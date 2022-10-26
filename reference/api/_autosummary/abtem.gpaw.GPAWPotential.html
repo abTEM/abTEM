@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="visualize" href="abtem.visualize.html" />
     <link rel="prev" title="GPAWParametrization" href="abtem.gpaw.GPAWParametrization.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1039,12 +1039,294 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
+<label for="__page-toc"
+  class="headerbtn headerbtn-page-toc"
+  
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-list"></i>
+  </span>
+
+</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
+    <div class="tocsection onthispage pt-5 pb-3">
+        <i class="fas fa-list"></i> Contents
+    </div>
+    <nav id="bd-toc-nav" aria-label="Page">
+        <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     GPAWPotential
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.axes_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.axes_metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.build">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.build()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.device">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.device
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.ensemble_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.ensemble_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.extent">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.extent
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.fourier_space_sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.fourier_space_sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.generate_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.generate_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.generate_slices">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.generate_slices()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.gpts">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.gpts
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.grid
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.match_grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.match_grid()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_exit_planes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_exit_planes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_slices">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_slices
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.periodic">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.periodic
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.select_block">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.select_block()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.shape">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.shape
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.show">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.show()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.slice_limits">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.slice_limits
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.slice_thickness">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.slice_thickness
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.thickness">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.thickness
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1056,6 +1338,277 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
+                        <div>
+                            <h2> Contents </h2>
+                        </div>
+                        <nav aria-label="Page">
+                            <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     GPAWPotential
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.axes_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.axes_metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.build">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.build()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.device">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.device
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.ensemble_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.ensemble_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.extent">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.extent
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.fourier_space_sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.fourier_space_sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.generate_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.generate_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.generate_slices">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.generate_slices()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.gpts">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.gpts
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.grid
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.match_grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.match_grid()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_exit_planes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_exit_planes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.num_slices">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.num_slices
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.periodic">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.periodic
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.select_block">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.select_block()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.shape">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.shape
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.show">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.show()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.slice_limits">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.slice_limits
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.slice_thickness">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.slice_thickness
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.gpaw.GPAWPotential.thickness">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       GPAWPotential.thickness
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+                        </nav>
                     </div>
                 </div>
             </div>
@@ -1064,11 +1617,11 @@ title="Print to PDF"
               <div>
                 
   <section id="gpawpotential">
-<h1>GPAWPotential<a class="headerlink" href="#gpawpotential" title="Permalink to this headline">#</a></h1>
+<h1>GPAWPotential<a class="headerlink" href="#gpawpotential" title="Permalink to this heading">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.gpaw.GPAWPotential">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.gpaw.</span></span><span class="sig-name descname"><span class="pre">GPAWPotential</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">calculators</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'xy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">origin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">box</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">periodic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">frozen_phonons</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">repetitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(1,</span> <span class="pre">1,</span> <span class="pre">1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gridrefinement</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/gpaw.html#GPAWPotential"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.gpaw.GPAWPotential" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.potentials._PotentialBuilder</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_PotentialBuilder</span></code></p>
 <p>Calculate the electrostatic potential from a (set of) converged GPAW DFT calculation(s). Frozen phonons can be
 included either by specifying multiple GPAW calculators corresponding to the different phonon configurations, or
 approximately for a single calculator by using the <cite>frozen_phonons</cite> keyword.</p>
@@ -1079,15 +1632,15 @@ approximately for a single calculator by using the <cite>frozen_phonons</cite> k
 <li><p><strong>gpts</strong> (<em>one</em><em> or </em><em>two int</em><em>, </em><em>optional</em>) – Number of grid points in <cite>x</cite> and <cite>y</cite> describing each slice of the potential. Provide either “sampling” (spacing
 between consecutive grid points) or “gpts” (total number of grid points).</p></li>
 <li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Sampling of the potential in <cite>x</cite> and <cite>y</cite> [1 / Å]. Provide either “sampling” or “gpts”.</p></li>
-<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence of float</em><em>, </em><em>optional</em>) – Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
+<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence</em><em> of </em><em>float</em><em>, </em><em>optional</em>) – Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
 If given as a float the number of slices is calculated by dividing the slice thickness into the <cite>z</cite>-height
 of supercell. The slice thickness may be given as a sequence of values for each slice, in which case an
 error will be thrown if the sum of slice thicknesses is not equal to the height of the atoms.</p></li>
-<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple of int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
+<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple</em><em> of </em><em>int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
 Providing <cite>exit_planes</cite> as a tuple of int indicates that the tuple contains the slice indices after which an
 exit plane is desired, and hence during a multislice simulation a measurement is created. If <cite>exit_planes</cite> is
 an integer a measurement will be collected every <cite>exit_planes</cite> number of slices.</p></li>
-<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples of three float</em><em>, </em><em>optional</em>) – The plane relative to the provided atoms mapped to <cite>xy</cite> plane of the potential, i.e. provided plane is
+<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples</em><em> of </em><em>three float</em><em>, </em><em>optional</em>) – The plane relative to the provided atoms mapped to <cite>xy</cite> plane of the potential, i.e. provided plane is
 perpendicular to the propagation direction. If string, it must be a concatenation of two of ‘x’, ‘y’ and ‘z’;
 the default value ‘xy’ indicates that potential slices are cuts along the <cite>xy</cite>-plane of the atoms.
 The plane may also be specified with two arbitrary 3D vectors, which are mapped to the <cite>x</cite> and <cite>y</cite> directions of
@@ -1105,7 +1658,7 @@ transformation to the atoms. If False, the transformed potential is effectively 
 potential, which may not preserve periodicity.</p></li>
 <li><p><strong>frozen_phonons</strong> (<em>abtem.AbstractFrozenPhonons</em><em>, </em><em>optional</em>) – Approximates frozen phonons for a single GPAW calculator by displacing only the nuclear core potentials.
 Supercedes the atoms from the calculator.</p></li>
-<li><p><strong>repetitions</strong> (<em>tuple of int</em>) – Repeats the atoms by integer amounts in the <cite>x</cite>, <cite>y</cite> and <cite>z</cite> directions before applying frozen phonon displacements
+<li><p><strong>repetitions</strong> (<em>tuple</em><em> of </em><em>int</em>) – Repeats the atoms by integer amounts in the <cite>x</cite>, <cite>y</cite> and <cite>z</cite> directions before applying frozen phonon displacements
 to calculate the potential contribution of the nuclear cores. Necessary when using frozen phonons.</p></li>
 <li><p><strong>gridrefinement</strong> (<em>int</em>) – Necessary interpolation of the charge density into a finer grid for improved numerical precision.
 Allowed values are ‘2’ and ‘4’.</p></li>
@@ -1314,7 +1867,7 @@ configuration file.</p></li>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.gpaw.GPAWPotential.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.gpaw.GPAWPotential.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.gpaw.GPAWPotential.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1344,7 +1897,7 @@ configuration file.</p></li>
 <li><p><strong>first_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the first slice of the generated potential.</p></li>
 <li><p><strong>last_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the last slice of the generated potential</p></li>
 <li><p><strong>TODO</strong> (<em>replace with max_batches</em>) – </p></li>
-<li><p><strong>chunks</strong> (<em>int</em><em> or </em><em>tuple of int</em><em> or </em><em>tuple of tuple of int</em>) – Number of slices to include in each Dask worker batch. Default is 1.</p></li>
+<li><p><strong>chunks</strong> (<em>int</em><em> or </em><em>tuple</em><em> of </em><em>int</em><em> or </em><em>tuple</em><em> of </em><em>tuple</em><em> of </em><em>int</em>) – Number of slices to include in each Dask worker batch. Default is 1.</p></li>
 <li><p><strong>lazy</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
 value set in the configuration file.</p></li>
 </ul>
@@ -1391,7 +1944,7 @@ value set in the configuration file.</p></li>
 <dd><p>Split the ensemble into an array of smaller ensembles.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code></p>
@@ -1427,7 +1980,7 @@ value set in the configuration file.</p></li>
 <dd><p>Generate chunks of the ensemble.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1465,7 +2018,7 @@ value set in the configuration file.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.gpaw.GPAWPotential.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.gpaw.GPAWPotential.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.gpaw.GPAWPotential.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1564,8 +2117,8 @@ value set in the configuration file.</p></li>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>index</strong> (<em>tuple of ints</em>) – Index of selected block.</p></li>
-<li><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p></li>
+<li><p><strong>index</strong> (<em>tuple</em><em> of </em><em>ints</em>) – Index of selected block.</p></li>
+<li><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p></li>
 </ul>
 </dd>
 </dl>
@@ -1647,7 +2200,7 @@ of the potential slices when this keyword set to False.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference/api/_autosummary"
+            path: "./reference\api\_autosummary"
         },
         predefinedOutput: true
     }

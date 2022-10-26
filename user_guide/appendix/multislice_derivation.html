@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,8 +52,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -59,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Sampling and antialiasing" href="antialiasing.html" />
     <link rel="prev" title="Appendix" href="appendix.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -135,7 +135,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1095,7 +1095,7 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="deriving-the-multislice-algorithm">
-<h1>Deriving the Multislice Algorithm<a class="headerlink" href="#deriving-the-multislice-algorithm" title="Permalink to this headline">#</a></h1>
+<h1>Deriving the Multislice Algorithm<a class="headerlink" href="#deriving-the-multislice-algorithm" title="Permalink to this heading">#</a></h1>
 <p>This is a short description on the theory of the multislice simulation method for electron scattering. For a more complete derivation including detailed theory, see Advanced Computing Computing in Electron Microscopy by EJ Kirkland<span id="id1">[<a class="reference internal" href="../bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span>.</p>
 <p>In electron microscopy, the energy of the incident electron waves (20 - 1000 keV) are generally much larger than the electrostatic potential wells of the atoms, which we will assume to only provide small perturbations on the forward motion of the electrons. Hence, we write the wave function, <span class="math notranslate nohighlight">\(\psi_{full}\)</span>, of the propagating electrons as a slowly varying plane wave along the optical axis, <span class="math notranslate nohighlight">\(z\)</span>, with a modulation in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span> given by <span class="math notranslate nohighlight">\(\psi(x,y)\)</span></p>
 <div class="math notranslate nohighlight">
@@ -1154,7 +1154,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "abtem-dask",
-            path: "./user_guide/appendix"
+            path: "./user_guide\appendix"
         },
         predefinedOutput: true
     }

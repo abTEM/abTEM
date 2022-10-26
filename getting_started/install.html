@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="The basics" href="basics.html" />
+    <link rel="next" title="Basic examples" href="basics.html" />
     <link rel="prev" title="Overview" href="overview.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1135,11 +1135,11 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="installation">
-<h1>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">#</a></h1>
+<h1>Installation<a class="headerlink" href="#installation" title="Permalink to this heading">#</a></h1>
 <p>There are two ways to install the <em>ab</em>TEM package, using conda or pip:</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="3b9f08e7-3ec0-4efe-b9a9-77ea530a2af9" name="177c937e-6226-4e73-8d72-7e5136e1f1a4" type="radio">
-</input><label class="sd-tab-label" for="3b9f08e7-3ec0-4efe-b9a9-77ea530a2af9">
+<input checked="checked" id="af43b09e-4f6c-4fc1-9ef2-4ea2fa066336" name="0ae468e4-6053-4799-8621-aa0bfb976260" type="radio">
+</input><label class="sd-tab-label" for="af43b09e-4f6c-4fc1-9ef2-4ea2fa066336">
 conda</label><div class="sd-tab-content docutils">
 <p>Install <em>ab</em>TEM using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">abtem</span>
@@ -1147,8 +1147,8 @@ conda</label><div class="sd-tab-content docutils">
 </div>
 <p>(Instructions on how to install miniconda can be found <a class="reference external" href="https://docs.conda.io/en/latest/miniconda.html">here</a>.)</p>
 </div>
-<input id="5c13b485-b912-46ce-b918-bf17dada7d7b" name="177c937e-6226-4e73-8d72-7e5136e1f1a4" type="radio">
-</input><label class="sd-tab-label" for="5c13b485-b912-46ce-b918-bf17dada7d7b">
+<input id="9282ed30-d8c2-4628-99eb-ea1311cb0e18" name="0ae468e4-6053-4799-8621-aa0bfb976260" type="radio">
+</input><label class="sd-tab-label" for="9282ed30-d8c2-4628-99eb-ea1311cb0e18">
 pip</label><div class="sd-tab-content docutils">
 <p>Install <em>ab</em>TEM using pip:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">abtem</span>
@@ -1161,23 +1161,23 @@ pip</label><div class="sd-tab-content docutils">
 </div>
 </div>
 <section id="optional-dependencies">
-<h2>Optional dependencies<a class="headerlink" href="#optional-dependencies" title="Permalink to this headline">#</a></h2>
+<h2>Optional dependencies<a class="headerlink" href="#optional-dependencies" title="Permalink to this heading">#</a></h2>
 <section id="gpaw-not-available-on-windows">
-<h3>GPAW (not available on Windows)<a class="headerlink" href="#gpaw-not-available-on-windows" title="Permalink to this headline">#</a></h3>
+<h3>GPAW (not available on Windows)<a class="headerlink" href="#gpaw-not-available-on-windows" title="Permalink to this heading">#</a></h3>
 <p>Some features of <em>ab</em>TEM, such as calculating potentials from DFT, require a working installation
 of <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/index.html">GPAW</a>. See <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/install.html">here</a> for
 detailed installation instructions.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="f12ba560-85f4-48cf-8d94-28b2da6ff422" name="70db10a7-efc9-4ebd-9220-3bd654b6e5ac" type="radio">
-</input><label class="sd-tab-label" for="f12ba560-85f4-48cf-8d94-28b2da6ff422">
+<input checked="checked" id="16c80650-d1f0-4f7c-80cc-199fe14df22d" name="1e7cfbbc-23ae-43ad-81c0-61f5595f812c" type="radio">
+</input><label class="sd-tab-label" for="16c80650-d1f0-4f7c-80cc-199fe14df22d">
 conda</label><div class="sd-tab-content docutils">
 <p>Install GPAW using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">gpaw</span>
 </pre></div>
 </div>
 </div>
-<input id="39c90c34-79bd-4897-b535-ad83f510a6ee" name="70db10a7-efc9-4ebd-9220-3bd654b6e5ac" type="radio">
-</input><label class="sd-tab-label" for="39c90c34-79bd-4897-b535-ad83f510a6ee">
+<input id="9926853a-2eff-4d17-a71c-64f3c142b3c6" name="1e7cfbbc-23ae-43ad-81c0-61f5595f812c" type="radio">
+</input><label class="sd-tab-label" for="9926853a-2eff-4d17-a71c-64f3c142b3c6">
 pip</label><div class="sd-tab-content docutils">
 <p>Install GPAW using pip:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">gpaw</span>
@@ -1191,20 +1191,20 @@ pip</label><div class="sd-tab-content docutils">
 </div>
 </section>
 <section id="gpu-only-nvidia">
-<h3>GPU (only Nvidia)<a class="headerlink" href="#gpu-only-nvidia" title="Permalink to this headline">#</a></h3>
+<h3>GPU (only Nvidia)<a class="headerlink" href="#gpu-only-nvidia" title="Permalink to this heading">#</a></h3>
 <p>GPU calculations with <em>ab</em>TEM require a working installation of <a class="reference external" href="https://cupy.dev/">CuPy</a> and compatible hardware.
 See <a class="reference external" href="https://docs.cupy.dev/en/stable/install.html">here</a> for detailed installation instructions.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="cad696bc-1ea6-45da-83b4-2e71509af46d" name="289a5536-1142-4869-9915-612b52cc066d" type="radio">
-</input><label class="sd-tab-label" for="cad696bc-1ea6-45da-83b4-2e71509af46d">
+<input checked="checked" id="28786cb3-cd79-4d5b-9dc5-f651beef5b67" name="0ab7d9ca-8c46-407a-80e5-ce343fc1d458" type="radio">
+</input><label class="sd-tab-label" for="28786cb3-cd79-4d5b-9dc5-f651beef5b67">
 conda</label><div class="sd-tab-content docutils">
 <p>Install CuPy using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">cupy</span>
 </pre></div>
 </div>
 </div>
-<input id="70b447a6-227c-4441-a749-b15fe9bfade8" name="289a5536-1142-4869-9915-612b52cc066d" type="radio">
-</input><label class="sd-tab-label" for="70b447a6-227c-4441-a749-b15fe9bfade8">
+<input id="035b0a22-2a8f-45d1-ac2b-50f9d37ce22a" name="0ab7d9ca-8c46-407a-80e5-ce343fc1d458" type="radio">
+</input><label class="sd-tab-label" for="035b0a22-2a8f-45d1-ac2b-50f9d37ce22a">
 pip</label><div class="sd-tab-content docutils">
 <p>First, install the <a class="reference external" href="https://developer.nvidia.com/cuda-toolkit">CUDA Toolkit</a>.</p>
 <p>Install CuPy using pip:</p>
@@ -1216,7 +1216,7 @@ pip</label><div class="sd-tab-content docutils">
 </div>
 </section>
 <section id="development">
-<h3>Development<a class="headerlink" href="#development" title="Permalink to this headline">#</a></h3>
+<h3>Development<a class="headerlink" href="#development" title="Permalink to this heading">#</a></h3>
 <p>See <a class="reference internal" href="../abtem/contributing.html#library-contributing"><span class="std std-ref">our guide to contributing</span></a> for instructions on a development installation of <em>ab</em>TEM.</p>
 </section>
 </section>
@@ -1259,7 +1259,7 @@ pip</label><div class="sd-tab-content docutils">
     <a class='right-next' id="next-link" href="basics.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">The basics</p>
+        <p class="prev-next-title">Basic examples</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

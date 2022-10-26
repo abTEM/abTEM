@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Contact" href="../abtem/contact.html" />
     <link rel="prev" title="FresnelPropagator" href="api/_autosummary/abtem.multislice.FresnelPropagator.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1121,39 +1121,39 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="configuration">
-<h1>Configuration<a class="headerlink" href="#configuration" title="Permalink to this headline">#</a></h1>
+<h1>Configuration<a class="headerlink" href="#configuration" title="Permalink to this heading">#</a></h1>
 <p>You can configure <em>abTEM</em> with a YAML configuration file (abtem.yaml). This file controls a number of options and
 feature flags.</p>
 <section id="configuration-files">
-<h2>Configuration files<a class="headerlink" href="#configuration-files" title="Permalink to this headline">#</a></h2>
+<h2>Configuration files<a class="headerlink" href="#configuration-files" title="Permalink to this heading">#</a></h2>
 <p>The configuration is specified by <em>any</em> YAML file in <code class="docutils literal notranslate"><span class="pre">~/.config/abtem/</span></code> or <code class="docutils literal notranslate"><span class="pre">/etc/abtem/</span></code>. <em>abTEM</em> searches for all YAML
 files within each of these directories and merges them together.</p>
 <p>Below is the full default configuration file. Anything you set in your own YAML will be merged into these
 defaults before they are used to configure the build.</p>
-<div class="full-width highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">device</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">cpu</span>
-<span class="nt">fft</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">mkl</span>
-<span class="nt">local_diagnostics</span><span class="p">:</span>
-  <span class="nt">progress_bar</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="nt">dask</span><span class="p">:</span>
-  <span class="nt">lazy</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">true</span>
-  <span class="nt">scheduler</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">threads</span>
-  <span class="nt">chunk-size</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">128 MB</span>
-  <span class="nt">chunk-size-gpu</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">512 MB</span>
-<span class="nt">cupy</span><span class="p">:</span>
-  <span class="nt">fft-cache-size</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">0 MB</span>
-<span class="nt">mkl</span><span class="p">:</span>
-  <span class="nt">threads</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">1</span>
-<span class="nt">fftw</span><span class="p">:</span>
-  <span class="nt">threads</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">1</span>
-  <span class="nt">planning_effort</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">FFTW_MEASURE</span>
-<span class="nt">warnings</span><span class="p">:</span>
-  <span class="nt">prism-interpolation-gpts</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">true</span>
-  <span class="nt">dask-blockwise-performance</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">false</span>
+<div class="full-width highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">device</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cpu</span><span class="w"></span>
+<span class="nt">fft</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mkl</span><span class="w"></span>
+<span class="nt">local_diagnostics</span><span class="p">:</span><span class="w"></span>
+<span class="w">  </span><span class="nt">progress_bar</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w"></span>
+<span class="nt">dask</span><span class="p">:</span><span class="w"></span>
+<span class="w">  </span><span class="nt">lazy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w"></span>
+<span class="w">  </span><span class="nt">scheduler</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">threads</span><span class="w"></span>
+<span class="w">  </span><span class="nt">chunk-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128 MB</span><span class="w"></span>
+<span class="w">  </span><span class="nt">chunk-size-gpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512 MB</span><span class="w"></span>
+<span class="nt">cupy</span><span class="p">:</span><span class="w"></span>
+<span class="w">  </span><span class="nt">fft-cache-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0 MB</span><span class="w"></span>
+<span class="nt">mkl</span><span class="p">:</span><span class="w"></span>
+<span class="w">  </span><span class="nt">threads</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w"></span>
+<span class="nt">fftw</span><span class="p">:</span><span class="w"></span>
+<span class="w">  </span><span class="nt">threads</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w"></span>
+<span class="w">  </span><span class="nt">planning_effort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FFTW_MEASURE</span><span class="w"></span>
+<span class="nt">warnings</span><span class="p">:</span><span class="w"></span>
+<span class="w">  </span><span class="nt">prism-interpolation-gpts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w"></span>
+<span class="w">  </span><span class="nt">dask-blockwise-performance</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
 <section id="access-configuration">
-<h2>Access configuration<a class="headerlink" href="#access-configuration" title="Permalink to this headline">#</a></h2>
+<h2>Access configuration<a class="headerlink" href="#access-configuration" title="Permalink to this heading">#</a></h2>
 <table class="autosummary longtable table autosummary">
 <colgroup>
 <col style="width: 10%" />
@@ -1173,7 +1173,7 @@ access, for example:</p>
 </div>
 </section>
 <section id="specify-configuration-in-python">
-<h2>Specify configuration in Python<a class="headerlink" href="#specify-configuration-in-python" title="Permalink to this headline">#</a></h2>
+<h2>Specify configuration in Python<a class="headerlink" href="#specify-configuration-in-python" title="Permalink to this heading">#</a></h2>
 <table class="autosummary longtable table autosummary">
 <colgroup>
 <col style="width: 10%" />

@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="STEM quickstart" href="stem_quickstart.html" />
     <link rel="prev" title="HRTEM quickstart" href="hrtem_quickstart.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1068,12 +1068,36 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
+<label for="__page-toc"
+  class="headerbtn headerbtn-page-toc"
+  
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-list"></i>
+  </span>
+
+</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
+    <div class="tocsection onthispage pt-5 pb-3">
+        <i class="fas fa-list"></i> Contents
+    </div>
+    <nav id="bd-toc-nav" aria-label="Page">
+        <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-atomic-model">
+   Create atomic model
+  </a>
+ </li>
+</ul>
+
+    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1085,6 +1109,19 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
+                        <div>
+                            <h2> Contents </h2>
+                        </div>
+                        <nav aria-label="Page">
+                            <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-atomic-model">
+   Create atomic model
+  </a>
+ </li>
+</ul>
+
+                        </nav>
                     </div>
                 </div>
             </div>
@@ -1092,43 +1129,56 @@ title="Print to PDF"
                 
               <div>
                 
-  <section class="tex2jax_ignore mathjax_ignore" id="prism-quickstart">
-<span id="examples-prism-quickstart"></span><h1>PRISM quickstart<a class="headerlink" href="#prism-quickstart" title="Permalink to this headline">#</a></h1>
-<div class="cell docutils container">
+  <div class="cell tag_hide-input docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">abtem</span>
+<span class="kn">import</span> <span class="nn">dask</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-
 <span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">bulk</span>
 <span class="kn">from</span> <span class="nn">ase.cluster</span> <span class="kn">import</span> <span class="n">Decahedron</span>
-<span class="kn">from</span> <span class="nn">dask.distributed</span> <span class="kn">import</span> <span class="n">Client</span>
-
-<span class="kn">import</span> <span class="nn">abtem</span>
+</pre></div>
+</div>
+</div>
+</div>
+<section class="tex2jax_ignore mathjax_ignore" id="prism-quickstart">
+<span id="examples-prism-quickstart"></span><h1>PRISM quickstart<a class="headerlink" href="#prism-quickstart" title="Permalink to this heading">#</a></h1>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;device&quot;</span><span class="p">:</span> <span class="s2">&quot;gpu&quot;</span><span class="p">})</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;fft&quot;</span><span class="p">:</span> <span class="s2">&quot;mkl&quot;</span><span class="p">})</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x24274719640&gt;
+</pre></div>
+</div>
+</div>
+</div>
+<section id="create-atomic-model">
+<h2>Create atomic model<a class="headerlink" href="#create-atomic-model" title="Permalink to this heading">#</a></h2>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">carbon</span> <span class="o">=</span> <span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;C&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">carbon</span> <span class="o">*=</span> <span class="p">(</span><span class="mi">14</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">20</span><span class="p">)</span>
+<span class="n">carbon</span><span class="o">.</span><span class="n">positions</span><span class="p">[:]</span> <span class="o">+=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">carbon</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.5</span>
+<span class="n">carbon</span><span class="o">.</span><span class="n">wrap</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">carbon</span> <span class="o">=</span> <span class="n">bulk</span><span class="p">(</span><span class="s1">&#39;C&#39;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-<span class="n">carbon</span> <span class="o">*=</span> <span class="p">(</span><span class="mi">14</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">7</span><span class="p">)</span> 
-
-<span class="n">carbon</span><span class="o">.</span><span class="n">positions</span><span class="p">[:]</span> <span class="o">+=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">carbon</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span> <span class="o">*</span> <span class="mf">.5</span> <span class="c1"># displace atoms with a standard deviation of .5 Å</span>
-
-<span class="n">carbon</span><span class="o">.</span><span class="n">wrap</span><span class="p">()</span>
-
-
-<span class="n">cluster</span> <span class="o">=</span> <span class="n">Decahedron</span><span class="p">(</span><span class="s1">&#39;Au&#39;</span><span class="p">,</span> 
-                     <span class="mi">10</span><span class="p">,</span> <span class="c1"># Number of atoms on the facets perpendicular to the five fold axis.</span>
-                     <span class="mi">2</span><span class="p">,</span> <span class="c1"># Number of atoms on the facets parallel to the five fold axis.</span>
-                     <span class="mi">0</span> <span class="c1"># Depth of re-entrence at the pentagon corners.</span>
-                    <span class="p">)</span>
-
-
-<span class="n">cluster</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">30</span><span class="p">)</span>
-
-<span class="n">center_height</span> <span class="o">=</span> <span class="o">-</span><span class="mi">20</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">cluster</span> <span class="o">=</span> <span class="n">Decahedron</span><span class="p">(</span><span class="s2">&quot;Cu&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">cluster</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="o">-</span><span class="mi">30</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">center_height</span> <span class="o">=</span> <span class="o">-</span><span class="mi">45</span>
 
 <span class="n">translated_cluster</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
@@ -1138,40 +1188,37 @@ title="Print to PDF"
 
 <span class="n">cluster_on_carbon</span><span class="o">.</span><span class="n">center</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">cluster_on_carbon</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s1">&#39;xz&#39;</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">cluster_on_carbon</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s2">&quot;xz&quot;</span><span class="p">,</span> <span class="n">merge</span><span class="o">=</span><span class="mf">.5</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;AxesSubplot:xlabel=&#39;x [Å]&#39;, ylabel=&#39;z [Å]&#39;&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 1 Axes&gt;,
+ &lt;AxesSubplot: xlabel=&#39;x [Å]&#39;, ylabel=&#39;z [Å]&#39;&gt;)
 </pre></div>
 </div>
-<img alt="../../../_images/prism_quickstart_2_1.png" src="../../../_images/prism_quickstart_2_1.png" />
+<img alt="../../../_images/prism_quickstart_6_1.png" src="../../../_images/prism_quickstart_6_1.png" />
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">client</span> <span class="o">=</span> <span class="n">Client</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">frozen_phonons</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FrozenPhonons</span><span class="p">(</span><span class="n">cluster_on_carbon</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="p">{</span><span class="s1">&#39;C&#39;</span><span class="p">:</span><span class="mf">.0</span><span class="p">,</span> <span class="s1">&#39;Au&#39;</span><span class="p">:</span><span class="mf">0.</span><span class="p">})</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">frozen_phonons</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FrozenPhonons</span><span class="p">(</span><span class="n">cluster_on_carbon</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;C&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="s2">&quot;Cu&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">})</span>
 
-<span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">,</span> 
-                            <span class="n">gpts</span> <span class="o">=</span> <span class="mi">1024</span><span class="p">,</span>
-                            <span class="n">projection</span> <span class="o">=</span> <span class="s1">&#39;infinite&#39;</span><span class="p">,</span> 
-                            <span class="n">slice_thickness</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
-                            <span class="p">)</span>
+<span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
+    <span class="n">frozen_phonons</span><span class="p">,</span>
+    <span class="n">gpts</span><span class="o">=</span><span class="mi">900</span><span class="p">,</span>
+    <span class="n">projection</span><span class="o">=</span><span class="s2">&quot;infinite&quot;</span><span class="p">,</span>
+    <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">s_matrix</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">SMatrix</span><span class="p">(</span><span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span> <span class="n">planewave_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">interpolation</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">s_matrix</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">SMatrix</span><span class="p">(</span>
+    <span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span> <span class="n">planewave_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">interpolation</span><span class="o">=</span><span class="mi">3</span>
+<span class="p">)</span>
 
 <span class="n">s_matrix</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">array</span>
 </pre></div>
@@ -1193,30 +1240,30 @@ title="Print to PDF"
 
                     <tr>
                         <th> Bytes </th>
-                        <td> 1.06 GiB </td>
-                        <td> 53.54 MiB </td>
+                        <td> 1.48 GiB </td>
+                        <td> 216.98 MiB </td>
                     </tr>
 
                     <tr>
                         <th> Shape </th>
-                        <td> (1, 305, 684, 684) </td>
-                        <td> (1, 15, 684, 684) </td>
+                        <td> (1, 553, 600, 600) </td>
+                        <td> (1, 79, 600, 600) </td>
                     </tr>
                     <tr>
                         <th> Count </th>
-                        <td> 45 Tasks </td>
-                        <td> 21 Chunks </td>
+                        <td> 5 Graph Layers </td>
+                        <td> 7 Chunks </td>
                     </tr>
                     <tr>
                     <th> Type </th>
                     <td> complex64 </td>
-                    <td> numpy.ndarray </td>
+                    <td> cupy.ndarray </td>
                     </tr>
                 </tbody>
             </table>
         </td>
         <td>
-        <svg width="391" height="201" style="stroke:rgb(0,0,0);stroke-width:1" >
+        <svg width="425" height="235" style="stroke:rgb(0,0,0);stroke-width:1" >
 
   <!-- Horizontal lines -->
   <line x1="0" y1="0" x2="25" y2="0" style="stroke-width:2" />
@@ -1235,82 +1282,54 @@ title="Print to PDF"
 
 
   <!-- Horizontal lines -->
-  <line x1="95" y1="0" x2="126" y2="31" style="stroke-width:2" />
-  <line x1="95" y1="120" x2="126" y2="151" style="stroke-width:2" />
+  <line x1="95" y1="0" x2="160" y2="65" style="stroke-width:2" />
+  <line x1="95" y1="120" x2="160" y2="185" style="stroke-width:2" />
 
   <!-- Vertical lines -->
   <line x1="95" y1="0" x2="95" y2="120" style="stroke-width:2" />
-  <line x1="96" y1="1" x2="96" y2="121" />
-  <line x1="98" y1="3" x2="98" y2="123" />
-  <line x1="99" y1="4" x2="99" y2="124" />
-  <line x1="101" y1="6" x2="101" y2="126" />
-  <line x1="102" y1="7" x2="102" y2="127" />
   <line x1="104" y1="9" x2="104" y2="129" />
-  <line x1="105" y1="10" x2="105" y2="130" />
-  <line x1="107" y1="12" x2="107" y2="132" />
-  <line x1="108" y1="13" x2="108" y2="133" />
-  <line x1="110" y1="15" x2="110" y2="135" />
-  <line x1="112" y1="17" x2="112" y2="137" />
   <line x1="113" y1="18" x2="113" y2="138" />
-  <line x1="115" y1="20" x2="115" y2="140" />
-  <line x1="116" y1="21" x2="116" y2="141" />
-  <line x1="118" y1="23" x2="118" y2="143" />
-  <line x1="119" y1="24" x2="119" y2="144" />
-  <line x1="121" y1="26" x2="121" y2="146" />
   <line x1="122" y1="27" x2="122" y2="147" />
-  <line x1="124" y1="29" x2="124" y2="149" />
-  <line x1="125" y1="30" x2="125" y2="150" />
-  <line x1="126" y1="31" x2="126" y2="151" style="stroke-width:2" />
+  <line x1="132" y1="37" x2="132" y2="157" />
+  <line x1="141" y1="46" x2="141" y2="166" />
+  <line x1="150" y1="55" x2="150" y2="175" />
+  <line x1="160" y1="65" x2="160" y2="185" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="95.0,0.0 126.47574819401444,31.47574819401445 126.47574819401444,151.47574819401444 95.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="95.0,0.0 160.05882352941177,65.05882352941177 160.05882352941177,185.05882352941177 95.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Horizontal lines -->
   <line x1="95" y1="0" x2="215" y2="0" style="stroke-width:2" />
-  <line x1="96" y1="1" x2="216" y2="1" />
-  <line x1="98" y1="3" x2="218" y2="3" />
-  <line x1="99" y1="4" x2="219" y2="4" />
-  <line x1="101" y1="6" x2="221" y2="6" />
-  <line x1="102" y1="7" x2="222" y2="7" />
   <line x1="104" y1="9" x2="224" y2="9" />
-  <line x1="105" y1="10" x2="225" y2="10" />
-  <line x1="107" y1="12" x2="227" y2="12" />
-  <line x1="108" y1="13" x2="228" y2="13" />
-  <line x1="110" y1="15" x2="230" y2="15" />
-  <line x1="112" y1="17" x2="232" y2="17" />
   <line x1="113" y1="18" x2="233" y2="18" />
-  <line x1="115" y1="20" x2="235" y2="20" />
-  <line x1="116" y1="21" x2="236" y2="21" />
-  <line x1="118" y1="23" x2="238" y2="23" />
-  <line x1="119" y1="24" x2="239" y2="24" />
-  <line x1="121" y1="26" x2="241" y2="26" />
   <line x1="122" y1="27" x2="242" y2="27" />
-  <line x1="124" y1="29" x2="244" y2="29" />
-  <line x1="125" y1="30" x2="245" y2="30" />
-  <line x1="126" y1="31" x2="246" y2="31" style="stroke-width:2" />
+  <line x1="132" y1="37" x2="252" y2="37" />
+  <line x1="141" y1="46" x2="261" y2="46" />
+  <line x1="150" y1="55" x2="270" y2="55" />
+  <line x1="160" y1="65" x2="280" y2="65" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="95" y1="0" x2="126" y2="31" style="stroke-width:2" />
-  <line x1="215" y1="0" x2="246" y2="31" style="stroke-width:2" />
+  <line x1="95" y1="0" x2="160" y2="65" style="stroke-width:2" />
+  <line x1="215" y1="0" x2="280" y2="65" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="95.0,0.0 215.0,0.0 246.47574819401444,31.47574819401445 126.47574819401444,31.47574819401445" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="95.0,0.0 215.0,0.0 280.05882352941177,65.05882352941177 160.05882352941177,65.05882352941177" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Horizontal lines -->
-  <line x1="126" y1="31" x2="246" y2="31" style="stroke-width:2" />
-  <line x1="126" y1="151" x2="246" y2="151" style="stroke-width:2" />
+  <line x1="160" y1="65" x2="280" y2="65" style="stroke-width:2" />
+  <line x1="160" y1="185" x2="280" y2="185" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="126" y1="31" x2="126" y2="151" style="stroke-width:2" />
-  <line x1="246" y1="31" x2="246" y2="151" style="stroke-width:2" />
+  <line x1="160" y1="65" x2="160" y2="185" style="stroke-width:2" />
+  <line x1="280" y1="65" x2="280" y2="185" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="126.47574819401444,31.47574819401445 246.47574819401444,31.47574819401445 246.47574819401444,151.47574819401444 126.47574819401444,151.47574819401444" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="160.05882352941177,65.05882352941177 280.05882352941177,65.05882352941177 280.05882352941177,185.05882352941177 160.05882352941177,185.05882352941177" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Text -->
-  <text x="186.475748" y="171.475748" font-size="1.0rem" font-weight="100" text-anchor="middle" >684</text>
-  <text x="266.475748" y="91.475748" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,266.475748,91.475748)">684</text>
-  <text x="100.737874" y="155.737874" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,100.737874,155.737874)">305</text>
+  <text x="220.058824" y="205.058824" font-size="1.0rem" font-weight="100" text-anchor="middle" >600</text>
+  <text x="300.058824" y="125.058824" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,300.058824,125.058824)">600</text>
+  <text x="117.529412" y="172.529412" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,117.529412,172.529412)">553</text>
 </svg>
         </td>
     </tr>
@@ -1323,7 +1342,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(171.109544782093, 171.109544782093)
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(150.53625640653343, 150.53625640653343)
 </pre></div>
 </div>
 </div>
@@ -1359,19 +1378,19 @@ title="Print to PDF"
 
                     <tr>
                         <th> Bytes </th>
-                        <td> 13.78 MiB </td>
-                        <td> 901.76 kiB </td>
+                        <td> 12.09 MiB </td>
+                        <td> 1.37 MiB </td>
                     </tr>
 
                     <tr>
                         <th> Shape </th>
-                        <td> (178, 178, 114, 1) </td>
-                        <td> (45, 45, 114, 1) </td>
+                        <td> (178, 178, 100, 1) </td>
+                        <td> (60, 60, 100, 1) </td>
                     </tr>
                     <tr>
                         <th> Count </th>
-                        <td> 696 Tasks </td>
-                        <td> 16 Chunks </td>
+                        <td> 19 Graph Layers </td>
+                        <td> 9 Chunks </td>
                     </tr>
                     <tr>
                     <th> Type </th>
@@ -1382,7 +1401,7 @@ title="Print to PDF"
             </table>
         </td>
         <td>
-        <svg width="526" height="197" style="stroke:rgb(0,0,0);stroke-width:1" >
+        <svg width="526" height="188" style="stroke:rgb(0,0,0);stroke-width:1" >
 
   <!-- Horizontal lines -->
   <line x1="0" y1="0" x2="120" y2="0" style="stroke-width:2" />
@@ -1390,9 +1409,8 @@ title="Print to PDF"
 
   <!-- Vertical lines -->
   <line x1="0" y1="0" x2="0" y2="25" style="stroke-width:2" />
-  <line x1="29" y1="0" x2="29" y2="25" />
-  <line x1="60" y1="0" x2="60" y2="25" />
-  <line x1="89" y1="0" x2="89" y2="25" />
+  <line x1="39" y1="0" x2="39" y2="25" />
+  <line x1="79" y1="0" x2="79" y2="25" />
   <line x1="120" y1="0" x2="120" y2="25" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
@@ -1405,23 +1423,21 @@ title="Print to PDF"
 
   <!-- Horizontal lines -->
   <line x1="190" y1="0" x2="260" y2="70" style="stroke-width:2" />
-  <line x1="190" y1="76" x2="260" y2="147" style="stroke-width:2" />
+  <line x1="190" y1="67" x2="260" y2="138" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="190" y1="0" x2="190" y2="76" style="stroke-width:2" />
-  <line x1="207" y1="17" x2="207" y2="94" />
-  <line x1="225" y1="35" x2="225" y2="112" />
-  <line x1="242" y1="52" x2="242" y2="129" />
-  <line x1="260" y1="70" x2="260" y2="147" style="stroke-width:2" />
+  <line x1="190" y1="0" x2="190" y2="67" style="stroke-width:2" />
+  <line x1="213" y1="23" x2="213" y2="90" />
+  <line x1="236" y1="46" x2="236" y2="114" />
+  <line x1="260" y1="70" x2="260" y2="138" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="190.0,0.0 260.5882352941177,70.58823529411765 260.5882352941177,147.44216787838732 190.0,76.85393258426967" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="190.0,0.0 260.5882352941177,70.58823529411765 260.5882352941177,138.0039656311963 190.0,67.41573033707866" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Horizontal lines -->
   <line x1="190" y1="0" x2="215" y2="0" style="stroke-width:2" />
-  <line x1="207" y1="17" x2="232" y2="17" />
-  <line x1="225" y1="35" x2="250" y2="35" />
-  <line x1="242" y1="52" x2="268" y2="52" />
+  <line x1="213" y1="23" x2="238" y2="23" />
+  <line x1="236" y1="46" x2="262" y2="46" />
   <line x1="260" y1="70" x2="286" y2="70" style="stroke-width:2" />
 
   <!-- Vertical lines -->
@@ -1433,19 +1449,19 @@ title="Print to PDF"
 
   <!-- Horizontal lines -->
   <line x1="260" y1="70" x2="286" y2="70" style="stroke-width:2" />
-  <line x1="260" y1="147" x2="286" y2="147" style="stroke-width:2" />
+  <line x1="260" y1="138" x2="286" y2="138" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="260" y1="70" x2="260" y2="147" style="stroke-width:2" />
-  <line x1="286" y1="70" x2="286" y2="147" style="stroke-width:2" />
+  <line x1="260" y1="70" x2="260" y2="138" style="stroke-width:2" />
+  <line x1="286" y1="70" x2="286" y2="138" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="260.5882352941177,70.58823529411765 286.0008518087002,70.58823529411765 286.0008518087002,147.44216787838732 260.5882352941177,147.44216787838732" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="260.5882352941177,70.58823529411765 286.0008518087002,70.58823529411765 286.0008518087002,138.0039656311963 260.5882352941177,138.0039656311963" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Text -->
-  <text x="273.294544" y="167.442168" font-size="1.0rem" font-weight="100" text-anchor="middle" >1</text>
-  <text x="306.000852" y="109.015202" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,306.000852,109.015202)">114</text>
-  <text x="215.294118" y="132.148050" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,215.294118,132.148050)">178</text>
+  <text x="273.294544" y="158.003966" font-size="1.0rem" font-weight="100" text-anchor="middle" >1</text>
+  <text x="306.000852" y="104.296100" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,306.000852,104.296100)">100</text>
+  <text x="215.294118" y="122.709848" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,215.294118,122.709848)">178</text>
 </svg>
         </td>
     </tr>
@@ -1453,32 +1469,57 @@ title="Print to PDF"
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">compute</span><span class="p">(</span><span class="n">num_workers</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measure.measure.PolarMeasurements at 0x228378647f0&gt;
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 39.26 s
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x00000243B9D8B610&gt;
 </pre></div>
 </div>
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">integrated_measurement</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">((</span><span class="n">measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">150</span><span class="p">),</span>
-                                      <span class="n">measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">20</span><span class="p">)</span>
-                                     <span class="p">),</span>
-                                    <span class="n">axis_metadata</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;HAADF&#39;</span><span class="p">,</span> <span class="s1">&#39;Bright field&#39;</span><span class="p">)</span>
-                                    <span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">integrated_measurement</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+    <span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">150</span><span class="p">),</span> <span class="n">measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">20</span><span class="p">)),</span>
+    <span class="n">axis_metadata</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;HAADF&quot;</span><span class="p">,</span> <span class="s2">&quot;Bright field&quot;</span><span class="p">),</span>
+<span class="p">)</span>
 
 <span class="n">integrated_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../../_images/prism_quickstart_10_0.png" src="../../../_images/prism_quickstart_10_0.png" />
+<img alt="../../../_images/prism_quickstart_13_0.png" src="../../../_images/prism_quickstart_13_0.png" />
 </div>
 </div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">filtered_measurement</span> <span class="o">=</span> <span class="n">integrated_measurement</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">.35</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">noisy_measurement</span> <span class="o">=</span> <span class="n">filtered_measurement</span><span class="o">.</span><span class="n">poisson_noise</span><span class="p">(</span><span class="n">dose_per_area</span><span class="o">=</span><span class="mf">1e5</span><span class="p">)</span>
+
+<span class="n">noisy_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 2 Axes&gt;, &lt;Axes: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
+</pre></div>
+</div>
+<img alt="../../../_images/prism_quickstart_15_1.png" src="../../../_images/prism_quickstart_15_1.png" />
+</div>
+</div>
+</section>
 </section>
 
     <script type="text/x-thebe-config">
@@ -1490,16 +1531,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "dask-gpu"
+            mode: "abtem-dask-gpu"
         },
         kernelOptions: {
-            kernelName: "dask-gpu",
-            path: "./user_guide/examples/notebooks"
+            kernelName: "abtem-dask-gpu",
+            path: "./user_guide\examples\notebooks"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'dask-gpu'</script>
+    <script>kernelName = 'abtem-dask-gpu'</script>
 
               </div>
               

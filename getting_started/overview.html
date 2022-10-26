@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Installation" href="install.html" />
     <link rel="prev" title="Welcome to abTEM!" href="../intro.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1039,12 +1039,68 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
+<label for="__page-toc"
+  class="headerbtn headerbtn-page-toc"
+  
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-list"></i>
+  </span>
+
+</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
+    <div class="tocsection onthispage pt-5 pb-3">
+        <i class="fas fa-list"></i> Contents
+    </div>
+    <nav id="bd-toc-nav" aria-label="Page">
+        <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#how-abtem-differs">
+   How abTEM differs
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#no-gui-jupyter-notebooks">
+     No GUI, Jupyter notebooks
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#flexible-no-fixed-simulation-modes">
+     Flexible, no fixed simulation modes
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#pure-python-but-fast">
+     “Pure Python”, but fast
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#deploys-anywhere-powered-by-dask">
+     Deploys anywhere, powered by Dask
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#open-source-and-open-to-contributions">
+     Open-source and open to contributions
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#the-abtem-object-model">
+   The abTEM object model
+  </a>
+ </li>
+</ul>
+
+    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1056,6 +1112,51 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
+                        <div>
+                            <h2> Contents </h2>
+                        </div>
+                        <nav aria-label="Page">
+                            <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#how-abtem-differs">
+   How abTEM differs
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#no-gui-jupyter-notebooks">
+     No GUI, Jupyter notebooks
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#flexible-no-fixed-simulation-modes">
+     Flexible, no fixed simulation modes
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#pure-python-but-fast">
+     “Pure Python”, but fast
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#deploys-anywhere-powered-by-dask">
+     Deploys anywhere, powered by Dask
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#open-source-and-open-to-contributions">
+     Open-source and open to contributions
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#the-abtem-object-model">
+   The abTEM object model
+  </a>
+ </li>
+</ul>
+
+                        </nav>
                     </div>
                 </div>
             </div>
@@ -1064,11 +1165,158 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="overview">
-<span id="getting-started-overview"></span><h1>Overview<a class="headerlink" href="#overview" title="Permalink to this headline">#</a></h1>
-<div class="no-icon admonition">
-<p class="admonition-title"><svg version="4.0.0.63c5cb3" width="1.5rem" height="1.5rem" class="sd-material-icon sd-material-icon-engineering sd-mr-1" viewBox="0 0 24 24" aria-hidden="true"><g><rect fill="none" height="24" width="24"></rect></g><g><g><path d="M9,15c-2.67,0-8,1.34-8,4v2h16v-2C17,16.34,11.67,15,9,15z"></path><path d="M22.1,6.84c0.01-0.11,0.02-0.22,0.02-0.34c0-0.12-0.01-0.23-0.03-0.34l0.74-0.58c0.07-0.05,0.08-0.15,0.04-0.22l-0.7-1.21 c-0.04-0.08-0.14-0.1-0.21-0.08L21.1,4.42c-0.18-0.14-0.38-0.25-0.59-0.34l-0.13-0.93C20.36,3.06,20.29,3,20.2,3h-1.4 c-0.09,0-0.16,0.06-0.17,0.15L18.5,4.08c-0.21,0.09-0.41,0.21-0.59,0.34l-0.87-0.35c-0.08-0.03-0.17,0-0.21,0.08l-0.7,1.21 c-0.04,0.08-0.03,0.17,0.04,0.22l0.74,0.58c-0.02,0.11-0.03,0.23-0.03,0.34c0,0.11,0.01,0.23,0.03,0.34l-0.74,0.58 c-0.07,0.05-0.08,0.15-0.04,0.22l0.7,1.21c0.04,0.08,0.14,0.1,0.21,0.08l0.87-0.35c0.18,0.14,0.38,0.25,0.59,0.34l0.13,0.93 C18.64,9.94,18.71,10,18.8,10h1.4c0.09,0,0.16-0.06,0.17-0.15l0.13-0.93c0.21-0.09,0.41-0.21,0.59-0.34l0.87,0.35 c0.08,0.03,0.17,0,0.21-0.08l0.7-1.21c0.04-0.08,0.03-0.17-0.04-0.22L22.1,6.84z M19.5,7.75c-0.69,0-1.25-0.56-1.25-1.25 s0.56-1.25,1.25-1.25s1.25,0.56,1.25,1.25S20.19,7.75,19.5,7.75z"></path><path d="M19.92,11.68l-0.5-0.87c-0.03-0.06-0.1-0.08-0.15-0.06l-0.62,0.25c-0.13-0.1-0.27-0.18-0.42-0.24l-0.09-0.66 C18.12,10.04,18.06,10,18,10h-1c-0.06,0-0.11,0.04-0.12,0.11l-0.09,0.66c-0.15,0.06-0.29,0.15-0.42,0.24l-0.62-0.25 c-0.06-0.02-0.12,0-0.15,0.06l-0.5,0.87c-0.03,0.06-0.02,0.12,0.03,0.16l0.53,0.41c-0.01,0.08-0.02,0.16-0.02,0.24 c0,0.08,0.01,0.17,0.02,0.24l-0.53,0.41c-0.05,0.04-0.06,0.11-0.03,0.16l0.5,0.87c0.03,0.06,0.1,0.08,0.15,0.06l0.62-0.25 c0.13,0.1,0.27,0.18,0.42,0.24l0.09,0.66C16.89,14.96,16.94,15,17,15h1c0.06,0,0.12-0.04,0.12-0.11l0.09-0.66 c0.15-0.06,0.29-0.15,0.42-0.24l0.62,0.25c0.06,0.02,0.12,0,0.15-0.06l0.5-0.87c0.03-0.06,0.02-0.12-0.03-0.16l-0.52-0.41 c0.01-0.08,0.02-0.16,0.02-0.24c0-0.08-0.01-0.17-0.02-0.24l0.53-0.41C19.93,11.81,19.94,11.74,19.92,11.68z M17.5,13.33 c-0.46,0-0.83-0.38-0.83-0.83c0-0.46,0.38-0.83,0.83-0.83s0.83,0.38,0.83,0.83C18.33,12.96,17.96,13.33,17.5,13.33z"></path><path d="M4.74,9h8.53c0.27,0,0.49-0.22,0.49-0.49V8.49c0-0.27-0.22-0.49-0.49-0.49H13c0-1.48-0.81-2.75-2-3.45V5.5 C11,5.78,10.78,6,10.5,6S10,5.78,10,5.5V4.14C9.68,4.06,9.35,4,9,4S8.32,4.06,8,4.14V5.5C8,5.78,7.78,6,7.5,6S7,5.78,7,5.5V4.55 C5.81,5.25,5,6.52,5,8H4.74C4.47,8,4.25,8.22,4.25,8.49v0.03C4.25,8.78,4.47,9,4.74,9z"></path><path d="M9,13c1.86,0,3.41-1.28,3.86-3H5.14C5.59,11.72,7.14,13,9,13z"></path></g></g></svg> Currently Under Construction</p>
-<p>Check back for more…</p>
+<span id="getting-started-overview"></span><h1>Overview<a class="headerlink" href="#overview" title="Permalink to this heading">#</a></h1>
+<p>To reliably interpret the data from electron microscopy experiments, a careful comparison between theoretical models and
+experiments are often required. The use of dynamical scattering simulations based on the multislice algorithm has now
+aided this process for multiple decades. As a result there are many excellent simulation codes, <em>abTEM</em> is another one,
+however our approach differs in many key aspects.</p>
+<section id="how-abtem-differs">
+<h2>How abTEM differs<a class="headerlink" href="#how-abtem-differs" title="Permalink to this heading">#</a></h2>
+<section id="no-gui-jupyter-notebooks">
+<h3>No GUI, Jupyter notebooks<a class="headerlink" href="#no-gui-jupyter-notebooks" title="Permalink to this heading">#</a></h3>
+<p>abTEM does not implement a graphical user interface, instead focusing on making scripts and especially Jupyter notebooks
+work. The Jupyter Notebook mix of code, explanatory text and visualizations immediately provides documentation of the
+simulation, allowing others to understand, share and reproduce it. abTEM aids a visual workflow by implementing methods
+for creating quick visualizations of each subtask; for example a heatmap of the projected potential or the profile of
+the electron probe.</p>
+</section>
+<section id="flexible-no-fixed-simulation-modes">
+<h3>Flexible, no fixed simulation modes<a class="headerlink" href="#flexible-no-fixed-simulation-modes" title="Permalink to this heading">#</a></h3>
+<p>abTEM does not directly implement <em>any</em> of the common imaging modes, instead inviting the user to mix and match
+objects to construct the desired simulation. This provides the user with an enormous flexibility to design the
+simulation while abTEM takes care of the computational details. See below for examples.</p>
+</section>
+<section id="pure-python-but-fast">
+<h3>“Pure Python”, but fast<a class="headerlink" href="#pure-python-but-fast" title="Permalink to this heading">#</a></h3>
+<p>Python has become the most popular programming language in physics, thanks in particular to its extensive base
+of open-source libraries. In the electron microscopy community, this includes packages such as
+<a class="reference external" href="https://hyperspy.org/">HyperSpy</a>, <a class="reference external" href="https://libertem.github.io/LiberTEM/">Libertem</a> and
+<a class="reference external" href="https://py4dstem.readthedocs.io/en/latest/">Py4DSTEM</a>. Effective use of the fast open-source libraries such
+as <a class="reference external" href="https://numpy.org/">NumPy</a>, <a class="reference external" href="https://cupy.dev/">CuPy</a>, <a class="reference external" href="https://numba.pydata.org/">Numba</a> and
+<a class="reference external" href="https://pyfftw.readthedocs.io/en/latest/">PyFFTW</a>, allows abTEM to be extremely competitive in raw performance.</p>
+</section>
+<section id="deploys-anywhere-powered-by-dask">
+<h3>Deploys anywhere, powered by Dask<a class="headerlink" href="#deploys-anywhere-powered-by-dask" title="Permalink to this heading">#</a></h3>
+<p>abTEM is created from the ground-up to work with <a class="reference external" href="https://www.dask.org/">Dask</a>. Dask allows scaling from a single
+laptop to hundreds of nodes at high-performance computing (HPC) facilities with minimal changes to the code.</p>
+</section>
+<section id="open-source-and-open-to-contributions">
+<h3>Open-source and open to contributions<a class="headerlink" href="#open-source-and-open-to-contributions" title="Permalink to this heading">#</a></h3>
+<p>The abTEM developers are not alone in seeing the necessity of open-source software in electron microscopy. We are
+striving to make abTEM an inviting project for new contributors. Everybody is invited to contribute in using and
+developing the code, see our <a class="reference internal" href="../abtem/contributing.html#library-contributing"><span class="std std-ref">guide for contributors</span></a>.</p>
+</section>
+</section>
+<section id="the-abtem-object-model">
+<h2>The abTEM object model<a class="headerlink" href="#the-abtem-object-model" title="Permalink to this heading">#</a></h2>
+<p>abTEM implements objects representing physical concepts, for example, a plane wave function is represented
+by the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> object and a STEM probe wave function is represented by the <code class="docutils literal notranslate"><span class="pre">Probe</span></code> object.</p>
+<p>To simulate a (basic) HRTEM image, we need a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code>, a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> and a <code class="docutils literal notranslate"><span class="pre">CTF</span></code> representing the objective lens, the
+image is the <code class="docutils literal notranslate"><span class="pre">intensity</span></code> of the exit wave after applying the <code class="docutils literal notranslate"><span class="pre">CTF</span></code>. We show how this could be implemented in code below,
+change the tabs for other simulation modes.</p>
+<p>We can turn the HRTEM simulation into a SAED simulation by getting rid of the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> and calculating
+the <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code> instead of the <code class="docutils literal notranslate"><span class="pre">intensity</span></code> from the exit wave. The SAED simulation becomes a CBED simulation
+by only changing the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> for a <code class="docutils literal notranslate"><span class="pre">Probe</span></code>, which can become a precession ED simulation by setting the <code class="docutils literal notranslate"><span class="pre">tilt</span></code>
+property of the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>.</p>
+<p>A STEM-ADF simulation requires defining the scan area using the <code class="docutils literal notranslate"><span class="pre">GridScan</span></code> and an <code class="docutils literal notranslate"><span class="pre">AnnularDetector</span></code> defining the
+inner and outer detector angles. The STEM-ADF simulation is easily modified into a 4D-STEM simulation by swapping the
+<code class="docutils literal notranslate"><span class="pre">AnnularDetector</span></code> for a <code class="docutils literal notranslate"><span class="pre">PixelatedDetector</span></code>.</p>
+<p>The code below demonstrate slightly simplified <em>ab</em>TEM code for simulating several common electron microscopy
+experiments. For clarity of expression we have ommited import statements and the atomic models is assumed to be given as
+<code class="docutils literal notranslate"><span class="pre">atoms</span></code>. For real, runable code examples look <a class="reference internal" href="basics.html#getting-started-basic-examples"><span class="std std-ref">further in the documentation</span></a>.</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="88e063fe-e450-4450-88fc-3e15907a343c" name="32543f67-5aa5-4953-9fbc-a07b22306de3" type="radio">
+</input><label class="sd-tab-label" for="88e063fe-e450-4450-88fc-3e15907a343c">
+HRTEM</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">)</span>
+
+<span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
+
+<span class="n">ctf</span> <span class="o">=</span> <span class="n">CTF</span><span class="p">(</span><span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">Cs</span><span class="o">=</span><span class="mf">1e-3</span> <span class="o">*</span> <span class="mf">1e10</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="s2">&quot;scherzer&quot;</span><span class="p">)</span>
+
+<span class="n">exit_wave</span> <span class="o">=</span> <span class="n">wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+
+<span class="n">measurement</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf</span><span class="p">)</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
+</pre></div>
 </div>
+</div>
+<input id="e051a04e-3ef9-491b-be47-ad04c11e5ce5" name="32543f67-5aa5-4953-9fbc-a07b22306de3" type="radio">
+</input><label class="sd-tab-label" for="e051a04e-3ef9-491b-be47-ad04c11e5ce5">
+SAED</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">)</span>
+
+<span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
+
+
+
+<span class="n">exit_wave</span> <span class="o">=</span> <span class="n">wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+
+<span class="n">measurement</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<input id="6534df9a-7e0d-4222-b1ae-420943e0b454" name="32543f67-5aa5-4953-9fbc-a07b22306de3" type="radio">
+</input><label class="sd-tab-label" for="6534df9a-7e0d-4222-b1ae-420943e0b454">
+CBED</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">Cs</span><span class="o">=</span><span class="mf">1e-3</span> <span class="o">*</span> <span class="mf">1e10</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="s2">&quot;scherzer&quot;</span><span class="p">)</span>
+
+<span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
+
+
+
+<span class="n">exit_wave</span> <span class="o">=</span> <span class="n">wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+
+<span class="n">measurement</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<input id="77634819-c1b4-4511-a320-3fcaf58af0f8" name="32543f67-5aa5-4953-9fbc-a07b22306de3" type="radio">
+</input><label class="sd-tab-label" for="77634819-c1b4-4511-a320-3fcaf58af0f8">
+PED</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">Cs</span><span class="o">=</span><span class="mf">1e-3</span> <span class="o">*</span> <span class="mf">1e10</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="s2">&quot;scherzer&quot;</span><span class="p">)</span>
+
+<span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
+
+<span class="n">wave</span><span class="o">.</span><span class="n">tilt</span> <span class="o">=</span> <span class="n">precession_tilts</span><span class="p">(</span><span class="n">precession_angle</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span> <span class="n">num_samples</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+
+<span class="n">exit_wave</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+
+<span class="n">measurement</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<input id="476d76fb-bbda-4387-a766-eeed1071bdb8" name="32543f67-5aa5-4953-9fbc-a07b22306de3" type="radio">
+</input><label class="sd-tab-label" for="476d76fb-bbda-4387-a766-eeed1071bdb8">
+STEM-MAADF</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">Cs</span><span class="o">=</span><span class="mf">1e-3</span> <span class="o">*</span> <span class="mf">1e10</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="s2">&quot;scherzer&quot;</span><span class="p">)</span>
+
+<span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
+
+<span class="n">detector</span> <span class="o">=</span> <span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
+
+<span class="n">scan</span> <span class="o">=</span> <span class="n">GridScan</span><span class="p">()</span>
+
+<span class="n">measurement</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">detector</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">scan</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<input id="315f9a73-320d-4894-9c25-cea1776b56c9" name="32543f67-5aa5-4953-9fbc-a07b22306de3" type="radio">
+</input><label class="sd-tab-label" for="315f9a73-320d-4894-9c25-cea1776b56c9">
+4D-STEM</label><div class="sd-tab-content docutils">
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">Cs</span><span class="o">=</span><span class="mf">1e-3</span> <span class="o">*</span> <span class="mf">1e10</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="s2">&quot;scherzer&quot;</span><span class="p">)</span>
+
+<span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
+
+<span class="n">detector</span> <span class="o">=</span> <span class="n">PixelatedDetector</span><span class="p">()</span>
+
+<span class="n">scan</span> <span class="o">=</span> <span class="n">GridScan</span><span class="p">()</span>
+
+<span class="n">measurement</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">detector</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">scan</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
 </section>
 
     <script type="text/x-thebe-config">

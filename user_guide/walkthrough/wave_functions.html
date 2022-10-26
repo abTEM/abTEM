@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,8 +52,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -59,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Multislice simulations" href="multislice.html" />
     <link rel="prev" title="Potentials" href="potentials.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -135,7 +135,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1176,7 +1176,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="wave-functions">
-<span id="walkthrough-wave-functions"></span><h1>Wave functions<a class="headerlink" href="#wave-functions" title="Permalink to this headline">#</a></h1>
+<span id="walkthrough-wave-functions"></span><h1>Wave functions<a class="headerlink" href="#wave-functions" title="Permalink to this heading">#</a></h1>
 <p>The multislice algorithm works by propagating the <span class="math notranslate nohighlight">\(xy\)</span> part of the wave function (defined as <span class="math notranslate nohighlight">\(\psi\)</span> in the <a class="reference internal" href="../appendix/multislice_derivation.html"><span class="doc std std-doc">appendix</span></a>) through the electrostatic potential. To start the propagation, we need to assume the initial conditions for the wave function, i.e. a wave function describing the electron beam formed by the electron optics before the sample.</p>
 <p><em>ab</em>TEM defines three types of wave functions:</p>
 <ul class="simple">
@@ -1189,7 +1189,7 @@ title="Print to PDF"
 <p>The PRISM algorithm uses <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>, which is not included in the list above. However, in most ways it can be used similar to <code class="docutils literal notranslate"><span class="pre">Probe</span></code>; see our <a class="reference internal" href="../tutorials/prism.html#walkthrough-prism"><span class="std std-ref">introduction to PRISM in abTEM</span></a> for more detail.</p>
 </div>
 <section id="plane-wave-functions">
-<span id="wave-functions-plane-wave"></span><h2>Plane wave functions<a class="headerlink" href="#plane-wave-functions" title="Permalink to this headline">#</a></h2>
+<span id="wave-functions-plane-wave"></span><h2>Plane wave functions<a class="headerlink" href="#plane-wave-functions" title="Permalink to this heading">#</a></h2>
 <p>The default plane wave is just defined to be equal to unity everywhere in the plane</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1355,7 +1355,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="probe-wave-functions">
-<span id="wave-functions-probe"></span><h2>Probe wave functions<a class="headerlink" href="#probe-wave-functions" title="Permalink to this headline">#</a></h2>
+<span id="wave-functions-probe"></span><h2>Probe wave functions<a class="headerlink" href="#probe-wave-functions" title="Permalink to this heading">#</a></h2>
 <p>In <em>ab</em>TEM, a focused beam of electrons, or <code class="docutils literal notranslate"><span class="pre">Probe</span></code>, is defined in Fourier space as</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1461,7 +1461,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="visualizing-the-wave-function">
-<h2>Visualizing the wave function<a class="headerlink" href="#visualizing-the-wave-function" title="Permalink to this headline">#</a></h2>
+<h2>Visualizing the wave function<a class="headerlink" href="#visualizing-the-wave-function" title="Permalink to this heading">#</a></h2>
 <p>To visualize the wave function using <em>ab</em>TEM’s built-in visualization module, we first have to convert it to a measurement type. The most common methods are <code class="docutils literal notranslate"><span class="pre">intensity</span></code> and <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code>, which will return a measurement of type <code class="docutils literal notranslate"><span class="pre">Images</span></code> and <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code>, respectively.</p>
 <p>The real space intensity, <span class="math notranslate nohighlight">\(\|\psi\|^2\)</span>, is calculated and shown below. The parameter <code class="docutils literal notranslate"><span class="pre">cbar=True</span></code> displays the color intensity scale.</p>
 <div class="cell docutils container">
@@ -1541,7 +1541,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="wave-function-ensembles">
-<h2>Wave-function ensembles<a class="headerlink" href="#wave-function-ensembles" title="Permalink to this headline">#</a></h2>
+<h2>Wave-function ensembles<a class="headerlink" href="#wave-function-ensembles" title="Permalink to this heading">#</a></h2>
 <p>In general, <code class="docutils literal notranslate"><span class="pre">Waves</span></code> can represent an ensemble of wave functions as a multidimensional array.  The last two dimensions of <code class="docutils literal notranslate"><span class="pre">Waves</span></code> represent the spatial dimensions, which are the mandatory or <em>base</em> dimensions of the object. Any preceeding dimension is an optional <em>ensemble</em> dimension. The ensemble dimensions may represent a range of defocii, positions, frozen phonons, tilt and more. In computations, <em>ab</em>TEM will automatically parallelize over the ensemble dimensions.</p>
 <p>As an example, we create an ensemble of probes with different values for their defocus.</p>
 <div class="cell docutils container">
@@ -1669,7 +1669,7 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
         },
         kernelOptions: {
             kernelName: "abtem",
-            path: "./user_guide/walkthrough"
+            path: "./user_guide\walkthrough"
         },
         predefinedOutput: true
     }

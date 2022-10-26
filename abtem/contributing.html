@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Citing" href="citing.html" />
     <link rel="prev" title="Contact" href="contact.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1165,7 +1165,7 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="contributing">
-<span id="library-contributing"></span><h1>Contributing<a class="headerlink" href="#contributing" title="Permalink to this headline">#</a></h1>
+<span id="library-contributing"></span><h1>Contributing<a class="headerlink" href="#contributing" title="Permalink to this heading">#</a></h1>
 <p>Welcome to the <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> repository! We’re excited you’re here and want to contribute.</p>
 <p>There are many ways you can help the community to improve <code class="docutils literal notranslate"><span class="pre">abTEM</span></code>, some of the main ways are:</p>
 <ul class="simple">
@@ -1175,7 +1175,7 @@ title="Print to PDF"
 <li><p>Contributing to the code base</p></li>
 </ul>
 <section id="bug-reports-and-enhancement-requests">
-<h2>Bug reports and enhancement requests<a class="headerlink" href="#bug-reports-and-enhancement-requests" title="Permalink to this headline">#</a></h2>
+<h2>Bug reports and enhancement requests<a class="headerlink" href="#bug-reports-and-enhancement-requests" title="Permalink to this heading">#</a></h2>
 <p>Bug reports are an important part of making <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> more stable. Bug reports should be submitted as a GitHub issue, the
 issue will then show up to the <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> community and be open to comments/ideas from others. Before creating an issue, it
 is good practice to search existing issues and pull requests to see if the issue has already been reported and/or fixed.</p>
@@ -1196,7 +1196,7 @@ code nicely by using <a class="reference external" href="https://docs.github.com
 </ol>
 </section>
 <section id="the-example-gallery">
-<h2>The example gallery<a class="headerlink" href="#the-example-gallery" title="Permalink to this headline">#</a></h2>
+<h2>The example gallery<a class="headerlink" href="#the-example-gallery" title="Permalink to this heading">#</a></h2>
 <p>Contributing an example to the gallery can be done in a few steps without any additional installations:</p>
 <ol class="simple">
 <li><p>Add a notebook to examples folder and a thumbnail to the example thumbnails folder.</p></li>
@@ -1211,7 +1211,7 @@ and <code class="docutils literal notranslate"><span class="pre">remove-cell</sp
 </div>
 </section>
 <section id="contributing-to-the-documentation">
-<h2>Contributing to the documentation<a class="headerlink" href="#contributing-to-the-documentation" title="Permalink to this headline">#</a></h2>
+<h2>Contributing to the documentation<a class="headerlink" href="#contributing-to-the-documentation" title="Permalink to this heading">#</a></h2>
 <p>The documentation exists in two places, under <code class="docutils literal notranslate"><span class="pre">/docs</span></code> in the form of markdown files and Jupyter notebooks and as
 docstrings in the library which become the auto-generated API reference.</p>
 <p>The documentation is build using <a class="reference external" href="https://jupyterbook.org/en/stable/intro.html"><code class="docutils literal notranslate"><span class="pre">jupyter-book</span></code></a>. To generate the docs
@@ -1220,10 +1220,10 @@ available in your <code class="docutils literal notranslate"><span class="pre">_
 <p>The online documentation is automatically updated when the source is updated.</p>
 </section>
 <section id="getting-started-with-the-codebase">
-<h2>Getting started with the codebase<a class="headerlink" href="#getting-started-with-the-codebase" title="Permalink to this headline">#</a></h2>
+<h2>Getting started with the codebase<a class="headerlink" href="#getting-started-with-the-codebase" title="Permalink to this heading">#</a></h2>
 <p>To get started with <code class="docutils literal notranslate"><span class="pre">abTEM</span></code>’s codebase, take the following steps:</p>
 <section id="clone-and-install">
-<h3>Clone and install<a class="headerlink" href="#clone-and-install" title="Permalink to this headline">#</a></h3>
+<h3>Clone and install<a class="headerlink" href="#clone-and-install" title="Permalink to this heading">#</a></h3>
 <p>Clone the repository:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">git</span> <span class="n">clone</span> <span class="n">https</span><span class="p">:</span><span class="o">//</span><span class="n">github</span><span class="o">.</span><span class="n">com</span><span class="o">/</span><span class="n">abtem</span><span class="o">/</span><span class="n">abtem</span>
 <span class="n">cd</span> <span class="n">abtem</span>
@@ -1237,7 +1237,7 @@ available in your <code class="docutils literal notranslate"><span class="pre">_
 some development packages.</p>
 </section>
 <section id="optional-install-the-pre-commit-hooks">
-<h3>Optional: Install the pre-commit hooks<a class="headerlink" href="#optional-install-the-pre-commit-hooks" title="Permalink to this headline">#</a></h3>
+<h3>Optional: Install the pre-commit hooks<a class="headerlink" href="#optional-install-the-pre-commit-hooks" title="Permalink to this heading">#</a></h3>
 <p>abTEM uses pre-commit to ensure code style before a commit is made. This ensures that the look and
 feel of <em>abTEM</em> remains consistent over time and across developers. We use the following tools:</p>
 <ul class="simple">
@@ -1254,7 +1254,7 @@ feel of <em>abTEM</em> remains consistent over time and across developers. We us
 checks.</p>
 </section>
 <section id="run-the-tests">
-<h3>Run the tests<a class="headerlink" href="#run-the-tests" title="Permalink to this headline">#</a></h3>
+<h3>Run the tests<a class="headerlink" href="#run-the-tests" title="Permalink to this heading">#</a></h3>
 <p>For code tests, <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> uses <code class="docutils literal notranslate"><span class="pre">pytest</span></code>, the test suite also relies on <a class="reference external" href="https://hypothesis.readthedocs.io/en/latest/"><code class="docutils literal notranslate"><span class="pre">hypothesis</span></code></a> for property based testing. You
 may run all the tests: , or only ones that do not have a specific mark, with the following command:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pytest</span>

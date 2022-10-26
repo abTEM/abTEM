@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="TemporalEnvelope" href="abtem.transfer.TemporalEnvelope.html" />
     <link rel="prev" title="CTF" href="abtem.transfer.CTF.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1039,12 +1039,132 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
+<label for="__page-toc"
+  class="headerbtn headerbtn-page-toc"
+  
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-list"></i>
+  </span>
+
+</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
+    <div class="tocsection onthispage pt-5 pb-3">
+        <i class="fas fa-list"></i> Contents
+    </div>
+    <nav id="bd-toc-nav" aria-label="Page">
+        <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     SpatialEnvelope
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.aberration_coefficients">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.aberration_coefficients
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.accelerator">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.accelerator
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.energy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.energy
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.ensemble_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.ensemble_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.generate_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.generate_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.select_block">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.select_block()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.set_aberrations">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.set_aberrations()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.wavelength">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.wavelength
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1056,6 +1176,115 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
+                        <div>
+                            <h2> Contents </h2>
+                        </div>
+                        <nav aria-label="Page">
+                            <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     SpatialEnvelope
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.aberration_coefficients">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.aberration_coefficients
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.accelerator">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.accelerator
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.energy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.energy
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.ensemble_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.ensemble_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.generate_blocks">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.generate_blocks()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.select_block">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.select_block()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.set_aberrations">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.set_aberrations()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.transfer.SpatialEnvelope.wavelength">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SpatialEnvelope.wavelength
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+                        </nav>
                     </div>
                 </div>
             </div>
@@ -1064,11 +1293,11 @@ title="Print to PDF"
               <div>
                 
   <section id="spatialenvelope">
-<h1>SpatialEnvelope<a class="headerlink" href="#spatialenvelope" title="Permalink to this headline">#</a></h1>
+<h1>SpatialEnvelope<a class="headerlink" href="#spatialenvelope" title="Permalink to this heading">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.transfer.SpatialEnvelope">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.transfer.</span></span><span class="sig-name descname"><span class="pre">SpatialEnvelope</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">angular_spread</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aberration_coefficients</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/transfer.html#SpatialEnvelope"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.transfer.SpatialEnvelope" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.transfer._HasAberrations</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.distributions._EnsembleFromDistributionsMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.transform.FourierSpaceConvolution</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_HasAberrations</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">_EnsembleFromDistributionsMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">FourierSpaceConvolution</span></code></p>
 <p>Envelope function for simulating partial spatial coherence in the quasi-coherent approximation.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -1271,7 +1500,7 @@ may be provided.</p></li>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.transfer.SpatialEnvelope.aberration_coefficients">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">aberration_coefficients</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Union</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference internal" href="abtem.distributions.BaseDistribution.html#abtem.distributions.BaseDistribution" title="abtem.distributions.BaseDistribution"><span class="pre">abtem.distributions.BaseDistribution</span></a><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.transfer.SpatialEnvelope.aberration_coefficients" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">aberration_coefficients</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Union</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference internal" href="abtem.distributions.BaseDistribution.html#abtem.distributions.BaseDistribution" title="abtem.distributions.BaseDistribution"><span class="pre">BaseDistribution</span></a><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.transfer.SpatialEnvelope.aberration_coefficients" title="Permalink to this definition">#</a></dt>
 <dd><p>The parameters.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1282,7 +1511,7 @@ may be provided.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.transfer.SpatialEnvelope.accelerator">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.energy.Accelerator</span></em><a class="headerlink" href="#abtem.transfer.SpatialEnvelope.accelerator" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Accelerator</span></em><a class="headerlink" href="#abtem.transfer.SpatialEnvelope.accelerator" title="Permalink to this definition">#</a></dt>
 <dd><p>Accelerator object describing the acceleration energy.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1309,7 +1538,7 @@ may be provided.</p></li>
 <dd><p>Split the ensemble into an array of smaller ensembles.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code></p>
@@ -1323,7 +1552,7 @@ may be provided.</p></li>
 <dd><p>Generate chunks of the ensemble.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1335,8 +1564,8 @@ may be provided.</p></li>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>index</strong> (<em>tuple of ints</em>) – Index of selected block.</p></li>
-<li><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p></li>
+<li><p><strong>index</strong> (<em>tuple</em><em> of </em><em>ints</em>) – Index of selected block.</p></li>
+<li><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p></li>
 </ul>
 </dd>
 </dl>
@@ -1376,7 +1605,7 @@ may be provided.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference/api/_autosummary"
+            path: "./reference\api\_autosummary"
         },
         predefinedOutput: true
     }

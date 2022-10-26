@@ -1,133 +1,117 @@
-# The basics
+(getting_started:basic_examples)=
+# Basic examples
 
 :::{admonition} {material-regular}`engineering;1.5rem;sd-mr-1` Currently Under Construction
 :class: no-icon
-Check back for more...
+The examples are currently a work in progress. 
 :::
 
-This is a short overview of abTEM geared towards new users. Hence, for details 
+This is a selection of basic code examples for the most common types of simulations of electron microscopy experiments.
 
-There is much more information contained in the rest of the documentation.
+If you have previous experience with multislice simulations, we think that should be able to jump right in and modify 
+the most relevant for your simulation task. If you are completely new to multislice simulations we highly recommend that
+you go through [our walkthrough](user_guide:walkthrough), which also explains the basics multislice simulations. 
 
-For users with previous experience in . This 
+For more advanced examples, see our [tutorials section](tutorials:tutorials) or check one of the specialized examples in 
+the [gallery](user_guide:example_gallery).
 
-We normally import abTEM as follows:
-```python
-import abtem
+::::{grid} 3
+:gutter: 2
+
+:::{grid-item-card}
+:link: examples:cbed_quickstart
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+**CBED**
+^^^
+
+```{image} ../user_guide/examples/thumbnails/cbed_quickstart.png
+:align: center
 ```
 
-## Atomic model
-abTEM uses the atomic simulation environment for importing atomic models:
+:::
 
+
+:::{grid-item-card}
+:link: examples:hrtem_quickstart
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+
+**HRTEM**
+^^^
+
+```{image} ../user_guide/examples/thumbnails/hrtem_quickstart.png
+:align: center
 ```
 
-We can also procedurally create and modify structures: 
-
-
-The multislice algorithm requires cell with orthogonal lattice vectors. You can make your unit cell orthogonal ``:
-
-## Potential 
-We create an electron static potential by 
-
-
-We can include frozen phonons by wrapping 
-
-## Wave functions
-abTEM differs from codes for simulating electron diffraction by not directly implementing any common imaging modes 
-(STEM, HRTEM etc.). You select
-
-For simulating HRTEM and SAED you should define a plane wave:
-
-For STEM and CBED you should 
-
-## Setup simulation
-
-
-
-For simulating  
-
-## Execute computation
-abTEM is lazily evaluated. The result from a computation isn’t computed until you ask for it. Instead, a Dask task graph for the computation is produced.
-
-The array is a [Dask Array](https://docs.dask.org/en/stable/array.html), this means that it is "lazily" evaluated. When we create a lazy array, we only set up the tasks to compute the array, to execute those tasks we also have to call `compute`. After calling `compute` the Dask array becomes a NumPy array. 
-
-
-## Postprocess 
-
-
-
-
-## 
-::::{grid}
-
-:::{grid-item}
-:outline:
-:columns: 4
-**Wave functions**  
-`PlaneWave`  
-`Probe`  
-`Waves`
 :::
-:::{grid-item}
-:outline:
-:columns: 4
-**Potentials**  
-`Potential`  
-`PotentialArray`  
-`CrystalPotential`  
-`ChargeDensityPotential`  
-`GPAWPotential`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Detectors**  
-`AnnularDetector`
-`FlexibleAnnularDetector`
-`SegmentedDetector`
-`PixelatedDetector`
-`WavesDetector`
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Scans**  
-`GridScan`  
-`LineScan`  
-`CustomScan`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Measurements**  
-`Images`  
-`LineProfiles`  
-`FourierSpaceLineProfiles`  
-`DiffractionPatterns`  
-`PolarMeasurements`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**PRISM**  
-`SMatrix`  
-`SMatrixArray`  
-`PartitionedSMatrix`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**FrozenPhonons**  
-`FrozenPhonons`  
-`MDFrozenPhonons`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Transfer**  
-`Aperture`  
-`Aberrations`  
-`CTF`  
-:::
-::::
 
+
+:::{grid-item-card}
+:link: examples:stem_quickstart
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+
+**STEM-ADF**
+^^^
+
+```{image} ../user_guide/examples/thumbnails/stem_quickstart.png
+:align: center
+```
+
+:::
+
+
+:::{grid-item-card}
+:link: examples:prism_quickstart
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+
+**PRISM**
+^^^
+
+```{image} ../user_guide/examples/thumbnails/prism_quickstart.png
+:align: center
+```
+
+:::
+
+
+:::{grid-item-card}
+:link:
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+
+**SAED**
+^^^
+
+:::
+
+
+:::{grid-item-card}
+:link:
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+
+**4D-STEM**
+^^^
+
+:::
+
+
+:::{grid-item-card}
+:link:
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+
+**PED**
+^^^
+
+:::

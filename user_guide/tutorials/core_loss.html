@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,8 +52,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -59,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Plasmons" href="plasmons.html" />
     <link rel="prev" title="PRISM" href="prism.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -135,7 +135,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1123,7 +1123,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="core-loss-filtered-images">
-<h1>Core-loss filtered images<a class="headerlink" href="#core-loss-filtered-images" title="Permalink to this headline">#</a></h1>
+<h1>Core-loss filtered images<a class="headerlink" href="#core-loss-filtered-images" title="Permalink to this heading">#</a></h1>
 <p>We calculate an “energy-filtered” STEM image of SrTiO<span class="math notranslate nohighlight">\(_3\)</span> targeting oxygen, specifically we target its <em>K</em>-edge (i.e. the 1<em>s</em> subshell; quantum numbers <span class="math notranslate nohighlight">\((n, \ell) = (1, 0)\)</span>)). In a hypothetical experiment, this would be roughly equivalent to setting your energy filter to 456 eV.</p>
 <p>The following code calculates projected overlap integrals following to Dwyer <em>et al.</em> (see <a class="reference external" href="https://doi.org/10.1016/j.ultramic.2005.03.005">https://doi.org/10.1016/j.ultramic.2005.03.005</a> or <a class="reference external" href="https://doi.org/10.1103/PhysRevB.57.3273">https://doi.org/10.1103/PhysRevB.57.3273</a>), dynamical scattering following Brown <em>et al.</em> (<a class="reference external" href="https://doi.org/10.1103/PhysRevResearch.1.033186">https://doi.org/10.1103/PhysRevResearch.1.033186</a>) and uses the density functional theory code <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/index.html">GPAW</a> for calculating wave functions. Please see our citation guide if you use this code in a publication.</p>
 <div class="cell docutils container">
@@ -1411,7 +1411,7 @@ Strontium:
         },
         kernelOptions: {
             kernelName: "abtem",
-            path: "./user_guide/tutorials"
+            path: "./user_guide\tutorials"
         },
         predefinedOutput: true
     }

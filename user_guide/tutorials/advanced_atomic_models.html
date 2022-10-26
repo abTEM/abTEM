@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,8 +52,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -59,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Partial coherence" href="partial_coherence.html" />
     <link rel="prev" title="Advanced tutorials" href="tutorials.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -135,7 +135,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1249,10 +1249,10 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="advanced-atomic-models">
-<span id="tutorials-advanced-atomic-models"></span><h1>Advanced atomic models<a class="headerlink" href="#advanced-atomic-models" title="Permalink to this headline">#</a></h1>
+<span id="tutorials-advanced-atomic-models"></span><h1>Advanced atomic models<a class="headerlink" href="#advanced-atomic-models" title="Permalink to this heading">#</a></h1>
 <p>In this advanced tutorial, we cover more complex ways of creating and manipulating atomic models.</p>
 <section id="downloading-structures-from-databases">
-<h2>Downloading structures from databases<a class="headerlink" href="#downloading-structures-from-databases" title="Permalink to this headline">#</a></h2>
+<h2>Downloading structures from databases<a class="headerlink" href="#downloading-structures-from-databases" title="Permalink to this heading">#</a></h2>
 <p>You can obtain structure files for most crystal structures from internet databases through your browser. The structure file imported above was downloaded from the <a class="reference external" href="https://materialsproject.org/">Materials Project</a>, but note that you need a free account to download data. We recommend this database because it is open source and provides a huge number of high-quality structures. It should howdever be noted that structures in the Materials Project database are determined computationally, and hence they may differ slightly from experiment.</p>
 <p>The simplest way to get a structure from the Materials Project is to find it through their web interface, but you can also access their database through an API. Below we use the API to obtain the same strontium titanate structure. To run this code, you need an API key from the materials project and insert it in place of “your_api_key”. In the example below, which is shown but not excuted, we additionally use the <a class="reference external" href="https://pymatgen.org/">pymatgen</a> package to adapt the structure into the ASE format.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">mp_api.client</span> <span class="kn">import</span> <span class="n">MPRester</span>
@@ -1265,7 +1265,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="visualizing-structures-in-3d">
-<h2>Visualizing structures in 3D<a class="headerlink" href="#visualizing-structures-in-3d" title="Permalink to this headline">#</a></h2>
+<h2>Visualizing structures in 3D<a class="headerlink" href="#visualizing-structures-in-3d" title="Permalink to this heading">#</a></h2>
 <p>To view the atoms in an interactive 3D graphical user interface (GUI) viewer, we can use ASE’s <code class="docutils literal notranslate"><span class="pre">view</span></code> function (see the documentation <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/visualize/visualize.html">here</a>). Note that this may not work in a remote environment unless X11 forwarding is correctly set up (below we simply show the code instead of running it).</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase.visualize</span> <span class="kn">import</span> <span class="n">view</span>
 <span class="n">view</span><span class="p">(</span><span class="n">srtio3</span><span class="p">)</span>
@@ -1277,7 +1277,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="building-structures">
-<h2>Building structures<a class="headerlink" href="#building-structures" title="Permalink to this headline">#</a></h2>
+<h2>Building structures<a class="headerlink" href="#building-structures" title="Permalink to this heading">#</a></h2>
 <p>In addition to importing structures, ASE has tools for procedurally creating many common structures:</p>
 <ul class="simple">
 <li><p>Common bulk crystals: <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/build.html#ase.build.bulk"><code class="docutils literal notranslate"><span class="pre">ase.build.bulk</span></code></a></p></li>
@@ -1308,10 +1308,10 @@ title="Print to PDF"
 </div>
 </section>
 <section id="manipulating-structures">
-<h2>Manipulating structures<a class="headerlink" href="#manipulating-structures" title="Permalink to this headline">#</a></h2>
+<h2>Manipulating structures<a class="headerlink" href="#manipulating-structures" title="Permalink to this heading">#</a></h2>
 <p>The structure you import or build may not match your requirements or the requirements of <em>ab</em>TEM. Here, we exemplify the most common manipulations needed to modify atomic models for image simulation.</p>
 <section id="rotating-structures">
-<h3>Rotating structures<a class="headerlink" href="#rotating-structures" title="Permalink to this headline">#</a></h3>
+<h3>Rotating structures<a class="headerlink" href="#rotating-structures" title="Permalink to this heading">#</a></h3>
 <p>A common problem when creating model structures is choosing the imaging direction. <em>ab</em>TEM always assumes that the imaging electrons travel along the <span class="math notranslate nohighlight">\(z\)</span>-axis in the direction from negative to positive coordinate values, hence choosing the propagation direction requires manipulating the atomic structure.</p>
 <p>In this example, we rotate the nanoparticle into the (111) zone axis. We first <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/atoms.html?highlight=atoms#ase.Atoms.rotate"><code class="docutils literal notranslate"><span class="pre">rotate</span></code></a> the atoms by 45° around <span class="math notranslate nohighlight">\(x\)</span> and then by <span class="math notranslate nohighlight">\(\sim\)</span>35.26° around <span class="math notranslate nohighlight">\(y\)</span>.</p>
 <div class="cell docutils container">
@@ -1333,7 +1333,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="adding-vacuum">
-<h3>Adding vacuum<a class="headerlink" href="#adding-vacuum" title="Permalink to this headline">#</a></h3>
+<h3>Adding vacuum<a class="headerlink" href="#adding-vacuum" title="Permalink to this heading">#</a></h3>
 <p>The unit cell of the nanoparticle has <em>zero extent</em>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1370,7 +1370,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="rotation-of-bulk-structures">
-<h3>Rotation of bulk structures<a class="headerlink" href="#rotation-of-bulk-structures" title="Permalink to this headline">#</a></h3>
+<h3>Rotation of bulk structures<a class="headerlink" href="#rotation-of-bulk-structures" title="Permalink to this heading">#</a></h3>
 <p>We simply rotated the nanoparticle without considering the unit cell because it does not require periodicity at the cell boundary. This is not possible for periodic structures; in such cases ASE provides the <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/surface.html#create-specific-non-common-surfaces"><code class="docutils literal notranslate"><span class="pre">surface</span></code></a> function for picking the <a class="reference external" href="https://en.wikipedia.org/wiki/Zone_axis">zone axis</a> of a given structure by providing the Miller indices. Below we create a SrTiO<sub>3</sub> structure in the (110) zone axis.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1395,7 +1395,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="conditionally-modifying-atoms">
-<h3>Conditionally modifying atoms<a class="headerlink" href="#conditionally-modifying-atoms" title="Permalink to this headline">#</a></h3>
+<h3>Conditionally modifying atoms<a class="headerlink" href="#conditionally-modifying-atoms" title="Permalink to this heading">#</a></h3>
 <p>The atomic positions and numbers are just <code class="docutils literal notranslate"><span class="pre">numpy</span></code> arrays and can be modified directly. The ASE documentation provides some tips <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/tips.html#atoms-objects">here</a>.</p>
 <p>We create a SrTiO<sub>3</sub> / LaTiO<sub>3</sub> interface by changing the atomic number of the Sr atoms in one half of the cell.</p>
 <div class="cell docutils container">
@@ -1425,7 +1425,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="scaling-structures">
-<h3>Scaling structures<a class="headerlink" href="#scaling-structures" title="Permalink to this headline">#</a></h3>
+<h3>Scaling structures<a class="headerlink" href="#scaling-structures" title="Permalink to this heading">#</a></h3>
 <p>The structure created above uses the lattice constant of SrTiO<sub>3</sub> calculated from DFT. Below we scale the structure to have the average experimental lattice constant of SrTiO<sub>3</sub> and LaTiO<sub>3</sub>, achieved by using the <code class="docutils literal notranslate"><span class="pre">scale_atoms=True</span></code> parameter.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1449,7 +1449,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="combining-multiple-structures">
-<h3>Combining multiple structures<a class="headerlink" href="#combining-multiple-structures" title="Permalink to this headline">#</a></h3>
+<h3>Combining multiple structures<a class="headerlink" href="#combining-multiple-structures" title="Permalink to this heading">#</a></h3>
 <p>Some complex heterostructures can only be created by combining multiple component structures. As an example, we create a model of a nanoparticle supported on amorphous carbon.</p>
 <p>Below, the amorphous carbon is created by randomly displacing the atoms of a diamond structure; more accurate models should be considered for realistic simulations (e.g. <span id="id1">[<a class="reference internal" href="../bibliography.html#id16" title="Miguel A. Caro. Amorphous carbon films generated through simulated deposition with GAP from 1eV to 100eV. 2020. URL: https://doi.org/10.5281/zenodo.3778153, doi:10.5281/zenodo.3778153.">Car20</a>]</span>).</p>
 <div class="cell docutils container">
@@ -1530,7 +1530,7 @@ title="Print to PDF"
 </section>
 </section>
 <section id="orthogonal-and-periodic-supercells">
-<span id="orthogonal"></span><h2>Orthogonal and periodic supercells<a class="headerlink" href="#orthogonal-and-periodic-supercells" title="Permalink to this headline">#</a></h2>
+<span id="orthogonal"></span><h2>Orthogonal and periodic supercells<a class="headerlink" href="#orthogonal-and-periodic-supercells" title="Permalink to this heading">#</a></h2>
 <p>The multislice algorithm requires an orthogonal and periodic atomic structure as its input. However, taking any arbitrary structure and making it periodic and orthogonal is not always trivial, and we therefore give an in-depth tutorial on this problem here.</p>
 <p>Below we briefly introduce a tool we have created to solve this problem. To demonstrate the tool, we start by creating a graphene structure with the its minimal non-orthogonal unit cell.</p>
 <div class="cell docutils container">
@@ -1635,7 +1635,7 @@ Shear strains (percent): 	 xy = 0.000, 	 xz = 0.000, 	 xz = 0.000
         },
         kernelOptions: {
             kernelName: "abtem",
-            path: "./user_guide/tutorials"
+            path: "./user_guide\tutorials"
         },
         predefinedOutput: true
     }

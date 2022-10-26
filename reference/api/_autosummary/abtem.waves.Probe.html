@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="Waves" href="abtem.waves.Waves.html" />
     <link rel="prev" title="PlaneWave" href="abtem.waves.PlaneWave.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1039,12 +1039,312 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
+<label for="__page-toc"
+  class="headerbtn headerbtn-page-toc"
+  
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-list"></i>
+  </span>
+
+</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
+    <div class="tocsection onthispage pt-5 pb-3">
+        <i class="fas fa-list"></i> Contents
+    </div>
+    <nav id="bd-toc-nav" aria-label="Page">
+        <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.waves.Probe">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Probe
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.aberrations">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.aberrations
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.accelerator">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.accelerator
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.angular_sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.angular_sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.aperture">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.aperture
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.axes_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.axes_metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.build">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.build()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.cutoff_angles">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.cutoff_angles
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.energy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.energy
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.extent">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.extent
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.fourier_space_sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.fourier_space_sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.full_cutoff_angles">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.full_cutoff_angles
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.gpts">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.gpts
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.grid
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.match_grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.match_grid()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.multislice">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.multislice()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.num_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.num_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.num_base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.num_base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.num_ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.num_ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.profile">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.profile()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.rectangle_cutoff_angles">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.rectangle_cutoff_angles
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.scan">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.scan()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.shape">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.shape
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.show">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.show()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.wavelength">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.wavelength
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1056,6 +1356,295 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
+                        <div>
+                            <h2> Contents </h2>
+                        </div>
+                        <nav aria-label="Page">
+                            <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.waves.Probe">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Probe
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.aberrations">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.aberrations
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.accelerator">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.accelerator
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.angular_sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.angular_sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.aperture">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.aperture
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.axes_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.axes_metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.build">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.build()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.cutoff_angles">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.cutoff_angles
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.energy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.energy
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.extent">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.extent
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.fourier_space_sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.fourier_space_sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.full_cutoff_angles">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.full_cutoff_angles
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.gpts">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.gpts
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.grid
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.match_grid">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.match_grid()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.multislice">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.multislice()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.num_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.num_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.num_base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.num_base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.num_ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.num_ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.profile">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.profile()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.rectangle_cutoff_angles">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.rectangle_cutoff_angles
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.sampling">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.sampling
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.scan">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.scan()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.shape">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.shape
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.show">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.show()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.waves.Probe.wavelength">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Probe.wavelength
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+                        </nav>
                     </div>
                 </div>
             </div>
@@ -1064,11 +1653,11 @@ title="Print to PDF"
               <div>
                 
   <section id="probe">
-<h1>Probe<a class="headerlink" href="#probe" title="Permalink to this headline">#</a></h1>
+<h1>Probe<a class="headerlink" href="#probe" title="Permalink to this heading">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.waves.Probe">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.waves.</span></span><span class="sig-name descname"><span class="pre">Probe</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">semiangle_cutoff</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">taper</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tilt</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aperture</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aberrations</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transforms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves.html#Probe"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.Probe" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.waves._WavesFactory</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_WavesFactory</span></code></p>
 <p>Represents electron-probe wave functions for simulating experiments with a convergent beam,
 such as CBED and STEM.</p>
 <dl class="field-list simple">
@@ -1264,7 +1853,7 @@ such as CBED and STEM.</p>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Probe.aberrations">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">aberrations</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="abtem.transfer.Aberrations.html#abtem.transfer.Aberrations" title="abtem.transfer.Aberrations"><span class="pre">abtem.transfer.Aberrations</span></a></em><a class="headerlink" href="#abtem.waves.Probe.aberrations" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">aberrations</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="abtem.transfer.Aberrations.html#abtem.transfer.Aberrations" title="abtem.transfer.Aberrations"><span class="pre">Aberrations</span></a></em><a class="headerlink" href="#abtem.waves.Probe.aberrations" title="Permalink to this definition">#</a></dt>
 <dd><p>Phase aberrations of the probe wave functions.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1275,7 +1864,7 @@ such as CBED and STEM.</p>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Probe.accelerator">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.energy.Accelerator</span></em><a class="headerlink" href="#abtem.waves.Probe.accelerator" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Accelerator</span></em><a class="headerlink" href="#abtem.waves.Probe.accelerator" title="Permalink to this definition">#</a></dt>
 <dd><p>Accelerator object describing the acceleration energy.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1297,7 +1886,7 @@ such as CBED and STEM.</p>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Probe.aperture">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">aperture</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="abtem.transfer.Aperture.html#abtem.transfer.Aperture" title="abtem.transfer.Aperture"><span class="pre">abtem.transfer.Aperture</span></a></em><a class="headerlink" href="#abtem.waves.Probe.aperture" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">aperture</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="abtem.transfer.Aperture.html#abtem.transfer.Aperture" title="abtem.transfer.Aperture"><span class="pre">Aperture</span></a></em><a class="headerlink" href="#abtem.waves.Probe.aperture" title="Permalink to this definition">#</a></dt>
 <dd><p>Condenser or probe-forming aperture.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1308,7 +1897,7 @@ such as CBED and STEM.</p>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Probe.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.waves.Probe.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.waves.Probe.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1431,7 +2020,7 @@ setting in the user configuration file.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Probe.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.waves.Probe.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.waves.Probe.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1465,8 +2054,8 @@ setting in the user configuration file.</p></li>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>potential</strong> (<a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><em>BasePotential</em></a><em> or </em><em>Atoms</em>) – The scattering potential. Optionally atoms can be directly given.</p></li>
-<li><p><strong>scan</strong> (<em>array of xy-positions</em><em> or </em><a class="reference internal" href="abtem.scan.BaseScan.html#abtem.scan.BaseScan" title="abtem.scan.BaseScan"><em>BaseScan</em></a><em>, </em><em>optional</em>) – Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.</p></li>
-<li><p><strong>detectors</strong> (<a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em> or </em><em>list of BaseDetector</em><em>, </em><em>optional</em>) – <dl class="simple">
+<li><p><strong>scan</strong> (<em>array</em><em> of </em><em>xy-positions</em><em> or </em><a class="reference internal" href="abtem.scan.BaseScan.html#abtem.scan.BaseScan" title="abtem.scan.BaseScan"><em>BaseScan</em></a><em>, </em><em>optional</em>) – Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.</p></li>
+<li><p><strong>detectors</strong> (<a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em> or </em><em>list</em><em> of </em><a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em>, </em><em>optional</em>) – <dl class="simple">
 <dt>A detector or a list of detectors defining how the wave functions should be converted to measurements after</dt><dd><p>running the multislice algorithm. If not given, defaults to the flexible annular detector.</p>
 </dd>
 <dt>max_batch<span class="classifier">int, optional</span></dt><dd><p>The number of wave functions in each chunk of the Dask array. If ‘auto’, the number of chunks are
@@ -1483,7 +2072,7 @@ setting in the user configuration file.</p></li>
 <dd class="field-even"><p><strong>measurements</strong></p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a> or <a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves">Waves</a> or list of BaseMeasurement</p>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a> or <a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves">Waves</a> or list of <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1566,7 +2155,7 @@ setting in the user configuration file.</p></li>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>potential</strong> (<a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><em>BasePotential</em></a><em> or </em><em>Atoms</em>) – The scattering potential.</p></li>
 <li><p><strong>scan</strong> (<a class="reference internal" href="abtem.scan.BaseScan.html#abtem.scan.BaseScan" title="abtem.scan.BaseScan"><em>BaseScan</em></a>) – Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.</p></li>
-<li><p><strong>detectors</strong> (<a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em>, </em><em>list of BaseDetector</em><em>, </em><em>optional</em>) – A detector or a list of detectors defining how the wave functions should be converted to measurements after
+<li><p><strong>detectors</strong> (<a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em>, </em><em>list</em><em> of </em><a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em>, </em><em>optional</em>) – A detector or a list of detectors defining how the wave functions should be converted to measurements after
 running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.</p></li>
 <li><p><strong>max_batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
 automatically estimated based on “dask.chunk-size” in the user configuration.</p></li>
@@ -1632,7 +2221,7 @@ set in the configuration file.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference/api/_autosummary"
+            path: "./reference\api\_autosummary"
         },
         predefinedOutput: true
     }

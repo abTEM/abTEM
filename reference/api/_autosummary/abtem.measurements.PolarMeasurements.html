@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="RealSpaceLineProfiles" href="abtem.measurements.RealSpaceLineProfiles.html" />
     <link rel="prev" title="Images" href="abtem.measurements.Images.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1039,12 +1039,249 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
+<label for="__page-toc"
+  class="headerbtn headerbtn-page-toc"
+  
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-list"></i>
+  </span>
+
+</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
+    <div class="tocsection onthispage pt-5 pb-3">
+        <i class="fas fa-list"></i> Contents
+    </div>
+    <nav id="bd-toc-nav" aria-label="Page">
+        <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     PolarMeasurements
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.abs">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.abs()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.axes_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.axes_metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.copy_to_device">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.copy_to_device()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.from_array_and_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.from_array_and_metadata()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.from_zarr">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.from_zarr()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.imag">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.imag()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.integrate_radial">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.integrate_radial()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.intensity">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.intensity()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.num_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.num_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.num_base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.num_base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.num_ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.num_ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.phase">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.phase()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.poisson_noise">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.poisson_noise()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.real">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.real()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.reduce_ensemble">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.reduce_ensemble()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.relative_difference">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.relative_difference()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.shape">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.shape
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.to_hyperspy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.to_hyperspy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.to_zarr">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.to_zarr()
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1056,6 +1293,232 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
+                        <div>
+                            <h2> Contents </h2>
+                        </div>
+                        <nav aria-label="Page">
+                            <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     PolarMeasurements
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.__init__">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.__init__()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.abs">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.abs()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.axes_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.axes_metadata
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.copy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.copy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.copy_to_device">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.copy_to_device()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.from_array_and_metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.from_array_and_metadata()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.from_zarr">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.from_zarr()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.imag">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.imag()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.integrate_radial">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.integrate_radial()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.intensity">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.intensity()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.num_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.num_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.num_base_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.num_base_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.num_ensemble_axes">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.num_ensemble_axes
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.phase">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.phase()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.poisson_noise">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.poisson_noise()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.real">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.real()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.reduce_ensemble">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.reduce_ensemble()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.relative_difference">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.relative_difference()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.shape">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.shape
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.to_hyperspy">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.to_hyperspy()
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abtem.measurements.PolarMeasurements.to_zarr">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PolarMeasurements.to_zarr()
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+                        </nav>
                     </div>
                 </div>
             </div>
@@ -1064,11 +1527,11 @@ title="Print to PDF"
               <div>
                 
   <section id="polarmeasurements">
-<h1>PolarMeasurements<a class="headerlink" href="#polarmeasurements" title="Permalink to this headline">#</a></h1>
+<h1>PolarMeasurements<a class="headerlink" href="#polarmeasurements" title="Permalink to this heading">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.measurements.PolarMeasurements">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.measurements.</span></span><span class="sig-name descname"><span class="pre">PolarMeasurements</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radial_sampling</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">azimuthal_sampling</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radial_offset</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">azimuthal_offset</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#PolarMeasurements"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.PolarMeasurements" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.measurements.BaseMeasurement</span></code></a></p>
+<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseMeasurement</span></code></a></p>
 <p>Class describing polar measurements with a specified number of radial and azimuthal bins.</p>
 <p>Each bin is a segment of an annulus and the bins are spaced equally in the radial and azimuthal directions.
 The bins may be rotated around the origin, and their center may be shifted from the origin.</p>
@@ -1437,7 +1900,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.PolarMeasurements.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.PolarMeasurements.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.PolarMeasurements.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1494,7 +1957,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more polar measurements. The second-to-last and last dimensions are the
 measurement <cite>y</cite>- and <cite>x</cite>-axis.</p></li>
-<li><p><strong>axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
+<li><p><strong>axes_metadata</strong> (<em>list</em><em> of </em><em>AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
 axes must be RealSpaceAxis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em>) – A dictionary defining the measurement metadata.</p></li>
 </ul>
@@ -1735,7 +2198,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference/api/_autosummary"
+            path: "./reference\api\_autosummary"
         },
         predefinedOutput: true
     }

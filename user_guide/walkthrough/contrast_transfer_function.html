@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,8 +52,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -59,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Scan and detect" href="scan_and_detect.html" />
     <link rel="prev" title="Multislice simulations" href="multislice.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -135,7 +135,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1227,10 +1227,10 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="contrast-transfer-function">
-<span id="walkthrough-contrast-transfer-function"></span><h1>Contrast transfer function<a class="headerlink" href="#contrast-transfer-function" title="Permalink to this headline">#</a></h1>
+<span id="walkthrough-contrast-transfer-function"></span><h1>Contrast transfer function<a class="headerlink" href="#contrast-transfer-function" title="Permalink to this heading">#</a></h1>
 <p>The <a class="reference external" href="https://en.wikipedia.org/wiki/Contrast_transfer_function">contrast transfer function</a> (CTF) describes the aberrations of the objective lens in HRTEM and  how the condenser system shapes the probe in STEM. Here we describe how to create a CTF with specific aberrations and how this affects the resulting images.</p>
 <section id="phase-aberrations">
-<h2>Phase aberrations<a class="headerlink" href="#phase-aberrations" title="Permalink to this headline">#</a></h2>
+<h2>Phase aberrations<a class="headerlink" href="#phase-aberrations" title="Permalink to this heading">#</a></h2>
 <p>Ideally, a lens forms a spherical wave converging on or emerging from a single point. In practice, aberrations cause the wave front to deviate from a spherical surface. In a polar representation, this deviation, or phase aberration, can be written as <span class="math notranslate nohighlight">\(\chi(k, \phi)\)</span>, where <span class="math notranslate nohighlight">\(k = \sqrt{k_x^2 + k_y^2}\)</span> is the radial component and <span class="math notranslate nohighlight">\(\phi = \arctan(k_y / k_x)\)</span> is the azimuthal component. We expand the phase error as a series expansion</p>
 <div class="math notranslate nohighlight">
 \[ 
@@ -1306,7 +1306,7 @@ title="Print to PDF"
 </tbody>
 </table>
 <section id="point-spread-function">
-<h3>Point spread function<a class="headerlink" href="#point-spread-function" title="Permalink to this headline">#</a></h3>
+<h3>Point spread function<a class="headerlink" href="#point-spread-function" title="Permalink to this heading">#</a></h3>
 <p>We can visualize each phase aberration by showing its effect on a small probe wave function. This is called the point spread function (PSF) and describes the response of an imaging system to a point source. In the image grid below, the indicated aberration is applied to the probe shown in the bottom left. Both magnitude and phase are indicated through domain coloring. The magnitude of the coefficients are scaled by the radial order according to a power law.</p>
 <div class="cell tag_hide-input docutils container">
 <div class="cell_input docutils container">
@@ -1371,7 +1371,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="applying-phase-aberrations-to-wave-functions">
-<h3>Applying phase aberrations to wave functions<a class="headerlink" href="#applying-phase-aberrations-to-wave-functions" title="Permalink to this headline">#</a></h3>
+<h3>Applying phase aberrations to wave functions<a class="headerlink" href="#applying-phase-aberrations-to-wave-functions" title="Permalink to this heading">#</a></h3>
 <p>Given an exit wave function <span class="math notranslate nohighlight">\(\phi_{exit}\)</span> and an objective lens with a phase error <span class="math notranslate nohighlight">\(\chi\)</span> (and infinite aperture), the wave function at the image plane is given by</p>
 <div class="math notranslate nohighlight" id="equation-eq-user-guide-walkthrough-contrast-transfer-function-apply-ctf">
 <span class="eqno">(4)<a class="headerlink" href="#equation-eq-user-guide-walkthrough-contrast-transfer-function-apply-ctf" title="Permalink to this equation">#</a></span>\[  
@@ -1469,7 +1469,7 @@ title="Print to PDF"
 <p>Without an aperture, the high-frequency components of the CTF lead to the observed complicated contrast variation.</p>
 </section>
 <section id="focal-series">
-<h3>Focal series<a class="headerlink" href="#focal-series" title="Permalink to this headline">#</a></h3>
+<h3>Focal series<a class="headerlink" href="#focal-series" title="Permalink to this heading">#</a></h3>
 <p>It common that the aberrations of your microscope are not known exactly, and thus it is useful to simulate an ensemble of images with different aberrations.</p>
 <p>We create an ensemble of <code class="docutils literal notranslate"><span class="pre">CTF</span></code>s for an range of defocii.</p>
 <div class="cell docutils container">
@@ -1503,7 +1503,7 @@ title="Print to PDF"
 </section>
 </section>
 <section id="aperture">
-<h2>Aperture<a class="headerlink" href="#aperture" title="Permalink to this headline">#</a></h2>
+<h2>Aperture<a class="headerlink" href="#aperture" title="Permalink to this heading">#</a></h2>
 <p>In practice, the maximum transferred frequency is limited by the aperture of the objective lens. This is conventionally described as a multiplication with the aperture function:</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1564,7 +1564,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="partial-coherence-quasi-coherent">
-<h2>Partial coherence (quasi-coherent)<a class="headerlink" href="#partial-coherence-quasi-coherent" title="Permalink to this headline">#</a></h2>
+<h2>Partial coherence (quasi-coherent)<a class="headerlink" href="#partial-coherence-quasi-coherent" title="Permalink to this heading">#</a></h2>
 <p>Partial coherence acts similarly to the aperture function to dampen the high spatial frequencies of the signal. Partial coherence may be approximated by multiplying the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> by envelope functions:</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1581,7 +1581,7 @@ title="Print to PDF"
 <p>Here partial coherence is applied using the convenient quasi-coherent approximation. This is only appropriate for HRTEM simulations when the effect is sufficiently small, but it is generally <em>never</em> appropriate for STEM simulations. The more accurate approach of using an incoherent summation is <a class="reference internal" href="../tutorials/partial_coherence.html"><span class="doc std std-doc">introduced in a tutorial</span></a>.</p>
 </div>
 <section id="partial-temporal-coherence">
-<h3>Partial temporal coherence<a class="headerlink" href="#partial-temporal-coherence" title="Permalink to this headline">#</a></h3>
+<h3>Partial temporal coherence<a class="headerlink" href="#partial-temporal-coherence" title="Permalink to this heading">#</a></h3>
 <p>The most important source of partial coherence in HRTEM is partial temporal coherence. A small spread in energy of the incident electrons, <span class="math notranslate nohighlight">\(\Delta E\)</span>, is due to the chromatic aberration of the objective lens equivalent to a small spread in defocus. Fluctuations in the focusing currents of the objective lens, <span class="math notranslate nohighlight">\(\Delta I\)</span>, also produce an incoherent spread in defocus. Combining these effects, the standard deviation of the focal spread may be written as</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1627,7 +1627,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="partial-spatial-coherence">
-<h3>Partial spatial coherence<a class="headerlink" href="#partial-spatial-coherence" title="Permalink to this headline">#</a></h3>
+<h3>Partial spatial coherence<a class="headerlink" href="#partial-spatial-coherence" title="Permalink to this heading">#</a></h3>
 <p>As the electron source has a finite size, the incident beam contains a distribution of incident directions. In HRTEM this is quantified by <em>angular spread</em>. Assuming that each incident direction performs its own scattering and that the distribution of incident directions is small, it can be shown that the angular spread can be modelled by the spatial coherence envelope function<span id="id2">[<a class="reference internal" href="../bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span>, as given by</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1691,7 +1691,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "abtem",
-            path: "./user_guide/walkthrough"
+            path: "./user_guide\walkthrough"
         },
         predefinedOutput: true
     }

@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="DFT vs. IAM in hBN diffraction" href="hbn_dft_iam.html" />
     <link rel="prev" title="PRISM quickstart" href="prism_quickstart.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1096,13 +1096,27 @@ title="Print to PDF"
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">graphene</span>
 <span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">write</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">abtem</span>
 </pre></div>
 </div>
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="stem-quickstart">
-<span id="examples-stem-quickstart"></span><h1>STEM quickstart<a class="headerlink" href="#stem-quickstart" title="Permalink to this headline">#</a></h1>
+<span id="examples-stem-quickstart"></span><h1>STEM quickstart<a class="headerlink" href="#stem-quickstart" title="Permalink to this heading">#</a></h1>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;device&quot;</span><span class="p">:</span> <span class="s2">&quot;gpu&quot;</span><span class="p">})</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;fft&quot;</span><span class="p">:</span> <span class="s2">&quot;mkl&quot;</span><span class="p">})</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x1c1533b24f0&gt;
+</pre></div>
+</div>
+</div>
+</div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">orthogonalize_cell</span><span class="p">(</span><span class="n">graphene</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span>
@@ -1111,14 +1125,198 @@ title="Print to PDF"
 
 <span class="n">atoms</span><span class="o">.</span><span class="n">numbers</span><span class="p">[</span><span class="mi">10</span><span class="p">]</span> <span class="o">=</span> <span class="mi">14</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+<span class="n">atoms</span><span class="o">.</span><span class="n">center</span><span class="p">()</span>
 
-<span class="n">write</span><span class="p">(</span><span class="s1">&#39;../../user_guide/data/graphene_with_si.cif&#39;</span><span class="p">,</span> <span class="n">atoms</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../../_images/stem_quickstart_2_0.png" src="../../../_images/stem_quickstart_2_0.png" />
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 1 Axes&gt;,
+ &lt;AxesSubplot: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
+</pre></div>
+</div>
+<img alt="../../../_images/stem_quickstart_3_1.png" src="../../../_images/stem_quickstart_3_1.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span>
+
+<span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<span class="n">probe</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">grid_scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="o">.</span><span class="n">from_fractional_coordinates</span><span class="p">(</span>
+    <span class="n">potential</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">end</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">sampling</span><span class="o">=</span><span class="n">probe</span><span class="o">.</span><span class="n">aperture</span><span class="o">.</span><span class="n">nyquist_sampling</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FlexibleAnnularDetector</span><span class="p">()</span>
+
+<span class="n">measurements</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">detector</span><span class="p">)</span>
+<span class="n">measurements</span><span class="o">.</span><span class="n">array</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_html"><table>
+    <tr>
+        <td>
+            <table>
+                <thead>
+                    <tr>
+                        <td> </td>
+                        <th> Array </th>
+                        <th> Chunk </th>
+                    </tr>
+                </thead>
+                <tbody>
+
+                    <tr>
+                        <th> Bytes </th>
+                        <td> 588.67 kiB </td>
+                        <td> 588.67 kiB </td>
+                    </tr>
+
+                    <tr>
+                        <th> Shape </th>
+                        <td> (22, 25, 274, 1) </td>
+                        <td> (22, 25, 274, 1) </td>
+                    </tr>
+                    <tr>
+                        <th> Count </th>
+                        <td> 8 Graph Layers </td>
+                        <td> 1 Chunks </td>
+                    </tr>
+                    <tr>
+                    <th> Type </th>
+                    <td> float32 </td>
+                    <td> numpy.ndarray </td>
+                    </tr>
+                </tbody>
+            </table>
+        </td>
+        <td>
+        <svg width="311" height="192" style="stroke:rgb(0,0,0);stroke-width:1" >
+
+  <!-- Horizontal lines -->
+  <line x1="0" y1="0" x2="37" y2="0" style="stroke-width:2" />
+  <line x1="0" y1="25" x2="37" y2="25" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="0" y1="0" x2="0" y2="25" style="stroke-width:2" />
+  <line x1="37" y1="0" x2="37" y2="25" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="0.0,0.0 37.34780011086898,0.0 37.34780011086898,25.412616514582485 0.0,25.412616514582485" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Text -->
+  <text x="18.673900" y="45.412617" font-size="1.0rem" font-weight="100" text-anchor="middle" >22</text>
+  <text x="57.347800" y="12.706308" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(0,57.347800,12.706308)">1</text>
+
+
+  <!-- Horizontal lines -->
+  <line x1="107" y1="0" x2="129" y2="22" style="stroke-width:2" />
+  <line x1="107" y1="120" x2="129" y2="142" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="107" y1="0" x2="107" y2="120" style="stroke-width:2" />
+  <line x1="129" y1="22" x2="129" y2="142" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="107.0,0.0 129.40167302879183,22.401673028791834 129.40167302879183,142.40167302879183 107.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Horizontal lines -->
+  <line x1="107" y1="0" x2="132" y2="0" style="stroke-width:2" />
+  <line x1="129" y1="22" x2="154" y2="22" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="107" y1="0" x2="129" y2="22" style="stroke-width:2" />
+  <line x1="132" y1="0" x2="154" y2="22" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="107.0,0.0 132.41261651458248,0.0 154.81428954337431,22.401673028791834 129.40167302879183,22.401673028791834" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Horizontal lines -->
+  <line x1="129" y1="22" x2="154" y2="22" style="stroke-width:2" />
+  <line x1="129" y1="142" x2="154" y2="142" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="129" y1="22" x2="129" y2="142" style="stroke-width:2" />
+  <line x1="154" y1="22" x2="154" y2="142" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="129.40167302879183,22.401673028791834 154.81428954337431,22.401673028791834 154.81428954337431,142.40167302879183 129.40167302879183,142.40167302879183" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Text -->
+  <text x="142.107981" y="162.401673" font-size="1.0rem" font-weight="100" text-anchor="middle" >1</text>
+  <text x="174.814290" y="82.401673" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,174.814290,82.401673)">274</text>
+  <text x="108.200837" y="151.200837" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,108.200837,151.200837)">25</text>
+</svg>
+        </td>
+    </tr>
+</table></div></div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurements</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 542.77 ms
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x000001C10B8A5790&gt;
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">integrated_measurement</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">150</span><span class="p">)</span>
+
+<span class="n">interpolated_measurement</span> <span class="o">=</span> <span class="n">integrated_measurement</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">.05</span><span class="p">)</span>
+
+<span class="n">filtered_measurement</span> <span class="o">=</span> <span class="n">interpolated_measurement</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">.3</span><span class="p">)</span>
+
+<span class="n">noisy_measurement</span> <span class="o">=</span> <span class="n">filtered_measurement</span><span class="o">.</span><span class="n">poisson_noise</span><span class="p">(</span><span class="mf">1e6</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">noisy_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 2 Axes&gt;, &lt;Axes: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
+</pre></div>
+</div>
+<img alt="../../../_images/stem_quickstart_9_1.png" src="../../../_images/stem_quickstart_9_1.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">noisy_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">&quot;off&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;../thumbnails/stem_quickstart.png&quot;</span><span class="p">,</span> <span class="n">bbox_inches</span><span class="o">=</span><span class="s2">&quot;tight&quot;</span><span class="p">,</span> <span class="n">pad_inches</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../../_images/stem_quickstart_10_0.png" src="../../../_images/stem_quickstart_10_0.png" />
 </div>
 </div>
 </section>
@@ -1132,16 +1330,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem-dask"
+            mode: "abtem-dask-gpu"
         },
         kernelOptions: {
-            kernelName: "abtem-dask",
-            path: "./user_guide/examples/notebooks"
+            kernelName: "abtem-dask-gpu",
+            path: "./user_guide\examples\notebooks"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem-dask'</script>
+    <script>kernelName = 'abtem-dask-gpu'</script>
 
               </div>
               

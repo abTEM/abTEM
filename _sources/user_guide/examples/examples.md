@@ -1,7 +1,7 @@
 (user_guide:example_gallery)=
 # Example gallery
 
-  ```{eval-rst}
+```{eval-rst}
 .. toctree::
    :hidden:
 

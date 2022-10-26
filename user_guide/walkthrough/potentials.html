@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,8 +52,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -59,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Wave functions" href="wave_functions.html" />
     <link rel="prev" title="Atomic models" href="atomic_models.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -135,7 +135,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1249,10 +1249,10 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="potentials">
-<span id="walkthrough-potentials"></span><h1>Potentials<a class="headerlink" href="#potentials" title="Permalink to this headline">#</a></h1>
+<span id="walkthrough-potentials"></span><h1>Potentials<a class="headerlink" href="#potentials" title="Permalink to this heading">#</a></h1>
 <p>An electron beam interacts with a specimen principally through the Coulomb potential of its electrons and nuclei. Thus the total electrostatic potential of the sample is required for image simulations. Typically, a so-called independent atom model (IAM) is used, which calculates the potential as a superposition of atomic potentials, hence neglecting effects due to valence bonding.</p>
 <section id="atomic-potential-parametrization">
-<h2>Atomic potential parametrization<a class="headerlink" href="#atomic-potential-parametrization" title="Permalink to this headline">#</a></h2>
+<h2>Atomic potential parametrization<a class="headerlink" href="#atomic-potential-parametrization" title="Permalink to this heading">#</a></h2>
 <p>The electron charge distribution of a single atom can be calculated from a first-principles electronic structure calculation, for example using the <a class="reference external" href="https://en.wikipedia.org/wiki/Hartree%E2%80%93Fock_method">Hartree-Fock method</a> or <a class="reference external" href="https://en.wikipedia.org/wiki/Density_functional_theory">density functional theory</a>. Given a charge distribution, the potential can be obtained via <a class="reference external" href="https://en.wikipedia.org/wiki/Poisson%27s_equation">Poisson’s equation</a>. Most multislice simulation codes include a parametrization of the atomic potentials, with a table of parameters for each element fitted to the potential calculated elsewhere from first principles.</p>
 <p>We show the radial dependence of the electrostatic potential of five selected elements below. Note that the potentials tend to infinity at <span class="math notranslate nohighlight">\(r=0\)</span> due to the point-like nuclear charge.</p>
 <div class="cell docutils container">
@@ -1284,7 +1284,7 @@ title="Print to PDF"
 </section>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="independent-atom-model">
-<h1>Independent atom model<a class="headerlink" href="#independent-atom-model" title="Permalink to this headline">#</a></h1>
+<h1>Independent atom model<a class="headerlink" href="#independent-atom-model" title="Permalink to this heading">#</a></h1>
 <p>The full specimen potential, <span class="math notranslate nohighlight">\(V(r)\)</span>, is usually obtained as a linear superposition of atomic potentials</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1292,7 +1292,7 @@ title="Print to PDF"
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(V_i(r)\)</span> is the atomic potential of the <span class="math notranslate nohighlight">\(i\)</span>’th atom. This is known as the independent atom model (IAM), and as a superposition of independent atoms, it neglects bonding effects. While this is in many cases an adequate approximation, there are situations where that is not the case (<span id="id5">[<a class="reference internal" href="../bibliography.html#id15" title="Jacob Madsen, Timothy J. Pennycook, and Toma Susi. Ab initio description of bonding for transmission electron microscopy. Ultramicroscopy, 231:113253, 2021. doi:https://doi.org/10.1016/j.ultramic.2021.113253.">MPS21</a>]</span>) which <em>ab</em>TEM is particularly designed to address (as discussed <a class="reference internal" href="../tutorials/charge_density.html#walkthrough-charge-density"><span class="std std-ref">later in the walkthrough</span></a>.</p>
 <section id="potential">
-<h2><code class="docutils literal notranslate"><span class="pre">Potential</span></code><a class="headerlink" href="#potential" title="Permalink to this headline">#</a></h2>
+<h2><code class="docutils literal notranslate"><span class="pre">Potential</span></code><a class="headerlink" href="#potential" title="Permalink to this heading">#</a></h2>
 <p>Here, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> object representing an IAM potential of SrTiO<sub>3</sub> with the Lobato parametrization. The <code class="docutils literal notranslate"><span class="pre">sampling</span></code> denotes the spacing of the <span class="math notranslate nohighlight">\(xy\)</span>-samples of the potential, <code class="docutils literal notranslate"><span class="pre">slice_thickness</span></code> determines the spacing the slices in direction of electron beam and <code class="docutils literal notranslate"><span class="pre">projection</span></code> determines how those slices are calculated (as described <a class="reference internal" href="#walkthrough-slicing"><span class="std std-ref">later in this document</span></a>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1353,7 +1353,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="building-and-saving-the-potential">
-<h2>Building and saving the potential<a class="headerlink" href="#building-and-saving-the-potential" title="Permalink to this headline">#</a></h2>
+<h2>Building and saving the potential<a class="headerlink" href="#building-and-saving-the-potential" title="Permalink to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> does not store the calculated potential slices. Hence, if a simulation, such as STEM requires multiple propagations, each slice have to be calculated multiple times. For this reason, <em>ab</em>TEM often precalculates the potential whenever it has to be used more than once.</p>
 <p>The potential can be precalculated manually using the <code class="docutils literal notranslate"><span class="pre">build</span></code> method, but you should typically let <em>ab</em>TEM decide whether to precalculate the potential. Note that we also need to <code class="docutils literal notranslate"><span class="pre">compute</span></code> it, <em>ab</em>TEM by default uses so-called lazy arrays (see our <a class="reference internal" href="parallelization.html#walkthrough-parallelization"><span class="std std-ref">description of Dask</span></a> for detail); a progress bar is displayed by default.</p>
 <div class="cell tag_skip-test docutils container">
@@ -1398,11 +1398,11 @@ title="Print to PDF"
 </div>
 </section>
 <section id="slicing-the-potential">
-<span id="walkthrough-slicing"></span><h2>Slicing the potential<a class="headerlink" href="#slicing-the-potential" title="Permalink to this headline">#</a></h2>
+<span id="walkthrough-slicing"></span><h2>Slicing the potential<a class="headerlink" href="#slicing-the-potential" title="Permalink to this heading">#</a></h2>
 <p>The multislice algorithm underlying most modern TEM image simulations requires a mathematical discretization of the potential into slices, which is exact in the limit of infinitely thin slices. The slice thickness can be considered a convergence parameter, and since more slices increases the computational cost, an optimum providing sufficient precision at an acceptable cost can be selected.</p>
 <p>A reasonable value for slice thickness is generally between <span class="math notranslate nohighlight">\(0.5 \ \mathrm{Å}\)</span> and <span class="math notranslate nohighlight">\(2 \ \mathrm{Å}\)</span>; our default value is <span class="math notranslate nohighlight">\(1 \ \mathrm{Å}\)</span>. <em>ab</em>TEM also provides multiple options for evaluating the integrals required for slicing the potential that make slightly different tradeoffs in terms of precision and performance.</p>
 <section id="finite-projection-integrals">
-<h3>Finite projection integrals<a class="headerlink" href="#finite-projection-integrals" title="Permalink to this headline">#</a></h3>
+<h3>Finite projection integrals<a class="headerlink" href="#finite-projection-integrals" title="Permalink to this heading">#</a></h3>
 <p><em>ab</em>TEM implements an accurate finite potential projection method. Numerical integration is used to calculate the integrals of the form</p>
 <div class="math notranslate nohighlight" id="equation-eq-potentials-slice">
 <span class="eqno">(1)<a class="headerlink" href="#equation-eq-potentials-slice" title="Permalink to this equation">#</a></span>\[
@@ -1412,7 +1412,7 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 <p>We used the <em>ab</em>TEM default method of handling finite projection integrals above; additional options and a description of the methods is given in <a class="reference internal" href="../appendix/potential_integrals.html"><span class="doc std std-doc">an appendix</span></a>.</p>
 </section>
 <section id="infinite-projection-integrals">
-<h3>Infinite projection integrals<a class="headerlink" href="#infinite-projection-integrals" title="Permalink to this headline">#</a></h3>
+<h3>Infinite projection integrals<a class="headerlink" href="#infinite-projection-integrals" title="Permalink to this heading">#</a></h3>
 <p>Since the finite projection method can be computationally demanding, <em>ab</em>TEM also implements potentials using infinite projection integrals. The finite integrals are replaced by infinite integrals, which may be evaluated analytically</p>
 <div class="math notranslate nohighlight">
 \[ \int_{-\infty}^{\infty} V(x,y,z) dz \approx \int_{z_i}^{z_i+\Delta z} V(x,y,z) dz \]</div>
@@ -1454,7 +1454,7 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 </section>
 </section>
 <section id="crystal-potentials">
-<h2>Crystal potentials<a class="headerlink" href="#crystal-potentials" title="Permalink to this headline">#</a></h2>
+<h2>Crystal potentials<a class="headerlink" href="#crystal-potentials" title="Permalink to this heading">#</a></h2>
 <p>Calculating the potential is generally not a significant cost for simulations where the same potential is used in many runs of the multislice algorithm. However, for simulations that require just one or a few wave functions, such as HRTEM and CBED, it can also be an advantage to use the a periodic crystal potential.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> allows fast calculation for potentials of crystals by tiling a repeating unit of the potential. Below we create a <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> by tiling the already calculated finite projected potential.</p>
 <div class="cell tag_skip-test docutils container">
@@ -1490,7 +1490,7 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
         },
         kernelOptions: {
             kernelName: "abtem",
-            path: "./user_guide/walkthrough"
+            path: "./user_guide\walkthrough"
         },
         predefinedOutput: true
     }

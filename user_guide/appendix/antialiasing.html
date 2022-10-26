@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,9 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,8 +52,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -59,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Potential integrals" href="potential_integrals.html" />
     <link rel="prev" title="Deriving the Multislice Algorithm" href="multislice_derivation.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -135,7 +135,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../getting_started/basics.html">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1106,7 +1106,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="sampling-and-antialiasing">
-<h1>Sampling and antialiasing<a class="headerlink" href="#sampling-and-antialiasing" title="Permalink to this headline">#</a></h1>
+<h1>Sampling and antialiasing<a class="headerlink" href="#sampling-and-antialiasing" title="Permalink to this heading">#</a></h1>
 <p>In abTEM, the wave function is represented on a rectangular grid of <span class="math notranslate nohighlight">\(N_x \times N_y\)</span> grid points (<code class="docutils literal notranslate"><span class="pre">gpts</span></code>) or pixels. Given an orthogonal cell with the sidelengths <span class="math notranslate nohighlight">\(L_x\)</span> and <span class="math notranslate nohighlight">\(L_y\)</span>, in the <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>-direction, the real space sampling (or dimensions of the pixels) is <span class="math notranslate nohighlight">\(\Delta x = L_x / N_x\)</span> in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(\Delta y=L_y / N_y\)</span>.
 The real space coordinates take on only discrete values of:</p>
 <div class="math notranslate nohighlight">
@@ -1254,7 +1254,7 @@ The real space coordinates take on only discrete values of:</p>
         },
         kernelOptions: {
             kernelName: "abtem-dask",
-            path: "./user_guide/appendix"
+            path: "./user_guide\appendix"
         },
         predefinedOutput: true
     }

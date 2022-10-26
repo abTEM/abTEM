@@ -1,12 +1,12 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>The basics &#8212; abTEM Documentation</title>
+    <title>Basic examples &#8212; abTEM Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,7 +34,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -50,14 +52,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Walkthrough" href="../user_guide/walkthrough/walkthrough.html" />
     <link rel="prev" title="Installation" href="install.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -133,7 +133,7 @@ const thebe_selector_output = ".output, .cell_output"
  </li>
  <li class="toctree-l1 current active">
   <a class="current reference internal" href="#">
-   The basics
+   Basic examples
   </a>
  </li>
 </ul>
@@ -1039,60 +1039,23 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#atomic-model">
-   Atomic model
-  </a>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
         <div class="col pl-md-3 pl-lg-5 content-container">
             <!-- Table of contents that is only displayed when printing the page -->
             <div id="jb-print-docs-body" class="onlyprint">
-                <h1>The basics</h1>
+                <h1>Basic examples</h1>
                 <!-- Table of contents -->
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#atomic-model">
-   Atomic model
-  </a>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1100,136 +1063,89 @@ title="Print to PDF"
                 
               <div>
                 
-  <section class="tex2jax_ignore mathjax_ignore" id="the-basics">
-<h1>The basics<a class="headerlink" href="#the-basics" title="Permalink to this headline">#</a></h1>
+  <section class="tex2jax_ignore mathjax_ignore" id="basic-examples">
+<span id="getting-started-basic-examples"></span><h1>Basic examples<a class="headerlink" href="#basic-examples" title="Permalink to this heading">#</a></h1>
 <div class="no-icon admonition">
 <p class="admonition-title"><svg version="4.0.0.63c5cb3" width="1.5rem" height="1.5rem" class="sd-material-icon sd-material-icon-engineering sd-mr-1" viewBox="0 0 24 24" aria-hidden="true"><g><rect fill="none" height="24" width="24"></rect></g><g><g><path d="M9,15c-2.67,0-8,1.34-8,4v2h16v-2C17,16.34,11.67,15,9,15z"></path><path d="M22.1,6.84c0.01-0.11,0.02-0.22,0.02-0.34c0-0.12-0.01-0.23-0.03-0.34l0.74-0.58c0.07-0.05,0.08-0.15,0.04-0.22l-0.7-1.21 c-0.04-0.08-0.14-0.1-0.21-0.08L21.1,4.42c-0.18-0.14-0.38-0.25-0.59-0.34l-0.13-0.93C20.36,3.06,20.29,3,20.2,3h-1.4 c-0.09,0-0.16,0.06-0.17,0.15L18.5,4.08c-0.21,0.09-0.41,0.21-0.59,0.34l-0.87-0.35c-0.08-0.03-0.17,0-0.21,0.08l-0.7,1.21 c-0.04,0.08-0.03,0.17,0.04,0.22l0.74,0.58c-0.02,0.11-0.03,0.23-0.03,0.34c0,0.11,0.01,0.23,0.03,0.34l-0.74,0.58 c-0.07,0.05-0.08,0.15-0.04,0.22l0.7,1.21c0.04,0.08,0.14,0.1,0.21,0.08l0.87-0.35c0.18,0.14,0.38,0.25,0.59,0.34l0.13,0.93 C18.64,9.94,18.71,10,18.8,10h1.4c0.09,0,0.16-0.06,0.17-0.15l0.13-0.93c0.21-0.09,0.41-0.21,0.59-0.34l0.87,0.35 c0.08,0.03,0.17,0,0.21-0.08l0.7-1.21c0.04-0.08,0.03-0.17-0.04-0.22L22.1,6.84z M19.5,7.75c-0.69,0-1.25-0.56-1.25-1.25 s0.56-1.25,1.25-1.25s1.25,0.56,1.25,1.25S20.19,7.75,19.5,7.75z"></path><path d="M19.92,11.68l-0.5-0.87c-0.03-0.06-0.1-0.08-0.15-0.06l-0.62,0.25c-0.13-0.1-0.27-0.18-0.42-0.24l-0.09-0.66 C18.12,10.04,18.06,10,18,10h-1c-0.06,0-0.11,0.04-0.12,0.11l-0.09,0.66c-0.15,0.06-0.29,0.15-0.42,0.24l-0.62-0.25 c-0.06-0.02-0.12,0-0.15,0.06l-0.5,0.87c-0.03,0.06-0.02,0.12,0.03,0.16l0.53,0.41c-0.01,0.08-0.02,0.16-0.02,0.24 c0,0.08,0.01,0.17,0.02,0.24l-0.53,0.41c-0.05,0.04-0.06,0.11-0.03,0.16l0.5,0.87c0.03,0.06,0.1,0.08,0.15,0.06l0.62-0.25 c0.13,0.1,0.27,0.18,0.42,0.24l0.09,0.66C16.89,14.96,16.94,15,17,15h1c0.06,0,0.12-0.04,0.12-0.11l0.09-0.66 c0.15-0.06,0.29-0.15,0.42-0.24l0.62,0.25c0.06,0.02,0.12,0,0.15-0.06l0.5-0.87c0.03-0.06,0.02-0.12-0.03-0.16l-0.52-0.41 c0.01-0.08,0.02-0.16,0.02-0.24c0-0.08-0.01-0.17-0.02-0.24l0.53-0.41C19.93,11.81,19.94,11.74,19.92,11.68z M17.5,13.33 c-0.46,0-0.83-0.38-0.83-0.83c0-0.46,0.38-0.83,0.83-0.83s0.83,0.38,0.83,0.83C18.33,12.96,17.96,13.33,17.5,13.33z"></path><path d="M4.74,9h8.53c0.27,0,0.49-0.22,0.49-0.49V8.49c0-0.27-0.22-0.49-0.49-0.49H13c0-1.48-0.81-2.75-2-3.45V5.5 C11,5.78,10.78,6,10.5,6S10,5.78,10,5.5V4.14C9.68,4.06,9.35,4,9,4S8.32,4.06,8,4.14V5.5C8,5.78,7.78,6,7.5,6S7,5.78,7,5.5V4.55 C5.81,5.25,5,6.52,5,8H4.74C4.47,8,4.25,8.22,4.25,8.49v0.03C4.25,8.78,4.47,9,4.74,9z"></path><path d="M9,13c1.86,0,3.41-1.28,3.86-3H5.14C5.59,11.72,7.14,13,9,13z"></path></g></g></svg> Currently Under Construction</p>
-<p>Check back for more…</p>
+<p>The examples are currently a work in progress.</p>
 </div>
-<p>This is a short overview of abTEM geared towards new users. Hence, for details</p>
-<p>There is much more information contained in the rest of the documentation.</p>
-<p>For users with previous experience in . This</p>
-<p>We normally import abTEM as follows:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">abtem</span>
-</pre></div>
+<p>This is a selection of basic code examples for the most common types of simulations of electron microscopy experiments.</p>
+<p>If you have previous experience with multislice simulations, we think that should be able to jump right in and modify
+the most relevant for your simulation task. If you are completely new to multislice simulations we highly recommend that
+you go through <a class="reference internal" href="../user_guide/walkthrough/walkthrough.html#user-guide-walkthrough"><span class="std std-ref">our walkthrough</span></a>, which also explains the basics multislice simulations.</p>
+<p>For more advanced examples, see our <a class="reference internal" href="../user_guide/tutorials/tutorials.html#tutorials-tutorials"><span class="std std-ref">tutorials section</span></a> or check one of the specialized examples in
+the <a class="reference internal" href="../user_guide/examples/examples.html#user-guide-example-gallery"><span class="std std-ref">gallery</span></a>.</p>
+<div class="sd-container-fluid sd-sphinx-override sd-mb-4 docutils">
+<div class="sd-row sd-row-cols-3 sd-row-cols-xs-3 sd-row-cols-sm-3 sd-row-cols-md-3 sd-row-cols-lg-3 sd-g-2 sd-g-xs-2 sd-g-sm-2 sd-g-md-2 sd-g-lg-2 docutils">
+<div class="sd-col sd-d-flex-row docutils">
+<div class="sd-card sd-sphinx-override sd-w-100 sd-shadow-sm sd-card-hover docutils">
+<div class="sd-card-header bg-light text-center docutils">
+<p class="sd-card-text"><strong>CBED</strong></p>
 </div>
-<section id="atomic-model">
-<h2>Atomic model<a class="headerlink" href="#atomic-model" title="Permalink to this headline">#</a></h2>
-<p>abTEM uses the atomic simulation environment for importing atomic models:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>
-We can also procedurally create and modify structures: 
-
-
-The multislice algorithm requires cell with orthogonal lattice vectors. You can make your unit cell orthogonal ``:
-
-## Potential 
-We create an electron static potential by 
-
-
-We can include frozen phonons by wrapping 
-
-## Wave functions
-abTEM differs from codes for simulating electron diffraction by not directly implementing any common imaging modes 
-(STEM, HRTEM etc.). You select
-
-For simulating HRTEM and SAED you should define a plane wave:
-
-For STEM and CBED you should 
-
-## Setup simulation
-
-
-
-For simulating  
-
-## Execute computation
-abTEM is lazily evaluated. The result from a computation isn’t computed until you ask for it. Instead, a Dask task graph for the computation is produced.
-
-The array is a [Dask Array](https://docs.dask.org/en/stable/array.html), this means that it is &quot;lazily&quot; evaluated. When we create a lazy array, we only set up the tasks to compute the array, to execute those tasks we also have to call `compute`. After calling `compute` the Dask array becomes a NumPy array. 
-
-
-## Postprocess 
-
-
-
-
-## 
-::::{grid}
-
-:::{grid-item}
-:outline:
-:columns: 4
-**Wave functions**  
-`PlaneWave`  
-`Probe`  
-`Waves`
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Potentials**  
-`Potential`  
-`PotentialArray`  
-`CrystalPotential`  
-`ChargeDensityPotential`  
-`GPAWPotential`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Detectors**  
-`AnnularDetector`
-`FlexibleAnnularDetector`
-`SegmentedDetector`
-`PixelatedDetector`
-`WavesDetector`
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Scans**  
-`GridScan`  
-`LineScan`  
-`CustomScan`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Measurements**  
-`Images`  
-`LineProfiles`  
-`FourierSpaceLineProfiles`  
-`DiffractionPatterns`  
-`PolarMeasurements`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**PRISM**  
-`SMatrix`  
-`SMatrixArray`  
-`PartitionedSMatrix`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**FrozenPhonons**  
-`FrozenPhonons`  
-`MDFrozenPhonons`  
-:::
-:::{grid-item}
-:outline:
-:columns: 4
-**Transfer**  
-`Aperture`  
-`Aberrations`  
-`CTF`  
-:::
-::::
-
-</pre></div>
+<div class="sd-card-body text-center docutils">
+<img alt="../_images/cbed_quickstart.png" class="align-center" src="../_images/cbed_quickstart.png" />
 </div>
-</section>
+<a class="sd-stretched-link reference internal" href="../user_guide/examples/notebooks/cbed_quickstart.html#examples-cbed-quickstart"><span class="std std-ref"></span></a></div>
+</div>
+<div class="sd-col sd-d-flex-row docutils">
+<div class="sd-card sd-sphinx-override sd-w-100 sd-shadow-sm sd-card-hover docutils">
+<div class="sd-card-header bg-light text-center docutils">
+<p class="sd-card-text"><strong>HRTEM</strong></p>
+</div>
+<div class="sd-card-body text-center docutils">
+<img alt="../_images/hrtem_quickstart.png" class="align-center" src="../_images/hrtem_quickstart.png" />
+</div>
+<a class="sd-stretched-link reference internal" href="../user_guide/examples/notebooks/hrtem_quickstart.html#examples-hrtem-quickstart"><span class="std std-ref"></span></a></div>
+</div>
+<div class="sd-col sd-d-flex-row docutils">
+<div class="sd-card sd-sphinx-override sd-w-100 sd-shadow-sm sd-card-hover docutils">
+<div class="sd-card-header bg-light text-center docutils">
+<p class="sd-card-text"><strong>STEM-ADF</strong></p>
+</div>
+<div class="sd-card-body text-center docutils">
+<img alt="../_images/stem_quickstart.png" class="align-center" src="../_images/stem_quickstart.png" />
+</div>
+<a class="sd-stretched-link reference internal" href="../user_guide/examples/notebooks/stem_quickstart.html#examples-stem-quickstart"><span class="std std-ref"></span></a></div>
+</div>
+<div class="sd-col sd-d-flex-row docutils">
+<div class="sd-card sd-sphinx-override sd-w-100 sd-shadow-sm sd-card-hover docutils">
+<div class="sd-card-header bg-light text-center docutils">
+<p class="sd-card-text"><strong>PRISM</strong></p>
+</div>
+<div class="sd-card-body text-center docutils">
+<img alt="../_images/prism_quickstart.png" class="align-center" src="../_images/prism_quickstart.png" />
+</div>
+<a class="sd-stretched-link reference internal" href="../user_guide/examples/notebooks/prism_quickstart.html#examples-prism-quickstart"><span class="std std-ref"></span></a></div>
+</div>
+<div class="sd-col sd-d-flex-row docutils">
+<div class="sd-card sd-sphinx-override sd-w-100 sd-shadow-sm sd-card-hover docutils">
+<div class="sd-card-header bg-light text-center docutils">
+<p class="sd-card-text"><strong>SAED</strong></p>
+</div>
+<div class="sd-card-body text-center docutils">
+</div>
+<span class="sd-stretched-link"></span></div>
+</div>
+<div class="sd-col sd-d-flex-row docutils">
+<div class="sd-card sd-sphinx-override sd-w-100 sd-shadow-sm sd-card-hover docutils">
+<div class="sd-card-header bg-light text-center docutils">
+<p class="sd-card-text"><strong>4D-STEM</strong></p>
+</div>
+<div class="sd-card-body text-center docutils">
+</div>
+<span class="sd-stretched-link"></span></div>
+</div>
+<div class="sd-col sd-d-flex-row docutils">
+<div class="sd-card sd-sphinx-override sd-w-100 sd-shadow-sm sd-card-hover docutils">
+<div class="sd-card-header bg-light text-center docutils">
+<p class="sd-card-text"><strong>PED</strong></p>
+</div>
+<div class="sd-card-body text-center docutils">
+</div>
+<span class="sd-stretched-link"></span></div>
+</div>
+</div>
+</div>
 </section>
 
     <script type="text/x-thebe-config">
