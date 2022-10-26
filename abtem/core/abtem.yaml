@@ -13,6 +13,7 @@ mkl:
   threads: 1
 fftw:
   threads: 1
+  cache_size: 2
   planning_effort: FFTW_MEASURE
 warnings:
   prism-interpolation-gpts: true

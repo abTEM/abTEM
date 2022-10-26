@@ -1,5 +1,5 @@
 import functools
-from typing import Tuple
+from typing import Tuple, OrderedDict
 
 try:
     import pyfftw
@@ -33,6 +33,30 @@ def raise_fft_lib_not_present(lib_name):
     )
 
 
+class CacheDict(OrderedDict):
+    """Dict with a limited length, ejecting LRUs as needed."""
+
+    def __init__(self, *args, cache_len: int = 10, **kwargs):
+        assert cache_len > 0
+        self.cache_len = cache_len
+
+        super().__init__(*args, **kwargs)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        super().move_to_end(key)
+
+        while len(self) > self.cache_len:
+            oldkey = next(iter(self))
+            super().__delitem__(oldkey)
+
+    def __getitem__(self, key):
+        val = super().__getitem__(key)
+        super().move_to_end(key)
+
+        return val
+
+
 threadsafe = local()
 
 
@@ -40,7 +64,7 @@ def get_fftw_obj(name, shape, dtype, threads):
     key = (name, shape, dtype, threads)
 
     if not hasattr(threadsafe, "cache"):
-        threadsafe.cache = {}
+        threadsafe.cache = CacheDict(cache_len=config.get("fftw.cache_size"))
 
     if not key in threadsafe.cache.keys():
         dummy_in = np.zeros(shape, dtype=dtype)
@@ -206,19 +230,19 @@ def _fft_interpolation_masks_1d(n1, n2):
             mask2[0] = True
         elif n1 % 2 == 0:
             mask2[: n1 // 2] = True
-            mask2[-n1 // 2 :] = True
+            mask2[-n1 // 2:] = True
         else:
             mask2[: n1 // 2 + 1] = True
-            mask2[-n1 // 2 + 1 :] = True
+            mask2[-n1 // 2 + 1:] = True
     else:
         if n2 == 1:
             mask1[0] = True
         elif n2 % 2 == 0:
             mask1[: n2 // 2] = True
-            mask1[-n2 // 2 :] = True
+            mask1[-n2 // 2:] = True
         else:
             mask1[: n2 // 2 + 1] = True
-            mask1[-n2 // 2 + 1 :] = True
+            mask1[-n2 // 2 + 1:] = True
 
         mask2[:] = True
 
@@ -268,13 +292,13 @@ def fft_crop(array, new_shape, normalize: bool = False):
 
 
 def fft_interpolate(
-    array: np.ndarray,
-    new_shape: Tuple[int, ...],
-    normalization: str = "values",
-    overwrite_x: bool = False,
+        array: np.ndarray,
+        new_shape: Tuple[int, ...],
+        normalization: str = "values",
+        overwrite_x: bool = False,
 ):
     xp = get_array_module(array)
-    old_size = np.prod(array.shape[-len(new_shape) :])
+    old_size = np.prod(array.shape[-len(new_shape):])
 
     is_complex = np.iscomplexobj(array)
     array = array.astype(xp.complex64)
@@ -297,7 +321,7 @@ def fft_interpolate(
         array = array.real
 
     if normalization == "values":
-        array *= np.prod(array.shape[-len(new_shape) :]) / old_size
+        array *= np.prod(array.shape[-len(new_shape):]) / old_size
 
     elif normalization != "intensity":
         raise ValueError()
