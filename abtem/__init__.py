@@ -1,7 +1,7 @@
 """Main abTEM module."""
 from abtem import distributions
 from abtem._version import __version__
-from abtem.atoms import orthogonalize_cell
+from abtem.atoms import orthogonalize_cell, standardize_cell
 from abtem.charge_density import ChargeDensityPotential
 from abtem.core import axes
 from abtem.core import config

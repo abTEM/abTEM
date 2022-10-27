@@ -340,7 +340,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         scan: BaseScan,
         ctf: CTF,
         detectors: List[BaseDetector],
-        reduction_max_batch: int,
+        max_batch_reduction: int,
     ) -> Tuple[Union[BaseMeasurement, Waves], ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
@@ -352,7 +352,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
             extra_ensemble_axes_metadata=self.waves.ensemble_axes_metadata[:-1],
         )
 
-        for _, slics, sub_scan in scan.generate_blocks(reduction_max_batch):
+        for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
 
             for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
                 waves = self.reduce_to_waves(sub_scan, sub_ctf)
@@ -451,10 +451,10 @@ class SMatrixArray(HasArray, BaseSMatrix):
             for n, nsc in zip(self.gpts, num_chunks)
         )
 
-    def _validate_reduction_max_batch(self, scan, reduction_max_batch="auto"):
+    def _validate_max_batch_reduction(self, scan, max_batch_reduction="auto"):
 
         shape = (len(scan),) + self.cropping_window
-        chunks = (reduction_max_batch, -1, -1)
+        chunks = (max_batch_reduction, -1, -1)
 
         return validate_chunks(shape, chunks, dtype=np.dtype("complex64"))[0][0]
 
@@ -467,7 +467,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         window_overlap,
         ctf,
         detectors,
-        reduction_max_batch,
+        max_batch_reduction,
         block_info=None,
     ):
 
@@ -509,7 +509,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         )
 
         measurements = s_matrix.batch_reduce_to_measurements(
-            scan, ctf, detectors, reduction_max_batch
+            scan, ctf, detectors, max_batch_reduction
         )
 
         arr = np.zeros((1,) * (len(array.shape) - 1), dtype=object)
@@ -521,7 +521,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         scan: BaseScan = None,
         ctf: CTF = None,
         detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        reduction_max_batch: Union[int, str] = "auto",
+        max_batch_reduction: Union[int, str] = "auto",
         rechunk_scheme: Union[Tuple[int, int], str] = "auto",
     ):
 
@@ -536,10 +536,9 @@ class SMatrixArray(HasArray, BaseSMatrix):
             Scan defining the positions of the probe wave functions.
         ctf: CTF object, optional
             The probe contrast transfer function. Default is None (aperture is set by the planewave cutoff).
-        reduction_max_batch : int or str, optional
+        max_batch_reduction : int or str, optional
             Number of positions per reduction operation. A large number of positions better utilize thread
-            parallelization, but requires more memory and floating point operations. The optimal value is highly
-            dependent on
+            parallelization, but requires more memory and floating point operations.
         rechunk_scheme : two int or str, optional
             Partitioning of the scan. The scattering matrix will be reduced in similarly partitioned chunks.
             Should be equal to or greater than the interpolation.
@@ -564,8 +563,8 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
         detectors = _validate_detectors(detectors)
 
-        reduction_max_batch = self._validate_reduction_max_batch(
-            scan, reduction_max_batch
+        max_batch_reduction = self._validate_max_batch_reduction(
+            scan, max_batch_reduction
         )
 
         if self.is_lazy:
@@ -590,7 +589,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
                 window_overlap=self._window_overlap(),
                 ctf=ctf,
                 detectors=detectors,
-                reduction_max_batch=reduction_max_batch,
+                max_batch_reduction=max_batch_reduction,
                 trim=False,
                 boundary="periodic",
                 meta=np.array((), dtype=np.complex64),
@@ -621,7 +620,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
         else:
             measurements = self.batch_reduce_to_measurements(
-                scan, ctf, detectors, reduction_max_batch
+                scan, ctf, detectors, max_batch_reduction
             )
 
         if squeeze_scan:
@@ -641,7 +640,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         scan: BaseScan = None,
         ctf: CTF = None,
         detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        reduction_max_batch: Union[int, str] = "auto",
+        max_batch_reduction: Union[int, str] = "auto",
         rechunk_scheme: Union[Tuple[int, int], str] = "auto",
     ):
         if scan is None:
@@ -654,7 +653,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
             scan=scan,
             ctf=ctf,
             detectors=detectors,
-            reduction_max_batch=reduction_max_batch,
+            max_batch_reduction=max_batch_reduction,
             rechunk_scheme=rechunk_scheme,
         )
 
@@ -1061,8 +1060,8 @@ class SMatrix(BaseSMatrix):
         scan: Union[np.ndarray, BaseScan] = None,
         detectors: Union[BaseDetector, List[BaseDetector]] = None,
         ctf: Union[CTF, Dict] = None,
-        multislice_max_batch: Union[str, int] = "auto",
-        reduction_max_batch: Union[str, int] = "auto",
+        max_batch_multislice: Union[str, int] = "auto",
+        max_batch_reduction: Union[str, int] = "auto",
         rechunk_scheme: Union[Tuple[int, int], str] = "auto",
         lazy: bool = None,
     ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
@@ -1081,8 +1080,8 @@ class SMatrix(BaseSMatrix):
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
             set in the configuration file.
-        multislice_max_batch : str or int  # TODO: to be documented
-        reduction_max_batch : str or int  # TODO: to be documented
+        max_batch_multislice : str or int
+        max_batch_reduction : str or int  # TODO: to be documented
         rechunk_scheme : tuple of int or str  # TODO: to be documented
 
         Returns
@@ -1095,10 +1094,10 @@ class SMatrix(BaseSMatrix):
         if scan is None:
             scan = GridScan()
 
-        return self.build(max_batch=multislice_max_batch, lazy=lazy).scan(
+        return self.build(max_batch=max_batch_multislice, lazy=lazy).scan(
             scan=scan,
             detectors=detectors,
-            reduction_max_batch=reduction_max_batch,
+            max_batch_reduction=max_batch_reduction,
             ctf=ctf,
             rechunk_scheme=rechunk_scheme,
         )
@@ -1108,14 +1107,14 @@ class SMatrix(BaseSMatrix):
         scan: Union[np.ndarray, BaseScan] = None,
         detectors: Union[BaseDetector, List[BaseDetector]] = None,
         ctf: Union[CTF, Dict] = None,
-        multislice_max_batch: Union[str, int] = "auto",
-        reduction_max_batch: Union[str, int] = "auto",
+        max_batch_multislice: Union[str, int] = "auto",
+        max_batch_reduction: Union[str, int] = "auto",
         lazy: bool = None,
     ):
 
-        return self.build(max_batch=multislice_max_batch, lazy=lazy).reduce(
+        return self.build(max_batch=max_batch_multislice, lazy=lazy).reduce(
             scan=scan,
             detectors=detectors,
-            reduction_max_batch=reduction_max_batch,
+            max_batch_reduction=max_batch_reduction,
             ctf=ctf,
         )
