@@ -325,9 +325,6 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         calibration_units = measurement.calibration_units
         diffraction_patterns = measurement.array
 
-        if any(unit != "Å" for unit in calibration_units[:-2]):
-            raise ValueError()
-
         if any(unit != "mrad" and unit != "1/Å" for unit in calibration_units[-2:]):
             raise ValueError()
 
