@@ -520,6 +520,8 @@ class Potential(_PotentialBuilder):
         if not hasattr(atoms, "randomize"):
             if isinstance(atoms, (list, tuple)):
                 self._frozen_phonons = MDFrozenPhonons(atoms)
+            elif isinstance(atoms, str):
+                self._frozen_phonons = MDFrozenPhonons(atoms)
             else:
                 self._frozen_phonons = DummyFrozenPhonons(atoms)
         else:

@@ -12,6 +12,7 @@ from ase import Atoms
 from ase import data
 from ase.cell import Cell
 from ase.data import chemical_symbols
+from ase.io import read
 from dask.delayed import Delayed
 
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata
@@ -443,7 +444,7 @@ class MDFrozenPhonons(BaseFrozenPhonons):
 
     def __init__(
             self,
-            trajectory: Sequence[Atoms],
+            trajectory: Union[Sequence[Atoms], str],
             atomic_numbers=None,  # TODO: to be removed
             cell=None,  # TODO: to be removed
             ensemble_mean: bool = True,
@@ -451,6 +452,9 @@ class MDFrozenPhonons(BaseFrozenPhonons):
 
         if isinstance(trajectory, Atoms):
             trajectory = [trajectory]
+
+        if isinstance(trajectory, str):
+            trajectory = read(trajectory, index=":")
 
         if isinstance(trajectory, (list, tuple)):
             if isinstance(trajectory[0], str):
