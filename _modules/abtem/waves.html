@@ -5,7 +5,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>abtem.waves &#8212; abTEM Documentation</title>
+    <title>abtem.waves &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -96,7 +96,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
@@ -2008,7 +2008,6 @@ title="Open an issue"
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="n">potential</span> <span class="o">=</span> <span class="n">_validate_potential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span>
-
         <span class="n">detectors</span> <span class="o">=</span> <span class="n">_validate_detectors</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
@@ -2027,14 +2026,9 @@ title="Open an issue"
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">new_axes</span> <span class="o">=</span> <span class="kc">None</span>
 
-
             <span class="n">axes_blocks</span> <span class="o">=</span> <span class="p">()</span>
             <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">axis</span><span class="p">,</span> <span class="n">chunks</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">)):</span>
                 <span class="n">axes_blocks</span> <span class="o">+=</span> <span class="p">(</span><span class="n">axis</span><span class="o">.</span><span class="n">_to_blocks</span><span class="p">((</span><span class="n">chunks</span><span class="p">),),</span> <span class="p">(</span><span class="n">num_new_symbols</span> <span class="o">+</span> <span class="n">i</span><span class="p">,))</span>
-
-            <span class="c1">#print(axes_blocks)</span>
-            <span class="c1">#sss</span>
-            <span class="c1">#sss</span>
 
             <span class="n">arrays</span> <span class="o">=</span> <span class="n">da</span><span class="o">.</span><span class="n">blockwise</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_lazy_multislice</span><span class="p">,</span>
@@ -2094,10 +2088,21 @@ title="Open an issue"
         <span class="k">if</span> <span class="n">transforms</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">transforms</span> <span class="o">=</span> <span class="p">[]</span>
 
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">transforms</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
-            <span class="n">transforms</span> <span class="o">=</span> <span class="n">CompositeWaveTransform</span><span class="p">(</span><span class="n">transforms</span><span class="p">)</span>
-
         <span class="bp">self</span><span class="o">.</span><span class="n">_transforms</span> <span class="o">=</span> <span class="n">transforms</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">tilt</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tilt</span>
+
+    <span class="nd">@tilt</span><span class="o">.</span><span class="n">setter</span>
+    <span class="k">def</span> <span class="nf">tilt</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="n">old_tilt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tilt</span>
+
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">transform</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_transforms</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">transform</span> <span class="ow">is</span> <span class="n">old_tilt</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_transforms</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_tilt</span> <span class="o">=</span> <span class="n">validate_tilt</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
 
     <span class="nd">@abstractmethod</span>
     <span class="k">def</span> <span class="nf">metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2112,7 +2117,7 @@ title="Open an issue"
         <span class="k">if</span> <span class="n">index</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">index</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_transforms</span><span class="p">)</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">_transforms</span><span class="o">.</span><span class="n">insert_transform</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">transform</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_transforms</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">transform</span><span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@property</span>
@@ -2121,11 +2126,11 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">ensemble_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span>
+        <span class="k">return</span> <span class="n">CompositeWaveTransform</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="p">)</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">ensemble_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">ensemble_shape</span>
+        <span class="k">return</span> <span class="n">CompositeWaveTransform</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="p">)</span><span class="o">.</span><span class="n">ensemble_shape</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span> <span class="nf">_build_waves_multislice_detect</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">partials</span><span class="p">,</span> <span class="n">multislice_func</span><span class="p">,</span> <span class="n">detectors</span><span class="p">):</span>
@@ -2200,18 +2205,20 @@ title="Open an issue"
                 <span class="n">extra_ensemble_axes_metadata</span> <span class="o">+=</span> <span class="p">[</span><span class="n">potential</span><span class="o">.</span><span class="n">exit_planes_axes_metadata</span><span class="p">]</span>
                 <span class="n">max_symbol</span> <span class="o">+=</span> <span class="mi">1</span>
 
+        <span class="n">transforms</span> <span class="o">=</span> <span class="n">CompositeWaveTransform</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="p">)</span>
+
         <span class="c1"># add transform args</span>
         <span class="n">transform_arg_indices</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
-            <span class="nb">range</span><span class="p">(</span><span class="n">max_arg_index</span><span class="p">,</span> <span class="n">max_arg_index</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">))</span>
+            <span class="nb">range</span><span class="p">(</span><span class="n">max_arg_index</span><span class="p">,</span> <span class="n">max_arg_index</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">transforms</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">))</span>
         <span class="p">)</span>
         <span class="n">partials</span><span class="p">[</span><span class="s2">&quot;transforms&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">_wrapped_from_partitioned_args</span><span class="p">(),</span>
+            <span class="n">transforms</span><span class="o">.</span><span class="n">_wrapped_from_partitioned_args</span><span class="p">(),</span>
             <span class="n">transform_arg_indices</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">transform_symbols</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
-            <span class="nb">range</span><span class="p">(</span><span class="n">max_symbol</span><span class="p">,</span> <span class="n">max_symbol</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">))</span>
+            <span class="nb">range</span><span class="p">(</span><span class="n">max_symbol</span><span class="p">,</span> <span class="n">max_symbol</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">transforms</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">))</span>
         <span class="p">)</span>
-        <span class="n">transform_chunks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">_ensemble_chunks</span><span class="p">(</span>
+        <span class="n">transform_chunks</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">_ensemble_chunks</span><span class="p">(</span>
             <span class="n">max_batch</span><span class="p">,</span> <span class="n">base_shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gpts</span>
         <span class="p">)</span>
 
@@ -2221,7 +2228,7 @@ title="Open an issue"
                     <span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="p">(</span><span class="n">i</span><span class="p">,))</span>
                     <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">block</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
                         <span class="n">transform_symbols</span><span class="p">,</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">(</span><span class="n">transform_chunks</span><span class="p">),</span>
+                        <span class="n">transforms</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">(</span><span class="n">transform_chunks</span><span class="p">),</span>
                     <span class="p">)</span>
                 <span class="p">)</span>
             <span class="p">)</span>
@@ -2306,10 +2313,6 @@ title="Open an issue"
         <span class="n">transforms</span> <span class="o">=</span> <span class="n">transforms</span> <span class="o">+</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_tilt</span><span class="p">]</span>
 
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">transforms</span><span class="o">=</span><span class="n">transforms</span><span class="p">)</span></div>
-
-    <span class="nd">@property</span>
-    <span class="k">def</span> <span class="nf">named_transforms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">CompositeWaveTransform</span><span class="p">([])</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2540,8 +2543,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_device</span> <span class="o">=</span> <span class="n">validate_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
 
         <span class="n">transforms</span> <span class="o">=</span> <span class="p">[]</span> <span class="k">if</span> <span class="n">transforms</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">transforms</span>
-
-        <span class="n">transforms</span> <span class="o">=</span> <span class="n">transforms</span> <span class="o">+</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_tilt</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">aperture</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">aberrations</span><span class="p">]</span>
+        <span class="n">transforms</span> <span class="o">=</span> <span class="n">transforms</span> <span class="o">+</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">tilt</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">aperture</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">aberrations</span><span class="p">]</span>
 
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">transforms</span><span class="o">=</span><span class="n">transforms</span><span class="p">)</span>
 
@@ -2661,7 +2663,7 @@ title="Open an issue"
         <span class="k">else</span><span class="p">:</span>
             <span class="n">waves</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">_base_waves_partial</span><span class="p">()()</span>
 
-            <span class="n">waves</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">transforms</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
+            <span class="n">waves</span> <span class="o">=</span> <span class="n">CompositeWaveTransform</span><span class="p">(</span><span class="n">probe</span><span class="o">.</span><span class="n">transforms</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
 
             <span class="n">waves</span> <span class="o">=</span> <span class="n">waves</span><span class="o">.</span><span class="n">ensure_real_space</span><span class="p">()</span>
 

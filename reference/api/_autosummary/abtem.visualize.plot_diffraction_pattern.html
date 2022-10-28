@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>plot_diffraction_pattern &#8212; abTEM Documentation</title>
+    <title>plot_diffraction_pattern &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -99,7 +99,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../../search.html" method="get">
@@ -1112,7 +1112,7 @@ title="Print to PDF"
 <h1>plot_diffraction_pattern<a class="headerlink" href="#plot-diffraction-pattern" title="Permalink to this heading">#</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.visualize.plot_diffraction_pattern">
-<span class="sig-prename descclassname"><span class="pre">abtem.visualize.</span></span><span class="sig-name descname"><span class="pre">plot_diffraction_pattern</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">indexed_diffraction_pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">spot_scale</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ax</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">figsize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(6,</span> <span class="pre">6)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">title</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">annotate_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inequivalency_threshold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/visualize.html#plot_diffraction_pattern"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.visualize.plot_diffraction_pattern" title="Permalink to this definition">#</a></dt>
+<span class="sig-prename descclassname"><span class="pre">abtem.visualize.</span></span><span class="sig-name descname"><span class="pre">plot_diffraction_pattern</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">indexed_diffraction_pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">spot_scale</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ax</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">figsize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(6,</span> <span class="pre">6)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">title</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overlay_indices</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">annotate_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inequivalency_threshold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/visualize.html#plot_diffraction_pattern"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.visualize.plot_diffraction_pattern" title="Permalink to this definition">#</a></dt>
 <dd><p>Display a diffraction pattern as indexed Bragg reflections.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -1123,6 +1123,7 @@ title="Print to PDF"
 <li><p><strong>figsize</strong> (<em>two int</em><em>, </em><em>optional</em>) – The figure size given as width and height in inches, passed to <cite>matplotlib.pyplot.figure</cite>.</p></li>
 <li><p><strong>title</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add a title to the figure. If True is given instead of a string the title will be given by the value
 corresponding to the “name” key of the metadata dictionary, if this item exists</p></li>
+<li><p><strong>overlay_indices</strong> (<em>bool</em>) – </p></li>
 <li><p><strong>annotate_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>matplotlib.axes.Axes.annotate</cite> to change the formatting of the labels.</p></li>
 <li><p><strong>inequivalency_threshold</strong> (<em>float</em>) – Relative intensity difference to determine whether two symmetry-equivalent diffraction spots should be indepdendently
 labeled (e.g. due to a unit cell with a basis of more than one element).</p></li>

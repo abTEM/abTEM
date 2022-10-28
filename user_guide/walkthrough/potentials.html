@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>Potentials &#8212; abTEM Documentation</title>
+    <title>Potentials &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -101,7 +101,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
@@ -1294,12 +1294,14 @@ title="Print to PDF"
 <section id="potential">
 <h2><code class="docutils literal notranslate"><span class="pre">Potential</span></code><a class="headerlink" href="#potential" title="Permalink to this heading">#</a></h2>
 <p>Here, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> object representing an IAM potential of SrTiO<sub>3</sub> with the Lobato parametrization. The <code class="docutils literal notranslate"><span class="pre">sampling</span></code> denotes the spacing of the <span class="math notranslate nohighlight">\(xy\)</span>-samples of the potential, <code class="docutils literal notranslate"><span class="pre">slice_thickness</span></code> determines the spacing the slices in direction of electron beam and <code class="docutils literal notranslate"><span class="pre">projection</span></code> determines how those slices are calculated (as described <a class="reference internal" href="#walkthrough-slicing"><span class="std std-ref">later in this document</span></a>).</p>
+<p>We also repeat the structure to make a larger supercell for visualizations.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sto_lto_interface</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s2">&quot;./data/STO_LTO.cif&quot;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">srtio3</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s2">&quot;./data/SrTiO3.cif&quot;</span><span class="p">)</span>
+<span class="n">repeated_srtio3</span> <span class="o">=</span> <span class="n">srtio3</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span>
 
 <span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
-    <span class="n">sto_lto_interface</span><span class="p">,</span>
+    <span class="n">repeated_srtio3</span><span class="p">,</span>
     <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
     <span class="n">parametrization</span><span class="o">=</span><span class="s2">&quot;lobato&quot;</span><span class="p">,</span>
     <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
@@ -1309,15 +1311,10 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>The potential has 23 slices along the <span class="math notranslate nohighlight">\(z\)</span> propagation direction, as may be determined from getting its length.</p>
+<p>The potential has 24 slices along the <span class="math notranslate nohighlight">\(z\)</span> propagation direction, as may be determined from getting its length.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="nb">len</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>23
 </pre></div>
 </div>
 </div>
@@ -1327,28 +1324,22 @@ title="Print to PDF"
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">sto_lto_interface</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">repeated_srtio3</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
 <span class="n">potential</span><span class="p">[:]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
-<div class="cell_output docutils container">
-<img alt="../../_images/potentials_10_0.png" src="../../_images/potentials_10_0.png" />
 </div>
-</div>
-<p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> may be indexed to return a subset of slices. Below we select the first 5 slices (using the Python syntax for indexing lists, <code class="docutils literal notranslate"><span class="pre">[:5]</span></code>) and show them all by setting <code class="docutils literal notranslate"><span class="pre">project=False</span></code> (the default is to show the projected potential) and <code class="docutils literal notranslate"><span class="pre">explode=True</span></code> (which automatically creates a multi-panel figure; in this instance the latter setting is assumed if the former is set). The titles of the panels are automatically set based on the selected slices.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> may be indexed to return a subset of slices. Below we select every sixth slice (using the Python syntax for indexing lists, <code class="docutils literal notranslate"><span class="pre">[:][::6]</span></code>) and show them all by setting <code class="docutils literal notranslate"><span class="pre">project=False</span></code> (the default is to show the projected potential) and <code class="docutils literal notranslate"><span class="pre">explode=True</span></code> (which automatically creates a multi-panel figure; in this instance the latter setting is assumed if the former is set). The titles of the panels are automatically set based on the selected slices.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">project</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                   <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-                   <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
-                   <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">});</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span><span class="p">[:][::</span><span class="mi">6</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">project</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                       <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                       <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+                       <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">});</span>
 </pre></div>
 </div>
-</div>
-<div class="cell_output docutils container">
-<img alt="../../_images/potentials_12_0.png" src="../../_images/potentials_12_0.png" />
 </div>
 </div>
 </section>
@@ -1356,14 +1347,9 @@ title="Print to PDF"
 <h2>Building and saving the potential<a class="headerlink" href="#building-and-saving-the-potential" title="Permalink to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> does not store the calculated potential slices. Hence, if a simulation, such as STEM requires multiple propagations, each slice have to be calculated multiple times. For this reason, <em>ab</em>TEM often precalculates the potential whenever it has to be used more than once.</p>
 <p>The potential can be precalculated manually using the <code class="docutils literal notranslate"><span class="pre">build</span></code> method, but you should typically let <em>ab</em>TEM decide whether to precalculate the potential. Note that we also need to <code class="docutils literal notranslate"><span class="pre">compute</span></code> it, <em>ab</em>TEM by default uses so-called lazy arrays (see our <a class="reference internal" href="parallelization.html#walkthrough-parallelization"><span class="std std-ref">description of Dask</span></a> for detail); a progress bar is displayed by default.</p>
-<div class="cell tag_skip-test docutils container">
+<div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_array</span> <span class="o">=</span> <span class="n">potential</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 4.08 ss
 </pre></div>
 </div>
 </div>
@@ -1375,23 +1361,13 @@ title="Print to PDF"
 </pre></div>
 </div>
 </div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(23, 224, 474)
-</pre></div>
-</div>
-</div>
 </div>
 <p>The calculated potential can be stored in the open-source <a class="reference external" href="https://zarr.readthedocs.io/en/stable/">Zarr file format</a> and conveniently read back in.</p>
-<div class="cell tag_skip-test docutils container">
+<div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_array</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s2">&quot;data/srtio3_110_potential.zarr&quot;</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_array</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s2">&quot;data/srtio3_repeated_potential.zarr&quot;</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="s2">&quot;data/srtio3_110_potential.zarr&quot;</span><span class="p">);</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 105.42 ms
+<span class="n">abtem</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="s2">&quot;data/srtio3_repeated_potential.zarr&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -1417,36 +1393,28 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 <div class="math notranslate nohighlight">
 \[ \int_{-\infty}^{\infty} V(x,y,z) dz \approx \int_{z_i}^{z_i+\Delta z} V(x,y,z) dz \]</div>
 <p>The infinite projection of the atomic potential for each atom is assigned to a single slice. The implementation uses the hybrid real-space/Fourier-space approach by van den Broek <span id="id6">[<a class="reference internal" href="../bibliography.html#id17" title="W. Van den Broek, X. Jiang, and C.T. Koch. Fdes, a gpu-based multislice algorithm with increased efficiency of the computation of the projected potential. Ultramicroscopy, 158:89–97, 2015. doi:10.1016/j.ultramic.2015.07.005.">VdBJK15</a>]</span>).</p>
-<p>Below we create the same SrTiO3 potential as above with infinite projections. The potential looks almost identical to the finite projection, but note that the slice at <span class="math notranslate nohighlight">\(z=3.88 \ \mathrm{Å}\)</span> has zero intensity because there is not atoms in this slice.</p>
+<p>Below we create the same SrTiO3 potential as above with infinite projections. The potential looks almost identical to the finite projection, but note that the slice at <span class="math notranslate nohighlight">\(z=2.96 \ \mathrm{Å}\)</span> has zero intensity because there is not atoms in this slice.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_infinite</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
-    <span class="n">sto_lto_interface</span><span class="p">,</span>
+    <span class="n">repeated_srtio3</span><span class="p">,</span>
     <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
     <span class="n">parametrization</span><span class="o">=</span><span class="s2">&quot;lobato&quot;</span><span class="p">,</span>
     <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
     <span class="n">projection</span><span class="o">=</span><span class="s2">&quot;infinite&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="n">potential_infinite</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+<span class="n">potential_infinite</span><span class="p">[:][::</span><span class="mi">6</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
     <span class="n">project</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">}</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 </div>
-<div class="cell_output docutils container">
-<img alt="../../_images/potentials_20_0.png" src="../../_images/potentials_20_0.png" />
-</div>
 </div>
 <p>Using infinite projections can be <em>much</em> faster, especially for potentials with a large numbers of atoms. As shown by the time below, the potential takes less than 0.5 s to calculate, which you may compare this to the finite projection calculated above that took 4 s. The error introduced by using infinite integrals is in most cases negligible compared to other sources of error.</p>
-<div class="cell tag_skip-test docutils container">
+<div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_infinite</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 307.32 ms
 </pre></div>
 </div>
 </div>
@@ -1457,18 +1425,13 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 <h2>Crystal potentials<a class="headerlink" href="#crystal-potentials" title="Permalink to this heading">#</a></h2>
 <p>Calculating the potential is generally not a significant cost for simulations where the same potential is used in many runs of the multislice algorithm. However, for simulations that require just one or a few wave functions, such as HRTEM and CBED, it can also be an advantage to use the a periodic crystal potential.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> allows fast calculation for potentials of crystals by tiling a repeating unit of the potential. Below we create a <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> by tiling the already calculated finite projected potential.</p>
-<div class="cell tag_skip-test docutils container">
+<div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">crystal_potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span>
     <span class="n">potential_unit</span><span class="o">=</span><span class="n">potential_array</span><span class="p">,</span> <span class="n">repetitions</span><span class="o">=</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
 <span class="p">)</span>
 
 <span class="n">crystal_potential</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 1.63 sms
 </pre></div>
 </div>
 </div>

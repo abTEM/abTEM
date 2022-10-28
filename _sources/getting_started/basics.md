@@ -82,7 +82,7 @@ the [gallery](user_guide:example_gallery).
 
 
 :::{grid-item-card}
-:link:
+:link: examples:saed_quickstart
 :link-type: ref
 :class-body: text-center
 :class-header: bg-light text-center
@@ -90,11 +90,15 @@ the [gallery](user_guide:example_gallery).
 **SAED**
 ^^^
 
+```{image} ../user_guide/examples/thumbnails/saed_quickstart.png
+:align: center
+```
+
 :::
 
 
 :::{grid-item-card}
-:link:
+:link: examples:4d-stem_quickstart
 :link-type: ref
 :class-body: text-center
 :class-header: bg-light text-center
@@ -102,16 +106,24 @@ the [gallery](user_guide:example_gallery).
 **4D-STEM**
 ^^^
 
+```{image} ../user_guide/examples/thumbnails/4d-stem_quickstart.png
+:align: center
+```
+
 :::
 
 
 :::{grid-item-card}
-:link:
+:link: examples:ped_quickstart
 :link-type: ref
 :class-body: text-center
 :class-header: bg-light text-center
 
 **PED**
 ^^^
+
+```{image} ../user_guide/examples/thumbnails/ped_quickstart.png
+:align: center
+```
 
 :::

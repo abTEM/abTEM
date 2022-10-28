@@ -1085,7 +1085,10 @@ title="Open an issue"
 
 <span class="k">def</span> <span class="nf">_add_colorbar_abs</span><span class="p">(</span><span class="n">cax</span><span class="p">,</span> <span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="p">):</span>
     <span class="n">norm</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">Normalize</span><span class="p">(</span><span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">)</span>
-    <span class="n">cb0</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">cm</span><span class="o">.</span><span class="n">ScalarMappable</span><span class="p">(</span><span class="n">norm</span><span class="o">=</span><span class="n">norm</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="n">cm</span><span class="o">.</span><span class="n">gray</span><span class="p">),</span> <span class="n">cax</span><span class="o">=</span><span class="n">cax</span><span class="p">,)</span>
+    <span class="n">cb0</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span>
+        <span class="n">cm</span><span class="o">.</span><span class="n">ScalarMappable</span><span class="p">(</span><span class="n">norm</span><span class="o">=</span><span class="n">norm</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="n">cm</span><span class="o">.</span><span class="n">gray</span><span class="p">),</span>
+        <span class="n">cax</span><span class="o">=</span><span class="n">cax</span><span class="p">,</span>
+    <span class="p">)</span>
     <span class="n">cb0</span><span class="o">.</span><span class="n">set_label</span><span class="p">(</span><span class="s2">&quot;abs&quot;</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span> <span class="n">va</span><span class="o">=</span><span class="s2">&quot;top&quot;</span><span class="p">)</span>
     <span class="n">cb0</span><span class="o">.</span><span class="n">ax</span><span class="o">.</span><span class="n">yaxis</span><span class="o">.</span><span class="n">set_label_coords</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.03</span><span class="p">)</span>
 
@@ -1128,7 +1131,7 @@ title="Open an issue"
     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="k">if</span> <span class="n">power</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-        <span class="n">array</span> <span class="o">=</span> <span class="n">array</span> <span class="o">**</span> <span class="n">power</span>
+        <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="o">**</span><span class="n">power</span>
         <span class="n">vmin</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmin</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmin</span> <span class="o">**</span> <span class="n">power</span>
         <span class="n">vmax</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmax</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmax</span> <span class="o">**</span> <span class="n">power</span>
 
@@ -1344,7 +1347,12 @@ title="Open an issue"
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">image_grid_kwargs</span><span class="p">[</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.1</span>
 
-        <span class="n">axes</span> <span class="o">=</span> <span class="n">ImageGrid</span><span class="p">(</span><span class="n">fig</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="n">nrows_ncols</span><span class="o">=</span><span class="p">(</span><span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span><span class="p">),</span> <span class="o">**</span><span class="n">image_grid_kwargs</span><span class="p">,)</span>
+        <span class="n">axes</span> <span class="o">=</span> <span class="n">ImageGrid</span><span class="p">(</span>
+            <span class="n">fig</span><span class="p">,</span>
+            <span class="mi">111</span><span class="p">,</span>
+            <span class="n">nrows_ncols</span><span class="o">=</span><span class="p">(</span><span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span><span class="p">),</span>
+            <span class="o">**</span><span class="n">image_grid_kwargs</span><span class="p">,</span>
+        <span class="p">)</span>
     <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">axes</span><span class="p">,</span> <span class="n">Axes</span><span class="p">):</span>
         <span class="n">fig</span> <span class="o">=</span> <span class="n">axes</span><span class="o">.</span><span class="n">get_figure</span><span class="p">()</span>
         <span class="n">axes</span> <span class="o">=</span> <span class="p">[</span><span class="n">axes</span><span class="p">]</span>
@@ -1539,6 +1547,7 @@ title="Open an issue"
     <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span>
     <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">overlay_indices</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">annotate_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">inequivalency_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
 <span class="p">):</span>
@@ -1558,6 +1567,8 @@ title="Open an issue"
 <span class="sd">    title : bool or str, optional</span>
 <span class="sd">        Add a title to the figure. If True is given instead of a string the title will be given by the value</span>
 <span class="sd">        corresponding to the &quot;name&quot; key of the metadata dictionary, if this item exists</span>
+<span class="sd">    overlay_indices : bool</span>
+
 <span class="sd">    annotate_kwargs : dict</span>
 <span class="sd">        Additional keyword arguments passed to `matplotlib.axes.Axes.annotate` to change the formatting of the labels.</span>
 <span class="sd">    inequivalency_threshold : float</span>
@@ -1605,22 +1616,25 @@ title="Open an issue"
         <span class="p">)</span>
     <span class="p">)</span>
 
-    <span class="n">indexed_diffraction_pattern</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">remove_equivalent</span><span class="p">(</span><span class="n">divide_threshold</span><span class="o">=</span><span class="n">inequivalency_threshold</span><span class="p">)</span>
-    <span class="n">coordinates</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">_vectors</span>
-    <span class="n">coordinates</span> <span class="o">=</span> <span class="n">coordinates</span> <span class="o">/</span> <span class="n">normalize_coordinates</span>
-
-    <span class="n">miller_indices</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">miller_indices</span>
-
-    <span class="k">for</span> <span class="n">hkl</span><span class="p">,</span> <span class="n">coordinate</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">miller_indices</span><span class="p">,</span> <span class="n">coordinates</span><span class="p">):</span>
-        <span class="n">t</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span>
-            <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">hkl</span><span class="p">))),</span>
-            <span class="n">coordinate</span><span class="p">,</span>
-            <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span>
-            <span class="n">va</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span>
-            <span class="n">size</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span>
-            <span class="o">**</span><span class="n">annotate_kwargs</span><span class="p">,</span>
+    <span class="k">if</span> <span class="n">overlay_indices</span><span class="p">:</span>
+        <span class="n">indexed_diffraction_pattern</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">remove_equivalent</span><span class="p">(</span>
+            <span class="n">divide_threshold</span><span class="o">=</span><span class="n">inequivalency_threshold</span>
         <span class="p">)</span>
-        <span class="n">t</span><span class="o">.</span><span class="n">set_path_effects</span><span class="p">([</span><span class="n">withStroke</span><span class="p">(</span><span class="n">foreground</span><span class="o">=</span><span class="s2">&quot;w&quot;</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">3</span><span class="p">)])</span>
+        <span class="n">coordinates</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">_vectors</span>
+        <span class="n">coordinates</span> <span class="o">=</span> <span class="n">coordinates</span> <span class="o">/</span> <span class="n">normalize_coordinates</span>
+
+        <span class="n">miller_indices</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">miller_indices</span>
+
+        <span class="k">for</span> <span class="n">hkl</span><span class="p">,</span> <span class="n">coordinate</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">miller_indices</span><span class="p">,</span> <span class="n">coordinates</span><span class="p">):</span>
+            <span class="n">t</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span>
+                <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">hkl</span><span class="p">))),</span>
+                <span class="n">coordinate</span><span class="p">,</span>
+                <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span>
+                <span class="n">va</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span>
+                <span class="n">size</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span>
+                <span class="o">**</span><span class="n">annotate_kwargs</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">t</span><span class="o">.</span><span class="n">set_path_effects</span><span class="p">([</span><span class="n">withStroke</span><span class="p">(</span><span class="n">foreground</span><span class="o">=</span><span class="s2">&quot;w&quot;</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">3</span><span class="p">)])</span>
 
     <span class="n">ax</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">&quot;equal&quot;</span><span class="p">)</span>
     <span class="n">ax</span><span class="o">.</span><span class="n">set_xlim</span><span class="p">([</span><span class="o">-</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">max_step</span> <span class="o">/</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">1.0</span> <span class="o">+</span> <span class="n">max_step</span> <span class="o">/</span> <span class="mf">2.0</span><span class="p">])</span>

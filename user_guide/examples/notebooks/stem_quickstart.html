@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>STEM quickstart &#8212; abTEM Documentation</title>
+    <title>STEM quickstart &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -99,7 +99,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../../search.html" method="get">
@@ -1094,7 +1094,10 @@ title="Print to PDF"
                 
   <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">graphene</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">config</span> InlineBackend.rc = {&quot;figure.dpi&quot;: 72, &quot;figure.figsize&quot;: (6.0, 4.0)}
+<span class="o">%</span><span class="k">matplotlib</span> inline
+
+<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">graphene</span>
 <span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">write</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">abtem</span>
@@ -1112,7 +1115,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x1c1533b24f0&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x169e317bbe0&gt;
 </pre></div>
 </div>
 </div>
@@ -1132,7 +1135,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 1 Axes&gt;,
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 432x288 with 1 Axes&gt;,
  &lt;AxesSubplot: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
 </pre></div>
 </div>
@@ -1145,6 +1148,38 @@ title="Print to PDF"
 
 <span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
 <span class="n">probe</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 335.03 ms
+</pre></div>
+</div>
+<div class="output stderr highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>C:\Users\jacob\anaconda3\envs\abtem-dask-gpu\lib\site-packages\cupy\fft\_fft.py:454: UserWarning: cuFFT plan cache is disabled on CUDA 11.1 due to a known bug, so performance may be degraded. The bug is fixed on CUDA 11.2+.
+  cache = get_plan_cache()
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 432x288 with 2 Axes&gt;, &lt;Axes: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
+</pre></div>
+</div>
+<img alt="../../../_images/stem_quickstart_5_3.png" src="../../../_images/stem_quickstart_5_3.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">())</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>1.0000001
 </pre></div>
 </div>
 </div>
@@ -1273,10 +1308,10 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 542.77 ms
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 336.42 ms
 </pre></div>
 </div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x000001C10B8A5790&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x000001699D29FA00&gt;
 </pre></div>
 </div>
 </div>
@@ -1301,10 +1336,10 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 2 Axes&gt;, &lt;Axes: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 432x288 with 2 Axes&gt;, &lt;Axes: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
 </pre></div>
 </div>
-<img alt="../../../_images/stem_quickstart_9_1.png" src="../../../_images/stem_quickstart_9_1.png" />
+<img alt="../../../_images/stem_quickstart_11_1.png" src="../../../_images/stem_quickstart_11_1.png" />
 </div>
 </div>
 <div class="cell docutils container">
@@ -1316,7 +1351,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../../_images/stem_quickstart_10_0.png" src="../../../_images/stem_quickstart_10_0.png" />
+<img alt="../../../_images/stem_quickstart_12_0.png" src="../../../_images/stem_quickstart_12_0.png" />
 </div>
 </div>
 </section>

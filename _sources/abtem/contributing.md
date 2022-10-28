@@ -61,6 +61,7 @@ The online documentation is automatically updated when the source is updated.
 
 To get started with `abTEM`'s codebase, take the following steps:
 
+(constributing:clone_and_install)
 ### Clone and install
 
 Clone the repository:
@@ -73,11 +74,10 @@ cd abtem
 Next, install:
 
 ```{code-block}
-python -m pip install -e .[testing,docs,dev] 
+python -m pip install -e .[testing,docs] 
 ```
 
-This will install abTEM locally along with the packages needed to test it, the packages for producing documentation and
-some development packages.
+This will install abTEM locally along with the packages needed to test it, the packages for producing documentation.
 
 ### Optional: Install the pre-commit hooks
 

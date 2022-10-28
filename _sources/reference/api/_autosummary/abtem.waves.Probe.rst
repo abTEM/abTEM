@@ -1,4 +1,4 @@
-Probe
+﻿Probe
 =====
 
 .. currentmodule:: abtem.waves
@@ -63,6 +63,7 @@ Probe
       ~Probe.rectangle_cutoff_angles
       ~Probe.sampling
       ~Probe.shape
+      ~Probe.tilt
       ~Probe.transforms
       ~Probe.wavelength
    

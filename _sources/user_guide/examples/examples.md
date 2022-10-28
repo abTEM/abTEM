@@ -9,6 +9,9 @@
    notebooks/hrtem_quickstart
    notebooks/prism_quickstart
    notebooks/stem_quickstart
+   notebooks/4d-stem_quickstart
+   notebooks/saed_quickstart
+   notebooks/ped_quickstart
    notebooks/hbn_dft_iam
 ```
 

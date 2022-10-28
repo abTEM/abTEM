@@ -1,4 +1,4 @@
-PlaneWave
+﻿PlaneWave
 =========
 
 .. currentmodule:: abtem.waves
@@ -52,7 +52,6 @@ PlaneWave
       ~PlaneWave.gpts
       ~PlaneWave.grid
       ~PlaneWave.metadata
-      ~PlaneWave.named_transforms
       ~PlaneWave.normalize
       ~PlaneWave.num_axes
       ~PlaneWave.num_base_axes
@@ -60,6 +59,7 @@ PlaneWave
       ~PlaneWave.rectangle_cutoff_angles
       ~PlaneWave.sampling
       ~PlaneWave.shape
+      ~PlaneWave.tilt
       ~PlaneWave.transforms
       ~PlaneWave.wavelength
    
