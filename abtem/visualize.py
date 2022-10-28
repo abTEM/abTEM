@@ -68,7 +68,10 @@ def _get_complex_colors(
 
 def _add_colorbar_abs(cax, vmin, vmax):
     norm = colors.Normalize(vmin=vmin, vmax=vmax)
-    cb0 = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cm.gray), cax=cax,)
+    cb0 = plt.colorbar(
+        cm.ScalarMappable(norm=norm, cmap=cm.gray),
+        cax=cax,
+    )
     cb0.set_label("abs", rotation=0, ha="center", va="top")
     cb0.ax.yaxis.set_label_coords(0.5, -0.03)
 
@@ -111,7 +114,7 @@ def _add_imshow(
     **kwargs,
 ):
     if power != 1:
-        array = array ** power
+        array = array**power
         vmin = array.min() if vmin is None else vmin ** power
         vmax = array.max() if vmax is None else vmax ** power
 
@@ -327,7 +330,12 @@ def show_measurement_2d(
             else:
                 image_grid_kwargs["axes_pad"] = 0.1
 
-        axes = ImageGrid(fig, 111, nrows_ncols=(nrows, ncols), **image_grid_kwargs,)
+        axes = ImageGrid(
+            fig,
+            111,
+            nrows_ncols=(nrows, ncols),
+            **image_grid_kwargs,
+        )
     elif isinstance(axes, Axes):
         fig = axes.get_figure()
         axes = [axes]
@@ -522,6 +530,7 @@ def plot_diffraction_pattern(
     ax: Axes = None,
     figsize: Tuple[float, float] = (6, 6),
     title: str = None,
+    overlay_indices: bool = True,
     annotate_kwargs: dict = None,
     inequivalency_threshold: float = 1.0,
 ):
@@ -541,6 +550,8 @@ def plot_diffraction_pattern(
     title : bool or str, optional
         Add a title to the figure. If True is given instead of a string the title will be given by the value
         corresponding to the "name" key of the metadata dictionary, if this item exists
+    overlay_indices : bool
+
     annotate_kwargs : dict
         Additional keyword arguments passed to `matplotlib.axes.Axes.annotate` to change the formatting of the labels.
     inequivalency_threshold : float
@@ -588,22 +599,25 @@ def plot_diffraction_pattern(
         )
     )
 
-    indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent(divide_threshold=inequivalency_threshold)
-    coordinates = indexed_diffraction_pattern._vectors
-    coordinates = coordinates / normalize_coordinates
-
-    miller_indices = indexed_diffraction_pattern.miller_indices
-
-    for hkl, coordinate in zip(miller_indices, coordinates):
-        t = ax.annotate(
-            "".join(map(str, list(hkl))),
-            coordinate,
-            ha="center",
-            va="center",
-            size=12,
-            **annotate_kwargs,
+    if overlay_indices:
+        indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent(
+            divide_threshold=inequivalency_threshold
         )
-        t.set_path_effects([withStroke(foreground="w", linewidth=3)])
+        coordinates = indexed_diffraction_pattern._vectors
+        coordinates = coordinates / normalize_coordinates
+
+        miller_indices = indexed_diffraction_pattern.miller_indices
+
+        for hkl, coordinate in zip(miller_indices, coordinates):
+            t = ax.annotate(
+                "".join(map(str, list(hkl))),
+                coordinate,
+                ha="center",
+                va="center",
+                size=12,
+                **annotate_kwargs,
+            )
+            t.set_path_effects([withStroke(foreground="w", linewidth=3)])
 
     ax.axis("equal")
     ax.set_xlim([-1.0 - max_step / 2.0, 1.0 + max_step / 2.0])
