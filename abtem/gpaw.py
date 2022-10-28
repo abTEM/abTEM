@@ -31,7 +31,7 @@ from abtem.core.parametrizations.ewald import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
-    BaseFrozenPhonons,
+    BaseFrozenPhonons, _safe_read_atoms,
 )
 from abtem.potentials import _PotentialBuilder, Potential
 
@@ -61,21 +61,6 @@ except:
     SerialCommunicator = None
     GridDescriptor = None
     unpack_atomic_matrices = None
-
-
-def _safe_read_atoms(calculator, clean: bool = True):
-
-    if isinstance(calculator, str):
-        with Reader(calculator) as reader:
-            atoms = read_atoms(reader.atoms)
-    else:
-        atoms = calculator.atoms
-
-    if clean:
-        atoms.constraints = None
-        atoms.calc = True
-
-    return atoms
 
 
 def _get_gpaw_setups(atoms, mode, xc):
@@ -195,6 +180,7 @@ def _interpolate_pseudo_density(nt_sg, gd, gridrefinement=1):
         gd = finegd
 
     return n_sg, finegd
+
 
 def _get_all_electron_density(
         nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
@@ -340,6 +326,7 @@ class GPAWPotential(_PotentialBuilder):
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
         configuration file.
     """
+
     def __init__(
             self,
             calculators: Union["GPAW", List["GPAW"], List[str], str],
@@ -622,6 +609,7 @@ class GPAWParametrization:
     """
     Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.
     """
+
     def __init__(self):
         self._potential_functions = {}
 

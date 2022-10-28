@@ -18,6 +18,26 @@ from abtem.core.axes import FrozenPhononsAxis, AxisMetadata
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble
 from abtem.core.utils import CopyMixin, EqualityMixin
+from ase.io.trajectory import read_atoms
+
+try:
+    from gpaw.io import Reader
+except:
+    Reader = None
+
+
+def _safe_read_atoms(calculator, clean: bool = True):
+    if isinstance(calculator, str):
+        with Reader(calculator) as reader:
+            atoms = read_atoms(reader.atoms)
+    else:
+        atoms = calculator.atoms
+
+    if clean:
+        atoms.constraints = None
+        atoms.calc = True
+
+    return atoms
 
 
 class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -84,11 +104,11 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
     """Class to allow all potentials to be treated in the same way."""
 
     def __init__(
-        self,
-        atoms: Union[Atoms, Delayed],
-        num_configs: int = None,
-        atomic_numbers: Union[np.ndarray, Sequence[int]] = None,
-        cell: Union[Cell, np.ndarray] = None,
+            self,
+            atoms: Union[Atoms, Delayed],
+            num_configs: int = None,
+            atomic_numbers: Union[np.ndarray, Sequence[int]] = None,
+            cell: Union[Cell, np.ndarray] = None,
     ):
 
         self._atoms = atoms
@@ -170,7 +190,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
 
 def _validate_seeds(
-    seeds: Union[int, Tuple[int, ...]], num_seeds: int = None
+        seeds: Union[int, Tuple[int, ...]], num_seeds: int = None
 ) -> Tuple[int, ...]:
     if seeds is None or np.isscalar(seeds):
         if num_seeds is None:
@@ -219,15 +239,15 @@ class FrozenPhonons(BaseFrozenPhonons):
     """
 
     def __init__(
-        self,
-        atoms: Atoms,
-        num_configs: int,
-        sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
-        directions: str = "xyz",
-        ensemble_mean: bool = True,
-        seeds: Union[int, Tuple[int, ...]] = None,
-        atomic_numbers: Union[np.ndarray, Sequence[int]] = None,  # TODO: to be removed
-        cell: Union[Cell, np.ndarray] = None,  # TODO: to be removed
+            self,
+            atoms: Atoms,
+            num_configs: int,
+            sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
+            directions: str = "xyz",
+            ensemble_mean: bool = True,
+            seeds: Union[int, Tuple[int, ...]] = None,
+            atomic_numbers: Union[np.ndarray, Sequence[int]] = None,  # TODO: to be removed
+            cell: Union[Cell, np.ndarray] = None,  # TODO: to be removed
     ):
 
         if isinstance(sigmas, dict) and atomic_numbers is None:
@@ -422,15 +442,19 @@ class MDFrozenPhonons(BaseFrozenPhonons):
     """
 
     def __init__(
-        self,
-        trajectory: Sequence[Atoms],
-        atomic_numbers=None,  # TODO: to be removed
-        cell=None,  # TODO: to be removed
-        ensemble_mean: bool = True,
+            self,
+            trajectory: Sequence[Atoms],
+            atomic_numbers=None,  # TODO: to be removed
+            cell=None,  # TODO: to be removed
+            ensemble_mean: bool = True,
     ):
 
         if isinstance(trajectory, Atoms):
             trajectory = [trajectory]
+
+        if isinstance(trajectory, (list, tuple)):
+            if isinstance(trajectory[0], str):
+                trajectory = [_safe_read_atoms(path) for path in trajectory]
 
         self._trajectory = trajectory
 

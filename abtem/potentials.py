@@ -37,7 +37,7 @@ from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     DummyFrozenPhonons,
-    _validate_seeds,
+    _validate_seeds, MDFrozenPhonons,
 )
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.measurements import Images
@@ -59,6 +59,7 @@ from abtem.atoms import (
 if TYPE_CHECKING:
     from abtem.waves import Waves
     from abtem.core.parametrizations.base import Parametrization
+
 
 
 class BasePotential(
@@ -517,7 +518,10 @@ class Potential(_PotentialBuilder):
     ):
 
         if not hasattr(atoms, "randomize"):
-            self._frozen_phonons = DummyFrozenPhonons(atoms)
+            if isinstance(atoms, (list, tuple)):
+                self._frozen_phonons = MDFrozenPhonons(atoms)
+            else:
+                self._frozen_phonons = DummyFrozenPhonons(atoms)
         else:
             self._frozen_phonons = atoms
 
