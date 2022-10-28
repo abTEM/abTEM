@@ -991,7 +991,6 @@ class Waves(HasArray, BaseWaves):
         """
 
         potential = _validate_potential(potential, self)
-
         detectors = _validate_detectors(detectors)
 
         if self.is_lazy:
@@ -1010,14 +1009,9 @@ class Waves(HasArray, BaseWaves):
             else:
                 new_axes = None
 
-
             axes_blocks = ()
             for i, (axis, chunks) in enumerate(zip(self.ensemble_axes_metadata, self.array.chunks)):
                 axes_blocks += (axis._to_blocks((chunks),), (num_new_symbols + i,))
-
-            #print(axes_blocks)
-            #sss
-            #sss
 
             arrays = da.blockwise(
                 self._lazy_multislice,
@@ -1077,10 +1071,21 @@ class _WavesFactory(BaseWaves):
         if transforms is None:
             transforms = []
 
-        if isinstance(transforms, list):
-            transforms = CompositeWaveTransform(transforms)
-
         self._transforms = transforms
+
+    @property
+    def tilt(self):
+        return self._tilt
+
+    @tilt.setter
+    def tilt(self, value):
+        old_tilt = self.tilt
+
+        for i, transform in self._transforms:
+            if transform is old_tilt:
+                self._transforms[i] = value
+
+        self._tilt = validate_tilt(value)
 
     @abstractmethod
     def metadata(self):
@@ -1095,7 +1100,7 @@ class _WavesFactory(BaseWaves):
         if index is None:
             index = len(self._transforms)
 
-        self._transforms.insert_transform(index, transform)
+        self._transforms.insert(index, transform)
         return self
 
     @property
@@ -1104,11 +1109,11 @@ class _WavesFactory(BaseWaves):
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        return self.transforms.ensemble_axes_metadata
+        return CompositeWaveTransform(self.transforms).ensemble_axes_metadata
 
     @property
     def ensemble_shape(self):
-        return self.transforms.ensemble_shape
+        return CompositeWaveTransform(self.transforms).ensemble_shape
 
     @staticmethod
     def _build_waves_multislice_detect(*args, partials, multislice_func, detectors):
@@ -1183,18 +1188,20 @@ class _WavesFactory(BaseWaves):
                 extra_ensemble_axes_metadata += [potential.exit_planes_axes_metadata]
                 max_symbol += 1
 
+        transforms = CompositeWaveTransform(self.transforms)
+
         # add transform args
         transform_arg_indices = tuple(
-            range(max_arg_index, max_arg_index + len(self.transforms.ensemble_shape))
+            range(max_arg_index, max_arg_index + len(transforms.ensemble_shape))
         )
         partials["transforms"] = (
-            self.transforms._wrapped_from_partitioned_args(),
+            transforms._wrapped_from_partitioned_args(),
             transform_arg_indices,
         )
         transform_symbols = tuple(
-            range(max_symbol, max_symbol + len(self.transforms.ensemble_shape))
+            range(max_symbol, max_symbol + len(transforms.ensemble_shape))
         )
-        transform_chunks = self.transforms._ensemble_chunks(
+        transform_chunks = transforms._ensemble_chunks(
             max_batch, base_shape=self.gpts
         )
 
@@ -1204,7 +1211,7 @@ class _WavesFactory(BaseWaves):
                     (block, (i,))
                     for i, block in zip(
                         transform_symbols,
-                        self.transforms._partition_args(transform_chunks),
+                        transforms._partition_args(transform_chunks),
                     )
                 )
             )
@@ -1289,10 +1296,6 @@ class PlaneWave(_WavesFactory):
         transforms = transforms + [self._tilt]
 
         super().__init__(transforms=transforms)
-
-    @property
-    def named_transforms(self):
-        return CompositeWaveTransform([])
 
     @property
     def metadata(self):
@@ -1523,8 +1526,7 @@ class Probe(_WavesFactory):
         self._device = validate_device(device)
 
         transforms = [] if transforms is None else transforms
-
-        transforms = transforms + [self._tilt, self.aperture, self.aberrations]
+        transforms = transforms + [self.tilt + self.aperture + self.aberrations]
 
         super().__init__(transforms=transforms)
 
@@ -1644,7 +1646,7 @@ class Probe(_WavesFactory):
         else:
             waves = probe._base_waves_partial()()
 
-            waves = probe.transforms.apply(waves)
+            waves = CompositeWaveTransform(probe.transforms).apply(waves)
 
             waves = waves.ensure_real_space()
 

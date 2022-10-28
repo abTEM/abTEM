@@ -2,11 +2,18 @@
 from typing import Union, TYPE_CHECKING, Tuple, List
 
 import dask.array as da
+import numpy as np
 
 from abtem.core.axes import AxisMetadata, TiltAxis, AxisAlignedTiltAxis
 from abtem.core.backend import get_array_module
 from abtem.core.transform import CompositeWaveTransform, WaveTransform
-from abtem.distributions import BaseDistribution, _AxisAlignedDistributionND, _EnsembleFromDistributionsMixin
+from abtem.distributions import (
+    BaseDistribution,
+    _AxisAlignedDistributionND,
+    _EnsembleFromDistributionsMixin,
+    _DistributionFromValues,
+    from_values,
+)
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -30,8 +37,45 @@ def validate_tilt(tilt):
             )
 
         tilt = CompositeWaveTransform(transforms)
+    elif isinstance(tilt, np.ndarray):
+
+        return BeamTilt(tilt)
 
     return tilt
+
+
+def precession_tilts(
+    precession_angle: float,
+    num_samples: int,
+    min_azimuth: float = 0.0,
+    max_azimuth: float = 2 * np.pi,
+    endpoint: bool = False,
+):
+    """
+    Tilts for electron precession at a given precession angle.
+
+    Parameters
+    ----------
+    precession_angle : float
+        Precession angle.
+    num_samples : int
+
+    min_azimuth
+    max_azimuth
+    endpoint
+
+    Returns
+    -------
+
+    """
+    azimuthal_angles = np.linspace(
+        min_azimuth, max_azimuth, num=num_samples, endpoint=endpoint
+    )
+
+    tilt_x = precession_angle * np.cos(azimuthal_angles)
+    tilt_y = precession_angle * np.sin(azimuthal_angles)
+
+    return np.array([tilt_x, tilt_y], dtype=float).T
 
 
 class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
@@ -43,7 +87,12 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
     tilt : tuple of float
         Tilt along the `x` and `y` axes [mrad] with an optional spread of values.
     """
-    def __init__(self, tilt: Union[Tuple[float, float], BaseDistribution]):
+
+    def __init__(self, tilt: Union[Tuple[float, float], BaseDistribution, np.ndarray]):
+
+        if isinstance(tilt, np.ndarray):
+            tilt = from_values(tilt)
+
         self._tilt = tilt
         super().__init__(distributions=("tilt",))
 
@@ -104,7 +153,10 @@ class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
     direction : str
         Cartesian axis, should be either 'x' or 'y'.
     """
-    def __init__(self, tilt: Union[float, BaseDistribution] = 0.0, direction: str = "x"):
+
+    def __init__(
+        self, tilt: Union[float, BaseDistribution] = 0.0, direction: str = "x"
+    ):
         if not isinstance(tilt, BaseDistribution):
             tilt = float(tilt)
         self._tilt = tilt
