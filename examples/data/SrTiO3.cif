@@ -1,0 +1,130 @@
+# generated using pymatgen
+data_SrTiO3
+_symmetry_space_group_name_H-M   Pm-3m
+_cell_length_a   3.94513000
+_cell_length_b   3.94513000
+_cell_length_c   3.94513000
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   90.00000000
+_symmetry_Int_Tables_number   221
+_chemical_formula_structural   SrTiO3
+_chemical_formula_sum   'Sr1 Ti1 O3'
+_cell_volume   61.40220340
+_cell_formula_units_Z   1
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+  2  'x, y, z'
+  3  '-x, -y, -z'
+  4  '-x, -y, -z'
+  5  '-y, x, z'
+  6  '-y, x, z'
+  7  'y, -x, -z'
+  8  'y, -x, -z'
+  9  '-x, -y, z'
+  10  '-x, -y, z'
+  11  'x, y, -z'
+  12  'x, y, -z'
+  13  'y, -x, z'
+  14  'y, -x, z'
+  15  '-y, x, -z'
+  16  '-y, x, -z'
+  17  'x, -y, -z'
+  18  'x, -y, -z'
+  19  '-x, y, z'
+  20  '-x, y, z'
+  21  '-y, -x, -z'
+  22  '-y, -x, -z'
+  23  'y, x, z'
+  24  'y, x, z'
+  25  '-x, y, -z'
+  26  '-x, y, -z'
+  27  'x, -y, z'
+  28  'x, -y, z'
+  29  'y, x, -z'
+  30  'y, x, -z'
+  31  '-y, -x, z'
+  32  '-y, -x, z'
+  33  'z, x, y'
+  34  'z, x, y'
+  35  '-z, -x, -y'
+  36  '-z, -x, -y'
+  37  'z, -y, x'
+  38  'z, -y, x'
+  39  '-z, y, -x'
+  40  '-z, y, -x'
+  41  'z, -x, -y'
+  42  'z, -x, -y'
+  43  '-z, x, y'
+  44  '-z, x, y'
+  45  'z, y, -x'
+  46  'z, y, -x'
+  47  '-z, -y, x'
+  48  '-z, -y, x'
+  49  '-z, x, -y'
+  50  '-z, x, -y'
+  51  'z, -x, y'
+  52  'z, -x, y'
+  53  '-z, -y, -x'
+  54  '-z, -y, -x'
+  55  'z, y, x'
+  56  'z, y, x'
+  57  '-z, -x, y'
+  58  '-z, -x, y'
+  59  'z, x, -y'
+  60  'z, x, -y'
+  61  '-z, y, x'
+  62  '-z, y, x'
+  63  'z, -y, -x'
+  64  'z, -y, -x'
+  65  'y, z, x'
+  66  'y, z, x'
+  67  '-y, -z, -x'
+  68  '-y, -z, -x'
+  69  'x, z, -y'
+  70  'x, z, -y'
+  71  '-x, -z, y'
+  72  '-x, -z, y'
+  73  '-y, z, -x'
+  74  '-y, z, -x'
+  75  'y, -z, x'
+  76  'y, -z, x'
+  77  '-x, z, y'
+  78  '-x, z, y'
+  79  'x, -z, -y'
+  80  'x, -z, -y'
+  81  '-y, -z, x'
+  82  '-y, -z, x'
+  83  'y, z, -x'
+  84  'y, z, -x'
+  85  '-x, -z, -y'
+  86  '-x, -z, -y'
+  87  'x, z, y'
+  88  'x, z, y'
+  89  'y, -z, -x'
+  90  'y, -z, -x'
+  91  '-y, z, x'
+  92  '-y, z, x'
+  93  'x, -z, y'
+  94  'x, -z, y'
+  95  '-x, z, -y'
+  96  '-x, z, -y'
+loop_
+ _atom_type_symbol
+ _atom_type_oxidation_number
+  Sr2+  2.0
+  Ti4+  4.0
+  O2-  -2.0
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  Sr2+  Sr0  1  0.00000000  0.00000000  0.00000000  1
+  Ti4+  Ti1  1  0.50000000  0.50000000  0.50000000  1
+  O2-  O2  3  0.00000000  0.50000000  0.50000000  1
