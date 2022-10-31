@@ -50,7 +50,8 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def _validate_atomic_numbers_and_cell(self, atoms, atomic_numbers, cell):
         if isinstance(atoms, Delayed) and (atomic_numbers is None or cell is None):
-            raise ValueError()
+            atoms = atoms.compute()
+            #raise ValueError()
 
         if cell is None:
             cell = atoms.cell.copy()
@@ -87,15 +88,11 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         self,
         atoms: Union[Atoms, Delayed],
         num_configs: int = None,
-        atomic_numbers: Union[np.ndarray, Sequence[int]] = None,
-        cell: Union[Cell, np.ndarray] = None,
     ):
 
         self._atoms = atoms
         self._num_configs = num_configs
-        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
-            atoms, atomic_numbers, cell
-        )
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, None)
         super().__init__(atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=True)
 
     @property
@@ -121,11 +118,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         if self._num_configs is None:
             return []
         else:
-            return [
-                FrozenPhononsAxis(
-                    _ensemble_mean=self.ensemble_mean
-                )
-            ]
+            return [FrozenPhononsAxis(_ensemble_mean=self.ensemble_mean)]
 
     def randomize(self, atoms):
         return atoms
@@ -226,15 +219,15 @@ class FrozenPhonons(BaseFrozenPhonons):
         directions: str = "xyz",
         ensemble_mean: bool = True,
         seeds: Union[int, Tuple[int, ...]] = None,
-        atomic_numbers: Union[np.ndarray, Sequence[int]] = None,  # TODO: to be removed
-        cell: Union[Cell, np.ndarray] = None,  # TODO: to be removed
     ):
 
-        if isinstance(sigmas, dict) and atomic_numbers is None:
+        if isinstance(sigmas, dict):
             atomic_numbers = [data.atomic_numbers[symbol] for symbol in sigmas.keys()]
+        else:
+            atomic_numbers = None
 
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
-            atoms, atomic_numbers, cell=cell
+            atoms, atomic_numbers, cell=None
         )
 
         unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
@@ -282,11 +275,7 @@ class FrozenPhonons(BaseFrozenPhonons):
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        return [
-            FrozenPhononsAxis(
-                _ensemble_mean=self.ensemble_mean
-            )
-        ]
+        return [FrozenPhononsAxis(_ensemble_mean=self.ensemble_mean)]
 
     @property
     def num_configs(self) -> int:
@@ -322,9 +311,7 @@ class FrozenPhonons(BaseFrozenPhonons):
             elif direction == "z":
                 axes += [2]
             else:
-                raise RuntimeError(
-                    "Directions must be 'x', 'y' or 'z', not {}."
-                )  # TODO
+                raise RuntimeError(f"Directions must be 'x', 'y' or 'z', not {axes}.")
         return axes
 
     def randomize(self, atoms: Atoms) -> Atoms:
@@ -401,7 +388,6 @@ class FrozenPhonons(BaseFrozenPhonons):
         return (array,)
 
     def to_md_frozen_phonons(self):
-        """TODO"""
         trajectory = []
         for b in self.generate_blocks(1):
             trajectory.append(b[-1].randomize(b[-1].atoms))
@@ -424,8 +410,6 @@ class MDFrozenPhonons(BaseFrozenPhonons):
     def __init__(
         self,
         trajectory: Sequence[Atoms],
-        atomic_numbers=None,  # TODO: to be removed
-        cell=None,  # TODO: to be removed
         ensemble_mean: bool = True,
     ):
 
@@ -435,7 +419,7 @@ class MDFrozenPhonons(BaseFrozenPhonons):
         self._trajectory = trajectory
 
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
-            trajectory[0], atomic_numbers, cell
+            trajectory[0], None, None
         )
 
         super().__init__(
@@ -444,11 +428,7 @@ class MDFrozenPhonons(BaseFrozenPhonons):
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        return [
-            FrozenPhononsAxis(
-                _ensemble_mean=self.ensemble_mean
-            )
-        ]
+        return [FrozenPhononsAxis(_ensemble_mean=self.ensemble_mean)]
 
     def __len__(self) -> int:
         return len(self._trajectory)
@@ -516,6 +496,3 @@ class MDFrozenPhonons(BaseFrozenPhonons):
             (atoms.positions - mean_positions) ** 2 for atoms in self._trajectory
         ]
         return np.sqrt(np.sum(squared_deviations, axis=0) / (len(self) - 1))
-
-    def __copy__(self):
-        return self.__class__(trajectory=[atoms.copy() for atoms in self._trajectory])

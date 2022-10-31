@@ -18,11 +18,13 @@ exclude_regex_paths = {
 }
 
 
-ROOT_DIR = "/Users/jacobmadsen/PycharmProjects/abtem-doc/docs/user_guide/walkthrough"
-KERNEL_NAME = "abtem-dask"
+# ROOT_DIR = "/Users/jacobmadsen/PycharmProjects/abtem-doc/docs/user_guide/walkthrough"
+ROOT_DIR = "C:\\Users\\jacob\\PycharmProjects\\abtem-docs\\docs\\user_guide"
+KERNEL_NAME = "abtem-dask-gpu"
+
 
 @contextmanager
-def working_directory(directory):
+def set_working_directory(directory):
     owd = os.getcwd()
     try:
         os.chdir(directory)
@@ -47,7 +49,7 @@ def strip_memory_address(text):
         match = re.search("at .+>", part)
         if match:
             parts[i] = (
-                    part[: match.span()[0] + 3] + "mem_addr" + part[match.span()[1] - 1:]
+                part[: match.span()[0] + 3] + "mem_addr" + part[match.span()[1] - 1 :]
             )
     return "<".join(parts)
 
@@ -91,13 +93,13 @@ def strip_timings_from_code_output(nb):
 def strip_skipped(nb):
     for cell in nb["cells"]:
         if (cell["cell_type"] == "code") and (
-                "skip-test" in cell["metadata"].get("tags", [])
+            "skip-test" in cell["metadata"].get("tags", [])
         ):
             cell["outputs"] = []
 
 
-def _test_notebook(fname):
-    with working_directory(ROOT_DIR):
+def _test_notebook(fname, working_directory):
+    with set_working_directory(working_directory):
         nb = nbformat.read(fname, DEFAULT_NB_VERSION)
         nb_old = copy.deepcopy(nb)
         client = NotebookClient(nb, kernel=KERNEL_NAME)
@@ -114,40 +116,57 @@ def _test_notebook(fname):
 
 @pytest.mark.slow
 def test_atomic_models():
-    _test_notebook("atomic_models.ipynb")
+    _test_notebook("atomic_models.ipynb", os.path.join(ROOT_DIR, "walkthrough"))
 
 
 @pytest.mark.slow
 def test_potentials():
-    _test_notebook("potentials.ipynb")
+    _test_notebook("potentials.ipynb", os.path.join(ROOT_DIR, "walkthrough"))
 
 
 @pytest.mark.slow
 def test_wave_functions():
-    _test_notebook("wave_functions.ipynb")
+    _test_notebook("wave_functions.ipynb", os.path.join(ROOT_DIR, "walkthrough"))
 
 
 @pytest.mark.slow
 def test_multislice():
-    _test_notebook("multislice.ipynb")
+    _test_notebook("multislice.ipynb", os.path.join(ROOT_DIR, "walkthrough"))
 
 
 @pytest.mark.slow
 def test_contrast_transfer_function():
-    _test_notebook("contrast_transfer_function.ipynb")
+    _test_notebook(
+        "contrast_transfer_function.ipynb", os.path.join(ROOT_DIR, "walkthrough")
+    )
 
 
 @pytest.mark.slow
 def test_scan_and_detect():
-    _test_notebook("scan_and_detect.ipynb")
+    _test_notebook("scan_and_detect.ipynb", os.path.join(ROOT_DIR, "walkthrough"))
+
+
+@pytest.mark.slow
+def test_frozen_phonons():
+    _test_notebook("frozen_phonons.ipynb", os.path.join(ROOT_DIR, "walkthrough"))
+
+
+@pytest.mark.slow
+def test_advanced_atomic_models():
+    _test_notebook("advanced_atomic_models.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 
 
 @pytest.mark.slow
 def test_partial_coherence():
-    _test_notebook("partial_coherence.ipynb")
+    _test_notebook("partial_coherence.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 
 
 @pytest.mark.slow
-def test_charge_density():
-    _test_notebook("charge_density.ipynb")
+def test_prism():
+    _test_notebook("prism.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 
+
+# @pytest.mark.slow
+# def test_charge_density():
+#     _test_notebook("charge_density.ipynb")
+#

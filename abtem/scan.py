@@ -16,7 +16,7 @@ from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.transform import WaveTransform
 from abtem.core.utils import safe_floor_int
-from abtem.distributions import _AxisAlignedDistributionND
+from abtem.distributions import _AxisAlignedDistributionND, BaseDistribution
 from abtem.potentials import BasePotential, _validate_potential
 
 if TYPE_CHECKING:
@@ -101,9 +101,17 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
         return waves.convolve(array, axes_metadata)
 
 
-# TODO: to be documented or made internal.
 class SourceOffset(BaseScan):
-    def __init__(self, distribution):
+    """
+    Distribution of electron source offsets.
+
+    Parameters
+    ----------
+    distribution : 2D :class:`.BaseDistribution`
+        Distribution describing the positions and weights of the source offsets.
+    """
+
+    def __init__(self, distribution: BaseDistribution):
         self._distribution = distribution
 
     @property
@@ -119,7 +127,6 @@ class SourceOffset(BaseScan):
 
     @property
     def ensemble_axes_metadata(self):
-
         return [PositionsAxis()] * len(self.shape)
 
     def ensemble_blocks(self, chunks=None):

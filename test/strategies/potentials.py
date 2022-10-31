@@ -70,8 +70,6 @@ def frozen_phonons(draw,
                          num_configs=num_configs,
                          sigmas=sigmas,
                          seeds=seeds,
-                         atomic_numbers=atomic_numbers,
-                         cell=cell,
                          ensemble_mean=ensemble_mean)
 
 
@@ -91,9 +89,7 @@ def dummy_frozen_phonons(draw,
                              max_atoms=max_atoms))
 
     if lazy:
-        return DummyFrozenPhonons(dask.delayed(drawn_atoms),
-                                  atomic_numbers=np.unique(drawn_atoms.numbers),
-                                  cell=drawn_atoms.cell)
+        return DummyFrozenPhonons(dask.delayed(drawn_atoms))
     else:
         return DummyFrozenPhonons(drawn_atoms)
 
@@ -122,7 +118,7 @@ def md_frozen_phonons(draw,
     if lazy:
         trajectory = [dask.delayed(drawn_atoms) for drawn_atoms in trajectory]
 
-    return MDFrozenPhonons(trajectory, atomic_numbers=atomic_numbers, cell=cell)
+    return MDFrozenPhonons(trajectory)
 
 
 @st.composite

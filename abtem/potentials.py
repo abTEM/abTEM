@@ -1,4 +1,5 @@
 """Module to calculate electrostatic potentials using the independent atom model."""
+import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from functools import reduce
@@ -42,7 +43,7 @@ from abtem.inelastic.phonons import (
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.measurements import Images
 from abtem.slicing import (
-    validate_slice_thickness,
+    _validate_slice_thickness,
     SliceIndexedAtoms,
     SlicedAtoms,
     unpack_item,
@@ -239,18 +240,18 @@ def _validate_exit_planes(exit_planes, num_slices):
 class _PotentialBuilder(BasePotential):
     def __init__(
         self,
-        gpts: Union[int, Tuple[int, int]],
-        sampling: Union[float, Tuple[float, float]],
         slice_thickness: Union[float, Tuple[float, ...]],
         exit_planes: Union[int, Tuple[int, ...]],
         cell: Union[np.ndarray, Cell],
-        box: Tuple[float, float, float],
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        box: Tuple[float, float, float] = None,
         plane: Union[
             str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-        ],
-        origin: Tuple[float, float, float],
-        periodic: bool,
-        device: str,
+        ] = "xy",
+        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        periodic: bool = True,
+        device: str = None,
     ):
 
         if self._require_cell_transform(cell, box=box, plane=plane, origin=origin):
@@ -271,7 +272,7 @@ class _PotentialBuilder(BasePotential):
         self._origin = origin
         self._periodic = periodic
 
-        self._slice_thickness = validate_slice_thickness(
+        self._slice_thickness = _validate_slice_thickness(
             slice_thickness, thickness=box[2]
         )
         self._exit_planes = _validate_exit_planes(
@@ -344,7 +345,7 @@ class _PotentialBuilder(BasePotential):
         self,
         first_slice: int = 0,
         last_slice: int = None,
-        chunks: Chunks = 1,
+        max_batch: Union[int, str] = 1,
         lazy: bool = None,
     ) -> "PotentialArray":
         """
@@ -356,9 +357,8 @@ class _PotentialBuilder(BasePotential):
             Index of the first slice of the generated potential.
         last_slice : int, optional
             Index of the last slice of the generated potential
-        TODO: replace with max_batches
-        chunks : int or tuple of int or tuple of tuple of int
-            Number of slices to include in each Dask worker batch. Default is 1.
+        max_batch : int or str, optional
+            Maximum number of slices to calculate in task. Default is 1.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             value set in the configuration file.
@@ -717,7 +717,7 @@ class Potential(_PotentialBuilder):
 
     def _from_partitioned_args(self, *args, **kwargs):
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
-        kwargs = self._copy_kwargs(exclude=("atoms",))
+        kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
         return partial(
             self.potential, frozen_phonons_partial=frozen_phonons_partial, **kwargs
         )
@@ -773,7 +773,7 @@ class PotentialArray(BasePotential, HasArray):
 
         self._array = array
         self._grid = Grid(extent=extent, gpts=self.array.shape[-2:], sampling=sampling)
-        self._slice_thickness = validate_slice_thickness(
+        self._slice_thickness = _validate_slice_thickness(
             slice_thickness, num_slices=array.shape[-3]
         )
         self._exit_planes = _validate_exit_planes(
@@ -841,6 +841,7 @@ class PotentialArray(BasePotential, HasArray):
         kwargs = potential_array._copy_kwargs(exclude=("array", "slice_thickness"))
         kwargs["array"] = array
         kwargs["slice_thickness"] = slice_thickness
+        kwargs["sampling"] = None
         return potential_array.__class__(**kwargs)
 
     def build(
@@ -937,7 +938,9 @@ class PotentialArray(BasePotential, HasArray):
     def _from_partitioned_args(self):
         return partial(
             self._from_partitioned_args_func,
-            **self._copy_kwargs(exclude=("array", "ensemble_axes_metadata")),
+            **self._copy_kwargs(
+                exclude=("array", "sampling", "ensemble_axes_metadata")
+            ),
         )
 
     def generate_slices(self, first_slice=0, last_slice=None):
@@ -964,17 +967,6 @@ class PotentialArray(BasePotential, HasArray):
             yield self.__class__(
                 array, self.slice_thickness[i : i + 1], extent=self.extent
             )
-
-    def get_chunk(self, first_slice, last_slice):
-        """TODO: check if can be made internal or deleted."""
-        array = self.array[first_slice:last_slice]
-
-        if len(array.shape) == 2:
-            array = array[None]
-
-        return self.__class__(
-            array, self.slice_thickness[first_slice:last_slice], extent=self.extent
-        )
 
     def transmission_function(self, energy: float) -> "TransmissionFunction":
         """
@@ -1066,9 +1058,10 @@ class PotentialArray(BasePotential, HasArray):
         transmissionfunction : TransmissionFunction
             Transmission function for the wave function through the potential slice.
         """
-        return self.transmission_function(waves.energy).transmit(
-            waves, conjugate=conjugate
-        )
+
+        transmission_function = self.transmission_function(waves.energy)
+
+        return transmission_function.transmit(waves, conjugate=conjugate)
 
     def images(self):
         """Convert slices of the potential to a stack of images."""
@@ -1235,13 +1228,15 @@ class CrystalPotential(_PotentialBuilder):
 
             self._seeds = _validate_seeds(seeds, num_frozen_phonons)
 
-        # TODO: check if still needed
-        # if (potential_unit.num_frozen_phonon_configs == 1) & (num_frozen_phonon_configs > 1):
-        #     warnings.warn('"num_frozen_phonon_configs" is greater than one, but the potential unit does not have'
-        #                   'frozen phonons')
-        #
-        # if (potential_unit.num_frozen_phonon_configs > 1) & (num_frozen_phonon_configs == 1):
-        #     warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
+        if (potential_unit.num_frozen_phonons == 1) and (num_frozen_phonons is not None) and (num_frozen_phonons > 1):
+            warnings.warn(
+                "'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons"
+            )
+
+        if (potential_unit.num_frozen_phonons > 1) and (num_frozen_phonons is not None):
+            warnings.warn(
+                "the potential unit has frozen phonons, but 'num_frozen_phonon' is not set"
+            )
 
         gpts = (
             potential_unit.gpts[0] * repetitions[0],
@@ -1251,12 +1246,11 @@ class CrystalPotential(_PotentialBuilder):
             potential_unit.extent[0] * repetitions[0],
             potential_unit.extent[1] * repetitions[1],
         )
-        sampling = extent[0] / gpts[0], extent[1] / gpts[1]
+
         box = extent + (potential_unit.thickness * repetitions[2],)
         slice_thickness = potential_unit.slice_thickness * repetitions[2]
         super().__init__(
             gpts=gpts,
-            sampling=sampling,
             cell=Cell(np.diag(box)),
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
@@ -1270,13 +1264,12 @@ class CrystalPotential(_PotentialBuilder):
         self._potential_unit = potential_unit
         self._repetitions = repetitions
 
-    # TODO: check if could be documented
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
         if self._seeds is None:
             return ()
         else:
-            return (self.num_frozen_phonons,)
+            return self.num_frozen_phonons,
 
     @property
     def num_frozen_phonons(self):
@@ -1326,11 +1319,7 @@ class CrystalPotential(_PotentialBuilder):
         if self.seeds is None:
             return []
         else:
-            return [
-                FrozenPhononsAxis(
-                    _ensemble_mean=True
-                )
-            ]
+            return [FrozenPhononsAxis(_ensemble_mean=True)]
 
     @staticmethod
     def _wrap_partition_args(*args):

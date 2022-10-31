@@ -1,6 +1,6 @@
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given
+from hypothesis import given, reproduce_failure
 
 import strategies as abtem_st
 from abtem import PixelatedDetector, AnnularDetector

@@ -72,6 +72,7 @@ def integrate_gradient_fourier(
     integrated : np.ndarray
         Integrated gradient.
     """
+
     if in_space == "real":
         array = np.fft.fftn(array)
 

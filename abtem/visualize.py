@@ -280,7 +280,7 @@ def show_measurement_2d(
 
     Returns
     -------
-    Figure, matplotlib.axes.Axes
+    matplotlib.figure.Figure, matplotlib.axes.Axes
     """
     measurements = measurements.to_cpu().compute()
 

@@ -484,7 +484,6 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
             xp.float32
         )
 
-    # TODO: add link to relevant example in the main docstring.
     def poisson_noise(
             self,
             dose_per_area: float = None,
@@ -493,7 +492,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
             seed: int = None,
     ):
         """
-        Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided 'total_dose' (per measurement
+        Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided 'total_dose' (per measurement
         if applied to an ensemble) or 'dose_per_area' (not applicable for single measurements).
 
         Parameters
@@ -2883,10 +2882,23 @@ class PolarMeasurements(BaseMeasurement):
             azimuthal_limits: Tuple[float, float] = None,
             detector_regions: Sequence[int] = None,
     ) -> Union[Images, RealSpaceLineProfiles]:
+        """
+        Integrate polar regions to produce an image or line profiles.
+
+        Parameters
+        ----------
+        radial_limits : tuple of floats
+        azimuthal_limits : tuple of floats
+        detector_regions : sequence of int
+
+        Returns
+        -------
+        integrated_images : Images
+        """
 
         if detector_regions is not None:
             if (radial_limits is not None) or (azimuthal_limits is not None):
-                raise RuntimeError()
+                raise ValueError()
 
             array = self.array.reshape(self.shape[:-2] + (-1,))[
                 ..., list(detector_regions)

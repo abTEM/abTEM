@@ -138,7 +138,7 @@ class _DummyGPAW:
 
             assert isinstance(setup_xc, str)
 
-            density = reader.density.density * units.Bohr ** 3
+            density = reader.density.density * units.Bohr**3
             gd = GridDescriptor(
                 N_c=density.shape[-3:],
                 cell_cv=atoms.get_cell() / Bohr,
@@ -147,7 +147,9 @@ class _DummyGPAW:
 
             setups = _get_gpaw_setups(atoms, setup_mode, setup_xc)
 
-            D_asp = unpack_atomic_matrices(reader.density.atomic_density_matrices, setups)
+            D_asp = unpack_atomic_matrices(
+                reader.density.atomic_density_matrices, setups
+            )
 
         kwargs = {
             "setup_mode": setup_mode,
@@ -196,8 +198,9 @@ def _interpolate_pseudo_density(nt_sg, gd, gridrefinement=1):
 
     return n_sg, finegd
 
+
 def _get_all_electron_density(
-        nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
+    nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
 ):
     nspins = nt_sG.shape[0]
     spos_ac = atoms.get_scaled_positions() % 1.0
@@ -230,7 +233,7 @@ def _get_all_electron_density(
     W = 0
     for a in phi.atom_indices:
         nw = len(phi.sphere_a[a].M_w)
-        a_W[W: W + nw] = a
+        a_W[W : W + nw] = a
         W += nw
 
     x_W = phi.create_displacement_arrays()[0]
@@ -263,7 +266,7 @@ def _get_all_electron_density(
     W = 0
     for a in nc.atom_indices:
         nw = len(nc.sphere_a[a].M_w)
-        a_W[W: W + nw] = a
+        a_W[W : W + nw] = a
         W += nw
     scale = 1.0 / nspins
 
@@ -279,7 +282,7 @@ def _get_all_electron_density(
             if np.all(g_c >= 0) and np.all(g_c < gd.n_c):
                 n_sg[s][tuple(g_c)] -= I / gd.dv
 
-    return n_sg.sum(0) / Bohr ** 3
+    return n_sg.sum(0) / Bohr**3
 
 
 class GPAWPotential(_PotentialBuilder):
@@ -340,21 +343,22 @@ class GPAWPotential(_PotentialBuilder):
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
         configuration file.
     """
+
     def __init__(
-            self,
-            calculators: Union["GPAW", List["GPAW"], List[str], str],
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            slice_thickness: float = 1.0,
-            exit_planes: int = None,
-            plane: str = "xy",
-            origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-            box: Tuple[float, float, float] = None,
-            periodic: bool = True,
-            frozen_phonons: BaseFrozenPhonons = None,
-            repetitions: Tuple[int, int, int] = (1, 1, 1),
-            gridrefinement: int = 4,
-            device: str = None
+        self,
+        calculators: Union["GPAW", List["GPAW"], List[str], str],
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        slice_thickness: float = 1.0,
+        exit_planes: int = None,
+        plane: str = "xy",
+        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: Tuple[float, float, float] = None,
+        periodic: bool = True,
+        frozen_phonons: BaseFrozenPhonons = None,
+        repetitions: Tuple[int, int, int] = (1, 1, 1),
+        gridrefinement: int = 4,
+        device: str = None,
     ):
 
         if GPAW is None:
@@ -516,7 +520,7 @@ class GPAWPotential(_PotentialBuilder):
         array = self._get_all_electron_density()
 
         for slic in _generate_slices(
-                array, ewald_potential, first_slice=first_slice, last_slice=last_slice
+            array, ewald_potential, first_slice=first_slice, last_slice=last_slice
         ):
             yield slic
 
@@ -574,7 +578,7 @@ class GPAWPotential(_PotentialBuilder):
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)
             for i, fp in enumerate(
-                    self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
+                self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
             ):
                 if lazy:
                     block = dask.delayed(frozen_phonons)(calculators, fp)
@@ -622,6 +626,7 @@ class GPAWParametrization:
     """
     Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.
     """
+
     def __init__(self):
         self._potential_functions = {}
 
@@ -689,7 +694,7 @@ class GPAWParametrization:
         """
         ae = self._get_all_electron_atom(symbol, charge)
         r = ae.rgd.r_g * units.Bohr
-        n = ae.n_sg.sum(0) / units.Bohr ** 3
+        n = ae.n_sg.sum(0) / units.Bohr**3
         return interp1d(r, n, fill_value="extrapolate", bounds_error=False)
 
     def potential(self, symbol: str, charge: float = 0.0):
@@ -716,6 +721,6 @@ class GPAWParametrization:
 
         vr = (
             lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0)
-                      + ve(r) / r * units.Hartree * units.Bohr
+            + ve(r) / r * units.Hartree * units.Bohr
         )
         return vr
