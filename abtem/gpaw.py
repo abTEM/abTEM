@@ -31,7 +31,7 @@ from abtem.core.parametrizations.ewald import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
-    BaseFrozenPhonons,
+    BaseFrozenPhonons, _safe_read_atoms,
 )
 from abtem.potentials import _PotentialBuilder, Potential
 
@@ -61,21 +61,6 @@ except:
     SerialCommunicator = None
     GridDescriptor = None
     unpack_atomic_matrices = None
-
-
-def _safe_read_atoms(calculator, clean: bool = True):
-
-    if isinstance(calculator, str):
-        with Reader(calculator) as reader:
-            atoms = read_atoms(reader.atoms)
-    else:
-        atoms = calculator.atoms
-
-    if clean:
-        atoms.constraints = None
-        atoms.calc = True
-
-    return atoms
 
 
 def _get_gpaw_setups(atoms, mode, xc):

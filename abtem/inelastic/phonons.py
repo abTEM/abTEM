@@ -12,12 +12,33 @@ from ase import Atoms
 from ase import data
 from ase.cell import Cell
 from ase.data import chemical_symbols
+from ase.io import read
 from dask.delayed import Delayed
 
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble
 from abtem.core.utils import CopyMixin, EqualityMixin
+from ase.io.trajectory import read_atoms
+
+try:
+    from gpaw.io import Reader
+except:
+    Reader = None
+
+
+def _safe_read_atoms(calculator, clean: bool = True):
+    if isinstance(calculator, str):
+        with Reader(calculator) as reader:
+            atoms = read_atoms(reader.atoms)
+    else:
+        atoms = calculator.atoms
+
+    if clean:
+        atoms.constraints = None
+        atoms.calc = True
+
+    return atoms
 
 
 class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -415,6 +436,13 @@ class MDFrozenPhonons(BaseFrozenPhonons):
 
         if isinstance(trajectory, Atoms):
             trajectory = [trajectory]
+
+        if isinstance(trajectory, str):
+            trajectory = read(trajectory, index=":")
+
+        if isinstance(trajectory, (list, tuple)):
+            if isinstance(trajectory[0], str):
+                trajectory = [_safe_read_atoms(path) for path in trajectory]
 
         self._trajectory = trajectory
 
