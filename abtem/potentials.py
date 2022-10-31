@@ -517,6 +517,10 @@ class Potential(_PotentialBuilder):
         device: str = None,
     ):
 
+        if isinstance(atoms, Atoms):
+            atoms = atoms.copy()
+            atoms.calc = None
+
         if not hasattr(atoms, "randomize"):
             if isinstance(atoms, (list, tuple)):
                 self._frozen_phonons = MDFrozenPhonons(atoms)
