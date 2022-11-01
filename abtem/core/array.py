@@ -621,7 +621,7 @@ class HasArray(HasAxes, CopyMixin):
         if chunks == "auto":
             chunks = ("auto",) * len(ensemble_axes_metadata) + (-1,) * cls._base_dims
 
-        array = da.from_zarr(url, component="array", chunks=chunks).compute()
+        array = da.from_zarr(url, component="array", chunks=chunks)
 
         with config.set({"warnings.overspecified-grid": False}):
             return cls(array, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs)

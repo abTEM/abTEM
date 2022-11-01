@@ -185,10 +185,10 @@ def _scan_shape(measurements):
 
 
 def _scan_area_per_pixel(measurements):
-    if _scan_sampling(measurements) == 2:
+    if len(_scan_sampling(measurements)) == 2:
         return np.prod(_scan_sampling(measurements))
     else:
-        raise RuntimeError("Cannot infer pixel area from metadata.")
+        raise RuntimeError("Cannot infer pixel area from axes metadata.")
 
 
 def _scan_extent(measurement):
@@ -1794,6 +1794,7 @@ class DiffractionPatterns(BaseMeasurement):
             allow_base_axis_chunks=False,
         )
 
+    @property
     def _area_per_pixel(self):
         return _scan_area_per_pixel(self)
 
