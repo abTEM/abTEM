@@ -57,7 +57,7 @@ class ComputableList(list):
             urls = [urls]
 
         if not len(urls) == len(self):
-            raise RuntimeError()
+            raise RuntimeError("Provide a file name for each measurement.")
 
         computables = [m.to_zarr(url, compute=False, overwrite=overwrite) for m, url in zip(self, urls)]
 
