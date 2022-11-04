@@ -64,7 +64,6 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
             warnings.filterwarnings(
                 "ignore", category=np.VisibleDeprecationWarning
             )
-            # TODO: properly handle this warning
 
             try:
                 equal = np.allclose(value, b.__dict__[key])

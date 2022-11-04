@@ -159,6 +159,7 @@ class BaseWaves(
 
     @property
     def fourier_space_axes_metadata(self) -> List[AxisMetadata]:
+
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         return [
@@ -184,6 +185,10 @@ class BaseWaves(
 
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
+        """
+        The number of grid points along the x and y direction in the simulation grid for the largest rectangle that fits
+        within antialiasing cutoff scattering angle.
+        """
         return self._gpts_within_angle("valid", "same")
 
     @property
@@ -195,6 +200,10 @@ class BaseWaves(
 
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
+        """
+        The number of grid points along the x and y direction in the simulation grid at the antialiasing cutoff
+        scattering angle.
+        """
         return self._gpts_within_angle("cutoff", "same")
 
     def _gpts_within_angle(
@@ -420,7 +429,6 @@ class Waves(HasArray, BaseWaves):
         alpha *= self.wavelength
         return alpha, phi
 
-    # TODO: check that axes_metadata being optional is correctly handled. Also, rename "reciprocal_space" to "reciprocal_space", but carefully.
     def convolve(
         self,
         kernel: np.ndarray,
@@ -451,6 +459,12 @@ class Waves(HasArray, BaseWaves):
             fourier_space_out = out_space == "reciprocal_space"
         else:
             raise ValueError
+
+        if axes_metadata is None:
+            axes_metadata = []
+
+        if (len(kernel.shape) - 2) != len(axes_metadata):
+            raise ValueError("provide axes metadata for each ensemble axis")
 
         waves = self.ensure_reciprocal_space(in_place=False)
 
@@ -513,7 +527,6 @@ class Waves(HasArray, BaseWaves):
 
         return waves
 
-    # TODO: throw an error if wave functions are in reciprocal space.
     def tile(self, repetitions: Tuple[int, int], renormalize: bool = False) -> "Waves":
         """
         Tile the wave functions. Can only be applied in real space.
@@ -531,8 +544,10 @@ class Waves(HasArray, BaseWaves):
             The tiled wave functions.
         """
 
-        d = self._copy_kwargs(exclude=("array", "extent"))
         xp = get_array_module(self.device)
+
+        if self.reciprocal_space:
+            raise NotImplementedError
 
         if self.is_lazy:
             tile_func = da.tile
@@ -544,12 +559,13 @@ class Waves(HasArray, BaseWaves):
         if hasattr(array, "rechunk"):
             array = array.rechunk(array.chunks[:-2] + (-1, -1))
 
-        d["array"] = array
+        kwargs = self._copy_kwargs(exclude=("array", "extent"))
+        kwargs["array"] = array
 
         if renormalize:
-            d["array"] /= xp.asarray(np.prod(repetitions))
+            kwargs["array"] /= xp.asarray(np.prod(repetitions))
 
-        return self.__class__(**d)
+        return self.__class__(**kwargs)
 
     def ensure_reciprocal_space(self, in_place: bool = False):
         """
@@ -857,8 +873,9 @@ class Waves(HasArray, BaseWaves):
         transform : WaveTransform
             The wave-function transformation to apply.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are
-            automatically set based on the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
 
         Returns
         -------
@@ -922,8 +939,9 @@ class Waves(HasArray, BaseWaves):
         ctf : CTF, optional
             Contrast transfer function to be applied.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are
-            automatically set based on the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
         kwargs :
             Provide the parameters of the contrast transfer function as keyword arguments (see :class:`.CTF`).
 
@@ -995,7 +1013,9 @@ class Waves(HasArray, BaseWaves):
 
         if self.is_lazy:
             potential_blocks = potential._partition_args()
-            potential_blocks = tuple((block, (i,)) for i, block in enumerate(potential_blocks))
+            potential_blocks = tuple(
+                (block, (i,)) for i, block in enumerate(potential_blocks)
+            )
 
             num_new_symbols = len(potential.ensemble_shape)
             extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
@@ -1010,8 +1030,15 @@ class Waves(HasArray, BaseWaves):
                 new_axes = None
 
             axes_blocks = ()
-            for i, (axis, chunks) in enumerate(zip(self.ensemble_axes_metadata, self.array.chunks)):
-                axes_blocks += (axis._to_blocks((chunks),), (num_new_symbols + i,))
+            for i, (axis, chunks) in enumerate(
+                zip(self.ensemble_axes_metadata, self.array.chunks)
+            ):
+                axes_blocks += (
+                    axis._to_blocks(
+                        (chunks),
+                    ),
+                    (num_new_symbols + i,),
+                )
 
             arrays = da.blockwise(
                 self._lazy_multislice,
@@ -1152,7 +1179,6 @@ class _WavesFactory(BaseWaves):
         detectors: List[BaseDetector],
         max_batch: int = None,
         potential: BasePotential = None,
-        events=None,
         multislice_func=multislice_and_detect,
     ):
 
@@ -1201,9 +1227,7 @@ class _WavesFactory(BaseWaves):
         transform_symbols = tuple(
             range(max_symbol, max_symbol + len(transforms.ensemble_shape))
         )
-        transform_chunks = transforms._ensemble_chunks(
-            max_batch, base_shape=self.gpts
-        )
+        transform_chunks = transforms._ensemble_chunks(max_batch, base_shape=self.gpts)
 
         args += tuple(
             itertools.chain(
@@ -1250,7 +1274,6 @@ class _WavesFactory(BaseWaves):
         )
 
 
-# TODO: thrown a warning if both gpts and sampling are given
 class PlaneWave(_WavesFactory):
     """
     Represents electron probe wave functions for simulating experiments with a plane-wave probe, such as HRTEM and SAED.
@@ -1343,8 +1366,9 @@ class PlaneWave(_WavesFactory):
             If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
             setting in the user configuration file.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the number of chunks are
-            automatically estimated based on the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
 
         Returns
         -------
@@ -1387,8 +1411,9 @@ class PlaneWave(_WavesFactory):
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto', the number of chunks are
-            automatically estimated based on the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             setting in the user configuration file.
@@ -1603,8 +1628,9 @@ class Probe(_WavesFactory):
         scan : array of `xy`-positions or BaseScan, optional
             Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto', the number of chunks are
-            automatically estimated based on the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
             setting in the user configuration file.
@@ -1675,9 +1701,10 @@ class Probe(_WavesFactory):
         detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. If not given, defaults to the flexible annular detector.
-         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto', the number of chunks are
-            automatically estimated based on the user configuration.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             setting in the user configuration file.
@@ -1766,8 +1793,9 @@ class Probe(_WavesFactory):
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
-            automatically estimated based on "dask.chunk-size" in the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
             set in the configuration file.

@@ -1,8 +1,10 @@
+import warnings
 from copy import copy
 from typing import Union, Sequence, Tuple
 
 import numpy as np
 
+from abtem.core import config
 from abtem.core.backend import get_array_module, xp_to_str
 from abtem.core.utils import CopyMixin, EqualityMixin
 
@@ -41,9 +43,7 @@ def safe_divide(a, b):
 
 class Grid(CopyMixin, EqualityMixin):
     """
-    Grid object.
-
-    The grid object represent the simulation grid on which the wave functions and potential are discretized.
+    The Grid object represent the simulation grid on which the wave functions and potential are discretized.
 
     Parameters
     ----------
@@ -78,6 +78,19 @@ class Grid(CopyMixin, EqualityMixin):
 
         self._endpoint = tuple(endpoint)
 
+        extent = self._validate(extent, dtype=float)
+        gpts = self._validate(gpts, dtype=int)
+        sampling = self._validate(sampling, dtype=float)
+
+        if (
+            extent is not None
+            and gpts is not None
+            and sampling is not None
+            and config.get("warnings.overspecified-grid")
+            and not np.allclose(np.array(extent) / gpts, sampling)
+        ):
+            warnings.warn("Overspecified grid, the provided sampling is ignored")
+
         # if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
         #    raise RuntimeError('At most one of extent, gpts, and sampling may be locked')
 
@@ -85,9 +98,9 @@ class Grid(CopyMixin, EqualityMixin):
         self._lock_gpts = lock_gpts
         self._lock_sampling = lock_sampling
 
-        self._extent = self._validate(extent, dtype=float)
-        self._gpts = self._validate(gpts, dtype=int)
-        self._sampling = self._validate(sampling, dtype=float)
+        self._extent = extent
+        self._gpts = gpts
+        self._sampling = sampling
 
         if self.extent is None:
             self._adjust_extent(self.gpts, self.sampling)
@@ -277,7 +290,7 @@ class Grid(CopyMixin, EqualityMixin):
         ):
             self.sampling = other.sampling
 
-    def check_match(self, other):
+    def check_match(self, other: "Grid"):
         """
         Raise error if the grid of another object is different from this object.
 

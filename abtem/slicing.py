@@ -9,9 +9,12 @@ from ase import Atoms
 from abtem.core.utils import label_to_index
 from abtem.atoms import is_cell_orthogonal
 
-def validate_slice_thickness(slice_thickness: Union[float, Tuple[float, ...]],
-                             thickness: float = None,
-                             num_slices: int = None) -> Tuple[float, ...]:
+
+def _validate_slice_thickness(
+    slice_thickness: Union[float, Tuple[float, ...]],
+    thickness: float = None,
+    num_slices: int = None,
+) -> Tuple[float, ...]:
     if np.isscalar(slice_thickness):
         if thickness is not None:
             n = np.ceil(thickness / slice_thickness)
@@ -36,7 +39,10 @@ def validate_slice_thickness(slice_thickness: Union[float, Tuple[float, ...]],
 
 def _slice_limits(slice_thickness):
     cumulative_thickness = np.cumsum(np.concatenate(((0,), slice_thickness)))
-    return [(cumulative_thickness[i], cumulative_thickness[i + 1]) for i in range(len(cumulative_thickness) - 1)]
+    return [
+        (cumulative_thickness[i], cumulative_thickness[i + 1])
+        for i in range(len(cumulative_thickness) - 1)
+    ]
 
 
 def unpack_item(item, num_items):
@@ -60,19 +66,20 @@ def unpack_item(item, num_items):
     return first_index, last_index
 
 
-class AbstractSlicedAtoms:
-
+class BaseSlicedAtoms:
     def __init__(self, atoms: Atoms, slice_thickness: Union[float, np.ndarray, str]):
 
         if not is_cell_orthogonal(atoms):
-            raise RuntimeError('atoms must have an orthgonal cell')
+            raise RuntimeError("atoms must have an orthogonal cell")
 
         self._atoms = atoms
 
         if isinstance(slice_thickness, str):
             raise NotImplementedError
 
-        self._slice_thickness = validate_slice_thickness(slice_thickness, thickness=atoms.cell[2, 2])
+        self._slice_thickness = _validate_slice_thickness(
+            slice_thickness, thickness=atoms.cell[2, 2]
+        )
 
     def __len__(self):
         return self.num_slices
@@ -100,7 +107,11 @@ class AbstractSlicedAtoms:
     def check_slice_idx(self, i):
         """Raises an error if i is greater than the number of slices."""
         if i >= self.num_slices:
-            raise RuntimeError('Slice index {} too large for sliced atoms with {} slices'.format(i, self.num_slices))
+            raise RuntimeError(
+                "Slice index {} too large for sliced atoms with {} slices".format(
+                    i, self.num_slices
+                )
+            )
 
     @abstractmethod
     def get_atoms_in_slices(self, first_slice: int, last_slice: int, **kwargs):
@@ -110,22 +121,25 @@ class AbstractSlicedAtoms:
         return self.get_atoms_in_slices(*unpack_item(item, len(self)))
 
 
-class SliceIndexedAtoms(AbstractSlicedAtoms):
-
-    def __init__(self,
-                 atoms: Atoms,
-                 slice_thickness: Union[float, Tuple[float, ...]]):
+class SliceIndexedAtoms(BaseSlicedAtoms):
+    def __init__(self, atoms: Atoms, slice_thickness: Union[float, Tuple[float, ...]]):
 
         super().__init__(atoms, slice_thickness)
 
-        labels = np.digitize(self.atoms.positions[:, 2], np.cumsum(self.slice_thickness))
-        self._slice_index = [indices for indices in label_to_index(labels, max_label=len(self) - 1)]
+        labels = np.digitize(
+            self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
+        )
+        self._slice_index = [
+            indices for indices in label_to_index(labels, max_label=len(self) - 1)
+        ]
 
     @property
     def slice_index(self):
         return self._slice_index
 
-    def get_atoms_in_slices(self, first_slice: int, last_slice: int = None, atomic_number: int = None):
+    def get_atoms_in_slices(
+        self, first_slice: int, last_slice: int = None, atomic_number: int = None
+    ):
         if last_slice is None:
             last_slice = first_slice
 
@@ -145,22 +159,22 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
         return atoms
 
 
-class SlicedAtoms(AbstractSlicedAtoms):
-
-    def __init__(self,
-                 atoms: Atoms,
-                 slice_thickness: Union[float, Sequence[float]],
-                 xy_padding: float = 0.,
-                 z_padding: float = 0.):
+class SlicedAtoms(BaseSlicedAtoms):
+    def __init__(
+        self,
+        atoms: Atoms,
+        slice_thickness: Union[float, Sequence[float]],
+        xy_padding: float = 0.0,
+        z_padding: float = 0.0,
+    ):
 
         super().__init__(atoms, slice_thickness)
         self._xy_padding = xy_padding
         self._z_padding = z_padding
 
-    def get_atoms_in_slices(self,
-                            first_slice: int,
-                            last_slice: int = None,
-                            atomic_number: int = None):
+    def get_atoms_in_slices(
+        self, first_slice: int, last_slice: int = None, atomic_number: int = None
+    ):
 
         if last_slice is None:
             last_slice = first_slice
@@ -168,8 +182,9 @@ class SlicedAtoms(AbstractSlicedAtoms):
         a = self.slice_limits[first_slice][0]
         b = self.slice_limits[last_slice][0]
 
-        in_slice = (self.atoms.positions[:, 2] >= (a - self._z_padding)) * \
-                   (self.atoms.positions[:, 2] < (b + self._z_padding))
+        in_slice = (self.atoms.positions[:, 2] >= (a - self._z_padding)) * (
+            self.atoms.positions[:, 2] < (b + self._z_padding)
+        )
 
         if atomic_number is not None:
             in_slice = (self.atoms.numbers == atomic_number) * in_slice
