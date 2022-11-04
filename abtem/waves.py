@@ -1739,6 +1739,9 @@ class Probe(_WavesFactory):
         if not lazy:
             measurements.compute()
 
+        for measurement in measurements:
+            measurement.metadata.update(scan.metadata)
+
         return measurements
 
     def scan(

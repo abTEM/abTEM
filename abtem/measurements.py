@@ -1,4 +1,5 @@
 """Module for handling measurements."""
+import copy
 import warnings
 from abc import ABCMeta, abstractmethod
 from typing import Union, Tuple, TypeVar, Dict, List, Sequence, Type, TYPE_CHECKING
@@ -1051,11 +1052,14 @@ class Images(BaseMeasurement):
         if width:
             array = array.mean(-1)
 
+        metadata = copy.copy(self.metadata)
+        metadata.update(scan.metadata)
+
         return RealSpaceLineProfiles(
             array=array,
             sampling=scan.sampling,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=self.metadata,
+            metadata=metadata,
         )
 
     def tile(self, repetitions: Tuple[int, int]) -> "Images":
@@ -1550,6 +1554,14 @@ class RealSpaceLineProfiles(_AbstractMeasurement1d):
 
         return self.__class__(**kwargs)
 
+    def add_to_plot(self, *args, **kwargs):
+        if not all(key in self.metadata for key in ("start", "end")):
+            raise RuntimeError("The metadata does not contain the keys 'start' and 'end'")
+
+        start, end = self.metadata["start"], self.metadata["end"]
+        from abtem.scan import LineScan
+        return LineScan(start=start, end=end).add_to_plot(*args, **kwargs)
+
     def show(
             self,
             ax: Axes = None,
@@ -1586,7 +1598,6 @@ class RealSpaceLineProfiles(_AbstractMeasurement1d):
         matplotlib Axes
         """
         extent = [0, self.extent]
-
         return show_measurements_1d(
             self,
             ax=ax,
