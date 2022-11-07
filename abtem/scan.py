@@ -288,6 +288,12 @@ class LineScan(BaseScan):
         self._gpts = gpts
         self._sampling = sampling
 
+        if isinstance(start, Atom):
+            start = start.x, start.y
+
+        if isinstance(end, Atom):
+            end = end.x, end.y
+
         self._start = start if start is None else tuple(start)
         self._end = end if end is None else tuple(end)
 
@@ -717,6 +723,12 @@ class GridScan(HasGridMixin, BaseScan):
 
         if self.sampling is None:
             self.sampling = 0.9 * probe.aperture.nyquist_sampling
+
+    def _x_coordinates(self):
+        return np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.endpoint[0], dtype=np.float32)
+
+    def _y_coordinates(self):
+        return np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.endpoint[1], dtype=np.float32)
 
     def get_positions(self) -> np.ndarray:
         xi = []
