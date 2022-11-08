@@ -234,7 +234,7 @@ class AnnularDetector(BaseDetector):
         metadata = {"energy": waves.energy}
         return DiffractionPatterns(
             array, metadata=metadata, sampling=waves.fourier_space_sampling
-        ).show(cmap=cmap, **kwargs)
+        ).show(cmap=cmap, units='mrad', **kwargs)
 
 
 class _AbstractRadialDetector(BaseDetector):
