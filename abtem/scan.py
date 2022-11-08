@@ -82,6 +82,13 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
     def metadata(self):
         return {}
 
+    def generate_blocks_by_extents(self, extents):
+        scan, chunks = self.sort_into_extents(extents)
+
+        for sub_scan in self.generate_blocks(chunks):
+            yield sub_scan
+
+
     def evaluate(self, waves):
         device = validate_device(waves.device)
         xp = get_array_module(device)
@@ -772,14 +779,21 @@ class GridScan(HasGridMixin, BaseScan):
         for start, end in extents[0]:
             start_gpt = safe_floor_int(max(start, self.start[0]) / self.sampling[0])
             end_gpt = safe_floor_int(min(end, self.end[0]) / self.sampling[0])
-            x_chunks += (max(end_gpt - start_gpt, 0),)
 
+            start_gpt = max(0, start_gpt)
+            end_gpt = min(self.gpts[0], end_gpt)
+
+            x_chunks += (end_gpt - start_gpt,)
         assert sum(x_chunks) == self.gpts[0]
 
         y_chunks = ()
         for start, end in extents[1]:
             start_gpt = safe_floor_int(max(start, self.start[1]) / self.sampling[1])
             end_gpt = safe_floor_int(min(end, self.end[1]) / self.sampling[1])
+
+            start_gpt = max(0, start_gpt)
+            end_gpt = min(self.gpts[1], end_gpt)
+
             y_chunks += (max(end_gpt - start_gpt, 0),)
 
         assert sum(y_chunks) == self.gpts[1]

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from abtem.waves import Waves
     from abtem.waves import BaseWaves
 
+import mkl_fft
 
 def _fresnel_propagator_array(
     thickness: float,
@@ -180,9 +181,20 @@ class FresnelPropagator:
         """
         array = self._get_array(waves, thickness)
 
-        waves._array = fft2_convolve(waves.array, array, overwrite_x=overwrite_x)
+        waves._array = fft2_convolve(waves.array, array, overwrite_x=True)
+        # waves._array = mkl_fft.fft2(waves._array, overwrite_x=True)
+
+        # waves._array *= array
+        #
+        # #try:
+        # #    x *= kernel
+        # #except ValueError:
+        # #    x = x * kernel
+        # waves._array = mkl_fft.ifft2(waves._array, overwrite_x=True)
 
         return waves
+
+        #return waves
 
 
 def allocate_multislice_measurements(

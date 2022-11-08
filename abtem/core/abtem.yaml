@@ -1,8 +1,10 @@
 device: cpu
-fft: fftw
+fft: mkl
 local_diagnostics:
   progress_bar: true
 dask:
+  fuse: true
+  worker-saturation: 1.0
   lazy: true
   scheduler: threads
   chunk-size: 128 MB
@@ -10,7 +12,7 @@ dask:
 cupy:
   fft-cache-size: 0 MB
 mkl:
-  threads: 1
+  threads: 4
 fftw:
   threads: 1
   cache_size: 2

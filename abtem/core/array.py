@@ -13,6 +13,7 @@ import zarr
 from dask.array.utils import validate_axis
 from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
 from dask.utils import format_bytes, parse_bytes
+from distributed import get_client
 from tabulate import tabulate
 from threadpoolctl import threadpool_limits
 
@@ -50,7 +51,12 @@ class ComputableList(list):
     #     return computables
 
     def to_zarr(
-        self, urls: str, compute: bool = True, overwrite: bool = False, progress_bar:bool=None, **kwargs
+        self,
+        urls: str,
+        compute: bool = True,
+        overwrite: bool = False,
+        progress_bar: bool = None,
+        **kwargs,
     ):
 
         if isinstance(urls, str):
@@ -59,16 +65,19 @@ class ComputableList(list):
         if not len(urls) == len(self):
             raise RuntimeError("Provide a file name for each measurement.")
 
-        computables = [m.to_zarr(url, compute=False, overwrite=overwrite) for m, url in zip(self, urls)]
+        computables = [
+            m.to_zarr(url, compute=False, overwrite=overwrite)
+            for m, url in zip(self, urls)
+        ]
 
         if not compute:
             return computables
 
         with _compute_context(
-                progress_bar, profiler=False, resource_profiler=False
-        ) as (a, b, c, d):
+            progress_bar, profiler=False, resource_profiler=False
+        ) as (a, b, c, d, e):
             output, profilers = dask.compute(computables, **kwargs)[0]
-            #output, profilers = _compute(computables, **kwargs)
+            # output, profilers = _compute(computables, **kwargs)
 
         if profilers:
             return output, profilers
@@ -107,10 +116,30 @@ def _compute_context(
         resource_profiler = nullcontext()
 
     threads = config.get("mkl.threads")
+
+    if config.get("dask.worker-saturation") is not None:
+        try:
+            client = get_client()
+            client.run_on_scheduler(
+                lambda dask_scheduler: setattr(
+                    dask_scheduler,
+                    "WORKER_SATURATION",
+                    config.get("dask.worker-saturation"),
+                )
+            )
+        except:
+            pass
+
+    dask_configuration = {
+        "optimization.fuse.active": config.get("dask.fuse"),
+    }
+
     with progress_bar as a, threadpool_limits(
         limits=threads
-    ) as b, profiler as c, resource_profiler as d:
-        yield a, b, c, d
+    ) as b, profiler as c, resource_profiler as d, dask.config.set(
+        dask_configuration
+    ) as e:
+        yield a, b, c, d, e
 
 
 def _compute(
@@ -127,7 +156,7 @@ def _compute(
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
-    ) as (_, _, c, d):
+    ) as (_, _, profiler, resource_profiler, _):
         arrays = dask.compute(
             [wrapper.array for wrapper in dask_array_wrappers], **kwargs
         )[0]
@@ -136,11 +165,11 @@ def _compute(
         wrapper._array = array
 
     profilers = ()
-    if c is not None:
-        profilers += (c,)
+    if profiler is not None:
+        profilers += (profiler,)
 
-    if d is not None:
-        profilers += (d,)
+    if resource_profiler is not None:
+        profilers += (resource_profiler,)
 
     return dask_array_wrappers, profilers
 

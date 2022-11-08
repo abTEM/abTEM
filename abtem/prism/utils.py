@@ -161,19 +161,31 @@ def plane_waves(wave_vectors: np.ndarray,
     return array
 
 
-def prism_coefficients(positions, ctf, wave_vectors, xp):
-    wave_vectors = xp.asarray(wave_vectors)
+def _planewave_shift_coefficients(positions, wave_vectors):
 
-    alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
-    phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
-    basis = ctf._evaluate_with_alpha_and_phi(alpha, phi)
+    xp = get_array_module(positions)
+    #wave_vectors = xp.asarray(wave_vectors)
 
     coefficients = complex_exponential(-2. * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None])
+    #print(coefficients.shape, coefficients.dtype)
     coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
 
-    basis, coefficients = expand_dims_to_match(
-        basis, coefficients, match_dims=[(-1,), (-1,)]
-    )
-    coefficients = coefficients * basis
+    return coefficients
+
+
+def prism_coefficients(positions, wave_vectors, xp, ctf=None):
+    wave_vectors = xp.asarray(wave_vectors)
+
+    coefficients = _planewave_shift_coefficients(positions, wave_vectors)
+
+    if ctf is not None:
+        alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
+        phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+
+        basis = ctf._evaluate_with_alpha_and_phi(alpha, phi)
+        basis, coefficients = expand_dims_to_match(
+            basis, coefficients, match_dims=[(-1,), (-1,)]
+        )
+        coefficients = coefficients * basis
 
     return coefficients
