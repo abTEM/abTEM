@@ -15,6 +15,7 @@ from abtem.measurements import (
     Images,
     RealSpaceLineProfiles,
     _scanned_measurement_type,
+    _polar_detector_bins,
 )
 
 if TYPE_CHECKING:
@@ -132,7 +133,7 @@ class AnnularDetector(BaseDetector):
         self,
         inner: float,
         outer: float,
-        offset: Tuple[float, float] = None,
+        offset: Tuple[float, float] = (0.0, 0.0),
         to_cpu: bool = True,
         url: str = None,
     ):
@@ -206,7 +207,7 @@ class AnnularDetector(BaseDetector):
             outer = self.outer
 
         diffraction_patterns = waves.diffraction_patterns(
-            max_angle="cutoff", parity="same"
+            max_angle="full", parity="same", fftshift=False
         )
         measurement = diffraction_patterns.integrate_radial(
             inner=self.inner, outer=outer
@@ -217,27 +218,23 @@ class AnnularDetector(BaseDetector):
 
         return measurement
 
-    def show(self, ax: Axes = None):
-        bins = np.arange(0, 2).reshape((2, 1))
-        bins[1, 0] = -1
-
-        vmin = -0.5
-        vmax = np.max(bins) + 0.5
-        cmap = plt.get_cmap("tab20", np.nanmax(bins) + 1)
-        cmap.set_under(color="white")
-
-        polar_measurements = PolarMeasurements(
-            bins,
-            radial_sampling=self.outer - self.inner,
-            azimuthal_sampling=2 * np.pi,
-            radial_offset=self.inner,
-            azimuthal_offset=0.0,
+    def show(self, waves: "Waves", **kwargs):
+        array = _polar_detector_bins(
+            gpts=waves.gpts,
+            sampling=waves.angular_sampling,
+            inner=self.inner,
+            outer=self.outer,
+            nbins_radial=1,
+            nbins_azimuthal=1,
+            fftshift=True,
+            rotation=0.0,
+            offset=self.offset,
+            return_indices=False,
         )
-
-        ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax)
-
-        plt.colorbar(im, extend="min", label="Detector region")
-        return ax, im
+        metadata = {"energy": waves.energy}
+        return DiffractionPatterns(
+            array, metadata=metadata, sampling=waves.fourier_space_sampling
+        ).show(**kwargs)
 
 
 class _AbstractRadialDetector(BaseDetector):
