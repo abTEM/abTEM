@@ -218,7 +218,7 @@ class AnnularDetector(BaseDetector):
 
         return measurement
 
-    def show(self, waves: "Waves", **kwargs):
+    def show(self, waves: "Waves", cmap="Greys", **kwargs):
         array = _polar_detector_bins(
             gpts=waves.gpts,
             sampling=waves.angular_sampling,
@@ -234,7 +234,7 @@ class AnnularDetector(BaseDetector):
         metadata = {"energy": waves.energy}
         return DiffractionPatterns(
             array, metadata=metadata, sampling=waves.fourier_space_sampling
-        ).show(**kwargs)
+        ).show(cmap=cmap, **kwargs)
 
 
 class _AbstractRadialDetector(BaseDetector):
