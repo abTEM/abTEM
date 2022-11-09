@@ -53,10 +53,12 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
             continue
 
         try:
+
             equal = value == b.__dict__[key]
         except (KeyError, TypeError):
             return False
 
+        #print(equal)
         # if (not isinstance(value, Iterable)) or (not isinstance(b.__dict__[key], Iterable)):
         #    return False
 
@@ -65,6 +67,7 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
 
             try:
                 equal = np.allclose(value, b.__dict__[key])
+
             except (ValueError, TypeError):
                 pass
 

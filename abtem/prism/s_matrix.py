@@ -13,7 +13,7 @@ from ase import Atoms
 
 from abtem.core.array import validate_lazy, HasArray, ComputableList
 from abtem.core.axes import OrdinalAxis, AxisMetadata, ScanAxis, UnknownAxis
-from abtem.core.backend import get_array_module, cp, validate_device
+from abtem.core.backend import get_array_module, cp, validate_device, copy_to_device
 from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks, Chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.energy import Accelerator
@@ -67,7 +67,10 @@ class BaseSMatrix(BaseWaves):
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [
-            OrdinalAxis(label="(n, m)", values=self.wave_vectors)
+            OrdinalAxis(
+                label="(n, m)",
+                values=_pack_wave_vectors(self.wave_vectors),
+            )
         ] + super().base_axes_metadata  # noqa
 
     @property
@@ -89,10 +92,10 @@ def _common_kwargs(a, b):
     return set(a_kwargs).intersection(b_kwargs)
 
 
-# def _validate_wave_vectors(wave_vectors):
-#     return [
-#         (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
-#     ]
+def _pack_wave_vectors(wave_vectors):
+    return tuple(
+        (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
+    )
 
 
 class SMatrixArray(HasArray, BaseSMatrix):
@@ -173,6 +176,28 @@ class SMatrixArray(HasArray, BaseSMatrix):
         self._device = device
         self._periodic = periodic
         self._check_axes_metadata()
+
+    @classmethod
+    def _pack_kwargs(cls, attrs, kwargs):
+        kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
+        super()._pack_kwargs(attrs, kwargs)
+
+    @classmethod
+    def _unpack_kwargs(cls, attrs):
+        kwargs = super()._unpack_kwargs(attrs)
+        kwargs["wave_vectors"] = np.array(kwargs["wave_vectors"], dtype=np.float32)
+        return kwargs
+
+        # kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
+
+    def copy_to_device(self, device: str) -> "SMatrixArray":
+        s_matrix = super().copy_to_device(device)
+        s_matrix._wave_vectors = copy_to_device(self.array, device)
+        return s_matrix
+
+    @staticmethod
+    def _packed_wave_vectors(wave_vectors):
+        return _pack_wave_vectors(wave_vectors)
 
     @property
     def tilt(self):
@@ -408,15 +433,9 @@ class SMatrixArray(HasArray, BaseSMatrix):
                     )
                     coefficients = positions_coefficients * expanded_ctf_coefficients
 
-                # print(coefficients.shape)
-                # sss
-
                 ensemble_axes_metadata = [UnknownAxis()] * len(array.shape[:-3]) + [
                     ScanAxis() for _ in range(len(scan.shape))
                 ]
-                # print(ensemble_axes_metadata)
-
-                # print(array.shape, coefficients.shape)
 
                 waves_array = self._reduce_to_waves(array, positions, coefficients)
 
@@ -1103,16 +1122,16 @@ class SMatrix(BaseSMatrix):
 
         array = plane_waves(wave_vectors[wave_vector_range], self.extent, self.gpts)
 
-        #if all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
-        #normalization_constant = (
+        # if all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
+        # normalization_constant = (
         #    np.prod(self.gpts)
         #    * xp.sqrt(len(wave_vectors))
         #    / np.prod(self.interpolation)
-        #)
+        # )
 
-        #corner = cropping_window[0] // 2, cropping_window[1] // 2
-        #cropped_array = wrapped_crop_2d(array, corner, cropping_window)
-        #normalization_constant = xp.sqrt(abs2(fft2(cropped_array.sum(0))).sum())
+        # corner = cropping_window[0] // 2, cropping_window[1] // 2
+        # cropped_array = wrapped_crop_2d(array, corner, cropping_window)
+        # normalization_constant = xp.sqrt(abs2(fft2(cropped_array.sum(0))).sum())
 
         cropping_window = (
             self.gpts[0] / self.interpolation[0],

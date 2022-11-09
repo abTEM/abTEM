@@ -151,9 +151,9 @@ def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array.to_zarr(url)
     has_array_from_zarr = has_array.from_zarr(url).copy_to_device(has_array.device).compute()
-    assert has_array_from_zarr == has_array
+    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
     has_array_from_zarr.compute()
-    assert has_array_from_zarr == has_array
+    assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
 
 
 @given(data=st.data())
@@ -232,7 +232,7 @@ def test_stacks_with_self(data, has_array, lazy, device):
     stacked = stack((has_array, has_array), axis_metadata=OrdinalAxis(values=(1, 1)), axis=0)
     stacked.compute()
     has_array._metadata = stacked[1].metadata
-    assert stacked[0] == stacked[1] == has_array
+    assert stacked[0].to_cpu() == stacked[1].to_cpu() == has_array.to_cpu()
 
 
 @given(data=st.data())
@@ -249,7 +249,7 @@ def test_stacks_with_self(data, has_array, lazy, device):
 def test_from_array_and_metadata(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     new = has_array.__class__.from_array_and_metadata(has_array.array, has_array.axes_metadata, has_array.metadata)
-    assert new == has_array
+    assert new.to_cpu() == has_array.to_cpu()
 
 
 @given(data=st.data())
@@ -274,4 +274,4 @@ def test_concatenates_with_self(data, has_array, lazy, device):
 
     assume(axis < len(has_array.ensemble_shape))
     indices = (slice(None),) * axis + (slice(0, has_array.shape[axis]),)
-    assert concatenated[indices] == has_array
+    assert concatenated[indices].to_cpu() == has_array.to_cpu()

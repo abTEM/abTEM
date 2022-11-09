@@ -603,18 +603,17 @@ class HasArray(HasAxes, CopyMixin):
         """
 
         with zarr.open(url, mode="w") as root:
-            waves = self.ensure_lazy()
+            has_array = self.ensure_lazy()
 
-            array = waves.copy_to_device("cpu").array
+            array = has_array.copy_to_device("cpu").array
 
             stored = array.to_zarr(
                 url, compute=False, component="array", overwrite=overwrite, **kwargs
             )
-            for key, value in waves._copy_kwargs(exclude=("array",)).items():
-                if key == "ensemble_axes_metadata":
-                    root.attrs[key] = [axis_to_dict(axis) for axis in value]
-                else:
-                    root.attrs[key] = value
+
+            kwargs = has_array._copy_kwargs(exclude=("array",))
+
+            self._pack_kwargs(root.attrs, kwargs)
 
             root.attrs["type"] = self.__class__.__name__
 
@@ -623,6 +622,28 @@ class HasArray(HasAxes, CopyMixin):
                 stored = stored.compute()
 
         return stored
+
+    @classmethod
+    def _pack_kwargs(cls, attrs, kwargs):
+        for key, value in kwargs.items():
+            if key == "ensemble_axes_metadata":
+                attrs[key] = [axis_to_dict(axis) for axis in value]
+            else:
+                attrs[key] = value
+
+    @classmethod
+    def _unpack_kwargs(cls, attrs):
+        kwargs = {}
+        kwargs["ensemble_axes_metadata"] = []
+        for key, value in attrs.items():
+            if key == "ensemble_axes_metadata":
+                kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
+            elif key == "type":
+                pass
+            else:
+                kwargs[key] = value
+
+        return kwargs
 
     @classmethod
     def from_zarr(cls, url, chunks: int = "auto") -> "T":
@@ -636,24 +657,17 @@ class HasArray(HasAxes, CopyMixin):
             aaaa
         """
         with zarr.open(url, mode="r") as f:
-            kwargs = {}
+            kwargs = cls._unpack_kwargs(f.attrs)
 
-            for key, value in f.attrs.items():
-                if key == "ensemble_axes_metadata":
-                    ensemble_axes_metadata = [axis_from_dict(d) for d in value]
-                elif key == "type":
-                    pass
-                #    cls = globals()[value]
-                else:
-                    kwargs[key] = value
+        num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
 
         if chunks == "auto":
-            chunks = ("auto",) * len(ensemble_axes_metadata) + (-1,) * cls._base_dims
+            chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
 
         array = da.from_zarr(url, component="array", chunks=chunks)
 
         with config.set({"warnings.overspecified-grid": False}):
-            return cls(array, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs)
+            return cls(array, **kwargs)
 
 
 def expand_dims(a, axis):
