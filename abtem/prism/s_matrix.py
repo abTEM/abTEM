@@ -192,7 +192,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
     def copy_to_device(self, device: str) -> "SMatrixArray":
         s_matrix = super().copy_to_device(device)
-        s_matrix._wave_vectors = copy_to_device(self.array, device)
+        s_matrix._wave_vectors = copy_to_device(self._wave_vectors, device)
         return s_matrix
 
     @staticmethod
