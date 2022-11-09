@@ -52,7 +52,7 @@ from abtem.transfer import Aberrations, CTF, Aperture
 
 def _extract_measurement(array, index):
     if array.size == 0:
-        return array  # np.zeros((7,0,64,1), dtype=np.float32)
+        return array
 
     array = array.item()[index].array
     return array

@@ -415,7 +415,7 @@ def polar_spatial_frequencies(gpts, sampling, xp=np):
 
 
 def disc_meshgrid(r):
-    """Internal function to return all indices inside a disk with a given radius."""
+    """Return all indices inside a disk with a given radius."""
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T
