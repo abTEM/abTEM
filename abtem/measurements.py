@@ -966,14 +966,15 @@ class Images(BaseMeasurement):
         )
 
     def interpolate_line(
-            self,
-            start: Union[Tuple[float, float], Atom] = None,
-            end: Union[Tuple[float, float], Atom] = None,
-            sampling: float = None,
-            gpts: int = None,
-            width: float = 0.0,
-            order: int = 3,
-            endpoint: bool = False,
+        self,
+        start: Union[Tuple[float, float], Atom] = None,
+        end: Union[Tuple[float, float], Atom] = None,
+        sampling: float = None,
+        gpts: int = None,
+        width: float = 0.0,
+        margin: float = 0.0,
+        order: int = 3,
+        endpoint: bool = False,
     ) -> "RealSpaceLineProfiles":
         """
         Interpolate image(s) along a given line. Either 'sampling' or 'gpts' must be provided.
@@ -990,6 +991,8 @@ class Images(BaseMeasurement):
             Number of grid points along the line.
         width : float, optional
             The interpolation will be averaged across a perpendicular distance equal to this width.
+        margin : float or tuple of float, optional
+            Add margin [Å] to the start and end interpolated line.
         order : int, optional
             The spline interpolation order.
         endpoint : bool
@@ -1020,6 +1023,9 @@ class Images(BaseMeasurement):
         scan = LineScan(
             start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
         )
+
+        if margin != 0.0:
+            scan.add_margin(margin)
 
         positions = xp.asarray(scan.get_positions(lazy=False) / self.sampling)
 
