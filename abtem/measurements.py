@@ -2278,6 +2278,8 @@ class DiffractionPatterns(BaseMeasurement):
                 sampling=self.angular_sampling,
             )
 
+
+
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
 
@@ -2885,6 +2887,7 @@ class PolarMeasurements(BaseMeasurement):
         """
         return self.integrate(radial_limits=(inner, outer))
 
+    # TODO: to be documented
     def integrate(
             self,
             radial_limits: Tuple[float, float] = None,
@@ -2892,17 +2895,13 @@ class PolarMeasurements(BaseMeasurement):
             detector_regions: Sequence[int] = None,
     ) -> Union[Images, RealSpaceLineProfiles]:
         """
-        Integrate polar regions to produce an image or line profiles. Provide either radial and azimuthal integration
-        limits, or provide the indices of the integration regions.
+        Integrate polar regions to produce an image or line profiles.
 
         Parameters
         ----------
         radial_limits : tuple of floats
-            The first entry is the inner radial integration limit, the second entry is the outer integration limit. The
-            numbers will be rounded to the closest coordinates of the polar data.
         azimuthal_limits : tuple of floats
-            The first entry is the inner radial integration limit, the second entry is the outer integration limit. The
-            numbers will be rounded to the closest coordinates of the polar data.
+        detector_regions : sequence of int
 
         Returns
         -------
@@ -2910,9 +2909,6 @@ class PolarMeasurements(BaseMeasurement):
         """
 
         if detector_regions is not None:
-            raise NotImplementedError
-            # TODO : implement this
-
             if (radial_limits is not None) or (azimuthal_limits is not None):
                 raise ValueError()
 
@@ -2942,65 +2938,32 @@ class PolarMeasurements(BaseMeasurement):
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
+    # TODO: to be revised and documented.
     def differentials(
             self,
-            direction_1: Tuple[Sequence, Sequence],
-            direction_2: Tuple[Sequence, Sequence] = None,
+            direction_1_plus,
+            direction_1_minus,
+            direction_2_plus,
+            direction_2_minus,
             return_complex: bool = True,
     ):
-        """
-        Calculate a differential signal by subtracting the intensity from different detector regions. The detector
-        regions should be given using their index. Use method "plot_regions" to visualize the indices of the detector
-        regions. By providing differential detector regions for two directions, a complex signal can be produced,
-        which may be used in conjunction with the "integrate_gradient" method for producing an integrated differential
-        phase contrast(iDPC) signal.
-
-        Parameters
-        ----------
-        direction_1 : tuple of two tuples of integers
-            The detector regions to subtract for the 1st direction. This should be a tuple of length two. The first
-            entry will be the positive part of the difference, the second part will be the negative part.
-        direction_2 : tuple of two tuples of integers
-            The detector regions to subtract for the 2nd direction. This should be a tuple of length two. The first
-            entry will be the positive part of the difference, the second part will be the negative part.
-        return_complex : bool
-            If true (default), a complex signal is returned where the real part corresponds to the difference of the
-            regions given by "direction_1" and the imaginary part corresponds to the difference of the regions given
-            by "direction_2".
-
-        Returns
-        -------
-        differential_signal : Images
-        """
 
         differential_1 = self.integrate(
-            detector_regions=direction_1[0]
-        ) - self.integrate(detector_regions=direction_1[1])
+            detector_regions=direction_1_plus
+        ) - self.integrate(detector_regions=direction_1_minus)
 
-        if direction_2 is not None:
-            differential_2 = self.integrate(
-                detector_regions=direction_2[0]
-            ) - self.integrate(detector_regions=direction_2[1])
-        else:
-            differential_2 = None
+        differential_2 = self.integrate(
+            detector_regions=direction_2_plus
+        ) - self.integrate(detector_regions=direction_2_minus)
 
         xp = get_array_module(self.device)
+        array = xp.zeros_like(differential_1.array, dtype=xp.complex64)
+        array.real = differential_1.array
+        array.imag = differential_2.array
 
-        if return_complex:
-            if differential_2 is None:
-                raise RuntimeError()
-            array = xp.zeros_like(differential_1.array, dtype=xp.complex64)
-            array.real = differential_1.array
-            array.imag = differential_2.array
-
-            return differential_1.__class__(
-                array, **differential_1._copy_kwargs(exclude=("array",))
-            )
-        else:
-            if differential_2 is None:
-                return differential_1
-            else:
-                return differential_1, differential_2
+        return differential_1.__class__(
+            array, **differential_1._copy_kwargs(exclude=("array",))
+        )
 
     # TODO: to be documented.
     def show(
