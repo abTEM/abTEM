@@ -179,7 +179,8 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
         raise RuntimeError("Invalid cell: no vertical lattice vector.")
 
     xy = np.delete(cell, vertical_vector[0], axis=0)
-    xy_norm = np.abs(xy / np.linalg.norm(xy, axis=0))
+
+    xy_norm = np.abs(xy / np.linalg.norm(xy, axis=1, keepdims=True))
     xy = xy[np.argsort(xy_norm[:, 0], axis=0)[::-1]]
 
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
