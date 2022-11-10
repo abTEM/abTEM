@@ -178,6 +178,11 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if len(vertical_vector) != 1:
         raise RuntimeError("Invalid cell: no vertical lattice vector.")
 
+    if np.all(np.sum(np.abs(atoms.cell) < 1e-6, axis=0) == 2):
+        new_order = np.argmax(np.abs(cell), axis=0)
+        atoms.set_cell(np.diag(np.abs(cell[new_order])))
+        return atoms
+
     xy = np.delete(cell, vertical_vector[0], axis=0)
 
     xy_norm = np.abs(xy / np.linalg.norm(xy, axis=1, keepdims=True))
@@ -187,7 +192,6 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     cell[:2] = xy
 
     r = np.arctan2(cell[0, 1], cell[0, 0]) / np.pi * 180
-
     atoms.set_cell(cell)
 
     if r != 0.0:

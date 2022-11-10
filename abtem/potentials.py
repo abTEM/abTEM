@@ -584,7 +584,7 @@ class Potential(_PotentialBuilder):
         unique_numbers = np.unique(atoms.numbers)
         return tuple(self._integrator.cutoff(number) for number in unique_numbers)
 
-    def _transformed_atoms(self):
+    def transformed_atoms(self):
         atoms = self.frozen_phonons.atoms
 
         cutoffs = self._cutoffs()
@@ -612,7 +612,7 @@ class Potential(_PotentialBuilder):
 
     def _prepare_atoms(self):
 
-        atoms = self._transformed_atoms()
+        atoms = self.transformed_atoms()
         cutoffs = self._cutoffs()
 
         if self.integrator.finite:
