@@ -102,7 +102,7 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
     )
 
 
-def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
+def is_cell_orthogonal(cell: Union[Atoms, Cell, np.ndarray], tol: float = 1e-12):
     """
     Check whether atoms have an orthogonal cell.
 
@@ -178,8 +178,14 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if len(vertical_vector) != 1:
         raise RuntimeError("Invalid cell: no vertical lattice vector.")
 
+    xy = np.delete(cell, vertical_vector[0], axis=0)
+    xy_norm = np.abs(xy / np.linalg.norm(xy, axis=0))
+    xy = xy[np.argsort(xy_norm[:, 0], axis=0)[::-1]]
+
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
-    r = np.arctan2(atoms.cell[0, 1], atoms.cell[0, 0]) / np.pi * 180
+    cell[:2] = xy
+
+    r = np.arctan2(cell[0, 1], cell[0, 0]) / np.pi * 180
 
     atoms.set_cell(cell)
 
