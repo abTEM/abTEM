@@ -72,7 +72,7 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def _validate_atomic_numbers_and_cell(self, atoms, atomic_numbers, cell):
         if isinstance(atoms, Delayed) and (atomic_numbers is None or cell is None):
             atoms = atoms.compute()
-            #raise ValueError()
+            # raise ValueError()
 
         if cell is None:
             cell = atoms.cell.copy()
@@ -393,13 +393,14 @@ class FrozenPhonons(BaseFrozenPhonons):
             seeds = self.seeds[start:stop]
 
             if lazy:
-                lazy_atoms = dask.delayed(atoms)
-                lazy_frozen_phonon = dask.delayed(self._frozen_phonon)(
-                    atoms=lazy_atoms, seeds=seeds
-                )
-                array.itemset(
-                    i, da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object)
-                )
+                with dask.annotate(priority=-i * 10 - 10):
+                    lazy_atoms = dask.delayed(atoms)
+                    lazy_frozen_phonon = dask.delayed(self._frozen_phonon)(
+                        atoms=lazy_atoms, seeds=seeds
+                    )
+                    array.itemset(
+                        i, da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object)
+                    )
             else:
                 array.itemset(i, self._frozen_phonon(atoms=atoms, seeds=seeds))
 
@@ -488,13 +489,14 @@ class MDFrozenPhonons(BaseFrozenPhonons):
             trajectory = self._trajectory[start:stop]
 
             if lazy:
-                atoms = dask.delayed(lambda *args: list(args))(*trajectory)
+                with dask.annotate(priority=-i * 10 - 10):
+                    atoms = dask.delayed(lambda *args: list(args))(*trajectory)
 
-                delayed_frozen_phonon = dask.delayed(md_frozen_phonons)(atoms=atoms)
+                    delayed_frozen_phonon = dask.delayed(md_frozen_phonons)(atoms=atoms)
 
-                array.itemset(
-                    i, da.from_delayed(delayed_frozen_phonon, shape=(1,), dtype=object)
-                )
+                    array.itemset(
+                        i, da.from_delayed(delayed_frozen_phonon, shape=(1,), dtype=object)
+                    )
             else:
                 trajectory = [
                     atoms.compute() if hasattr(atoms, "compute") else atoms

@@ -39,7 +39,7 @@ class CopyMixin:
         return kwargs
 
     def copy(self):
-        """ Make a copy. """
+        """Make a copy."""
         return copy.deepcopy(self)
 
 
@@ -53,20 +53,21 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
             continue
 
         try:
+
             equal = value == b.__dict__[key]
         except (KeyError, TypeError):
             return False
 
-        #if (not isinstance(value, Iterable)) or (not isinstance(b.__dict__[key], Iterable)):
+        #print(equal)
+        # if (not isinstance(value, Iterable)) or (not isinstance(b.__dict__[key], Iterable)):
         #    return False
 
         with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=np.VisibleDeprecationWarning
-            )
+            warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
             try:
                 equal = np.allclose(value, b.__dict__[key])
+
             except (ValueError, TypeError):
                 pass
 
@@ -91,6 +92,10 @@ def array_row_intersection(a, b):
 
 def safe_floor_int(n: float, tol: int = 7):
     return int(np.floor(np.round(n, decimals=tol)))
+
+
+def safe_ceiling_int(n: float, tol: int = 7):
+    return int(np.ceil(np.round(n, decimals=tol)))
 
 
 def insert_empty_axis(match_axis1, match_axis2):

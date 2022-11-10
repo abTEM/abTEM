@@ -3,6 +3,8 @@ fft: fftw
 local_diagnostics:
   progress_bar: true
 dask:
+  fuse: true
+  worker-saturation: 1.0
   lazy: true
   scheduler: threads
   chunk-size: 128 MB

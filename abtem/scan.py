@@ -1,6 +1,7 @@
 """Module for describing different types of scans."""
 import itertools
 from abc import ABCMeta, abstractmethod
+from numbers import Number
 from typing import Union, Tuple, TYPE_CHECKING
 
 import dask.array as da
@@ -80,6 +81,13 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
     @property
     def metadata(self):
         return {}
+
+    def generate_blocks_by_extents(self, extents):
+        scan, chunks = self.sort_into_extents(extents)
+
+        for sub_scan in self.generate_blocks(chunks):
+            yield sub_scan
+
 
     def evaluate(self, waves):
         device = validate_device(waves.device)
@@ -209,7 +217,7 @@ class CustomScan(BaseScan):
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            positions.itemset(i, self._positions[start_chunk: start_chunk + chunk])
+            positions.itemset(i, self._positions[start_chunk : start_chunk + chunk])
 
         if lazy:
             positions = da.from_array(positions, chunks=1)
@@ -222,10 +230,10 @@ class CustomScan(BaseScan):
         start = 0
         for x_extents, y_extents in itertools.product(*extents):
             mask = (
-                    (self.positions[:, 0] >= x_extents[0])
-                    * (self.positions[:, 0] < x_extents[1])
-                    * (self.positions[:, 1] >= y_extents[0])
-                    * (self.positions[:, 1] < y_extents[1])
+                (self.positions[:, 0] >= x_extents[0])
+                * (self.positions[:, 0] < x_extents[1])
+                * (self.positions[:, 1] >= y_extents[0])
+                * (self.positions[:, 1] < y_extents[1])
             )
 
             n = np.sum(mask)
@@ -276,17 +284,23 @@ class LineScan(BaseScan):
     """
 
     def __init__(
-            self,
-            start: Union[Tuple[float, float], None] = (0.0, 0.0),
-            end: Union[Tuple[float, float], None] = None,
-            gpts: int = None,
-            sampling: float = None,
-            endpoint: bool = True,
+        self,
+        start: Union[Tuple[float, float], None] = (0.0, 0.0),
+        end: Union[Tuple[float, float], None] = None,
+        gpts: int = None,
+        sampling: float = None,
+        endpoint: bool = True,
     ):
 
         super().__init__()
         self._gpts = gpts
         self._sampling = sampling
+
+        if isinstance(start, Atom):
+            start = start.x, start.y
+
+        if isinstance(end, Atom):
+            end = end.x, end.y
 
         self._start = start if start is None else tuple(start)
         self._end = end if end is None else tuple(end)
@@ -301,12 +315,12 @@ class LineScan(BaseScan):
 
     @classmethod
     def from_fractional_coordinates(
-            cls,
-            potential: BasePotential,
-            start: Tuple[float, float] = (0.0, 0.0),
-            end: Tuple[float, float] = (1.0, 1.0),
-            sampling: Union[float, Tuple[float, float]] = None,
-            endpoint: Union[bool, Tuple[bool, bool]] = False,
+        cls,
+        potential: BasePotential,
+        start: Tuple[float, float] = (0.0, 0.0),
+        end: Tuple[float, float] = (1.0, 1.0),
+        sampling: Union[float, Tuple[float, float]] = None,
+        endpoint: Union[bool, Tuple[bool, bool]] = False,
     ) -> "LineScan":
         """
         Create grid scan using fractional coordinates.
@@ -342,15 +356,25 @@ class LineScan(BaseScan):
 
         return cls(start=start, end=end, sampling=sampling, endpoint=endpoint)
 
+    def add_margin(self, margin: Union[float, Tuple[float, float]]):
+        if isinstance(margin, Number):
+            margin = (margin,) * 2
+
+        direction = np.array(self.end) - np.array(self.start)
+        direction = direction / np.linalg.norm(direction)
+
+        self.start = tuple(np.array(self.start) - direction * margin[0])
+        self.end = tuple(np.array(self.end) + direction * margin[1])
+
     @classmethod
     def at_position(
-            cls,
-            position: Union[Tuple[float, float], Atom],
-            extent: float = 1.0,
-            angle: float = 0.0,
-            gpts: int = None,
-            sampling: float = None,
-            endpoint: bool = True,
+        cls,
+        position: Union[Tuple[float, float], Atom],
+        extent: float = 1.0,
+        angle: float = 0.0,
+        gpts: int = None,
+        sampling: float = None,
+        endpoint: bool = True,
     ):
 
         if isinstance(position, Atom):
@@ -586,12 +610,12 @@ class GridScan(HasGridMixin, BaseScan):
     """
 
     def __init__(
-            self,
-            start: Tuple[float, float] = (0.0, 0.0),
-            end: Tuple[float, float] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            endpoint: Union[bool, Tuple[bool, bool]] = False,
+        self,
+        start: Tuple[float, float] = (0.0, 0.0),
+        end: Tuple[float, float] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        endpoint: Union[bool, Tuple[bool, bool]] = False,
     ):
 
         super().__init__()
@@ -627,12 +651,12 @@ class GridScan(HasGridMixin, BaseScan):
 
     @classmethod
     def from_fractional_coordinates(
-            cls,
-            potential: BasePotential,
-            start: Tuple[float, float] = (0.0, 0.0),
-            end: Tuple[float, float] = (1.0, 1.0),
-            sampling: Union[float, Tuple[float, float]] = None,
-            endpoint: Union[bool, Tuple[bool, bool]] = False,
+        cls,
+        potential: BasePotential,
+        start: Tuple[float, float] = (0.0, 0.0),
+        end: Tuple[float, float] = (1.0, 1.0),
+        sampling: Union[float, Tuple[float, float]] = None,
+        endpoint: Union[bool, Tuple[bool, bool]] = False,
     ) -> "GridScan":
         """
         Create grid scan using fractional coordinates.
@@ -718,10 +742,28 @@ class GridScan(HasGridMixin, BaseScan):
         if self.sampling is None:
             self.sampling = 0.9 * probe.aperture.nyquist_sampling
 
+    def _x_coordinates(self):
+        return np.linspace(
+            self.start[0],
+            self.end[0],
+            self.gpts[0],
+            endpoint=self.endpoint[0],
+            dtype=np.float32,
+        )
+
+    def _y_coordinates(self):
+        return np.linspace(
+            self.start[1],
+            self.end[1],
+            self.gpts[1],
+            endpoint=self.endpoint[1],
+            dtype=np.float32,
+        )
+
     def get_positions(self) -> np.ndarray:
         xi = []
         for start, end, gpts, endpoint in zip(
-                self.start, self.end, self.gpts, self.endpoint
+            self.start, self.end, self.gpts, self.endpoint
         ):
             xi.append(
                 np.linspace(start, end, gpts, endpoint=endpoint, dtype=np.float32)
@@ -737,14 +779,21 @@ class GridScan(HasGridMixin, BaseScan):
         for start, end in extents[0]:
             start_gpt = safe_floor_int(max(start, self.start[0]) / self.sampling[0])
             end_gpt = safe_floor_int(min(end, self.end[0]) / self.sampling[0])
-            x_chunks += (max(end_gpt - start_gpt, 0),)
 
+            start_gpt = max(0, start_gpt)
+            end_gpt = min(self.gpts[0], end_gpt)
+
+            x_chunks += (end_gpt - start_gpt,)
         assert sum(x_chunks) == self.gpts[0]
 
         y_chunks = ()
         for start, end in extents[1]:
             start_gpt = safe_floor_int(max(start, self.start[1]) / self.sampling[1])
             end_gpt = safe_floor_int(min(end, self.end[1]) / self.sampling[1])
+
+            start_gpt = max(0, start_gpt)
+            end_gpt = min(self.gpts[1], end_gpt)
+
             y_chunks += (max(end_gpt - start_gpt, 0),)
 
         assert sum(y_chunks) == self.gpts[1]
@@ -755,7 +804,7 @@ class GridScan(HasGridMixin, BaseScan):
         axes_metadata = []
         labels = ("x", "y", "z")
         for label, sampling, offset, endpoint in zip(
-                labels, self.sampling, self.start, self.endpoint
+            labels, self.sampling, self.start, self.endpoint
         ):
             axes_metadata.append(
                 ScanAxis(
@@ -814,12 +863,12 @@ class GridScan(HasGridMixin, BaseScan):
         return blocks
 
     def add_to_plot(
-            self,
-            ax,
-            alpha: float = 0.33,
-            facecolor: str = "r",
-            edgecolor: str = "r",
-            **kwargs
+        self,
+        ax,
+        alpha: float = 0.33,
+        facecolor: str = "r",
+        edgecolor: str = "r",
+        **kwargs
     ):
         """
         Add a visualization of the scan area to a matplotlib plot.
