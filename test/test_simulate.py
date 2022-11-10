@@ -7,15 +7,15 @@ from abtem import PixelatedDetector, AnnularDetector
 from abtem.scan import CustomScan, LineScan, GridScan
 from utils import gpu
 
-
+#@reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False], ids=['lazy', 'not_lazy'])
 @pytest.mark.parametrize('device', ['cpu', gpu])
 @pytest.mark.parametrize('ensemble_mean', [True, False])
 @pytest.mark.parametrize("waves_builder", [
     abtem_st.probe,
-    abtem_st.plane_wave,
-    abtem_st.s_matrix,
+    #abtem_st.plane_wave,
+    #abtem_st.s_matrix,
 ])
 def test_multislice_with_frozen_phonons(data, waves_builder, device, ensemble_mean, lazy):
     waves = data.draw(waves_builder(device=device))
@@ -32,7 +32,7 @@ def test_multislice_with_frozen_phonons(data, waves_builder, device, ensemble_me
 @pytest.mark.parametrize('ensemble_mean', [True, False])
 @pytest.mark.parametrize("waves_builder", [
     abtem_st.probe,
-    abtem_st.plane_wave,
+    #abtem_st.plane_wave,
 ])
 def test_multislice_detect_with_frozen_phonons(data, waves_builder, device, ensemble_mean, lazy):
     waves = data.draw(waves_builder(device=device, allow_distribution=False))

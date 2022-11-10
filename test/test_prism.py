@@ -22,10 +22,10 @@ def test_prism_matches_probe(data, lazy, device):
 
     s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(
         max_angle=None
-    )
+    ).to_cpu()
     probe_diffraction_patterns = probe.build(lazy=lazy).diffraction_patterns(
         max_angle=None
-    )
+    ).to_cpu()
 
     assert np.allclose(
         s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
@@ -43,10 +43,10 @@ def test_prism_matches_probe_with_interpolation(data, lazy, device):
 
     s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(
         max_angle=None
-    )
+    ).to_cpu()
     probe_diffraction_patterns = probe.build(lazy=lazy).diffraction_patterns(
         max_angle=None
-    )
+    ).to_cpu()
 
     assert np.allclose(
         s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
@@ -68,10 +68,10 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
 
     s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(
         None
-    )
+    ).to_cpu()
     probe_diffraction_patterns = probe.multislice(
         potential=potential, lazy=lazy
-    ).diffraction_patterns(None)
+    ).diffraction_patterns(None).to_cpu()
 
     assert np.allclose(
         s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
@@ -157,10 +157,10 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
         or isinstance(detector, WavesDetector)
     )
 
-    s_matrix_measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
+    s_matrix_measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy).to_cpu()
     probe_measurement = probe.scan(
         potential=potential, scan=scan, detectors=detector, lazy=lazy
-    )
+    ).to_cpu()
 
     assert s_matrix_measurement == probe_measurement
 
