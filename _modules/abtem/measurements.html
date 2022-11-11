@@ -1,11 +1,11 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>abtem.measurements &#8212; abTEM Documentation</title>
+    <title>abtem.measurements &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,9 +33,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -54,7 +52,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -96,7 +94,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
@@ -108,7 +106,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -297,6 +295,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -867,13 +880,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1016,6 +1029,7 @@ title="Open an issue"
                 
   <h1>Source code for abtem.measurements</h1><div class="highlight"><pre>
 <span></span><span class="sd">&quot;&quot;&quot;Module for handling measurements.&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">copy</span>
 <span class="kn">import</span> <span class="nn">warnings</span>
 <span class="kn">from</span> <span class="nn">abc</span> <span class="kn">import</span> <span class="n">ABCMeta</span><span class="p">,</span> <span class="n">abstractmethod</span>
 <span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">TypeVar</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">,</span> <span class="n">Type</span><span class="p">,</span> <span class="n">TYPE_CHECKING</span>
@@ -1202,10 +1216,10 @@ title="Open an issue"
 
 
 <span class="k">def</span> <span class="nf">_scan_area_per_pixel</span><span class="p">(</span><span class="n">measurements</span><span class="p">):</span>
-    <span class="k">if</span> <span class="n">_scan_sampling</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">_scan_sampling</span><span class="p">(</span><span class="n">measurements</span><span class="p">))</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">_scan_sampling</span><span class="p">(</span><span class="n">measurements</span><span class="p">))</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Cannot infer pixel area from metadata.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Cannot infer pixel area from axes metadata.&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span> <span class="nf">_scan_extent</span><span class="p">(</span><span class="n">measurement</span><span class="p">):</span>
@@ -1501,7 +1515,6 @@ title="Open an issue"
             <span class="n">xp</span><span class="o">.</span><span class="n">float32</span>
         <span class="p">)</span>
 
-    <span class="c1"># TODO: add link to relevant example in the main docstring.</span>
 <div class="viewcode-block" id="BaseMeasurement.poisson_noise"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.poisson_noise">[docs]</a>    <span class="k">def</span> <span class="nf">poisson_noise</span><span class="p">(</span>
             <span class="bp">self</span><span class="p">,</span>
             <span class="n">dose_per_area</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -1510,7 +1523,7 @@ title="Open an issue"
             <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided &#39;total_dose&#39; (per measurement</span>
+<span class="sd">        Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided &#39;total_dose&#39; (per measurement</span>
 <span class="sd">        if applied to an ensemble) or &#39;dose_per_area&#39; (not applicable for single measurements).</span>
 
 <span class="sd">        Parameters</span>
@@ -1983,14 +1996,15 @@ title="Open an issue"
         <span class="p">)</span>
 
 <div class="viewcode-block" id="Images.interpolate_line"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.interpolate_line">[docs]</a>    <span class="k">def</span> <span class="nf">interpolate_line</span><span class="p">(</span>
-            <span class="bp">self</span><span class="p">,</span>
-            <span class="n">start</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Atom</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">end</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Atom</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">sampling</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">gpts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">width</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
-            <span class="n">order</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
-            <span class="n">endpoint</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">start</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Atom</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">end</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Atom</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">sampling</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">gpts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">width</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">margin</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">order</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+        <span class="n">endpoint</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;RealSpaceLineProfiles&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Interpolate image(s) along a given line. Either &#39;sampling&#39; or &#39;gpts&#39; must be provided.</span>
@@ -2007,6 +2021,8 @@ title="Open an issue"
 <span class="sd">            Number of grid points along the line.</span>
 <span class="sd">        width : float, optional</span>
 <span class="sd">            The interpolation will be averaged across a perpendicular distance equal to this width.</span>
+<span class="sd">        margin : float or tuple of float, optional</span>
+<span class="sd">            Add margin [Å] to the start and end interpolated line.</span>
 <span class="sd">        order : int, optional</span>
 <span class="sd">            The spline interpolation order.</span>
 <span class="sd">        endpoint : bool</span>
@@ -2038,6 +2054,9 @@ title="Open an issue"
             <span class="n">start</span><span class="o">=</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">end</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="n">gpts</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">,</span> <span class="n">endpoint</span><span class="o">=</span><span class="n">endpoint</span>
         <span class="p">)</span>
 
+        <span class="k">if</span> <span class="n">margin</span> <span class="o">!=</span> <span class="mf">0.0</span><span class="p">:</span>
+            <span class="n">scan</span><span class="o">.</span><span class="n">add_margin</span><span class="p">(</span><span class="n">margin</span><span class="p">)</span>
+
         <span class="n">positions</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">get_positions</span><span class="p">(</span><span class="n">lazy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">width</span><span class="p">:</span>
@@ -2068,11 +2087,14 @@ title="Open an issue"
         <span class="k">if</span> <span class="n">width</span><span class="p">:</span>
             <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
 
+        <span class="n">metadata</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">)</span>
+        <span class="n">metadata</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">metadata</span><span class="p">)</span>
+
         <span class="k">return</span> <span class="n">RealSpaceLineProfiles</span><span class="p">(</span>
             <span class="n">array</span><span class="o">=</span><span class="n">array</span><span class="p">,</span>
             <span class="n">sampling</span><span class="o">=</span><span class="n">scan</span><span class="o">.</span><span class="n">sampling</span><span class="p">,</span>
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span>
-            <span class="n">metadata</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">,</span>
+            <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
         <span class="p">)</span></div>
 
 <div class="viewcode-block" id="Images.tile"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.tile">[docs]</a>    <span class="k">def</span> <span class="nf">tile</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="s2">&quot;Images&quot;</span><span class="p">:</span>
@@ -2567,6 +2589,14 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
+    <span class="k">def</span> <span class="nf">add_to_plot</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;start&quot;</span><span class="p">,</span> <span class="s2">&quot;end&quot;</span><span class="p">)):</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;The metadata does not contain the keys &#39;start&#39; and &#39;end&#39;&quot;</span><span class="p">)</span>
+
+        <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;start&quot;</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;end&quot;</span><span class="p">]</span>
+        <span class="kn">from</span> <span class="nn">abtem.scan</span> <span class="kn">import</span> <span class="n">LineScan</span>
+        <span class="k">return</span> <span class="n">LineScan</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">end</span><span class="p">)</span><span class="o">.</span><span class="n">add_to_plot</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
 <div class="viewcode-block" id="RealSpaceLineProfiles.show"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.show">[docs]</a>    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span>
             <span class="bp">self</span><span class="p">,</span>
             <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -2603,7 +2633,6 @@ title="Open an issue"
 <span class="sd">        matplotlib Axes</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">extent</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">extent</span><span class="p">]</span>
-
         <span class="k">return</span> <span class="n">show_measurements_1d</span><span class="p">(</span>
             <span class="bp">self</span><span class="p">,</span>
             <span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span>
@@ -2812,6 +2841,7 @@ title="Open an issue"
             <span class="n">allow_base_axis_chunks</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="p">)</span></div>
 
+    <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">_scan_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
@@ -3894,16 +3924,29 @@ title="Open an issue"
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">integrate</span><span class="p">(</span><span class="n">radial_limits</span><span class="o">=</span><span class="p">(</span><span class="n">inner</span><span class="p">,</span> <span class="n">outer</span><span class="p">))</span></div>
 
     <span class="c1"># TODO: to be documented</span>
-    <span class="k">def</span> <span class="nf">integrate</span><span class="p">(</span>
+<div class="viewcode-block" id="PolarMeasurements.integrate"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.integrate">[docs]</a>    <span class="k">def</span> <span class="nf">integrate</span><span class="p">(</span>
             <span class="bp">self</span><span class="p">,</span>
             <span class="n">radial_limits</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
             <span class="n">azimuthal_limits</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
             <span class="n">detector_regions</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">Images</span><span class="p">,</span> <span class="n">RealSpaceLineProfiles</span><span class="p">]:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Integrate polar regions to produce an image or line profiles.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        radial_limits : tuple of floats</span>
+<span class="sd">        azimuthal_limits : tuple of floats</span>
+<span class="sd">        detector_regions : sequence of int</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        integrated_images : Images</span>
+<span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">detector_regions</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">if</span> <span class="p">(</span><span class="n">radial_limits</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="n">azimuthal_limits</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">):</span>
-                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">()</span>
 
             <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,))[</span>
                 <span class="o">...</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">detector_regions</span><span class="p">)</span>
@@ -3929,7 +3972,7 @@ title="Open an issue"
 
             <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">radial_slice</span><span class="p">,</span> <span class="n">azimuthal_slice</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">))</span>
 
-        <span class="k">return</span> <span class="n">_reduced_scanned_images_or_line_profiles</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_reduced_scanned_images_or_line_profiles</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span></div>
 
     <span class="c1"># TODO: to be revised and documented.</span>
     <span class="k">def</span> <span class="nf">differentials</span><span class="p">(</span>

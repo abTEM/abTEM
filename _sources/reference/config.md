@@ -1,11 +1,11 @@
 # Configuration
 
-You can configure *abTEM* with a YAML configuration file (abtem.yaml). This file controls a number of options and
+You can configure *ab*TEM with a YAML configuration file (`abtem.yaml`), which controls a number of options and
 feature flags.
 
 ## Configuration files
 
-The configuration is specified by *any* YAML file in `~/.config/abtem/` or `/etc/abtem/`. *abTEM* searches for all YAML
+The configuration is specified by *any* YAML file in `~/.config/abtem/` or `/etc/abtem/`. *ab*TEM searches for all YAML
 files within each of these directories and merges them together.
 
 Below is the full default configuration file. Anything you set in your own YAML will be merged into these
@@ -23,12 +23,12 @@ defaults before they are used to configure the build.
    abtem.config.get
 ```
 
-*abTEM*’s configuration system is usually accessed using the `abtem.config.get` function. You can use `.` for nested
+The *ab*TEM configuration system is usually accessed using the `abtem.config.get` function. You can use `.` for nested
 access, for example:
 
 ```python
 import dask
-dask.config.get("dask.chunk-size") # use `.` for nested access
+dask.config.get("dask.chunk-size") # use "." for nested access
 ```
 
 ## Specify configuration in Python

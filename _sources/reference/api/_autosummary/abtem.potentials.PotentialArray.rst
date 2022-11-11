@@ -29,7 +29,6 @@ PotentialArray
       ~PotentialArray.from_zarr
       ~PotentialArray.generate_blocks
       ~PotentialArray.generate_slices
-      ~PotentialArray.get_chunk
       ~PotentialArray.get_items
       ~PotentialArray.images
       ~PotentialArray.match_grid

@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -59,7 +57,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Parallelization" href="parallelization.html" />
     <link rel="prev" title="Scan and detect" href="scan_and_detect.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -113,7 +111,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -302,6 +300,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -872,13 +885,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1164,7 +1177,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="frozen-phonons">
-<span id="walkthrough-frozen-phonons"></span><h1>Frozen phonons<a class="headerlink" href="#frozen-phonons" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-frozen-phonons"></span><h1>Frozen phonons<a class="headerlink" href="#frozen-phonons" title="Permalink to this headline">#</a></h1>
 <p>Thus far we have assumed that the atomic structures from which the electrons scatter are static. However, atoms in real materials are not stationary, but vibrate around their equilibrium position in the crystal due to thermal and zero-point vibrations.</p>
 <p>Vibrational scattering (or electron-phonon scattering) is responsible for features including diffuse backgrounds and <a class="reference external" href="https://en.wikipedia.org/wiki/Kikuchi_lines_(physics)">Kikuchi lines</a>, as well as for a significant part of the high-angle scattering measured in annular dark-field measurements <span id="id1">[<a class="reference internal" href="../bibliography.html#id18" title="F. S. Hage, D. M. Kepaptsoglou, Q. M. Ramasse, and L. J. Allen. Phonon spectroscopy at atomic resolution. Phys. Rev. Lett., 122:016103, Jan 2019. URL: https://link.aps.org/doi/10.1103/PhysRevLett.122.016103, doi:10.1103/PhysRevLett.122.016103.">HKRA19</a>]</span>.</p>
 <p>The so-called frozen phonon model is a highly simplified approach to simulate the effects of phonons on electron scattering. Nonetheless, it has been shown to produce essentially the same result as models with a better-justified theoretical foundation from quantum mechanics <span id="id2">[<a class="reference internal" href="../bibliography.html#id14" title="B. D. Forbes, A. V. Martin, S. D. Findlay, A. J. D'Alfonso, and L. J. Allen. Quantum mechanical model for phonon excitation in electron diffraction and imaging using a born-oppenheimer approximation. Phys. Rev. B, 82:104103, 2010. URL: https://link.aps.org/doi/10.1103/PhysRevB.82.104103, doi:10.1103/PhysRevB.82.104103.">FMF+10</a>]</span><span id="id3">[<a class="reference internal" href="../bibliography.html#id12" title="D. Van Dyck. Is the frozen phonon model adequate to describe inelastic phonon scattering? Ultramicroscopy, 109(6):677–682, 2009.">VD09</a>]</span>. In the frozen phonon approximation, the exit-wave intensity is averaged over several frozen snapshots of the atomic model, emulating distinct vibrational configurations. In practice, each frozen phonon image is created from the equilibrium structure by displacing its atoms by different random offsets.</p>
@@ -1173,7 +1186,7 @@ title="Print to PDF"
 <p>Even though phonon scattering in reality is inelastic, the multislice simulation used with the frozen phonon model is fully elastic same as for the static case. This is an excellent approximation since the energy loss involved with phonon scattering is negligible compared to the primary beam energy.</p>
 </div>
 <section id="kikuchi-lines-in-srtio-sub-3-sub">
-<h2>Kikuchi lines in SrTiO<sub>3</sub><a class="headerlink" href="#kikuchi-lines-in-srtio-sub-3-sub" title="Permalink to this heading">#</a></h2>
+<h2>Kikuchi lines in SrTiO<sub>3</sub><a class="headerlink" href="#kikuchi-lines-in-srtio-sub-3-sub" title="Permalink to this headline">#</a></h2>
 <p>As an illustration, we simulate SrTiO<sub>3</sub><span class="math notranslate nohighlight">\((100)\)</span> with frozen phonons. In order to observe visible Kikuchi lines, the sample needs some thickness, hence the unit cell is repeated 50 times along the <span class="math notranslate nohighlight">\(z\)</span>-direction. We also need to repeat the atoms in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span> to obtain a statistically significant ensemble.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1243,8 +1256,8 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 6.27 ss
-[########################################] | 100% Completed | 12.65 s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  8.1s
+[########################################] | 100% Completed | 28.6s
 </pre></div>
 </div>
 </div>
@@ -1356,7 +1369,7 @@ title="Print to PDF"
       <th>static</th>
       <td>0.010758</td>
       <td>1.0</td>
-      <td>0.529650</td>
+      <td>0.529651</td>
       <td>0.168959</td>
       <td>0.031614</td>
     </tr>
@@ -1374,7 +1387,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="stem-simulation-with-frozen-phonons">
-<h2>STEM simulation with frozen phonons<a class="headerlink" href="#stem-simulation-with-frozen-phonons" title="Permalink to this heading">#</a></h2>
+<h2>STEM simulation with frozen phonons<a class="headerlink" href="#stem-simulation-with-frozen-phonons" title="Permalink to this headline">#</a></h2>
 <p>While the intensity of higher-order spots is generally dampened by phonons, this is compensated for by high-angle diffuse scattering. Thus it is not necessarily obvious how phonon scattering affects STEM simulations with a HAADF detector.</p>
 <p>To model this, we create a <code class="docutils literal notranslate"><span class="pre">Probe</span></code> with an energy of <span class="math notranslate nohighlight">\(200 \ \mathrm{keV}\)</span> and a convergence semi-angle of <span class="math notranslate nohighlight">\(20 \ \mathrm{mrad}\)</span>. We make a <code class="docutils literal notranslate"><span class="pre">LineScan</span></code> along the diagonal of a single periodic unit.</p>
 <div class="cell docutils container">
@@ -1403,7 +1416,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 54.73 ss
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  3min 55.3s
 </pre></div>
 </div>
 </div>
@@ -1448,16 +1461,16 @@ Below the fully elastic and phonon models are compared for a BF signal (<span cl
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem"
+            mode: "abtem-dask"
         },
         kernelOptions: {
-            kernelName: "abtem",
-            path: "./user_guide\walkthrough"
+            kernelName: "abtem-dask",
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem'</script>
+    <script>kernelName = 'abtem-dask'</script>
 
               </div>
               

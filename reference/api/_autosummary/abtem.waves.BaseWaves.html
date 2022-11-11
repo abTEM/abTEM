@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="PlaneWave" href="abtem.waves.PlaneWave.html" />
     <link rel="prev" title="waves" href="abtem.waves.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,249 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.waves.BaseWaves">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     BaseWaves
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.accelerator">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.accelerator
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.angular_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.angular_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.energy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.energy
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.full_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.full_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.rectangle_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.rectangle_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.wavelength">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.wavelength
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1293,232 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.waves.BaseWaves">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     BaseWaves
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.accelerator">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.accelerator
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.angular_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.angular_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.energy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.energy
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.full_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.full_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.rectangle_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.rectangle_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.BaseWaves.wavelength">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseWaves.wavelength
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1527,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="basewaves">
-<h1>BaseWaves<a class="headerlink" href="#basewaves" title="Permalink to this heading">#</a></h1>
+<h1>BaseWaves<a class="headerlink" href="#basewaves" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.waves.BaseWaves">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.waves.</span></span><span class="sig-name descname"><span class="pre">BaseWaves</span></span><a class="reference internal" href="../../../_modules/abtem/waves.html#BaseWaves"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.BaseWaves" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">HasGridMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">HasAcceleratorMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">HasAxes</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">HasDevice</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">CopyMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">EqualityMixin</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.grid.HasGridMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.energy.HasAcceleratorMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.axes.HasAxes</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.backend.HasDevice</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.utils.CopyMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.utils.EqualityMixin</span></code></p>
 <p>Base class of all wave functions. Documented in the subclasses.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.waves.BaseWaves.__init__">
@@ -1569,21 +1119,11 @@ title="Print to PDF"
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.BaseWaves.angular_sampling" title="abtem.waves.BaseWaves.angular_sampling"><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_sampling</span></code></a></p></td>
 <td><p>Reciprocal-space sampling in units of scattering angles [mrad].</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_cutoff_gpts</span></code></p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.BaseWaves.antialias_cutoff_gpts" title="abtem.waves.BaseWaves.antialias_cutoff_gpts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_cutoff_gpts</span></code></a></p></td>
+<td><p>The number of grid points along the x and y direction in the simulation grid at the antialiasing cutoff scattering angle.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_valid_gpts</span></code></p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.BaseWaves.antialias_valid_gpts" title="abtem.waves.BaseWaves.antialias_valid_gpts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_valid_gpts</span></code></a></p></td>
+<td><p>The number of grid points along the x and y direction in the simulation grid for the largest rectangle that fits within antialiasing cutoff scattering angle.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.BaseWaves.axes_metadata" title="abtem.waves.BaseWaves.axes_metadata"><code class="xref py py-obj docutils literal notranslate"><span class="pre">axes_metadata</span></code></a></p></td>
 <td><p>List of AxisMetadata.</p></td>
@@ -1676,7 +1216,7 @@ title="Print to PDF"
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.BaseWaves.accelerator">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Accelerator</span></em><a class="headerlink" href="#abtem.waves.BaseWaves.accelerator" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.energy.Accelerator</span></em><a class="headerlink" href="#abtem.waves.BaseWaves.accelerator" title="Permalink to this definition">#</a></dt>
 <dd><p>Accelerator object describing the acceleration energy.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1697,8 +1237,32 @@ title="Print to PDF"
 </dd></dl>
 
 <dl class="py property">
+<dt class="sig sig-object py" id="abtem.waves.BaseWaves.antialias_cutoff_gpts">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">antialias_cutoff_gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.waves.BaseWaves.antialias_cutoff_gpts" title="Permalink to this definition">#</a></dt>
+<dd><p>The number of grid points along the x and y direction in the simulation grid at the antialiasing cutoff
+scattering angle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="abtem.waves.BaseWaves.antialias_valid_gpts">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">antialias_valid_gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.waves.BaseWaves.antialias_valid_gpts" title="Permalink to this definition">#</a></dt>
+<dd><p>The number of grid points along the x and y direction in the simulation grid for the largest rectangle that fits
+within antialiasing cutoff scattering angle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.BaseWaves.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.waves.BaseWaves.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.waves.BaseWaves.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1798,7 +1362,7 @@ title="Print to PDF"
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.BaseWaves.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.waves.BaseWaves.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.waves.BaseWaves.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1913,7 +1477,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

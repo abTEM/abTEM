@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="potentials" href="abtem.potentials.html" />
     <link rel="prev" title="Probe" href="abtem.waves.Probe.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,411 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.waves.Waves">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Waves
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.accelerator">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.accelerator
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.angular_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.angular_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.apply_ctf">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.apply_ctf()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.apply_transform">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.apply_transform()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.convolve">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.convolve()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.diffraction_patterns">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.diffraction_patterns()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.downsample">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.downsample()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.energy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.energy
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.ensure_real_space">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.ensure_real_space()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.ensure_reciprocal_space">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.ensure_reciprocal_space()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.full_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.full_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.images">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.images()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.multislice">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.multislice()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.normalize">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.normalize()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.phase_shift">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.phase_shift()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.rectangle_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.rectangle_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.wavelength">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.wavelength
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1455,394 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.waves.Waves">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Waves
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.accelerator">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.accelerator
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.angular_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.angular_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.apply_ctf">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.apply_ctf()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.apply_transform">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.apply_transform()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.convolve">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.convolve()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.diffraction_patterns">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.diffraction_patterns()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.downsample">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.downsample()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.energy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.energy
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.ensure_real_space">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.ensure_real_space()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.ensure_reciprocal_space">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.ensure_reciprocal_space()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.full_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.full_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.images">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.images()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.multislice">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.multislice()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.normalize">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.normalize()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.phase_shift">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.phase_shift()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.rectangle_cutoff_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.rectangle_cutoff_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.waves.Waves.wavelength">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Waves.wavelength
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1851,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="waves">
-<h1>Waves<a class="headerlink" href="#waves" title="Permalink to this heading">#</a></h1>
+<h1>Waves<a class="headerlink" href="#waves" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.waves.Waves">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.waves.</span></span><span class="sig-name descname"><span class="pre">Waves</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reciprocal_space</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves.html#Waves"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.Waves" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">HasArray</span></code>, <a class="reference internal" href="abtem.waves.BaseWaves.html#abtem.waves.BaseWaves" title="abtem.waves.BaseWaves"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseWaves</span></code></a></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.array.HasArray</span></code>, <a class="reference internal" href="abtem.waves.BaseWaves.html#abtem.waves.BaseWaves" title="abtem.waves.BaseWaves"><code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.waves.BaseWaves</span></code></a></p>
 <p>Waves define a batch of arbitrary 2D wave functions defined by a complex array.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -1866,7 +1092,7 @@ function <cite>y</cite>- and <cite>x</cite>-axes, respectively.</p></li>
 <li><p><strong>extent</strong> (<em>one</em><em> or </em><em>two float</em>) – Extent of wave functions in <cite>x</cite> and <cite>y</cite> [Å].</p></li>
 <li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em>) – Sampling of wave functions in <cite>x</cite> and <cite>y</cite> [1 / Å].</p></li>
 <li><p><strong>reciprocal_space</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the wave functions are assumed to be represented in reciprocal space instead of real space (default is False).</p></li>
-<li><p><strong>ensemble_axes_metadata</strong> (<em>list</em><em> of </em><em>AxesMetadata</em>) – Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em>) – A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
 from the waves.</p></li>
 </ul>
@@ -2068,21 +1294,11 @@ from the waves.</p></li>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.Waves.angular_sampling" title="abtem.waves.Waves.angular_sampling"><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_sampling</span></code></a></p></td>
 <td><p>Reciprocal-space sampling in units of scattering angles [mrad].</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_cutoff_gpts</span></code></p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.Waves.antialias_cutoff_gpts" title="abtem.waves.Waves.antialias_cutoff_gpts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_cutoff_gpts</span></code></a></p></td>
+<td><p>The number of grid points along the x and y direction in the simulation grid at the antialiasing cutoff scattering angle.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_valid_gpts</span></code></p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.Waves.antialias_valid_gpts" title="abtem.waves.Waves.antialias_valid_gpts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_valid_gpts</span></code></a></p></td>
+<td><p>The number of grid points along the x and y direction in the simulation grid for the largest rectangle that fits within antialiasing cutoff scattering angle.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">array</span></code></p></td>
 <td><p><dl class="field-list simple">
@@ -2217,7 +1433,7 @@ from the waves.</p></li>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Waves.accelerator">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Accelerator</span></em><a class="headerlink" href="#abtem.waves.Waves.accelerator" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.energy.Accelerator</span></em><a class="headerlink" href="#abtem.waves.Waves.accelerator" title="Permalink to this definition">#</a></dt>
 <dd><p>Accelerator object describing the acceleration energy.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2237,6 +1453,30 @@ from the waves.</p></li>
 </dl>
 </dd></dl>
 
+<dl class="py property">
+<dt class="sig sig-object py" id="abtem.waves.Waves.antialias_cutoff_gpts">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">antialias_cutoff_gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.waves.Waves.antialias_cutoff_gpts" title="Permalink to this definition">#</a></dt>
+<dd><p>The number of grid points along the x and y direction in the simulation grid at the antialiasing cutoff
+scattering angle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="abtem.waves.Waves.antialias_valid_gpts">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">antialias_valid_gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.waves.Waves.antialias_valid_gpts" title="Permalink to this definition">#</a></dt>
+<dd><p>The number of grid points along the x and y direction in the simulation grid for the largest rectangle that fits
+within antialiasing cutoff scattering angle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
+</dd>
+</dl>
+</dd></dl>
+
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.waves.Waves.apply_ctf">
 <span class="sig-name descname"><span class="pre">apply_ctf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ctf</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_batch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'auto'</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves.html#Waves.apply_ctf"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.Waves.apply_ctf" title="Permalink to this definition">#</a></dt>
@@ -2245,8 +1485,9 @@ from the waves.</p></li>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>ctf</strong> (<a class="reference internal" href="abtem.transfer.CTF.html#abtem.transfer.CTF" title="abtem.transfer.CTF"><em>CTF</em></a><em>, </em><em>optional</em>) – Contrast transfer function to be applied.</p></li>
-<li><p><strong>max_batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are
-automatically set based on the user configuration.</p></li>
+<li><p><strong>max_batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of wave functions in each chunk of the Dask array. If ‘auto’ (default), the batch size is
+automatically chosen based on the abtem user configuration settings “dask.chunk-size” and
+“dask.chunk-size-gpu”.</p></li>
 <li><p><strong>kwargs</strong> – Provide the parameters of the contrast transfer function as keyword arguments (see <a class="reference internal" href="abtem.transfer.CTF.html#abtem.transfer.CTF" title="abtem.transfer.CTF"><code class="xref py py-class docutils literal notranslate"><span class="pre">CTF</span></code></a>).</p></li>
 </ul>
 </dd>
@@ -2267,8 +1508,9 @@ automatically set based on the user configuration.</p></li>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>transform</strong> (<em>WaveTransform</em>) – The wave-function transformation to apply.</p></li>
-<li><p><strong>max_batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are
-automatically set based on the user configuration.</p></li>
+<li><p><strong>max_batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of wave functions in each chunk of the Dask array. If ‘auto’ (default), the batch size is
+automatically chosen based on the abtem user configuration settings “dask.chunk-size” and
+“dask.chunk-size-gpu”.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -2282,7 +1524,7 @@ automatically set based on the user configuration.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Waves.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.waves.Waves.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.waves.Waves.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2310,7 +1552,7 @@ automatically set based on the user configuration.</p></li>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>kernel</strong> (<em>np.ndarray</em>) – Array to be convolved with.</p></li>
-<li><p><strong>axes_metadata</strong> (<em>list</em><em> of </em><em>AxisMetadata</em><em>, </em><em>optional</em>) – Metadata for the resulting convolved array. Needed only if the given array has more than two dimensions.</p></li>
+<li><p><strong>axes_metadata</strong> (<em>list of AxisMetadata</em><em>, </em><em>optional</em>) – Metadata for the resulting convolved array. Needed only if the given array has more than two dimensions.</p></li>
 <li><p><strong>out_space</strong> (<em>str</em><em>, </em><em>optional</em>) – Space in which the convolved array is represented. Options are ‘reciprocal_space’ and ‘real_space’ (default is the space of the wave functions).</p></li>
 </ul>
 </dd>
@@ -2512,7 +1754,7 @@ cutoff scattering angle.</p>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the wave
 function <cite>y</cite>- and <cite>x</cite>-axis, respectively.</p></li>
-<li><p><strong>axes_metadata</strong> (<em>list</em><em> of </em><em>AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
+<li><p><strong>axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
 axes must be RealSpaceAxis.</p></li>
 <li><p><strong>metadata</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code>]) – A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived from
 the waves. The metadata must contain the electron energy [eV].</p></li>
@@ -2569,7 +1811,7 @@ s3:// for remote data.</p>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.waves.Waves.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.waves.Waves.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.waves.Waves.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2632,7 +1874,7 @@ are given, output will be the corresponding measurement.</p>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>potential</strong> (<a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><em>BasePotential</em></a><em> or </em><em>ASE.Atoms</em>) – The potential through which to propagate the wave function. Optionally atoms can be directly given.</p></li>
-<li><p><strong>detectors</strong> (<a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em> or </em><em>list</em><em> of </em><a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em>, </em><em>optional</em>) – A detector or a list of detectors defining how the wave functions should be converted to measurements after
+<li><p><strong>detectors</strong> (<a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em> or </em><em>list of BaseDetector</em><em>, </em><em>optional</em>) – A detector or a list of detectors defining how the wave functions should be converted to measurements after
 running the multislice algorithm. See <cite>abtem.measurements.detect</cite> for a list of implemented detectors. If not
 given, returns the wave functions themselves.</p></li>
 <li><p><strong>conjugate</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, use the conjugate of the transmission function (default is False).</p></li>
@@ -2824,7 +2066,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

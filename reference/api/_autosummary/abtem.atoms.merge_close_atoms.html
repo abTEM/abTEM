@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="orthogonalize_cell" href="abtem.atoms.orthogonalize_cell.html" />
     <link rel="prev" title="is_cell_valid" href="abtem.atoms.is_cell_valid.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,40 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.atoms.merge_close_atoms">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     merge_close_atoms()
-    </span>
-   </code>
-  </a>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1084,23 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.atoms.merge_close_atoms">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     merge_close_atoms()
-    </span>
-   </code>
-  </a>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1109,7 +1077,7 @@ title="Print to PDF"
               <div>
                 
   <section id="merge-close-atoms">
-<h1>merge_close_atoms<a class="headerlink" href="#merge-close-atoms" title="Permalink to this heading">#</a></h1>
+<h1>merge_close_atoms<a class="headerlink" href="#merge-close-atoms" title="Permalink to this headline">#</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.atoms.merge_close_atoms">
 <span class="sig-prename descclassname"><span class="pre">abtem.atoms.</span></span><span class="sig-name descname"><span class="pre">merge_close_atoms</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tol</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1e-07</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/atoms.html#merge_close_atoms"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.atoms.merge_close_atoms" title="Permalink to this definition">#</a></dt>
@@ -1145,7 +1113,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

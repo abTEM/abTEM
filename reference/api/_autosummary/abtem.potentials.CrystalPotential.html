@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Potential" href="abtem.potentials.Potential.html" />
     <link rel="prev" title="BasePotential" href="abtem.potentials.BasePotential.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,294 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     CrystalPotential
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.build">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.build()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.periodic">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.periodic
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.slice_thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.slice_thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1338,277 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     CrystalPotential
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.build">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.build()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.periodic">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.periodic
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.slice_thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.slice_thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.CrystalPotential.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       CrystalPotential.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1617,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="crystalpotential">
-<h1>CrystalPotential<a class="headerlink" href="#crystalpotential" title="Permalink to this heading">#</a></h1>
+<h1>CrystalPotential<a class="headerlink" href="#crystalpotential" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.potentials.CrystalPotential">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.potentials.</span></span><span class="sig-name descname"><span class="pre">CrystalPotential</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">potential_unit</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">repetitions</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_frozen_phonons</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seeds</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#CrystalPotential"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.CrystalPotential" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_PotentialBuilder</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.potentials._PotentialBuilder</span></code></p>
 <p>The crystal potential may be used to represent a potential consisting of a repeating unit. This may allow
 calculations to be performed with lower computational cost by calculating the potential unit once and repeating it.</p>
 <p>If the repeating unit is a potential with frozen phonons it is treated as an ensemble from which each repeating
@@ -1633,11 +1093,11 @@ each with a random seed for choosing potential units.</p>
 <li><p><strong>potential_unit</strong> (<a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><em>BasePotential</em></a>) – The potential unit to assemble the crystal potential from.</p></li>
 <li><p><strong>repetitions</strong> (<em>three int</em>) – The repetitions of the potential in <cite>x</cite>, <cite>y</cite> and <cite>z</cite>.</p></li>
 <li><p><strong>num_frozen_phonons</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of frozen phonon configurations assembled from the potential units.</p></li>
-<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple</em><em> of </em><em>int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
+<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple of int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
 Providing <cite>exit_planes</cite> as a tuple of int indicates that the tuple contains the slice indices after which an
 exit plane is desired, and hence during a multislice simulation a measurement is created. If <cite>exit_planes</cite> is
 an integer a measurement will be collected every <cite>exit_planes</cite> number of slices.</p></li>
-<li><p><strong>seeds</strong> (<em>int</em><em> or </em><em>sequence</em><em> of </em><em>int</em>) – Seed for the random number generator (RNG), or one seed for each RNG in the frozen phonon ensemble.</p></li>
+<li><p><strong>seeds</strong> (<em>int</em><em> or </em><em>sequence of int</em>) – Seed for the random number generator (RNG), or one seed for each RNG in the frozen phonon ensemble.</p></li>
 </ul>
 </dd>
 </dl>
@@ -1656,7 +1116,7 @@ an integer a measurement will be collected every <cite>exit_planes</cite> number
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.CrystalPotential.__init__" title="abtem.potentials.CrystalPotential.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(potential_unit, repetitions[, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.CrystalPotential.build" title="abtem.potentials.CrystalPotential.build"><code class="xref py py-obj docutils literal notranslate"><span class="pre">build</span></code></a>([first_slice, last_slice, chunks, lazy])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.CrystalPotential.build" title="abtem.potentials.CrystalPotential.build"><code class="xref py py-obj docutils literal notranslate"><span class="pre">build</span></code></a>([first_slice, last_slice, max_batch, lazy])</p></td>
 <td><p>Build the potential.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.CrystalPotential.copy" title="abtem.potentials.CrystalPotential.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code></a>()</p></td>
@@ -1853,7 +1313,7 @@ an integer a measurement will be collected every <cite>exit_planes</cite> number
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.CrystalPotential.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.CrystalPotential.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.CrystalPotential.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1875,15 +1335,14 @@ an integer a measurement will be collected every <cite>exit_planes</cite> number
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.potentials.CrystalPotential.build">
-<span class="sig-name descname"><span class="pre">build</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lazy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.potentials.CrystalPotential.build" title="Permalink to this definition">#</a></dt>
+<span class="sig-name descname"><span class="pre">build</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_batch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lazy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.potentials.CrystalPotential.build" title="Permalink to this definition">#</a></dt>
 <dd><p>Build the potential.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>first_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the first slice of the generated potential.</p></li>
 <li><p><strong>last_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the last slice of the generated potential</p></li>
-<li><p><strong>TODO</strong> (<em>replace with max_batches</em>) – </p></li>
-<li><p><strong>chunks</strong> (<em>int</em><em> or </em><em>tuple</em><em> of </em><em>int</em><em> or </em><em>tuple</em><em> of </em><em>tuple</em><em> of </em><em>int</em>) – Number of slices to include in each Dask worker batch. Default is 1.</p></li>
+<li><p><strong>max_batch</strong> (<em>int</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Maximum number of slices to calculate in task. Default is 1.</p></li>
 <li><p><strong>lazy</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
 value set in the configuration file.</p></li>
 </ul>
@@ -1930,7 +1389,7 @@ value set in the configuration file.</p></li>
 <dd><p>Split the ensemble into an array of smaller ensembles.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code></p>
@@ -1966,7 +1425,7 @@ value set in the configuration file.</p></li>
 <dd><p>Generate chunks of the ensemble.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2004,7 +1463,7 @@ value set in the configuration file.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.CrystalPotential.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.potentials.CrystalPotential.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.potentials.CrystalPotential.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2103,8 +1562,8 @@ value set in the configuration file.</p></li>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>index</strong> (<em>tuple</em><em> of </em><em>ints</em>) – Index of selected block.</p></li>
-<li><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p></li>
+<li><p><strong>index</strong> (<em>tuple of ints</em>) – Index of selected block.</p></li>
+<li><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p></li>
 </ul>
 </dd>
 </dl>
@@ -2186,7 +1645,7 @@ of the potential slices when this keyword set to False.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

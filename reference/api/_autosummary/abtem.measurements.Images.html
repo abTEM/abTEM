@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="PolarMeasurements" href="abtem.measurements.PolarMeasurements.html" />
     <link rel="prev" title="DiffractionPatterns" href="abtem.measurements.DiffractionPatterns.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,339 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.measurements.Images">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Images
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.abs">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.abs()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.coordinates">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.coordinates
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.crop">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.crop()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.diffractograms">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.diffractograms()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.gaussian_filter">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.gaussian_filter()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.imag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.imag()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.integrate_gradient">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.integrate_gradient()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.interpolate">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.interpolate()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.interpolate_line">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.interpolate_line()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.phase">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.phase()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.poisson_noise">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.poisson_noise()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.real">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.real()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.reduce_ensemble">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.reduce_ensemble()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.relative_difference">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.relative_difference()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.to_hyperspy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.to_hyperspy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1383,322 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.measurements.Images">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Images
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.abs">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.abs()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.coordinates">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.coordinates
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.crop">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.crop()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.diffractograms">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.diffractograms()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.gaussian_filter">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.gaussian_filter()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.imag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.imag()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.integrate_gradient">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.integrate_gradient()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.interpolate">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.interpolate()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.interpolate_line">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.interpolate_line()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.phase">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.phase()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.poisson_noise">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.poisson_noise()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.real">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.real()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.reduce_ensemble">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.reduce_ensemble()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.relative_difference">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.relative_difference()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.to_hyperspy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.to_hyperspy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.Images.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Images.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1707,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="images">
-<h1>Images<a class="headerlink" href="#images" title="Permalink to this heading">#</a></h1>
+<h1>Images<a class="headerlink" href="#images" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.measurements.Images">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.measurements.</span></span><span class="sig-name descname"><span class="pre">Images</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#Images"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.Images" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseMeasurement</span></code></a></p>
+<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.measurements.BaseMeasurement</span></code></a></p>
 <p>A collection of 2D measurements such as HRTEM or STEM-ADF images. May be used to represent a reconstructed phase.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -1719,7 +1089,7 @@ title="Print to PDF"
 <li><p><strong>array</strong> (<em>np.ndarray</em>) – 2D or greater array containing data of type <cite>float</cite> or ´complex´. The second-to-last and last
 dimensions are the image <cite>y</cite>- and <cite>x</cite>-axis, respectively.</p></li>
 <li><p><strong>sampling</strong> (<em>two float</em>) – Lateral sampling of images in <cite>x</cite> and <cite>y</cite> [Å].</p></li>
-<li><p><strong>ensemble_axes_metadata</strong> (<em>list</em><em> of </em><em>AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining simulation metadata.</p></li>
 </ul>
 </dd>
@@ -1842,7 +1212,7 @@ dimensions are the image <cite>y</cite>- and <cite>x</cite>-axis, respectively.<
 <td><p>Calculates the phase of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.Images.poisson_noise" title="abtem.measurements.Images.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
-<td><p>Add Poisson noise (ie.</p></td>
+<td><p>Add Poisson noise (i.e.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
 <td><p></p></td>
@@ -2051,7 +1421,7 @@ dimensions are the image <cite>y</cite>- and <cite>x</cite>-axis, respectively.<
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.Images.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.Images.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.Images.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2073,7 +1443,7 @@ dimensions are the image <cite>y</cite>- and <cite>x</cite>-axis, respectively.<
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.Images.coordinates">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.Images.coordinates" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.Images.coordinates" title="Permalink to this definition">#</a></dt>
 <dd><p>Coordinates of pixels in <cite>x</cite> and <cite>y</cite> [Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2106,8 +1476,8 @@ dimensions are the image <cite>y</cite>- and <cite>x</cite>-axis, respectively.<
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>extent</strong> (<em>tuple</em><em> of </em><em>float</em>) – Extent of rectangular cropping region in <cite>x</cite> and <cite>y</cite> [Å].</p></li>
-<li><p><strong>offset</strong> (<em>tuple</em><em> of </em><em>float</em>) – Lower corner of cropping region in <cite>x</cite> and <cite>y</cite> [Å] (default is (0,0)).</p></li>
+<li><p><strong>extent</strong> (<em>tuple of float</em>) – Extent of rectangular cropping region in <cite>x</cite> and <cite>y</cite> [Å].</p></li>
+<li><p><strong>offset</strong> (<em>tuple of float</em>) – Lower corner of cropping region in <cite>x</cite> and <cite>y</cite> [Å] (default is (0,0)).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -2164,7 +1534,7 @@ dimensions are the image <cite>y</cite>- and <cite>x</cite>-axis, respectively.<
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the
 <cite>y</cite>- and <cite>x</cite>-axis.</p></li>
-<li><p><strong>axes_metadata</strong> (<em>list</em><em> of </em><em>AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
+<li><p><strong>axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
 axes must be RealSpaceAxis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em>) – A dictionary defining the measurement metadata.</p></li>
 </ul>
@@ -2330,7 +1700,7 @@ by the ‘cval’ parameter.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.Images.interpolate_line">
-<span class="sig-name descname"><span class="pre">interpolate_line</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">end</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">endpoint</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#Images.interpolate_line"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.Images.interpolate_line" title="Permalink to this definition">#</a></dt>
+<span class="sig-name descname"><span class="pre">interpolate_line</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">end</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">margin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">endpoint</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#Images.interpolate_line"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.Images.interpolate_line" title="Permalink to this definition">#</a></dt>
 <dd><p>Interpolate image(s) along a given line. Either ‘sampling’ or ‘gpts’ must be provided.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -2340,6 +1710,7 @@ by the ‘cval’ parameter.</p>
 <li><p><strong>sampling</strong> (<em>float</em>) – Sampling of grid points along the line [1 / Å].</p></li>
 <li><p><strong>gpts</strong> (<em>int</em>) – Number of grid points along the line.</p></li>
 <li><p><strong>width</strong> (<em>float</em><em>, </em><em>optional</em>) – The interpolation will be averaged across a perpendicular distance equal to this width.</p></li>
+<li><p><strong>margin</strong> (<em>float</em><em> or </em><em>tuple of float</em><em>, </em><em>optional</em>) – Add margin [Å] to the start and end interpolated line.</p></li>
 <li><p><strong>order</strong> (<em>int</em><em>, </em><em>optional</em>) – The spline interpolation order.</p></li>
 <li><p><strong>endpoint</strong> (<em>bool</em>) – Sets whether the ending position is included or not.</p></li>
 </ul>
@@ -2400,7 +1771,7 @@ by the ‘cval’ parameter.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.Images.poisson_noise">
 <span class="sig-name descname"><span class="pre">poisson_noise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dose_per_area</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">total_dose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.Images.poisson_noise" title="Permalink to this definition">#</a></dt>
-<dd><p>Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
+<dd><p>Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
 if applied to an ensemble) or ‘dose_per_area’ (not applicable for single measurements).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -2499,7 +1870,7 @@ ensemble item is shown.</p></li>
 <li><p><strong>figsize</strong> (<em>two int</em><em>, </em><em>optional</em>) – The figure size given as width and height in inches, passed to <cite>matplotlib.pyplot.figure</cite>.</p></li>
 <li><p><strong>title</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add a title to the figure. If True is given instead of a string the title will be given by the value
 corresponding to the “name” key of the metadata dictionary, if this item exists.</p></li>
-<li><p><strong>panel_titles</strong> (<em>bool</em><em> or </em><em>list</em><em> of </em><em>str</em><em>, </em><em>optional</em>) – Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
+<li><p><strong>panel_titles</strong> (<em>bool</em><em> or </em><em>list of str</em><em>, </em><em>optional</em>) – Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
 strings an item must exist for each panel.</p></li>
 <li><p><strong>x_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the <cite>x</cite>-axis will be removed.</p></li>
 <li><p><strong>y_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the <cite>y</cite>-axis will be removed.</p></li>
@@ -2518,10 +1889,10 @@ axis metadata. A string may be given to override this. The default is no super l
 it is requested). Default is False.</p></li>
 <li><p><strong>cbar</strong> (<em>bool</em><em>, </em><em>optional</em>) – Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
 keyword arguments to <cite>mpl_toolkits.axes_grid1.axes_grid.ImageGrid</cite> through <cite>image_grid_kwargs</cite>.</p></li>
-<li><p><strong>cbar_labels</strong> (<em>str</em><em> or </em><em>list</em><em> of </em><em>str</em>) – Label(s) for the colorbar(s).</p></li>
+<li><p><strong>cbar_labels</strong> (<em>str</em><em> or </em><em>list of str</em>) – Label(s) for the colorbar(s).</p></li>
 <li><p><strong>sizebar</strong> (<em>bool</em><em>, </em><em>optional</em><em>,</em>) – Add a size bar to the image(s).</p></li>
 <li><p><strong>float_formatting</strong> (<em>str</em><em>, </em><em>optional</em>) – A formatting string used for formatting the floats of the panel titles.</p></li>
-<li><p><strong>panel_labels</strong> (<em>list</em><em> of </em><em>str</em>) – A list of labels for each panel of a grid of images.</p></li>
+<li><p><strong>panel_labels</strong> (<em>list of str</em>) – A list of labels for each panel of a grid of images.</p></li>
 <li><p><strong>image_grid_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>mpl_toolkits.axes_grid1.axes_grid.ImageGrid</cite>.</p></li>
 <li><p><strong>imshow_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>matplotlib.axes.Axes.imshow</cite>.</p></li>
 <li><p><strong>anchored_text_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>matplotlib.offsetbox.AnchoredText</cite>. This is used for creating panel
@@ -2540,7 +1911,7 @@ labels.</p></li>
 <dd><p>Tile image(s).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>repetitions</strong> (<em>tuple</em><em> of </em><em>int</em>) – The number of repetitions of the images along the <cite>x</cite>- and <cite>y</cite>-axis, respectively.</p>
+<dd class="field-odd"><p><strong>repetitions</strong> (<em>tuple of int</em>) – The number of repetitions of the images along the <cite>x</cite>- and <cite>y</cite>-axis, respectively.</p>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p><strong>tiled_images</strong> – The tiled image(s).</p>
@@ -2592,7 +1963,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

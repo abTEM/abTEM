@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="CustomScan" href="abtem.scan.CustomScan.html" />
     <link rel="prev" title="scan" href="abtem.scan.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,105 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.scan.BaseScan">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     BaseScan
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.get_positions">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.get_positions()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.shape
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1149,88 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.scan.BaseScan">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     BaseScan
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.get_positions">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.get_positions()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.scan.BaseScan.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       BaseScan.shape
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1239,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="basescan">
-<h1>BaseScan<a class="headerlink" href="#basescan" title="Permalink to this heading">#</a></h1>
+<h1>BaseScan<a class="headerlink" href="#basescan" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.scan.BaseScan">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.scan.</span></span><span class="sig-name descname"><span class="pre">BaseScan</span></span><a class="reference internal" href="../../../_modules/abtem/scan.html#BaseScan"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.scan.BaseScan" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">WaveTransform</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.transform.WaveTransform</span></code></p>
 <p>Abstract class to describe scans.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.scan.BaseScan.__init__">
@@ -1280,16 +1118,19 @@ title="Print to PDF"
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.scan.BaseScan.generate_blocks" title="abtem.scan.BaseScan.generate_blocks"><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_blocks</span></code></a>([chunks])</p></td>
 <td><p>Generate chunks of the ensemble.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.scan.BaseScan.get_positions" title="abtem.scan.BaseScan.get_positions"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_positions</span></code></a>(*args, **kwargs)</p></td>
-<td><p>Get the scan positions as numpy array.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_weights</span></code>()</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_blocks_by_extents</span></code>(extents)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.scan.BaseScan.select_block" title="abtem.scan.BaseScan.select_block"><code class="xref py py-obj docutils literal notranslate"><span class="pre">select_block</span></code></a>(index, chunks)</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.scan.BaseScan.get_positions" title="abtem.scan.BaseScan.get_positions"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_positions</span></code></a>(*args, **kwargs)</p></td>
+<td><p>Get the scan positions as numpy array.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_weights</span></code>()</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.scan.BaseScan.select_block" title="abtem.scan.BaseScan.select_block"><code class="xref py py-obj docutils literal notranslate"><span class="pre">select_block</span></code></a>(index, chunks)</p></td>
 <td><p>Select a block from the ensemble.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sort_into_extents</span></code>(extents)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sort_into_extents</span></code>(extents)</p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -1333,7 +1174,7 @@ title="Print to PDF"
 <dd><p>Split the ensemble into an array of smaller ensembles.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code></p>
@@ -1347,7 +1188,7 @@ title="Print to PDF"
 <dd><p>Generate chunks of the ensemble.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1365,8 +1206,8 @@ title="Print to PDF"
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>index</strong> (<em>tuple</em><em> of </em><em>ints</em>) – Index of selected block.</p></li>
-<li><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p></li>
+<li><p><strong>index</strong> (<em>tuple of ints</em>) – Index of selected block.</p></li>
+<li><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p></li>
 </ul>
 </dd>
 </dl>
@@ -1400,7 +1241,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

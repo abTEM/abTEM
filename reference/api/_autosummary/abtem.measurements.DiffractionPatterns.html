@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Images" href="abtem.measurements.Images.html" />
     <link rel="prev" title="BaseMeasurement" href="abtem.measurements.BaseMeasurement.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,393 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     DiffractionPatterns
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.abs">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.abs()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.angular_coordinates">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.angular_coordinates
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.angular_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.angular_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.bandlimit">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.bandlimit()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.block_direct">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.block_direct()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.center_of_mass">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.center_of_mass()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.coordinates">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.coordinates
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.epie">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.epie()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.gaussian_source_size">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.gaussian_source_size()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.imag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.imag()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.index_diffraction_spots">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.index_diffraction_spots()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.integrate_radial">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.integrate_radial()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.integrated_center_of_mass">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.integrated_center_of_mass()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.interpolate">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.interpolate()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.max_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.max_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.phase">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.phase()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.poisson_noise">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.poisson_noise()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.polar_binning">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.polar_binning()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.radial_binning">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.radial_binning()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.real">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.real()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.reduce_ensemble">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.reduce_ensemble()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.relative_difference">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.relative_difference()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.to_hyperspy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.to_hyperspy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1437,376 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     DiffractionPatterns
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.abs">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.abs()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.angular_coordinates">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.angular_coordinates
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.angular_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.angular_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.bandlimit">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.bandlimit()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.block_direct">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.block_direct()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.center_of_mass">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.center_of_mass()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.coordinates">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.coordinates
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.epie">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.epie()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.gaussian_source_size">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.gaussian_source_size()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.imag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.imag()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.index_diffraction_spots">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.index_diffraction_spots()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.integrate_radial">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.integrate_radial()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.integrated_center_of_mass">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.integrated_center_of_mass()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.interpolate">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.interpolate()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.max_angles">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.max_angles
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.phase">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.phase()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.poisson_noise">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.poisson_noise()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.polar_binning">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.polar_binning()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.radial_binning">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.radial_binning()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.real">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.real()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.reduce_ensemble">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.reduce_ensemble()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.relative_difference">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.relative_difference()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.to_hyperspy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.to_hyperspy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.DiffractionPatterns.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       DiffractionPatterns.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1815,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="diffractionpatterns">
-<h1>DiffractionPatterns<a class="headerlink" href="#diffractionpatterns" title="Permalink to this heading">#</a></h1>
+<h1>DiffractionPatterns<a class="headerlink" href="#diffractionpatterns" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.measurements.</span></span><span class="sig-name descname"><span class="pre">DiffractionPatterns</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fftshift</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseMeasurement</span></code></a></p>
+<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.measurements.BaseMeasurement</span></code></a></p>
 <p>One or more diffraction patterns.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -1829,7 +1091,7 @@ reciprocal space <cite>y</cite>- and <cite>x</cite>-axis of the diffraction patt
 <li><p><strong>sampling</strong> (<em>float</em><em> or </em><em>two float</em>) – The reciprocal-space sampling of the diffraction patterns [1 / Å].</p></li>
 <li><p><strong>fftshift</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the diffraction patterns are assumed to have the zero-frequency component to the center of the
 spectrum, otherwise the center(s) are assumed to be at (0,0).</p></li>
-<li><p><strong>ensemble_axes_metadata</strong> (<em>list</em><em> of </em><em>AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining simulation metadata.</p></li>
 </ul>
 </dd>
@@ -1961,7 +1223,7 @@ spectrum, otherwise the center(s) are assumed to be at (0,0).</p></li>
 <td><p>Calculates the phase of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.poisson_noise" title="abtem.measurements.DiffractionPatterns.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
-<td><p>Add Poisson noise (ie.</p></td>
+<td><p>Add Poisson noise (i.e.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.polar_binning" title="abtem.measurements.DiffractionPatterns.polar_binning"><code class="xref py py-obj docutils literal notranslate"><span class="pre">polar_binning</span></code></a>(nbins_radial, nbins_azimuthal)</p></td>
 <td><p>Create polar measurements from the diffraction patterns by binning the measurements on a polar grid.</p></td>
@@ -2193,7 +1455,7 @@ spectrum, otherwise the center(s) are assumed to be at (0,0).</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.angular_coordinates">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">angular_coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.angular_coordinates" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">angular_coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.angular_coordinates" title="Permalink to this definition">#</a></dt>
 <dd><p>Scattering angle coordinates [mrad].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2215,7 +1477,7 @@ spectrum, otherwise the center(s) are assumed to be at (0,0).</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2295,7 +1557,7 @@ where the real and imaginary part represents the <cite>x</cite> and <cite>y</cit
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.coordinates">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.coordinates" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.coordinates" title="Permalink to this definition">#</a></dt>
 <dd><p>Reciprocal-space frequency coordinates [1 / Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2370,7 +1632,7 @@ where the real and imaginary part represents the <cite>x</cite> and <cite>y</cit
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more 2D diffraction patterns. The second-to-last and last dimensions are the
 diffraction pattern <cite>y</cite>- and <cite>x</cite>-axis.</p></li>
-<li><p><strong>axes_metadata</strong> (<em>list</em><em> of </em><em>AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
+<li><p><strong>axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
 axes must be RealSpaceAxis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em>) – A dictionary defining the measurement metadata.</p></li>
 </ul>
@@ -2441,7 +1703,7 @@ deviation is equal for both axes.</p>
 <dd><p>Indexes the Bragg reflections (diffraction spots) by their Miller indices.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>cell</strong> (<em>ase.cell.Cell</em><em> or </em><em>float</em><em> or </em><em>tuple</em><em> of </em><em>float</em>) – The assumed unit cell with respect to the diffraction pattern should be indexed. Must be one of ASE <cite>Cell</cite>
+<dd class="field-odd"><p><strong>cell</strong> (<em>ase.cell.Cell</em><em> or </em><em>float</em><em> or </em><em>tuple of float</em>) – The assumed unit cell with respect to the diffraction pattern should be indexed. Must be one of ASE <cite>Cell</cite>
 object, float (for a cubic unit cell) or three floats (for orthorhombic unit cells).</p>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -2583,7 +1845,7 @@ the smallest pixel size such that the sampling is uniform.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.poisson_noise">
 <span class="sig-name descname"><span class="pre">poisson_noise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dose_per_area</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">total_dose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.poisson_noise" title="Permalink to this definition">#</a></dt>
-<dd><p>Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
+<dd><p>Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
 if applied to an ensemble) or ‘dose_per_area’ (not applicable for single measurements).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -2725,7 +1987,7 @@ ensemble item is shown.</p></li>
 <li><p><strong>figsize</strong> (<em>two int</em><em>, </em><em>optional</em>) – The figure size given as width and height in inches, passed to <cite>matplotlib.pyplot.figure</cite>.</p></li>
 <li><p><strong>title</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add a title to the figure. If True is given instead of a string the title will be given by the value
 corresponding to the “name” key of the metadata dictionary, if this item exists.</p></li>
-<li><p><strong>panel_titles</strong> (<em>bool</em><em> or </em><em>list</em><em> of </em><em>str</em><em>, </em><em>optional</em>) – Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
+<li><p><strong>panel_titles</strong> (<em>bool</em><em> or </em><em>list of str</em><em>, </em><em>optional</em>) – Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
 strings an item must exist for each panel.</p></li>
 <li><p><strong>x_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the <cite>x</cite>-axis will be removed.</p></li>
 <li><p><strong>y_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the <cite>y</cite>-axis will be removed.</p></li>
@@ -2746,7 +2008,7 @@ it is requested). Default is False.</p></li>
 keyword arguments to <cite>mpl_toolkits.axes_grid1.axes_grid.ImageGrid</cite> through ‘image_grid_kwargs’.</p></li>
 <li><p><strong>sizebar</strong> (<em>bool</em><em>, </em><em>optional</em><em>,</em>) – Add a size bar to the image(s).</p></li>
 <li><p><strong>float_formatting</strong> (<em>str</em><em>, </em><em>optional</em>) – A formatting string used for formatting the floats of the panel titles.</p></li>
-<li><p><strong>panel_labels</strong> (<em>list</em><em> of </em><em>str</em>) – A list of labels for each panel of a grid of images.</p></li>
+<li><p><strong>panel_labels</strong> (<em>list of str</em>) – A list of labels for each panel of a grid of images.</p></li>
 <li><p><strong>image_grid_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>mpl_toolkits.axes_grid1.axes_grid.ImageGrid</cite>.</p></li>
 <li><p><strong>imshow_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>matplotlib.axes.Axes.imshow</cite>.</p></li>
 <li><p><strong>anchored_text_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>matplotlib.offsetbox.AnchoredText</cite>. This is used for creating panel
@@ -2800,7 +2062,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

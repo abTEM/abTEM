@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
-    <script src="../_static/sphinx_highlight.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,9 +55,9 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Installation" href="install.html" />
-    <link rel="prev" title="Welcome to abTEM!" href="../intro.html" />
+    <link rel="prev" title="Welcome!" href="../intro.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -113,7 +111,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -302,6 +300,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -872,13 +885,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1069,7 +1082,7 @@ title="Print to PDF"
    <em>
     ab
    </em>
-   TEM differs?
+   TEM differs
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
@@ -1100,7 +1113,8 @@ title="Print to PDF"
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem-object-model">
+  <a class="reference internal nav-link" href="#the-abtem-object-model">
+   The
    <em>
     ab
    </em>
@@ -1132,7 +1146,7 @@ title="Print to PDF"
    <em>
     ab
    </em>
-   TEM differs?
+   TEM differs
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
@@ -1163,7 +1177,8 @@ title="Print to PDF"
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem-object-model">
+  <a class="reference internal nav-link" href="#the-abtem-object-model">
+   The
    <em>
     ab
    </em>
@@ -1181,68 +1196,69 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="overview">
-<span id="getting-started-overview"></span><h1>Overview<a class="headerlink" href="#overview" title="Permalink to this heading">#</a></h1>
+<span id="getting-started-overview"></span><h1>Overview<a class="headerlink" href="#overview" title="Permalink to this headline">#</a></h1>
 <p>Computer simulations have become an indispensable part of modern research. To reliably interpret the data from
 experiments, a careful comparison between theoretical models and experiments is often required. The use of
-dynamical scattering simulations based on the multislice algorithm has for several decades been an invaluable aid for
-transmission electron microscopy (TEM). As a result, there are many excellent simulation codes and <em>ab</em>TEM is another
+dynamical scattering simulations based on the multislice algorithm has, for several decades, been an invaluable aid for
+transmission electron microscopy (TEM). As a result, there are many excellent simulation codes, and <em>ab</em>TEM is another
 one; however, our approach differs in many key aspects.</p>
 <section id="how-abtem-differs">
-<h2>How <em>ab</em>TEM differs?<a class="headerlink" href="#how-abtem-differs" title="Permalink to this heading">#</a></h2>
+<h2>How <em>ab</em>TEM differs<a class="headerlink" href="#how-abtem-differs" title="Permalink to this headline">#</a></h2>
 <section id="no-gui-jupyter-notebooks">
-<h3>No GUI; Jupyter notebooks<a class="headerlink" href="#no-gui-jupyter-notebooks" title="Permalink to this heading">#</a></h3>
-<p><em>ab</em>TEM does not implement a graphical user interface, instead focusing on making scripts and especially computational
-notebooks. A Jupyter Notebook is mix of code, explanatory text and visualizations, which immediately provides
-documentation of the simulation, allowing others to understand, share and reproduce it. <em>ab</em>TEM aids a visual workflow
-by implementing methods for creating quick visualizations of each subtask; for example, a heatmap of the projected
-potential or the profile of the electron probe. The use of this open format improves reproducibility and transparency,
-and we always encourage users to share their open code with publications.</p>
+<h3>No GUI; Jupyter notebooks<a class="headerlink" href="#no-gui-jupyter-notebooks" title="Permalink to this headline">#</a></h3>
+<p><em>ab</em>TEM does not implement a graphical user interface, instead focusing on scripts and especially<br />
+<a class="reference external" href="https://jupyter.org/">Jupyter notebooks</a>. A Jupyter Notebook is a mix of code, explanatory text, and visualizations, which
+immediately provides documentation of the simulation, allowing others to understand, share and reproduce it. <em>ab</em>TEM
+aids a visual workflow by implementing methods for creating quick visualizations of each subtask, for example, a heatmap
+of the projected potential or the profile of the electron probe. The use of open formats improves reproducibility
+and transparency, and we always encourage users to share their code with publications.</p>
 </section>
 <section id="flexible-no-fixed-simulation-modes">
-<h3>Flexible, no fixed simulation modes<a class="headerlink" href="#flexible-no-fixed-simulation-modes" title="Permalink to this heading">#</a></h3>
-<p><em>ab</em>TEM does not directly implement <em>any</em> of the common imaging modes, instead inviting the user to mix and match
-objects to construct the desired simulation. This provides the user with an enormous flexibility to design the
+<h3>Flexible, no fixed simulation modes<a class="headerlink" href="#flexible-no-fixed-simulation-modes" title="Permalink to this headline">#</a></h3>
+<p><em>ab</em>TEM does not directly implement <em>any</em> of the common TEM experiments, instead inviting the user to mix and match
+objects to construct the desired simulation. This provides the user with enormous flexibility to design the
 simulation while <em>ab</em>TEM takes care of the computational details. See below for examples.</p>
 </section>
 <section id="pure-python-but-fast">
-<h3>“Pure Python”, but fast<a class="headerlink" href="#pure-python-but-fast" title="Permalink to this heading">#</a></h3>
+<h3>“Pure Python”, but fast<a class="headerlink" href="#pure-python-but-fast" title="Permalink to this headline">#</a></h3>
 <p>Python has become the most popular programming language in physics, thanks in particular to its extensive base
 of open-source libraries. In the electron microscopy community, this includes packages such as
 <a class="reference external" href="https://hyperspy.org/">HyperSpy</a>, <a class="reference external" href="https://libertem.github.io/LiberTEM/">Libertem</a> and
 <a class="reference external" href="https://py4dstem.readthedocs.io/en/latest/">Py4DSTEM</a>. Effective use of fast open-source numerical libraries such
 as <a class="reference external" href="https://numpy.org/">NumPy</a>, <a class="reference external" href="https://cupy.dev/">CuPy</a>, <a class="reference external" href="https://numba.pydata.org/">Numba</a> and
-<a class="reference external" href="https://pyfftw.readthedocs.io/en/latest/">PyFFTW</a>, allows <em>ab</em>TEM to be extremely competitive in raw performance. This
-combination of easy-to-understand code and excellent interoperability combined with uncompromising simulation speed make
-for an attractive combination.</p>
+<a class="reference external" href="https://pyfftw.readthedocs.io/en/latest/">PyFFTW</a>, allows <em>ab</em>TEM to be extremely competitive in raw performance. The
+combination of easy-to-understand Python code, excellent interoperability combined with uncompromising
+simulation speed make for an attractive combination.</p>
 </section>
 <section id="deploys-anywhere-powered-by-dask">
-<h3>Deploys anywhere, powered by Dask<a class="headerlink" href="#deploys-anywhere-powered-by-dask" title="Permalink to this heading">#</a></h3>
+<h3>Deploys anywhere, powered by Dask<a class="headerlink" href="#deploys-anywhere-powered-by-dask" title="Permalink to this headline">#</a></h3>
 <p><em>ab</em>TEM is created from the ground up to work with <a class="reference external" href="https://www.dask.org/">Dask</a>. Dask allows scaling from a single
 laptop to hundreds of nodes at high-performance computing (HPC) facilities with minimal changes to the code. This makes
-the code very well suited for diverse settings from teaching to cutting-edge research.</p>
+the code very well suited for diverse settings, from teaching to cutting-edge research.</p>
 </section>
 <section id="open-source-and-open-to-contributions">
-<h3>Open-source and open to contributions<a class="headerlink" href="#open-source-and-open-to-contributions" title="Permalink to this heading">#</a></h3>
+<h3>Open-source and open to contributions<a class="headerlink" href="#open-source-and-open-to-contributions" title="Permalink to this headline">#</a></h3>
 <p>The <em>ab</em>TEM developers are not alone in seeing the necessity of open-source software in electron microscopy. We are
 striving to make this an inviting project for new contributors and collaborators. Everybody is invited to contribute
-in using and developing the code, see our <a class="reference internal" href="../abtem/contributing.html#library-contributing"><span class="std std-ref">guide for contributors</span></a>.</p>
+to use and develop the code; see our <a class="reference internal" href="../abtem/contribute.html#library-contributing"><span class="std std-ref">guide for contributors</span></a>.</p>
 </section>
 </section>
-<section id="abtem-object-model">
-<h2><em>ab</em>TEM object model<a class="headerlink" href="#abtem-object-model" title="Permalink to this heading">#</a></h2>
-<p>As can be expected for a code written in an object-oriented programming language, the <em>ab</em>TEM implementation is based
-on code objects. However, whenever possible, these directly represent physical concepts; for example, a plane wave
-function is represented by the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> object and a focused STEM probe wave function is represented by the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>
-object. This makes the code easy to understand not only for specialists but anyone familiar with transmission electron
-microscopy.</p>
+<section id="the-abtem-object-model">
+<h2>The <em>ab</em>TEM object model<a class="headerlink" href="#the-abtem-object-model" title="Permalink to this headline">#</a></h2>
+<p>abTEM
+follows <a class="reference external" href="https://en.wikipedia.org/wiki/Domain-driven_design">domain-driven</a> and <a class="reference external" href="https://en.wikipedia.org/wiki/Object-oriented_programming">object-oriented</a>
+design principles. In short, that means that our implementation of the multislice algorithm is based on objects
+representing physical concepts; for example, a plane wave function is represented by the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> object, and a
+focused STEM probe wave function is represented by a <code class="docutils literal notranslate"><span class="pre">Probe</span></code> object. This makes the code easy to understand, not only for
+specialists but anyone familiar with transmission electron microscopy.</p>
 <p>To simulate a (basic) high-resolution TEM (HRTEM) image, we need a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> at a given energy (by default in units of
 <span class="math notranslate nohighlight">\(\mathrm{eV}\)</span>), a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> with a given real-space sampling (in units of <span class="math notranslate nohighlight">\(\mathrm{Å}\)</span>), and a <code class="docutils literal notranslate"><span class="pre">CTF</span></code> (contrast
 transfer function) representing the objective lens with a given aperture (in <span class="math notranslate nohighlight">\(\mathrm{mrad}\)</span>) and spherical aberration
-coefficient (also in <span class="math notranslate nohighlight">\(\mathrm{Å}\)</span>). We show how this could be implemented in code below; please change the tabs for
+coefficient (also in <span class="math notranslate nohighlight">\(\mathrm{Å}\)</span>). We show how this could be implemented in the code below; please change the tabs for
 other simulation modes.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="c6798750-775e-4dc5-a500-bebaccc26640" name="eeeb6a5a-5f7e-4ec3-8415-4fbdbf26224a" type="radio">
-</input><label class="sd-tab-label" for="c6798750-775e-4dc5-a500-bebaccc26640">
+<input checked="checked" id="54c449ce-6c6c-4e7d-bf88-503b13681d35" name="e99d6dac-5249-4586-b2d9-30f0bc9bb273" type="radio">
+</input><label class="sd-tab-label" for="54c449ce-6c6c-4e7d-bf88-503b13681d35">
 HRTEM</label><div class="sd-tab-content docutils">
 <p>An image is measured by getting the <code class="docutils literal notranslate"><span class="pre">intensity</span></code> of the exit wave, calculated by propagating the plane wave through
 the potential using the multislice algorithm and applying the <code class="docutils literal notranslate"><span class="pre">CTF</span></code>.</p>
@@ -1258,11 +1274,11 @@ the potential using the multislice algorithm and applying the <code class="docut
 </pre></div>
 </div>
 </div>
-<input id="ff60f85a-e462-44bc-a57e-95757812fa05" name="eeeb6a5a-5f7e-4ec3-8415-4fbdbf26224a" type="radio">
-</input><label class="sd-tab-label" for="ff60f85a-e462-44bc-a57e-95757812fa05">
+<input id="9afd9802-bd64-4878-be14-a27b8838cdb3" name="e99d6dac-5249-4586-b2d9-30f0bc9bb273" type="radio">
+</input><label class="sd-tab-label" for="9afd9802-bd64-4878-be14-a27b8838cdb3">
 SAED</label><div class="sd-tab-content docutils">
-<p>We can turn the HRTEM simulation into a selected-area electron diffraction (SAED) simulation by getting rid of the <code class="docutils literal notranslate"><span class="pre">CTF</span></code>
-and calculating <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code> from the exit wave instead of <code class="docutils literal notranslate"><span class="pre">intensity</span></code>.</p>
+<p>We can turn the HRTEM simulation into a selected area electron diffraction (SAED) simulation by getting rid of the <code class="docutils literal notranslate"><span class="pre">CTF</span></code>
+and calculating <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code> from the exit wave instead of the <code class="docutils literal notranslate"><span class="pre">intensity</span></code>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">)</span>
 
 <span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
@@ -1273,12 +1289,12 @@ and calculating <code class="docutils literal notranslate"><span class="pre">dif
 </pre></div>
 </div>
 </div>
-<input id="eef33b91-7575-4c62-a3ef-41af20713425" name="eeeb6a5a-5f7e-4ec3-8415-4fbdbf26224a" type="radio">
-</input><label class="sd-tab-label" for="eef33b91-7575-4c62-a3ef-41af20713425">
+<input id="097e80b2-015f-4eb9-80b3-e275c5f4eea9" name="e99d6dac-5249-4586-b2d9-30f0bc9bb273" type="radio">
+</input><label class="sd-tab-label" for="097e80b2-015f-4eb9-80b3-e275c5f4eea9">
 CBED</label><div class="sd-tab-content docutils">
-<p>The SAED simulation further becomes a converged-beam electron diffraction (CBED) simulation by only changing the
-<code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> for a <code class="docutils literal notranslate"><span class="pre">Probe</span></code>; the angular cutoff keyword now describes the condenser aperture of the probe.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">Cs</span><span class="o">=</span><span class="mf">1e-3</span> <span class="o">*</span> <span class="mf">1e10</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="s2">&quot;scherzer&quot;</span><span class="p">)</span>
+<p>The SAED simulation becomes a converged-beam electron diffraction (CBED) simulation by only changing the
+<code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> for a <code class="docutils literal notranslate"><span class="pre">Probe</span></code>; the semiangle cutoff keyword now describes the condenser aperture of the probe.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 
 <span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
 
@@ -1288,16 +1304,16 @@ CBED</label><div class="sd-tab-content docutils">
 </pre></div>
 </div>
 </div>
-<input id="e03b472c-0b4b-4e56-a384-67373c6f729f" name="eeeb6a5a-5f7e-4ec3-8415-4fbdbf26224a" type="radio">
-</input><label class="sd-tab-label" for="e03b472c-0b4b-4e56-a384-67373c6f729f">
+<input id="e9e8b21b-a7db-4c77-9cbc-1985c1ca8e1f" name="e99d6dac-5249-4586-b2d9-30f0bc9bb273" type="radio">
+</input><label class="sd-tab-label" for="e9e8b21b-a7db-4c77-9cbc-1985c1ca8e1f">
 PED</label><div class="sd-tab-content docutils">
-<p>The CBED simulation in turn can become a precession ED simulation by setting the <code class="docutils literal notranslate"><span class="pre">tilt</span></code> property of the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>, with
-a specified angle.</p>
+<p>The CBED simulation can become a precession ED simulation by setting the <code class="docutils literal notranslate"><span class="pre">tilt</span></code> property of the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>, with
+a specified array of angles.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">wave</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">Cs</span><span class="o">=</span><span class="mf">1e-3</span> <span class="o">*</span> <span class="mf">1e10</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="s2">&quot;scherzer&quot;</span><span class="p">)</span>
 
 <span class="n">potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
 
-<span class="n">wave</span><span class="o">.</span><span class="n">tilt</span> <span class="o">=</span> <span class="n">precession_tilts</span><span class="p">(</span><span class="n">precession_angle</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span> <span class="n">num_samples</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+<span class="n">wave</span><span class="o">.</span><span class="n">tilt</span> <span class="o">=</span> <span class="n">precession_tilts</span><span class="p">(</span><span class="n">precession_angle</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">num_samples</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
 
 <span class="n">exit_wave</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
 
@@ -1305,8 +1321,8 @@ a specified angle.</p>
 </pre></div>
 </div>
 </div>
-<input id="b9382ef9-70ed-4b30-a553-5f4ae8688a86" name="eeeb6a5a-5f7e-4ec3-8415-4fbdbf26224a" type="radio">
-</input><label class="sd-tab-label" for="b9382ef9-70ed-4b30-a553-5f4ae8688a86">
+<input id="b293571d-cc9a-4690-9aff-47e9e4a6c184" name="e99d6dac-5249-4586-b2d9-30f0bc9bb273" type="radio">
+</input><label class="sd-tab-label" for="b293571d-cc9a-4690-9aff-47e9e4a6c184">
 STEM-MAADF</label><div class="sd-tab-content docutils">
 <p>A STEM-ADF simulation requires defining the scan area using the <code class="docutils literal notranslate"><span class="pre">GridScan</span></code> (defaulting to the entire area of the
 cell) and an <code class="docutils literal notranslate"><span class="pre">AnnularDetector</span></code> defining the inner and outer detector angles (again in <span class="math notranslate nohighlight">\(\mathrm{mrad}\)</span>).</p>
@@ -1322,8 +1338,8 @@ cell) and an <code class="docutils literal notranslate"><span class="pre">Annula
 </pre></div>
 </div>
 </div>
-<input id="65d2cfd9-fb14-44bf-b26f-f51e3978d6d2" name="eeeb6a5a-5f7e-4ec3-8415-4fbdbf26224a" type="radio">
-</input><label class="sd-tab-label" for="65d2cfd9-fb14-44bf-b26f-f51e3978d6d2">
+<input id="1d82cdf4-6d91-4320-9004-63d1fd5a4b6b" name="e99d6dac-5249-4586-b2d9-30f0bc9bb273" type="radio">
+</input><label class="sd-tab-label" for="1d82cdf4-6d91-4320-9004-63d1fd5a4b6b">
 4D-STEM</label><div class="sd-tab-content docutils">
 <p>The STEM-ADF simulation is easily modified into a 4D-STEM simulation by swapping the
 <code class="docutils literal notranslate"><span class="pre">AnnularDetector</span></code> for a <code class="docutils literal notranslate"><span class="pre">PixelatedDetector</span></code>.</p>
@@ -1341,10 +1357,11 @@ cell) and an <code class="docutils literal notranslate"><span class="pre">Annula
 </div>
 </div>
 <p>These examples demonstrate simplified <em>ab</em>TEM code for simulating several common electron microscopy experiments.
-For clarity of expression we have omitted import statements, and the atomic models is assumed to be given as <code class="docutils literal notranslate"><span class="pre">atoms</span></code>.
-Complete executable code examples can be found <a class="reference internal" href="basics.html#getting-started-basic-examples"><span class="std std-ref">further in the documentation</span></a>.</p>
-<p>We recommend that new users work through our <a class="reference internal" href="../user_guide/walkthrough/walkthrough.html#user-guide-walkthrough"><span class="std std-ref">walkthrough</span></a> to familiarize them with <em>ab</em>TEM
-and its features.</p>
+For clarity, we have omitted import statements, and the atomic models are assumed to be given as <code class="docutils literal notranslate"><span class="pre">atoms</span></code>.
+Equivalent complete executable code examples can be found <a class="reference internal" href="basics.html#getting-started-basic-examples"><span class="std std-ref">further in the documentation</span></a>
+.</p>
+<p>We recommend that new users work through our <a class="reference internal" href="../user_guide/walkthrough/walkthrough.html#user-guide-walkthrough"><span class="std std-ref">walkthrough</span></a> to familiarize themselves with <em>ab</em>
+TEM and its features.</p>
 </section>
 </section>
 
@@ -1379,7 +1396,7 @@ and its features.</p>
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Welcome to <em>ab</em>TEM!</p>
+            <p class="prev-next-title">Welcome!</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="install.html" title="next page">

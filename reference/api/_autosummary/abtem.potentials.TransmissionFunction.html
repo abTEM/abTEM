@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="scan" href="abtem.scan.html" />
     <link rel="prev" title="PotentialArray" href="abtem.potentials.PotentialArray.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,375 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     TransmissionFunction
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.accelerator">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.accelerator
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.energy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.energy
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.get_chunk">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.get_chunk()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.images">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.images()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.project">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.project()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.transmission_function">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.transmission_function()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.transmit">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.transmit()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.wavelength">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.wavelength
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1419,358 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     TransmissionFunction
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.accelerator">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.accelerator
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.energy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.energy
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.get_chunk">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.get_chunk()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.images">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.images()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.project">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.project()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.transmission_function">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.transmission_function()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.transmit">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.transmit()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.TransmissionFunction.wavelength">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       TransmissionFunction.wavelength
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1779,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="transmissionfunction">
-<h1>TransmissionFunction<a class="headerlink" href="#transmissionfunction" title="Permalink to this heading">#</a></h1>
+<h1>TransmissionFunction<a class="headerlink" href="#transmissionfunction" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.potentials.TransmissionFunction">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.potentials.</span></span><span class="sig-name descname"><span class="pre">TransmissionFunction</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#TransmissionFunction"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.TransmissionFunction" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <a class="reference internal" href="abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray" title="abtem.potentials.PotentialArray"><code class="xref py py-class docutils literal notranslate"><span class="pre">PotentialArray</span></code></a>, <code class="xref py py-class docutils literal notranslate"><span class="pre">HasAcceleratorMixin</span></code></p>
+<dd><p>Bases: <a class="reference internal" href="abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray" title="abtem.potentials.PotentialArray"><code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.potentials.PotentialArray</span></code></a>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.energy.HasAcceleratorMixin</span></code></p>
 <p>Class to describe transmission functions.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -1859,8 +1157,13 @@ If a sequence, the length must equal the length of the potential array.</p></li>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.TransmissionFunction.generate_slices" title="abtem.potentials.TransmissionFunction.generate_slices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_slices</span></code></a>([first_slice, last_slice])</p></td>
 <td><p>Generate the slices for the potential.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.TransmissionFunction.get_chunk" title="abtem.potentials.TransmissionFunction.get_chunk"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_chunk</span></code></a>(first_slice, last_slice)</p></td>
-<td><p>TODO: check if can be made internal or deleted.</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_chunk</span></code>(first_slice, last_slice)</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.potentials.TransmissionFunction" title="abtem.potentials.TransmissionFunction"><code class="xref py py-class docutils literal notranslate"><span class="pre">TransmissionFunction</span></code></a></p>
+</dd>
+</dl>
+</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
 <td><p><dl class="field-list simple">
@@ -2121,7 +1424,7 @@ If a sequence, the length must equal the length of the potential array.</p></li>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.TransmissionFunction.accelerator">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Accelerator</span></em><a class="headerlink" href="#abtem.potentials.TransmissionFunction.accelerator" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">accelerator</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.energy.Accelerator</span></em><a class="headerlink" href="#abtem.potentials.TransmissionFunction.accelerator" title="Permalink to this definition">#</a></dt>
 <dd><p>Accelerator object describing the acceleration energy.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2132,7 +1435,7 @@ If a sequence, the length must equal the length of the potential array.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.TransmissionFunction.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.TransmissionFunction.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.TransmissionFunction.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2197,7 +1500,7 @@ If a sequence, the length must equal the length of the potential array.</p></li>
 <dd><p>Split the ensemble into an array of smaller ensembles.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code></p>
@@ -2251,7 +1554,7 @@ s3:// for remote data.</p>
 <dd><p>Generate chunks of the ensemble.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2276,17 +1579,6 @@ s3:// for remote data.</p>
 </dl>
 </dd></dl>
 
-<dl class="py method">
-<dt class="sig sig-object py" id="abtem.potentials.TransmissionFunction.get_chunk">
-<span class="sig-name descname"><span class="pre">get_chunk</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#TransmissionFunction.get_chunk"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.TransmissionFunction.get_chunk" title="Permalink to this definition">#</a></dt>
-<dd><p>TODO: check if can be made internal or deleted.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference internal" href="#abtem.potentials.TransmissionFunction" title="abtem.potentials.TransmissionFunction"><code class="xref py py-class docutils literal notranslate"><span class="pre">TransmissionFunction</span></code></a></p>
-</dd>
-</dl>
-</dd></dl>
-
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.TransmissionFunction.gpts">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.potentials.TransmissionFunction.gpts" title="Permalink to this definition">#</a></dt>
@@ -2300,7 +1592,7 @@ s3:// for remote data.</p>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.TransmissionFunction.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.potentials.TransmissionFunction.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.potentials.TransmissionFunction.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2408,8 +1700,8 @@ s3:// for remote data.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>index</strong> (<em>tuple</em><em> of </em><em>ints</em>) – Index of selected block.</p></li>
-<li><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p></li>
+<li><p><strong>index</strong> (<em>tuple of ints</em>) – Index of selected block.</p></li>
+<li><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p></li>
 </ul>
 </dd>
 </dl>
@@ -2559,7 +1851,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

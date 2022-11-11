@@ -1,11 +1,11 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>abtem.gpaw &#8212; abTEM Documentation</title>
+    <title>abtem.gpaw &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,9 +33,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -54,7 +52,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -96,7 +94,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
@@ -108,7 +106,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -297,6 +295,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -867,13 +880,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1048,7 +1061,7 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.inelastic.phonons</span> <span class="kn">import</span> <span class="p">(</span>
     <span class="n">DummyFrozenPhonons</span><span class="p">,</span>
     <span class="n">FrozenPhonons</span><span class="p">,</span>
-    <span class="n">BaseFrozenPhonons</span><span class="p">,</span>
+    <span class="n">BaseFrozenPhonons</span><span class="p">,</span> <span class="n">_safe_read_atoms</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span> <span class="nn">abtem.potentials</span> <span class="kn">import</span> <span class="n">_PotentialBuilder</span><span class="p">,</span> <span class="n">Potential</span>
 
@@ -1080,24 +1093,10 @@ title="Open an issue"
     <span class="n">unpack_atomic_matrices</span> <span class="o">=</span> <span class="kc">None</span>
 
 
-<span class="k">def</span> <span class="nf">_safe_read_atoms</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="n">clean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
-
-    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
-        <span class="k">with</span> <span class="n">Reader</span><span class="p">(</span><span class="n">calculator</span><span class="p">)</span> <span class="k">as</span> <span class="n">reader</span><span class="p">:</span>
-            <span class="n">atoms</span> <span class="o">=</span> <span class="n">read_atoms</span><span class="p">(</span><span class="n">reader</span><span class="o">.</span><span class="n">atoms</span><span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">atoms</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">atoms</span>
-
-    <span class="k">if</span> <span class="n">clean</span><span class="p">:</span>
-        <span class="n">atoms</span><span class="o">.</span><span class="n">constraints</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="n">atoms</span><span class="o">.</span><span class="n">calc</span> <span class="o">=</span> <span class="kc">True</span>
-
-    <span class="k">return</span> <span class="n">atoms</span>
-
-
 <span class="k">def</span> <span class="nf">_get_gpaw_setups</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="n">xc</span><span class="p">):</span>
     <span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">mode</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="n">xc</span><span class="p">)</span>
     <span class="n">gpaw</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+
     <span class="k">return</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">setups</span>
 
 
@@ -1114,6 +1113,7 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">setups</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">setup_mode</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">setup_xc</span><span class="p">)</span>
         <span class="n">gpaw</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">atoms</span><span class="p">)</span>
+
         <span class="k">return</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">setups</span>
 
     <span class="nd">@classmethod</span>
@@ -1132,6 +1132,7 @@ title="Open an issue"
             <span class="s2">&quot;D_asp&quot;</span><span class="p">:</span> <span class="nb">dict</span><span class="p">(</span><span class="n">gpaw</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">D_asp</span><span class="p">),</span>
             <span class="s2">&quot;atoms&quot;</span><span class="p">:</span> <span class="n">atoms</span><span class="p">,</span>
         <span class="p">}</span>
+
         <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
     <span class="nd">@classmethod</span>
@@ -1155,7 +1156,7 @@ title="Open an issue"
 
             <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">setup_xc</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>
 
-            <span class="n">density</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">density</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span> <span class="o">**</span> <span class="mi">3</span>
+            <span class="n">density</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">density</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span><span class="o">**</span><span class="mi">3</span>
             <span class="n">gd</span> <span class="o">=</span> <span class="n">GridDescriptor</span><span class="p">(</span>
                 <span class="n">N_c</span><span class="o">=</span><span class="n">density</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">:],</span>
                 <span class="n">cell_cv</span><span class="o">=</span><span class="n">atoms</span><span class="o">.</span><span class="n">get_cell</span><span class="p">()</span> <span class="o">/</span> <span class="n">Bohr</span><span class="p">,</span>
@@ -1164,7 +1165,9 @@ title="Open an issue"
 
             <span class="n">setups</span> <span class="o">=</span> <span class="n">_get_gpaw_setups</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">setup_mode</span><span class="p">,</span> <span class="n">setup_xc</span><span class="p">)</span>
 
-            <span class="n">D_asp</span> <span class="o">=</span> <span class="n">unpack_atomic_matrices</span><span class="p">(</span><span class="n">reader</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">atomic_density_matrices</span><span class="p">,</span> <span class="n">setups</span><span class="p">)</span>
+            <span class="n">D_asp</span> <span class="o">=</span> <span class="n">unpack_atomic_matrices</span><span class="p">(</span>
+                <span class="n">reader</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">atomic_density_matrices</span><span class="p">,</span> <span class="n">setups</span>
+            <span class="p">)</span>
 
         <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{</span>
             <span class="s2">&quot;setup_mode&quot;</span><span class="p">:</span> <span class="n">setup_mode</span><span class="p">,</span>
@@ -1213,8 +1216,112 @@ title="Open an issue"
 
     <span class="k">return</span> <span class="n">n_sg</span><span class="p">,</span> <span class="n">finegd</span>
 
+
+<span class="k">def</span> <span class="nf">_calculate_I_a</span><span class="p">(</span><span class="n">nspins</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">,</span> <span class="n">setups</span><span class="p">):</span>
+    <span class="n">I_sa</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">nspins</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">D_asp</span><span class="p">)))</span>
+
+    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nspins</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">setup</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">setups</span><span class="p">):</span>
+            <span class="n">D_sp</span> <span class="o">=</span> <span class="n">D_asp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">a</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">D_asp</span><span class="p">))</span>
+
+            <span class="k">if</span> <span class="n">D_sp</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">I_sa</span><span class="p">[</span><span class="n">s</span><span class="p">,</span> <span class="n">a</span><span class="p">]</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">Nct</span> <span class="o">/</span> <span class="n">nspins</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">pi</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span>
+                    <span class="n">D_sp</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">setup</span><span class="o">.</span><span class="n">Delta_pL</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span>
+                <span class="p">)</span>
+                <span class="n">I_sa</span><span class="p">[</span><span class="n">s</span><span class="p">,</span> <span class="n">a</span><span class="p">]</span> <span class="o">-=</span> <span class="n">setup</span><span class="o">.</span><span class="n">Nc</span> <span class="o">/</span> <span class="n">nspins</span>
+
+    <span class="k">return</span> <span class="n">I_sa</span>
+
+
+<span class="k">def</span> <span class="nf">_add_valence_density_correction</span><span class="p">(</span><span class="n">n_sg</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">,</span> <span class="n">setups</span><span class="p">,</span> <span class="n">atoms</span><span class="p">):</span>
+    <span class="n">nspins</span> <span class="o">=</span> <span class="n">n_sg</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">spos_ac</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">get_scaled_positions</span><span class="p">()</span> <span class="o">%</span> <span class="mf">1.0</span>
+
+    <span class="n">phi_aj</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">phit_aj</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">setup</span> <span class="ow">in</span> <span class="n">setups</span><span class="p">:</span>
+        <span class="n">phi_j</span><span class="p">,</span> <span class="n">phit_j</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">get_partial_waves</span><span class="p">()[:</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">phi_aj</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">phi_j</span><span class="p">)</span>
+        <span class="n">phit_aj</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">phit_j</span><span class="p">)</span>
+
+    <span class="n">phi</span> <span class="o">=</span> <span class="n">BasisFunctions</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">phi_aj</span><span class="p">)</span>
+    <span class="n">phit</span> <span class="o">=</span> <span class="n">BasisFunctions</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">phit_aj</span><span class="p">)</span>
+    <span class="n">phi</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+    <span class="n">phit</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+
+    <span class="n">a_W</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">phi</span><span class="o">.</span><span class="n">M_W</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">intc</span><span class="p">)</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">phi</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
+        <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">phi</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span><span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
+
+    <span class="n">x_W</span> <span class="o">=</span> <span class="n">phi</span><span class="o">.</span><span class="n">create_displacement_arrays</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="n">I_sa</span> <span class="o">=</span> <span class="n">_calculate_I_a</span><span class="p">(</span><span class="n">nspins</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">,</span> <span class="n">setups</span><span class="p">)</span>
+
+    <span class="n">rho_MM</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">phi</span><span class="o">.</span><span class="n">Mmax</span><span class="p">,</span> <span class="n">phi</span><span class="o">.</span><span class="n">Mmax</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">rho_MM</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nspins</span><span class="p">):</span>
+        <span class="n">M1</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">setup</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">setups</span><span class="p">):</span>
+            <span class="n">ni</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">ni</span>
+            <span class="n">D_sp</span> <span class="o">=</span> <span class="n">D_asp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">a</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">D_asp</span><span class="p">))</span>
+
+            <span class="k">if</span> <span class="n">D_sp</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">D_sp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">nspins</span><span class="p">,</span> <span class="n">ni</span> <span class="o">*</span> <span class="p">(</span><span class="n">ni</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span><span class="p">))</span>
+
+            <span class="n">M2</span> <span class="o">=</span> <span class="n">M1</span> <span class="o">+</span> <span class="n">ni</span>
+            <span class="n">rho_MM</span><span class="p">[</span><span class="n">M1</span><span class="p">:</span><span class="n">M2</span><span class="p">,</span> <span class="n">M1</span><span class="p">:</span><span class="n">M2</span><span class="p">]</span> <span class="o">=</span> <span class="n">unpack2</span><span class="p">(</span><span class="n">D_sp</span><span class="p">[</span><span class="n">s</span><span class="p">])</span>
+            <span class="n">M1</span> <span class="o">=</span> <span class="n">M2</span>
+
+        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">phi</span><span class="o">.</span><span class="n">gd</span><span class="o">.</span><span class="n">n_c</span><span class="p">)</span>
+        <span class="n">phi</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_valence_density_correction</span><span class="p">(</span><span class="n">rho_MM</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_sa</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">x_W</span><span class="p">)</span>
+        <span class="n">phit</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_valence_density_correction</span><span class="p">(</span><span class="o">-</span><span class="n">rho_MM</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_sa</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">x_W</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">n_sg</span><span class="p">,</span> <span class="n">I_sa</span>
+
+
+<span class="k">def</span> <span class="nf">_add_core_density_correction</span><span class="p">(</span><span class="n">n_sg</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">I_sa</span><span class="p">,</span> <span class="n">setups</span><span class="p">,</span> <span class="n">atoms</span><span class="p">):</span>
+    <span class="n">nspins</span> <span class="o">=</span> <span class="n">n_sg</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">spos_ac</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">get_scaled_positions</span><span class="p">()</span> <span class="o">%</span> <span class="mf">1.0</span>
+
+    <span class="n">nc_a</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">nct_a</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">setup</span> <span class="ow">in</span> <span class="n">setups</span><span class="p">:</span>
+        <span class="n">nc</span><span class="p">,</span> <span class="n">nct</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">get_partial_waves</span><span class="p">()[</span><span class="mi">2</span><span class="p">:</span><span class="mi">4</span><span class="p">]</span>
+        <span class="n">nc_a</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">nc</span><span class="p">])</span>
+        <span class="n">nct_a</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">nct</span><span class="p">])</span>
+
+    <span class="n">nc</span> <span class="o">=</span> <span class="n">LFC</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">nc_a</span><span class="p">)</span>
+    <span class="n">nct</span> <span class="o">=</span> <span class="n">LFC</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">nct_a</span><span class="p">)</span>
+    <span class="n">nc</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+    <span class="n">nct</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+
+    <span class="n">a_W</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">nc</span><span class="o">.</span><span class="n">M_W</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">intc</span><span class="p">)</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">nc</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
+        <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">nc</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span><span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
+    <span class="n">scale</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">nspins</span>
+
+    <span class="k">for</span> <span class="n">s</span><span class="p">,</span> <span class="n">I_a</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">I_sa</span><span class="p">):</span>
+        <span class="n">nc</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_core_density_correction</span><span class="p">(</span><span class="n">scale</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_a</span><span class="p">)</span>
+        <span class="n">nct</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_core_density_correction</span><span class="p">(</span><span class="o">-</span><span class="n">scale</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_a</span><span class="p">)</span>
+
+        <span class="n">N_c</span> <span class="o">=</span> <span class="n">gd</span><span class="o">.</span><span class="n">N_c</span>
+        <span class="n">g_ac</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">around</span><span class="p">(</span><span class="n">N_c</span> <span class="o">*</span> <span class="n">spos_ac</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span> <span class="o">%</span> <span class="n">N_c</span> <span class="o">-</span> <span class="n">gd</span><span class="o">.</span><span class="n">beg_c</span>
+
+        <span class="k">for</span> <span class="n">I</span><span class="p">,</span> <span class="n">g_c</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">I_a</span><span class="p">,</span> <span class="n">g_ac</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">g_c</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span> <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">g_c</span> <span class="o">&lt;</span> <span class="n">gd</span><span class="o">.</span><span class="n">n_c</span><span class="p">):</span>
+                <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">][</span><span class="nb">tuple</span><span class="p">(</span><span class="n">g_c</span><span class="p">)]</span> <span class="o">-=</span> <span class="n">I</span> <span class="o">/</span> <span class="n">gd</span><span class="o">.</span><span class="n">dv</span>
+
+    <span class="k">return</span> <span class="n">n_sg</span>
+
+
 <span class="k">def</span> <span class="nf">_get_all_electron_density</span><span class="p">(</span>
-        <span class="n">nt_sG</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">setups</span><span class="p">,</span> <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">nt_sG</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">setups</span><span class="p">,</span> <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
 <span class="p">):</span>
     <span class="n">nspins</span> <span class="o">=</span> <span class="n">nt_sG</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
     <span class="n">spos_ac</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">get_scaled_positions</span><span class="p">()</span> <span class="o">%</span> <span class="mf">1.0</span>
@@ -1247,27 +1354,27 @@ title="Open an issue"
     <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">phi</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
         <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">phi</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
-        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span><span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span> <span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
         <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
 
     <span class="n">x_W</span> <span class="o">=</span> <span class="n">phi</span><span class="o">.</span><span class="n">create_displacement_arrays</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
 
     <span class="n">rho_MM</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">phi</span><span class="o">.</span><span class="n">Mmax</span><span class="p">,</span> <span class="n">phi</span><span class="o">.</span><span class="n">Mmax</span><span class="p">))</span>
+
     <span class="k">for</span> <span class="n">s</span><span class="p">,</span> <span class="n">I_a</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">I_sa</span><span class="p">):</span>
         <span class="n">M1</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">setup</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">setups</span><span class="p">):</span>
             <span class="n">ni</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">ni</span>
             <span class="n">D_sp</span> <span class="o">=</span> <span class="n">D_asp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">a</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">D_asp</span><span class="p">))</span>
+
             <span class="k">if</span> <span class="n">D_sp</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="n">D_sp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">nspins</span><span class="p">,</span> <span class="n">ni</span> <span class="o">*</span> <span class="p">(</span><span class="n">ni</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span><span class="p">))</span>
+                <span class="n">D_sp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">nspins</span><span class="p">,</span> <span class="n">ni</span> <span class="o">*</span> <span class="p">(</span><span class="n">ni</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span><span class="p">))</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">I_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">Nct</span> <span class="o">/</span> <span class="n">nspins</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">pi</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span>
                     <span class="n">D_sp</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">setup</span><span class="o">.</span><span class="n">Delta_pL</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span>
                 <span class="p">)</span>
                 <span class="n">I_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span> <span class="o">-=</span> <span class="n">setup</span><span class="o">.</span><span class="n">Nc</span> <span class="o">/</span> <span class="n">nspins</span>
 
-            <span class="c1"># rank = D_asp.partition.rank_a[a]</span>
-            <span class="c1"># D_asp.partition.comm.broadcast(D_sp, rank)</span>
             <span class="n">M2</span> <span class="o">=</span> <span class="n">M1</span> <span class="o">+</span> <span class="n">ni</span>
             <span class="n">rho_MM</span><span class="p">[</span><span class="n">M1</span><span class="p">:</span><span class="n">M2</span><span class="p">,</span> <span class="n">M1</span><span class="p">:</span><span class="n">M2</span><span class="p">]</span> <span class="o">=</span> <span class="n">unpack2</span><span class="p">(</span><span class="n">D_sp</span><span class="p">[</span><span class="n">s</span><span class="p">])</span>
             <span class="n">M1</span> <span class="o">=</span> <span class="n">M2</span>
@@ -1280,7 +1387,7 @@ title="Open an issue"
     <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">nc</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
         <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">nc</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
-        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span><span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span> <span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
         <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
     <span class="n">scale</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">nspins</span>
 
@@ -1296,7 +1403,7 @@ title="Open an issue"
             <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">g_c</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span> <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">g_c</span> <span class="o">&lt;</span> <span class="n">gd</span><span class="o">.</span><span class="n">n_c</span><span class="p">):</span>
                 <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">][</span><span class="nb">tuple</span><span class="p">(</span><span class="n">g_c</span><span class="p">)]</span> <span class="o">-=</span> <span class="n">I</span> <span class="o">/</span> <span class="n">gd</span><span class="o">.</span><span class="n">dv</span>
 
-    <span class="k">return</span> <span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">Bohr</span> <span class="o">**</span> <span class="mi">3</span>
+    <span class="k">return</span> <span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">Bohr</span><span class="o">**</span><span class="mi">3</span>
 
 
 <div class="viewcode-block" id="GPAWPotential"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential">[docs]</a><span class="k">class</span> <span class="nc">GPAWPotential</span><span class="p">(</span><span class="n">_PotentialBuilder</span><span class="p">):</span>
@@ -1357,21 +1464,22 @@ title="Open an issue"
 <span class="sd">        The device used for calculating the potential, &#39;cpu&#39; or &#39;gpu&#39;. The default is determined by the user</span>
 <span class="sd">        configuration file.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+
 <div class="viewcode-block" id="GPAWPotential.__init__"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
-            <span class="bp">self</span><span class="p">,</span>
-            <span class="n">calculators</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">],</span>
-            <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">slice_thickness</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-            <span class="n">exit_planes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">plane</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
-            <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
-            <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-            <span class="n">frozen_phonons</span><span class="p">:</span> <span class="n">BaseFrozenPhonons</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-            <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
-            <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
-            <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">calculators</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">],</span>
+        <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">slice_thickness</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">exit_planes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">plane</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+        <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+        <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">frozen_phonons</span><span class="p">:</span> <span class="n">BaseFrozenPhonons</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 
         <span class="k">if</span> <span class="n">GPAW</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -1468,26 +1576,16 @@ title="Open an issue"
             <span class="n">gd</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">gd</span>
             <span class="n">nt_sG</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">nt_sG</span>
 
-        <span class="c1"># gridrefinement = self.gridrefinement</span>
-        <span class="c1"># if np.isscalar(self.gridrefinement):</span>
-        <span class="c1">#    gridrefinement = (gridrefinement,) * 3</span>
-
-        <span class="c1"># if not all([r == 1 for r in gridrefinement]):</span>
-        <span class="c1">#    cell_cv = gd.cell_cv</span>
-        <span class="c1">#    N_c = tuple(n_c * r for n_c, r in zip(gd.N_c, gridrefinement))</span>
-        <span class="c1">#    nt_sG = fft_interpolate(nt_sG, new_shape=N_c).astype(np.float64)</span>
-        <span class="c1">#    gd = gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)</span>
-
         <span class="n">random_atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">randomize</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
 
-        <span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">setup_mode</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">setup_xc</span><span class="p">)</span>
-        <span class="n">gpaw</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">random_atoms</span><span class="p">)</span>
+        <span class="n">calc</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">setup_mode</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">setup_xc</span><span class="p">)</span>
+        <span class="n">calc</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">random_atoms</span><span class="p">)</span>
 
         <span class="k">return</span> <span class="n">_get_all_electron_density</span><span class="p">(</span>
             <span class="n">nt_sG</span><span class="o">=</span><span class="n">nt_sG</span><span class="p">,</span>
             <span class="n">gd</span><span class="o">=</span><span class="n">gd</span><span class="p">,</span>
             <span class="n">D_asp</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">D_asp</span><span class="p">,</span>
-            <span class="n">setups</span><span class="o">=</span><span class="n">gpaw</span><span class="o">.</span><span class="n">setups</span><span class="p">,</span>
+            <span class="n">setups</span><span class="o">=</span><span class="n">calc</span><span class="o">.</span><span class="n">setups</span><span class="p">,</span>
             <span class="n">gridrefinement</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gridrefinement</span><span class="p">,</span>
             <span class="n">atoms</span><span class="o">=</span><span class="n">random_atoms</span><span class="p">,</span>
         <span class="p">)</span>
@@ -1533,7 +1631,7 @@ title="Open an issue"
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_density</span><span class="p">()</span>
 
         <span class="k">for</span> <span class="n">slic</span> <span class="ow">in</span> <span class="n">_generate_slices</span><span class="p">(</span>
-                <span class="n">array</span><span class="p">,</span> <span class="n">ewald_potential</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="n">last_slice</span>
+            <span class="n">array</span><span class="p">,</span> <span class="n">ewald_potential</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="n">last_slice</span>
         <span class="p">):</span>
             <span class="k">yield</span> <span class="n">slic</span></div>
 
@@ -1591,7 +1689,7 @@ title="Open an issue"
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="p">,</span> <span class="n">FrozenPhonons</span><span class="p">):</span>
             <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">fp</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">(</span><span class="n">chunks</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="n">lazy</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">(</span><span class="n">chunks</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="n">lazy</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
             <span class="p">):</span>
                 <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
                     <span class="n">block</span> <span class="o">=</span> <span class="n">dask</span><span class="o">.</span><span class="n">delayed</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">)(</span><span class="n">calculators</span><span class="p">,</span> <span class="n">fp</span><span class="p">)</span>
@@ -1639,6 +1737,7 @@ title="Open an issue"
     <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+
 <div class="viewcode-block" id="GPAWParametrization.__init__"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_potential_functions</span> <span class="o">=</span> <span class="p">{}</span></div>
 
@@ -1706,7 +1805,7 @@ title="Open an issue"
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">ae</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_atom</span><span class="p">(</span><span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">)</span>
         <span class="n">r</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">rgd</span><span class="o">.</span><span class="n">r_g</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
-        <span class="n">n</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span> <span class="o">**</span> <span class="mi">3</span>
+        <span class="n">n</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span><span class="o">**</span><span class="mi">3</span>
         <span class="k">return</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">,</span> <span class="n">bounds_error</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="GPAWParametrization.potential"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.potential">[docs]</a>    <span class="k">def</span> <span class="nf">potential</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">charge</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">):</span>
@@ -1733,7 +1832,7 @@ title="Open an issue"
 
         <span class="n">vr</span> <span class="o">=</span> <span class="p">(</span>
             <span class="k">lambda</span> <span class="n">r</span><span class="p">:</span> <span class="n">atomic_numbers</span><span class="p">[</span><span class="n">symbol</span><span class="p">]</span> <span class="o">/</span> <span class="n">r</span> <span class="o">/</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">eps0</span><span class="p">)</span>
-                      <span class="o">+</span> <span class="n">ve</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">/</span> <span class="n">r</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Hartree</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
+            <span class="o">+</span> <span class="n">ve</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">/</span> <span class="n">r</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Hartree</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
         <span class="p">)</span>
         <span class="k">return</span> <span class="n">vr</span></div></div>
 </pre></div>

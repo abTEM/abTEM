@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
-    <script src="../_static/sphinx_highlight.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Basic examples" href="basics.html" />
     <link rel="prev" title="Overview" href="overview.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1135,11 +1148,11 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="installation">
-<h1>Installation<a class="headerlink" href="#installation" title="Permalink to this heading">#</a></h1>
+<h1>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">#</a></h1>
 <p>There are two ways to install the <em>ab</em>TEM package, using conda or pip:</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="0625de1e-789b-437d-ac2e-c8b3f6a0b2b7" name="6cb5cfa2-f63a-4f3a-b4d2-c9a1e43d0e52" type="radio">
-</input><label class="sd-tab-label" for="0625de1e-789b-437d-ac2e-c8b3f6a0b2b7">
+<input checked="checked" id="e2460aba-1427-40c7-8779-593789769717" name="f863a8cd-f81e-468b-9dd7-dfa57cb965e1" type="radio">
+</input><label class="sd-tab-label" for="e2460aba-1427-40c7-8779-593789769717">
 conda</label><div class="sd-tab-content docutils">
 <p>Install <em>ab</em>TEM using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">abtem</span>
@@ -1147,8 +1160,8 @@ conda</label><div class="sd-tab-content docutils">
 </div>
 <p>(Instructions on how to install miniconda can be found <a class="reference external" href="https://docs.conda.io/en/latest/miniconda.html">here</a>.)</p>
 </div>
-<input id="d1965204-3343-436a-bf1b-b0ffb139c2b7" name="6cb5cfa2-f63a-4f3a-b4d2-c9a1e43d0e52" type="radio">
-</input><label class="sd-tab-label" for="d1965204-3343-436a-bf1b-b0ffb139c2b7">
+<input id="0088dbb9-c500-481a-9b56-c0afbf32d2b3" name="f863a8cd-f81e-468b-9dd7-dfa57cb965e1" type="radio">
+</input><label class="sd-tab-label" for="0088dbb9-c500-481a-9b56-c0afbf32d2b3">
 pip</label><div class="sd-tab-content docutils">
 <p>Install <em>ab</em>TEM using pip:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">abtem</span>
@@ -1161,23 +1174,23 @@ pip</label><div class="sd-tab-content docutils">
 </div>
 </div>
 <section id="optional-dependencies">
-<h2>Optional dependencies<a class="headerlink" href="#optional-dependencies" title="Permalink to this heading">#</a></h2>
+<h2>Optional dependencies<a class="headerlink" href="#optional-dependencies" title="Permalink to this headline">#</a></h2>
 <section id="gpaw-not-available-on-windows">
-<h3>GPAW (not available on Windows)<a class="headerlink" href="#gpaw-not-available-on-windows" title="Permalink to this heading">#</a></h3>
+<h3>GPAW (not available on Windows)<a class="headerlink" href="#gpaw-not-available-on-windows" title="Permalink to this headline">#</a></h3>
 <p>Some features of <em>ab</em>TEM, such as calculating potentials from DFT, require a working installation
 of <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/index.html">GPAW</a>. See <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/install.html">here</a> for
 detailed installation instructions.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="f1cfa0f6-f218-4a75-9ffd-4e74cfba6678" name="cd96b2bc-29bb-42fc-af35-e11811c25379" type="radio">
-</input><label class="sd-tab-label" for="f1cfa0f6-f218-4a75-9ffd-4e74cfba6678">
+<input checked="checked" id="ca06f64a-904c-44c4-a7e0-0a70441873b6" name="d094f1e6-e0ab-490d-b366-a278a5b91e5f" type="radio">
+</input><label class="sd-tab-label" for="ca06f64a-904c-44c4-a7e0-0a70441873b6">
 conda</label><div class="sd-tab-content docutils">
 <p>Install GPAW using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">gpaw</span>
 </pre></div>
 </div>
 </div>
-<input id="9d665d14-deb1-4f43-bed9-0bc08e80b373" name="cd96b2bc-29bb-42fc-af35-e11811c25379" type="radio">
-</input><label class="sd-tab-label" for="9d665d14-deb1-4f43-bed9-0bc08e80b373">
+<input id="274ae033-04be-453c-b520-d85db20c322b" name="d094f1e6-e0ab-490d-b366-a278a5b91e5f" type="radio">
+</input><label class="sd-tab-label" for="274ae033-04be-453c-b520-d85db20c322b">
 pip</label><div class="sd-tab-content docutils">
 <p>Install GPAW using pip:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">gpaw</span>
@@ -1191,20 +1204,20 @@ pip</label><div class="sd-tab-content docutils">
 </div>
 </section>
 <section id="gpu-only-nvidia">
-<h3>GPU (only Nvidia)<a class="headerlink" href="#gpu-only-nvidia" title="Permalink to this heading">#</a></h3>
+<h3>GPU (only Nvidia)<a class="headerlink" href="#gpu-only-nvidia" title="Permalink to this headline">#</a></h3>
 <p>GPU calculations with <em>ab</em>TEM require a working installation of <a class="reference external" href="https://cupy.dev/">CuPy</a> and compatible hardware.
 See <a class="reference external" href="https://docs.cupy.dev/en/stable/install.html">here</a> for detailed installation instructions.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="cbece3c0-f445-4f9d-98a6-5e02bad4fa9b" name="b183dd8c-f32d-43f9-a611-371bda5199fc" type="radio">
-</input><label class="sd-tab-label" for="cbece3c0-f445-4f9d-98a6-5e02bad4fa9b">
+<input checked="checked" id="e1825410-f2ba-4ce5-aaa3-01f4071e6def" name="fbb18c3c-5424-4f40-8570-fb87a9dd5f4f" type="radio">
+</input><label class="sd-tab-label" for="e1825410-f2ba-4ce5-aaa3-01f4071e6def">
 conda</label><div class="sd-tab-content docutils">
 <p>Install CuPy using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">cupy</span>
 </pre></div>
 </div>
 </div>
-<input id="e113cb80-eebb-446c-b67f-c505ba732e36" name="b183dd8c-f32d-43f9-a611-371bda5199fc" type="radio">
-</input><label class="sd-tab-label" for="e113cb80-eebb-446c-b67f-c505ba732e36">
+<input id="8f397f28-5fa9-4444-80f9-a9e7f6ae82d3" name="fbb18c3c-5424-4f40-8570-fb87a9dd5f4f" type="radio">
+</input><label class="sd-tab-label" for="8f397f28-5fa9-4444-80f9-a9e7f6ae82d3">
 pip</label><div class="sd-tab-content docutils">
 <p>First, install the <a class="reference external" href="https://developer.nvidia.com/cuda-toolkit">CUDA Toolkit</a>.</p>
 <p>Install CuPy using pip:</p>
@@ -1216,8 +1229,9 @@ pip</label><div class="sd-tab-content docutils">
 </div>
 </section>
 <section id="development">
-<h3>Development<a class="headerlink" href="#development" title="Permalink to this heading">#</a></h3>
-<p>See <a class="reference internal" href="../abtem/contributing.html#library-contributing"><span class="std std-ref">our guide to contributing</span></a> for instructions on a development installation of <em>ab</em>TEM.</p>
+<h3>Development<a class="headerlink" href="#development" title="Permalink to this headline">#</a></h3>
+<p>See <span class="xref myst">our guide to contributing</span> for instructions on a development installation of
+<em>ab</em>TEM.</p>
 </section>
 </section>
 </section>

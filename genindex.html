@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,9 +33,7 @@
     <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
     <script src="_static/jquery.js"></script>
     <script src="_static/underscore.js"></script>
-    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="_static/doctools.js"></script>
-    <script src="_static/sphinx_highlight.js"></script>
     <script src="_static/clipboard.min.js"></script>
     <script src="_static/copybutton.js"></script>
     <script src="_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -54,7 +52,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -108,7 +106,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -882,13 +880,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="abtem/citing.html">
-   Citing
+  <a class="reference internal" href="abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1310,6 +1308,26 @@ title="Open an issue"
       </ul></li>
       <li><a href="reference/api/_autosummary/abtem.detectors.AnnularDetector.html#abtem.detectors.AnnularDetector">AnnularDetector (class in abtem.detectors)</a>
 </li>
+      <li><a href="reference/api/_autosummary/abtem.waves.BaseWaves.html#abtem.waves.BaseWaves.antialias_cutoff_gpts">antialias_cutoff_gpts (abtem.waves.BaseWaves property)</a>
+
+      <ul>
+        <li><a href="reference/api/_autosummary/abtem.waves.PlaneWave.html#abtem.waves.PlaneWave.antialias_cutoff_gpts">(abtem.waves.PlaneWave property)</a>
+</li>
+        <li><a href="reference/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.antialias_cutoff_gpts">(abtem.waves.Probe property)</a>
+</li>
+        <li><a href="reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.antialias_cutoff_gpts">(abtem.waves.Waves property)</a>
+</li>
+      </ul></li>
+      <li><a href="reference/api/_autosummary/abtem.waves.BaseWaves.html#abtem.waves.BaseWaves.antialias_valid_gpts">antialias_valid_gpts (abtem.waves.BaseWaves property)</a>
+
+      <ul>
+        <li><a href="reference/api/_autosummary/abtem.waves.PlaneWave.html#abtem.waves.PlaneWave.antialias_valid_gpts">(abtem.waves.PlaneWave property)</a>
+</li>
+        <li><a href="reference/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.antialias_valid_gpts">(abtem.waves.Probe property)</a>
+</li>
+        <li><a href="reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.antialias_valid_gpts">(abtem.waves.Waves property)</a>
+</li>
+      </ul></li>
       <li><a href="reference/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.aperture">aperture (abtem.waves.Probe property)</a>
 </li>
       <li><a href="reference/api/_autosummary/abtem.transfer.Aperture.html#abtem.transfer.Aperture">Aperture (class in abtem.transfer)</a>
@@ -1932,14 +1950,6 @@ title="Open an issue"
         <li><a href="reference/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.generate_slices">(abtem.potentials.TransmissionFunction method)</a>
 </li>
       </ul></li>
-      <li><a href="reference/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.get_chunk">get_chunk() (abtem.potentials.PotentialArray method)</a>
-
-      <ul>
-        <li><a href="reference/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.get_chunk">(abtem.potentials.TransmissionFunction method)</a>
-</li>
-      </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="reference/api/_autosummary/abtem.scan.BaseScan.html#abtem.scan.BaseScan.get_positions">get_positions() (abtem.scan.BaseScan method)</a>
 
       <ul>
@@ -1952,6 +1962,8 @@ title="Open an issue"
         <li><a href="reference/api/_autosummary/abtem.scan.SourceOffset.html#abtem.scan.SourceOffset.get_positions">(abtem.scan.SourceOffset method)</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="reference/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization">GPAWParametrization (class in abtem.gpaw)</a>
 </li>
       <li><a href="reference/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential">GPAWPotential (class in abtem.gpaw)</a>
@@ -2050,18 +2062,20 @@ title="Open an issue"
         <li><a href="reference/api/_autosummary/abtem.detectors.SegmentedDetector.html#abtem.detectors.SegmentedDetector.inner">(abtem.detectors.SegmentedDetector property)</a>
 </li>
       </ul></li>
+      <li><a href="reference/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.integrate">integrate() (abtem.measurements.PolarMeasurements method)</a>
+</li>
       <li><a href="reference/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.integrate_gradient">integrate_gradient() (abtem.measurements.Images method)</a>
 </li>
       <li><a href="reference/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html#abtem.charge_density.integrate_gradient_fourier">integrate_gradient_fourier() (in module abtem.charge_density)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="reference/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.integrate_radial">integrate_radial() (abtem.measurements.DiffractionPatterns method)</a>
 
       <ul>
         <li><a href="reference/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.integrate_radial">(abtem.measurements.PolarMeasurements method)</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="reference/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.integrated_center_of_mass">integrated_center_of_mass() (abtem.measurements.DiffractionPatterns method)</a>
 </li>
       <li><a href="reference/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.intensity">intensity() (abtem.measurements.BaseMeasurement method)</a>

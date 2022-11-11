@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="PotentialArray" href="abtem.potentials.PotentialArray.html" />
     <link rel="prev" title="CrystalPotential" href="abtem.potentials.CrystalPotential.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,294 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.Potential">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Potential
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.build">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.build()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.periodic">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.periodic
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.slice_thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.slice_thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1338,277 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.Potential">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     Potential
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.build">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.build()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.periodic">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.periodic
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.slice_thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.slice_thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.Potential.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       Potential.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1617,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="potential">
-<h1>Potential<a class="headerlink" href="#potential" title="Permalink to this heading">#</a></h1>
+<h1>Potential<a class="headerlink" href="#potential" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.potentials.Potential">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.potentials.</span></span><span class="sig-name descname"><span class="pre">Potential</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parametrization</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'lobato'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">projection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'infinite'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integral_method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'xy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">origin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">box</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">periodic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integrator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#Potential"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.Potential" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_PotentialBuilder</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.potentials._PotentialBuilder</span></code></p>
 <p>Calculate the electrostatic potential of a set of atoms or frozen phonon configurations. The potential is calculated
 with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic potentials.</p>
 <dl class="field-list simple">
@@ -1632,7 +1092,7 @@ the electrostatic potential(s).</p></li>
 <li><p><strong>gpts</strong> (<em>one</em><em> or </em><em>two int</em><em>, </em><em>optional</em>) – Number of grid points in <cite>x</cite> and <cite>y</cite> describing each slice of the potential. Provide either “sampling” (spacing
 between consecutive grid points) or “gpts” (total number of grid points).</p></li>
 <li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Sampling of the potential in <cite>x</cite> and <cite>y</cite> [1 / Å]. Provide either “sampling” or “gpts”.</p></li>
-<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence</em><em> of </em><em>float</em><em>, </em><em>optional</em>) – Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
+<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence of float</em><em>, </em><em>optional</em>) – Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
 If given as a float, the number of slices is calculated by dividing the slice thickness into the <cite>z</cite>-height of supercell.
 The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown
 if the sum of slice thicknesses is not equal to the height of the atoms.</p></li>
@@ -1643,11 +1103,11 @@ See the citation guide for references.</p></li>
 the infinite potential projection of each atom will be assigned to a single slice.</p></li>
 <li><p><strong>integral_method</strong> (<em>{'quadrature'</em><em>, </em><em>'analytic'}</em><em>, </em><em>optional</em>) – Specifies whether to perform projection integrals in real space or reciprocal space. By default, finite projection
 integrals are computed in real space and infinite projection integrals are performed in reciprocal space.</p></li>
-<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple</em><em> of </em><em>int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
+<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple of int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
 Providing <cite>exit_planes</cite> as a tuple of int indicates that the tuple contains the slice indices after which an
 exit plane is desired, and hence during a multislice simulation a measurement is created. If <cite>exit_planes</cite> is
 an integer a measurement will be collected every <cite>exit_planes</cite> number of slices.</p></li>
-<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples</em><em> of </em><em>three float</em><em>, </em><em>optional</em>) – The plane relative to the provided atoms mapped to <cite>xy</cite> plane of the potential, i.e. provided plane is
+<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples of three float</em><em>, </em><em>optional</em>) – The plane relative to the provided atoms mapped to <cite>xy</cite> plane of the potential, i.e. provided plane is
 perpendicular to the propagation direction. If string, it must be a concatenation of two of ‘x’, ‘y’ and ‘z’;
 the default value ‘xy’ indicates that potential slices are cuts along the <cite>xy</cite>-plane of the atoms.
 The plane may also be specified with two arbitrary 3D vectors, which are mapped to the <cite>x</cite> and <cite>y</cite> directions of
@@ -1683,7 +1143,7 @@ potential, which may not preserve periodicity.</p></li>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.Potential.__init__" title="abtem.potentials.Potential.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>([atoms, gpts, sampling, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.build" title="abtem.potentials.Potential.build"><code class="xref py py-obj docutils literal notranslate"><span class="pre">build</span></code></a>([first_slice, last_slice, chunks, lazy])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.build" title="abtem.potentials.Potential.build"><code class="xref py py-obj docutils literal notranslate"><span class="pre">build</span></code></a>([first_slice, last_slice, max_batch, lazy])</p></td>
 <td><p>Build the potential.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.Potential.copy" title="abtem.potentials.Potential.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code></a>()</p></td>
@@ -1720,6 +1180,9 @@ potential, which may not preserve periodicity.</p></li>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.show" title="abtem.potentials.Potential.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>([project])</p></td>
 <td><p>Show the potential projection.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">transformed_atoms</span></code>()</p></td>
+<td><p></p></td>
 </tr>
 </tbody>
 </table>
@@ -1878,7 +1341,7 @@ potential, which may not preserve periodicity.</p></li>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.Potential.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.Potential.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1900,15 +1363,14 @@ potential, which may not preserve periodicity.</p></li>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.build">
-<span class="sig-name descname"><span class="pre">build</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lazy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.potentials.Potential.build" title="Permalink to this definition">#</a></dt>
+<span class="sig-name descname"><span class="pre">build</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_batch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lazy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.potentials.Potential.build" title="Permalink to this definition">#</a></dt>
 <dd><p>Build the potential.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>first_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the first slice of the generated potential.</p></li>
 <li><p><strong>last_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the last slice of the generated potential</p></li>
-<li><p><strong>TODO</strong> (<em>replace with max_batches</em>) – </p></li>
-<li><p><strong>chunks</strong> (<em>int</em><em> or </em><em>tuple</em><em> of </em><em>int</em><em> or </em><em>tuple</em><em> of </em><em>tuple</em><em> of </em><em>int</em>) – Number of slices to include in each Dask worker batch. Default is 1.</p></li>
+<li><p><strong>max_batch</strong> (<em>int</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Maximum number of slices to calculate in task. Default is 1.</p></li>
 <li><p><strong>lazy</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
 value set in the configuration file.</p></li>
 </ul>
@@ -1955,7 +1417,7 @@ value set in the configuration file.</p></li>
 <dd><p>Split the ensemble into an array of smaller ensembles.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code></p>
@@ -1991,7 +1453,7 @@ value set in the configuration file.</p></li>
 <dd><p>Generate chunks of the ensemble.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2029,7 +1491,7 @@ value set in the configuration file.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.potentials.Potential.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.potentials.Potential.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2128,8 +1590,8 @@ value set in the configuration file.</p></li>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>index</strong> (<em>tuple</em><em> of </em><em>ints</em>) – Index of selected block.</p></li>
-<li><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p></li>
+<li><p><strong>index</strong> (<em>tuple of ints</em>) – Index of selected block.</p></li>
+<li><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p></li>
 </ul>
 </dd>
 </dl>
@@ -2211,7 +1673,7 @@ of the potential slices when this keyword set to False.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

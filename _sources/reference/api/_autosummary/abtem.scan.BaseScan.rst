@@ -22,6 +22,7 @@ BaseScan
       ~BaseScan.ensemble_blocks
       ~BaseScan.evaluate
       ~BaseScan.generate_blocks
+      ~BaseScan.generate_blocks_by_extents
       ~BaseScan.get_positions
       ~BaseScan.get_weights
       ~BaseScan.select_block

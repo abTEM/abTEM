@@ -22,6 +22,7 @@ CustomScan
       ~CustomScan.ensemble_blocks
       ~CustomScan.evaluate
       ~CustomScan.generate_blocks
+      ~CustomScan.generate_blocks_by_extents
       ~CustomScan.get_positions
       ~CustomScan.get_weights
       ~CustomScan.match_probe

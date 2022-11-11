@@ -1,4 +1,4 @@
-﻿Probe
+Probe
 =====
 
 .. currentmodule:: abtem.waves

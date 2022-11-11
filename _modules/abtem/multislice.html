@@ -1,11 +1,11 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>abtem.multislice &#8212; abTEM Documentation</title>
+    <title>abtem.multislice &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,9 +33,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -54,7 +52,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -96,7 +94,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
@@ -108,7 +106,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -297,6 +295,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -867,13 +880,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1042,6 +1055,7 @@ title="Open an issue"
     <span class="kn">from</span> <span class="nn">abtem.waves</span> <span class="kn">import</span> <span class="n">Waves</span>
     <span class="kn">from</span> <span class="nn">abtem.waves</span> <span class="kn">import</span> <span class="n">BaseWaves</span>
 
+<span class="kn">import</span> <span class="nn">mkl_fft</span>
 
 <span class="k">def</span> <span class="nf">_fresnel_propagator_array</span><span class="p">(</span>
     <span class="n">thickness</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
@@ -1197,9 +1211,20 @@ title="Open an issue"
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_array</span><span class="p">(</span><span class="n">waves</span><span class="p">,</span> <span class="n">thickness</span><span class="p">)</span>
 
-        <span class="n">waves</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="n">fft2_convolve</span><span class="p">(</span><span class="n">waves</span><span class="o">.</span><span class="n">array</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="n">overwrite_x</span><span class="p">)</span>
+        <span class="n">waves</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="n">fft2_convolve</span><span class="p">(</span><span class="n">waves</span><span class="o">.</span><span class="n">array</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># waves._array = mkl_fft.fft2(waves._array, overwrite_x=True)</span>
+
+        <span class="c1"># waves._array *= array</span>
+        <span class="c1">#</span>
+        <span class="c1"># #try:</span>
+        <span class="c1"># #    x *= kernel</span>
+        <span class="c1"># #except ValueError:</span>
+        <span class="c1"># #    x = x * kernel</span>
+        <span class="c1"># waves._array = mkl_fft.ifft2(waves._array, overwrite_x=True)</span>
 
         <span class="k">return</span> <span class="n">waves</span></div></div>
+
+        <span class="c1">#return waves</span>
 
 
 <div class="viewcode-block" id="allocate_multislice_measurements"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html#abtem.multislice.allocate_multislice_measurements">[docs]</a><span class="k">def</span> <span class="nf">allocate_multislice_measurements</span><span class="p">(</span>

@@ -1,4 +1,4 @@
-﻿PlaneWave
+PlaneWave
 =========
 
 .. currentmodule:: abtem.waves

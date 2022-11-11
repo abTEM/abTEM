@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="TransmissionFunction" href="abtem.potentials.TransmissionFunction.html" />
     <link rel="prev" title="Potential" href="abtem.potentials.Potential.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,348 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     PotentialArray
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.get_chunk">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.get_chunk()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.images">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.images()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.project">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.project()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.transmission_function">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.transmission_function()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.transmit">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.transmit()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1392,331 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     PotentialArray
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.device
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.ensemble_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.ensemble_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.extent">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.extent
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.fourier_space_sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.fourier_space_sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.generate_blocks">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.generate_blocks()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.generate_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.generate_slices()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.get_chunk">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.get_chunk()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.gpts">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.gpts
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.grid
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.images">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.images()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.match_grid">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.match_grid()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_exit_planes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_exit_planes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.num_slices">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.num_slices
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.project">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.project()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.sampling">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.sampling
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.select_block">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.select_block()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.slice_limits">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.slice_limits
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.thickness">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.thickness
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.tile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.tile()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.transmission_function">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.transmission_function()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.potentials.PotentialArray.transmit">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       PotentialArray.transmit()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1725,11 +1077,11 @@ title="Print to PDF"
               <div>
                 
   <section id="potentialarray">
-<h1>PotentialArray<a class="headerlink" href="#potentialarray" title="Permalink to this heading">#</a></h1>
+<h1>PotentialArray<a class="headerlink" href="#potentialarray" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.potentials.PotentialArray">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.potentials.</span></span><span class="sig-name descname"><span class="pre">PotentialArray</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#PotentialArray"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.PotentialArray" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><code class="xref py py-class docutils literal notranslate"><span class="pre">BasePotential</span></code></a>, <code class="xref py py-class docutils literal notranslate"><span class="pre">HasArray</span></code></p>
+<dd><p>Bases: <a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.potentials.BasePotential</span></code></a>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.array.HasArray</span></code></p>
 <p>The potential array represents slices of the electrostatic potential as an array. All other potentials build
 potential arrays.</p>
 <dl class="field-list simple">
@@ -1741,11 +1093,11 @@ spatial dimensions.</p></li>
 If a sequence, the length must equal the length of the potential array.</p></li>
 <li><p><strong>extent</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Lateral extent of the potential [Å].</p></li>
 <li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Lateral sampling of the potential [1 / Å].</p></li>
-<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple</em><em> of </em><em>int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
+<li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple of int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
 Providing <cite>exit_planes</cite> as a tuple of int indicates that the tuple contains the slice indices after which an
 exit plane is desired, and hence during a multislice simulation a measurement is created. If <cite>exit_planes</cite> is
 an integer a measurement will be collected every <cite>exit_planes</cite> number of slices.</p></li>
-<li><p><strong>ensemble_axes_metadata</strong> (<em>list</em><em> of </em><em>AxesMetadata</em>) – Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em>) – A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
 from the waves.</p></li>
 </ul>
@@ -1812,10 +1164,7 @@ from the waves.</p></li>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.generate_slices" title="abtem.potentials.PotentialArray.generate_slices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_slices</span></code></a>([first_slice, last_slice])</p></td>
 <td><p>Generate the slices for the potential.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.get_chunk" title="abtem.potentials.PotentialArray.get_chunk"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_chunk</span></code></a>(first_slice, last_slice)</p></td>
-<td><p>TODO: check if can be made internal or deleted.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1823,13 +1172,13 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.images" title="abtem.potentials.PotentialArray.images"><code class="xref py py-obj docutils literal notranslate"><span class="pre">images</span></code></a>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.images" title="abtem.potentials.PotentialArray.images"><code class="xref py py-obj docutils literal notranslate"><span class="pre">images</span></code></a>()</p></td>
 <td><p>Convert slices of the potential to a stack of images.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.match_grid" title="abtem.potentials.PotentialArray.match_grid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">match_grid</span></code></a>(other[, check_match])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.match_grid" title="abtem.potentials.PotentialArray.match_grid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">match_grid</span></code></a>(other[, check_match])</p></td>
 <td><p>Match the grid to another object with a Grid.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1837,7 +1186,7 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mean</span></code>([axes])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mean</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1845,7 +1194,7 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1853,19 +1202,19 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.project" title="abtem.potentials.PotentialArray.project"><code class="xref py py-obj docutils literal notranslate"><span class="pre">project</span></code></a>()</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.project" title="abtem.potentials.PotentialArray.project"><code class="xref py py-obj docutils literal notranslate"><span class="pre">project</span></code></a>()</p></td>
 <td><p>Create a 2D array representing a projected image of the potential(s).</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.select_block" title="abtem.potentials.PotentialArray.select_block"><code class="xref py py-obj docutils literal notranslate"><span class="pre">select_block</span></code></a>(index, chunks)</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.select_block" title="abtem.potentials.PotentialArray.select_block"><code class="xref py py-obj docutils literal notranslate"><span class="pre">select_block</span></code></a>(index, chunks)</p></td>
 <td><p>Select a block from the ensemble.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.show" title="abtem.potentials.PotentialArray.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>([project])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.show" title="abtem.potentials.PotentialArray.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>([project])</p></td>
 <td><p>Show the potential projection.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1873,7 +1222,7 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">std</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">std</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1881,7 +1230,7 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>([axes])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1889,10 +1238,10 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.tile" title="abtem.potentials.PotentialArray.tile"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tile</span></code></a>(multiples)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.tile" title="abtem.potentials.PotentialArray.tile"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tile</span></code></a>(multiples)</p></td>
 <td><p>Tile the potential.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_cpu</span></code>()</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_cpu</span></code>()</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1900,10 +1249,10 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_delayed</span></code>()</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_delayed</span></code>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_gpu</span></code>()</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_gpu</span></code>()</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1911,19 +1260,19 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code>()</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.to_zarr" title="abtem.potentials.PotentialArray.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.to_zarr" title="abtem.potentials.PotentialArray.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
 <td><p>Write wave functions to a zarr file.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.transmission_function" title="abtem.potentials.PotentialArray.transmission_function"><code class="xref py py-obj docutils literal notranslate"><span class="pre">transmission_function</span></code></a>(energy)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.transmission_function" title="abtem.potentials.PotentialArray.transmission_function"><code class="xref py py-obj docutils literal notranslate"><span class="pre">transmission_function</span></code></a>(energy)</p></td>
 <td><p>Calculate the transmission functions for each slice for a specific energy.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.transmit" title="abtem.potentials.PotentialArray.transmit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">transmit</span></code></a>(waves[, conjugate])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.transmit" title="abtem.potentials.PotentialArray.transmit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">transmit</span></code></a>(waves[, conjugate])</p></td>
 <td><p>Transmit a wave function through a potential slice.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">visualize_graph</span></code>(**kwargs)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">visualize_graph</span></code>(**kwargs)</p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -2065,7 +1414,7 @@ from the waves.</p></li>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.PotentialArray.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.PotentialArray.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.PotentialArray.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2124,7 +1473,7 @@ from the waves.</p></li>
 <dd><p>Split the ensemble into an array of smaller ensembles.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code></p>
@@ -2178,7 +1527,7 @@ s3:// for remote data.</p>
 <dd><p>Generate chunks of the ensemble.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p>
+<dd class="field-odd"><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2203,12 +1552,6 @@ s3:// for remote data.</p>
 </dl>
 </dd></dl>
 
-<dl class="py method">
-<dt class="sig sig-object py" id="abtem.potentials.PotentialArray.get_chunk">
-<span class="sig-name descname"><span class="pre">get_chunk</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#PotentialArray.get_chunk"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.PotentialArray.get_chunk" title="Permalink to this definition">#</a></dt>
-<dd><p>TODO: check if can be made internal or deleted.</p>
-</dd></dl>
-
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.PotentialArray.gpts">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.potentials.PotentialArray.gpts" title="Permalink to this definition">#</a></dt>
@@ -2222,7 +1565,7 @@ s3:// for remote data.</p>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.PotentialArray.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.potentials.PotentialArray.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.potentials.PotentialArray.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -2330,8 +1673,8 @@ s3:// for remote data.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>index</strong> (<em>tuple</em><em> of </em><em>ints</em>) – Index of selected block.</p></li>
-<li><p><strong>chunks</strong> (<em>iterable</em><em> of </em><em>tuples</em>) – Block sizes along each dimension.</p></li>
+<li><p><strong>index</strong> (<em>tuple of ints</em>) – Index of selected block.</p></li>
+<li><p><strong>chunks</strong> (<em>iterable of tuples</em>) – Block sizes along each dimension.</p></li>
 </ul>
 </dd>
 </dl>
@@ -2475,7 +1818,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

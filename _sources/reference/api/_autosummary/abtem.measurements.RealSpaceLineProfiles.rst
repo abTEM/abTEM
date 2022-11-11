@@ -18,6 +18,7 @@ RealSpaceLineProfiles
    
       ~RealSpaceLineProfiles.__init__
       ~RealSpaceLineProfiles.abs
+      ~RealSpaceLineProfiles.add_to_plot
       ~RealSpaceLineProfiles.check_is_compatible
       ~RealSpaceLineProfiles.compute
       ~RealSpaceLineProfiles.copy

@@ -28,6 +28,7 @@ Potential
       ~Potential.project
       ~Potential.select_block
       ~Potential.show
+      ~Potential.transformed_atoms
    
    
 

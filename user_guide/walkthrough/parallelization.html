@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -59,7 +57,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Appendix" href="../appendix/appendix.html" />
     <link rel="prev" title="Frozen phonons" href="frozen_phonons.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -113,7 +111,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -302,6 +300,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -872,13 +885,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1254,13 +1267,13 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="parallelization">
-<span id="walkthrough-parallelization"></span><h1>Parallelization<a class="headerlink" href="#parallelization" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-parallelization"></span><h1>Parallelization<a class="headerlink" href="#parallelization" title="Permalink to this headline">#</a></h1>
 <p>The computational cost of running multislice simulations can become high depending on the size of the specimen, the number of probe positions, phonon images, and many other factors. This cost can be mitigated using parallelism. Many of the computations in <em>ab</em>TEM are <a class="reference external" href="https://en.wikipedia.org/wiki/Embarrassingly_parallel">embarrasingly parallel</a>: for example, every probe position is independent, thus each CPU core may calculate a batch of positions independently, only requiring communication after finishing a run of the multislice algorithm.</p>
 <p><em>ab</em>TEM is parallelized using <a class="reference external" href="https://www.dask.org/">Dask</a><span id="id1">[<a class="reference internal" href="../bibliography.html#id10" title="Dask Development Team. Dask: Library for dynamic task scheduling. 2016. URL: https://dask.org.">DaskDTeam16</a>]</span>, which is a flexible library for parallel computing in Python. Dask allows scaling from a single laptop to hundreds of nodes at high-performance computing (HPC) facilities with minimal changes to the code.</p>
 <p>In this walkthrough, we introduce how <em>ab</em>TEM uses Dask. Althouhg this is not required knowledge for running simulations on a single machine, it may still help you optimize your simulations. If you are already an experienced Dask user, most of what you already know can be applied to using <em>ab</em>TEM. If you are new to Dask you may benefit from watching <a class="reference external" href="https://www.youtube.com/watch?v=nnndxbr_Xq4">this introduction</a> before continuing.</p>
 <p>We note that Dask is used in several other libraries for the analysis of electron microscopy data, for example, <a class="reference external" href="https://hyperspy.org/">hyperspy</a>, <a class="reference external" href="https://libertem.github.io/LiberTEM/">libertem</a> and <a class="reference external" href="https://py4dstem.readthedocs.io/en/latest/">py4DSTEM</a>, and thus we think that you may benefit from knowing this library more generally.</p>
 <section id="task-graphs">
-<h2>Task graphs<a class="headerlink" href="#task-graphs" title="Permalink to this heading">#</a></h2>
+<h2>Task graphs<a class="headerlink" href="#task-graphs" title="Permalink to this headline">#</a></h2>
 <p>Simulating TEM experiments requires executing multiple <em>tasks</em> where each one may depend on the output of previous tasks. In Dask this is represented as a <a class="reference external" href="https://docs.dask.org/en/stable/graphs.html"><em>task graph</em></a>, where each task is a <em>node</em>, with <em>edges</em> between nodes if it is dependent on another task. The simulation result is obtained by executing each task (node) in the graph with a Dask <em>scheduler</em> on a single machine or a cluster.</p>
 <div class="cell tag_remove-input tag_hide-input docutils container">
 <div class="cell_output docutils container">
@@ -1495,7 +1508,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="chunks">
-<h2>Chunks<a class="headerlink" href="#chunks" title="Permalink to this heading">#</a></h2>
+<h2>Chunks<a class="headerlink" href="#chunks" title="Permalink to this headline">#</a></h2>
 <p>To futher explore the role of chunks in abTEM, we create the task graph for running a STEM simulation with the same specimen, gold in the <span class="math notranslate nohighlight">\(\left&lt;100\right&gt;\)</span> zone axis with 4 frozen phonons. We do not immediately apply a detector, so we obtain an ensemble of exit wave functions.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1867,11 +1880,11 @@ RealSpaceAxis      y [Å]           0.00 0.04 ... 20.36
 </div>
 </section>
 <section id="schedulers">
-<h2>Schedulers<a class="headerlink" href="#schedulers" title="Permalink to this heading">#</a></h2>
+<h2>Schedulers<a class="headerlink" href="#schedulers" title="Permalink to this headline">#</a></h2>
 <p>After generating a task graph, it needs to be executed on (parallel) hardware. This is the job of a <a class="reference external" href="https://docs.dask.org/en/stable/scheduler-overview.html">task scheduler</a>. Dask provides several <em>task schedulers</em>: each of which will compute a task graph and give the same result, but with different performance characteristics.</p>
 <p>Every time you call the <code class="docutils literal notranslate"><span class="pre">compute</span></code> method a Dask scheduler is used. We adopt the default Dask scheduler configuration and every keyword argument used with the <code class="docutils literal notranslate"><span class="pre">compute</span></code> method in <em>ab</em>TEM is forwarded to the Dask <code class="docutils literal notranslate"><span class="pre">compute</span></code> function.</p>
 <section id="local-scheduler">
-<h3>Local scheduler<a class="headerlink" href="#local-scheduler" title="Permalink to this heading">#</a></h3>
+<h3>Local scheduler<a class="headerlink" href="#local-scheduler" title="Permalink to this headline">#</a></h3>
 <p>The default scheduler is the <a class="reference external" href="https://docs.dask.org/en/stable/scheduling.html#local-threads"><code class="docutils literal notranslate"><span class="pre">ThreadPoolExecutor</span></code></a>. As an example of a keyword argument, the threaded scheduler takes <code class="docutils literal notranslate"><span class="pre">num_workers</span></code>, which sets the number of threads to use (by default, up to the number of computing cores). Let’s run compute with 8 workers.</p>
 <div class="cell tag_skip-test docutils container">
 <div class="cell_input docutils container">
@@ -1908,7 +1921,7 @@ RealSpaceAxis      y [Å]           0.00 0.04 ... 20.36
 </div>
 </section>
 <section id="profiling">
-<h3>Profiling<a class="headerlink" href="#profiling" title="Permalink to this heading">#</a></h3>
+<h3>Profiling<a class="headerlink" href="#profiling" title="Permalink to this headline">#</a></h3>
 <p>To improve performance, we have to be able to profile it. Profiling parallel code can be challenging, but Dask provides functionality to aid in this and inspecting execution. The diagnostic tools are however quite different depending on whether you use a local or distributed scheduler.</p>
 <p>Dask allows local diagnostics by adding callbacks that collect information about your code execution. You can use the profilers as a context manager as described in the <a class="reference external" href="https://docs.dask.org/en/stable/diagnostics-local.html">Dask documentation</a>. For convenience, the <em>ab</em>TEM <code class="docutils literal notranslate"><span class="pre">compute</span></code> methods also implement keywords for adding Dask profilers.</p>
 <p>Below we use the <a class="reference external" href="https://docs.dask.org/en/stable/diagnostics-local.html#profiler"><code class="docutils literal notranslate"><span class="pre">Profiler</span></code></a> to monitor task execution by setting <code class="docutils literal notranslate"><span class="pre">profiler=True</span></code> and a <a class="reference external" href="https://docs.dask.org/en/stable/diagnostics-local.html#resourceprofiler"><code class="docutils literal notranslate"><span class="pre">ResourceProfiler</span></code></a> to monitor the CPU usage and memory consumption by setting <code class="docutils literal notranslate"><span class="pre">resource_profiler=True</span></code>. We rerun the simulation above with these profilers.</p>
@@ -2293,7 +2306,7 @@ if (force === true) {
 <p>We note that the overhead in both CPU usage and memory diminishes for larger simulation with more powerful hardware.</p>
 </section>
 <section id="the-locally-distributed-scheduler">
-<h3>The (locally) distributed scheduler<a class="headerlink" href="#the-locally-distributed-scheduler" title="Permalink to this heading">#</a></h3>
+<h3>The (locally) distributed scheduler<a class="headerlink" href="#the-locally-distributed-scheduler" title="Permalink to this headline">#</a></h3>
 <p>The Dask distributed scheduler is necessary for running your simulations on a cluster, but it also runs <a class="reference external" href="https://docs.dask.org/en/stable/scheduling.html#dask-distributed-local">locally on a personal machine</a>. You can find details in the Dask documentation, but we demonstrate the basics below.</p>
 <p>You can use the Dask distributed scheduler by just initializing a <a class="reference external" href="https://distributed.dask.org/en/stable/client.html">Dask Client</a>. The <code class="docutils literal notranslate"><span class="pre">Client</span></code> takes keyword arguments such as <code class="docutils literal notranslate"><span class="pre">n_workers</span></code> (note that this is different from <code class="docutils literal notranslate"><span class="pre">num_workers</span></code> above!)</p>
 <div class="cell docutils container">
@@ -2720,10 +2733,10 @@ if (force === true) {
 </div>
 </section>
 <section id="running-abtem-on-hpc-clusters">
-<h3>Running <em>ab</em>TEM on HPC clusters<a class="headerlink" href="#running-abtem-on-hpc-clusters" title="Permalink to this heading">#</a></h3>
+<h3>Running <em>ab</em>TEM on HPC clusters<a class="headerlink" href="#running-abtem-on-hpc-clusters" title="Permalink to this headline">#</a></h3>
 <p>Dask (and thus <em>ab</em>TEM) has robust tools for deployment on high-performance compute clusters. We recommend consulting your HPC provider on how to deploy Dask applications on your available cluster. For general advice on deployment, please see the <a class="reference external" href="https://docs.dask.org/en/stable/deploying.html">Dask documentation</a>.</p>
 <section id="submitting-job-scripts">
-<h4>Submitting job scripts<a class="headerlink" href="#submitting-job-scripts" title="Permalink to this heading">#</a></h4>
+<h4>Submitting job scripts<a class="headerlink" href="#submitting-job-scripts" title="Permalink to this headline">#</a></h4>
 <p>As an overview, Dask provides a number of different cluster managers, so you can use distributed Dask on a range of platforms. These cluster managers deploy a scheduler and the necessary workers as determined by communicating with the resource manager. All cluster managers follow the same interface but have platform-specific configuration options.</p>
 <p>As an example, for deployment using <a class="reference external" href="https://slurm.schedmd.com/documentation.html">SLURM</a>, your script might look something like:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">dask_jobqueue</span> <span class="kn">import</span> <span class="n">SLURMCluster</span>
@@ -2760,7 +2773,7 @@ if (force === true) {
 </section>
 </section>
 <section id="using-gpus">
-<span id="walkthrough-parallelization-gpu"></span><h2>Using GPUs<a class="headerlink" href="#using-gpus" title="Permalink to this heading">#</a></h2>
+<span id="walkthrough-parallelization-gpu"></span><h2>Using GPUs<a class="headerlink" href="#using-gpus" title="Permalink to this headline">#</a></h2>
 <p>Almost every part of <em>ab</em>TEM can be accelerated using a GPU through the <a class="reference external" href="https://cupy.dev/">CuPy</a> library. We have only tested CUDA-compatible GPUs, but any graphics card compatible with CuPy should work.</p>
 <p>If you have a compatible GPU and a working installation of CuPy, you can accelerate your image simulations by simply changing the configs at the top of your document as below:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;device&quot;</span><span class="p">:</span> <span class="s2">&quot;gpu&quot;</span><span class="p">});</span>
@@ -2783,7 +2796,7 @@ if (force === true) {
 </pre></div>
 </div>
 <section id="multiple-gpus">
-<h3>Multiple GPUs<a class="headerlink" href="#multiple-gpus" title="Permalink to this heading">#</a></h3>
+<h3>Multiple GPUs<a class="headerlink" href="#multiple-gpus" title="Permalink to this headline">#</a></h3>
 <p>The above is enough for running <em>ab</em>TEM on a single GPU; if you are using an NVidia GPU, you may want to install <code class="docutils literal notranslate"><span class="pre">dask_cuda</span></code> (this is currently only supported on Linux). However, <code class="docutils literal notranslate"><span class="pre">dask_cuda</span></code> is currently necessary for multi-GPU calculations with <em>ab</em>TEM.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">dask_cuda</span> <span class="kn">import</span> <span class="n">LocalCUDACluster</span>
 <span class="kn">from</span> <span class="nn">dask.distributed</span> <span class="kn">import</span> <span class="n">Client</span>
@@ -2809,7 +2822,7 @@ if (force === true) {
         },
         kernelOptions: {
             kernelName: "test_threads",
-            path: "./user_guide\walkthrough"
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }

@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
-    <script src="../../../_static/sphinx_highlight.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
     <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -57,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="transfer" href="abtem.transfer.html" />
     <link rel="prev" title="RealSpaceLineProfiles" href="abtem.measurements.RealSpaceLineProfiles.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -111,7 +109,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -300,6 +298,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -870,13 +883,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1039,267 +1052,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     ReciprocalSpaceLineProfiles
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.abs">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.abs()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.imag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.imag()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.interpolate">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.interpolate()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.phase">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.phase()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.poisson_noise">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.poisson_noise()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.real">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.real()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.reduce_ensemble">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.reduce_ensemble()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.relative_difference">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.relative_difference()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.to_hyperspy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.to_hyperspy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.width">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.width()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1311,250 +1069,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     ReciprocalSpaceLineProfiles
-    </span>
-   </code>
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.__init__">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.__init__()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.abs">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.abs()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.axes_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.axes_metadata
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.copy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.copy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.copy_to_device">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.copy_to_device()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.from_array_and_metadata">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.from_array_and_metadata()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.from_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.from_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.imag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.imag()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.intensity">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.intensity()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.interpolate">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.interpolate()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.num_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.num_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.num_base_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.num_base_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.num_ensemble_axes">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.num_ensemble_axes
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.phase">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.phase()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.poisson_noise">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.poisson_noise()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.real">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.real()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.reduce_ensemble">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.reduce_ensemble()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.relative_difference">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.relative_difference()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.shape">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.shape
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.show">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.show()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.to_hyperspy">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.to_hyperspy()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.to_zarr">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.to_zarr()
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#abtem.measurements.ReciprocalSpaceLineProfiles.width">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ReciprocalSpaceLineProfiles.width()
-      </span>
-     </code>
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1563,18 +1077,18 @@ title="Print to PDF"
               <div>
                 
   <section id="reciprocalspacelineprofiles">
-<h1>ReciprocalSpaceLineProfiles<a class="headerlink" href="#reciprocalspacelineprofiles" title="Permalink to this heading">#</a></h1>
+<h1>ReciprocalSpaceLineProfiles<a class="headerlink" href="#reciprocalspacelineprofiles" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.measurements.ReciprocalSpaceLineProfiles">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.measurements.</span></span><span class="sig-name descname"><span class="pre">ReciprocalSpaceLineProfiles</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#ReciprocalSpaceLineProfiles"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.ReciprocalSpaceLineProfiles" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_AbstractMeasurement1d</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.measurements._AbstractMeasurement1d</span></code></p>
 <p>A collection of reciprocal-space line profile(s).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>array</strong> (<em>np.ndarray</em>) – 1D or greater array containing data of type <cite>float</cite> or ´complex´.</p></li>
 <li><p><strong>sampling</strong> (<em>float</em>) – Sampling of line profiles [1 / Å].</p></li>
-<li><p><strong>ensemble_axes_metadata</strong> (<em>list</em><em> of </em><em>AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining simulation metadata.</p></li>
 </ul>
 </dd>
@@ -1679,7 +1193,7 @@ title="Print to PDF"
 <td><p>Calculates the phase of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.ReciprocalSpaceLineProfiles.poisson_noise" title="abtem.measurements.ReciprocalSpaceLineProfiles.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
-<td><p>Add Poisson noise (ie.</p></td>
+<td><p>Add Poisson noise (i.e.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
 <td><p></p></td>
@@ -1898,7 +1412,7 @@ title="Print to PDF"
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.ReciprocalSpaceLineProfiles.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.ReciprocalSpaceLineProfiles.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.ReciprocalSpaceLineProfiles.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1954,7 +1468,7 @@ title="Print to PDF"
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more 1D line profiles.</p></li>
-<li><p><strong>axes_metadata</strong> (<em>list</em><em> of </em><em>AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
+<li><p><strong>axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
 axes must be RealSpaceAxis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining the measurement metadata.</p></li>
 </ul>
@@ -2077,7 +1591,7 @@ s3:// for remote data.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.ReciprocalSpaceLineProfiles.poisson_noise">
 <span class="sig-name descname"><span class="pre">poisson_noise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dose_per_area</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">total_dose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.ReciprocalSpaceLineProfiles.poisson_noise" title="Permalink to this definition">#</a></dt>
-<dd><p>Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
+<dd><p>Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
 if applied to an ensemble) or ‘dose_per_area’ (not applicable for single measurements).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -2234,7 +1748,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./reference\api\_autosummary"
+            path: "./reference/api/_autosummary"
         },
         predefinedOutput: true
     }

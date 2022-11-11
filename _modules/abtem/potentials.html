@@ -1,11 +1,11 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>abtem.potentials &#8212; abTEM Documentation</title>
+    <title>abtem.potentials &#8212; Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,9 +33,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -54,7 +52,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -96,7 +94,7 @@ const thebe_selector_output = ".output, .cell_output"
       <img src="../../_static/logo.png" class="logo" alt="logo">
       
       
-      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      <h1 class="site-logo" id="site-title">Documentation</h1>
       
     </a>
 </div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
@@ -108,7 +106,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -297,6 +295,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -867,13 +880,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1016,6 +1029,7 @@ title="Open an issue"
                 
   <h1>Source code for abtem.potentials</h1><div class="highlight"><pre>
 <span></span><span class="sd">&quot;&quot;&quot;Module to calculate electrostatic potentials using the independent atom model.&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">warnings</span>
 <span class="kn">from</span> <span class="nn">abc</span> <span class="kn">import</span> <span class="n">ABCMeta</span><span class="p">,</span> <span class="n">abstractmethod</span>
 <span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
 <span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">reduce</span>
@@ -1054,12 +1068,12 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.inelastic.phonons</span> <span class="kn">import</span> <span class="p">(</span>
     <span class="n">BaseFrozenPhonons</span><span class="p">,</span>
     <span class="n">DummyFrozenPhonons</span><span class="p">,</span>
-    <span class="n">_validate_seeds</span><span class="p">,</span>
+    <span class="n">_validate_seeds</span><span class="p">,</span> <span class="n">MDFrozenPhonons</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span> <span class="nn">abtem.inelastic.phonons</span> <span class="kn">import</span> <span class="n">FrozenPhonons</span>
 <span class="kn">from</span> <span class="nn">abtem.measurements</span> <span class="kn">import</span> <span class="n">Images</span>
 <span class="kn">from</span> <span class="nn">abtem.slicing</span> <span class="kn">import</span> <span class="p">(</span>
-    <span class="n">validate_slice_thickness</span><span class="p">,</span>
+    <span class="n">_validate_slice_thickness</span><span class="p">,</span>
     <span class="n">SliceIndexedAtoms</span><span class="p">,</span>
     <span class="n">SlicedAtoms</span><span class="p">,</span>
     <span class="n">unpack_item</span><span class="p">,</span>
@@ -1076,6 +1090,7 @@ title="Open an issue"
 <span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
     <span class="kn">from</span> <span class="nn">abtem.waves</span> <span class="kn">import</span> <span class="n">Waves</span>
     <span class="kn">from</span> <span class="nn">abtem.core.parametrizations.base</span> <span class="kn">import</span> <span class="n">Parametrization</span>
+
 
 
 <div class="viewcode-block" id="BasePotential"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential">[docs]</a><span class="k">class</span> <span class="nc">BasePotential</span><span class="p">(</span>
@@ -1256,18 +1271,18 @@ title="Open an issue"
 <span class="k">class</span> <span class="nc">_PotentialBuilder</span><span class="p">(</span><span class="n">BasePotential</span><span class="p">):</span>
     <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-        <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]],</span>
-        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span>
         <span class="n">slice_thickness</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
         <span class="n">exit_planes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
         <span class="n">cell</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Cell</span><span class="p">],</span>
-        <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span>
+        <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
             <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
-        <span class="p">],</span>
-        <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span>
-        <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
-        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+        <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+        <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_require_cell_transform</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">box</span><span class="o">=</span><span class="n">box</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="n">plane</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="n">origin</span><span class="p">):</span>
@@ -1288,7 +1303,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_origin</span> <span class="o">=</span> <span class="n">origin</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_periodic</span> <span class="o">=</span> <span class="n">periodic</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">_slice_thickness</span> <span class="o">=</span> <span class="n">validate_slice_thickness</span><span class="p">(</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_slice_thickness</span> <span class="o">=</span> <span class="n">_validate_slice_thickness</span><span class="p">(</span>
             <span class="n">slice_thickness</span><span class="p">,</span> <span class="n">thickness</span><span class="o">=</span><span class="n">box</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
         <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_exit_planes</span> <span class="o">=</span> <span class="n">_validate_exit_planes</span><span class="p">(</span>
@@ -1361,7 +1376,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
         <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">chunks</span><span class="p">:</span> <span class="n">Chunks</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
         <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;PotentialArray&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
@@ -1373,9 +1388,8 @@ title="Open an issue"
 <span class="sd">            Index of the first slice of the generated potential.</span>
 <span class="sd">        last_slice : int, optional</span>
 <span class="sd">            Index of the last slice of the generated potential</span>
-<span class="sd">        TODO: replace with max_batches</span>
-<span class="sd">        chunks : int or tuple of int or tuple of tuple of int</span>
-<span class="sd">            Number of slices to include in each Dask worker batch. Default is 1.</span>
+<span class="sd">        max_batch : int or str, optional</span>
+<span class="sd">            Maximum number of slices to calculate in task. Default is 1.</span>
 <span class="sd">        lazy : bool, optional</span>
 <span class="sd">            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the</span>
 <span class="sd">            value set in the configuration file.</span>
@@ -1533,8 +1547,17 @@ title="Open an issue"
         <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">Atoms</span><span class="p">):</span>
+            <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+            <span class="n">atoms</span><span class="o">.</span><span class="n">calc</span> <span class="o">=</span> <span class="kc">None</span>
+
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="s2">&quot;randomize&quot;</span><span class="p">):</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span> <span class="o">=</span> <span class="n">DummyFrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span> <span class="o">=</span> <span class="n">MDFrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span> <span class="o">=</span> <span class="n">MDFrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span> <span class="o">=</span> <span class="n">DummyFrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span> <span class="o">=</span> <span class="n">atoms</span>
 
@@ -1591,7 +1614,7 @@ title="Open an issue"
         <span class="n">unique_numbers</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">numbers</span><span class="p">)</span>
         <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_integrator</span><span class="o">.</span><span class="n">cutoff</span><span class="p">(</span><span class="n">number</span><span class="p">)</span> <span class="k">for</span> <span class="n">number</span> <span class="ow">in</span> <span class="n">unique_numbers</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="nf">_transformed_atoms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">transformed_atoms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">atoms</span>
 
         <span class="n">cutoffs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cutoffs</span><span class="p">()</span>
@@ -1619,7 +1642,7 @@ title="Open an issue"
 
     <span class="k">def</span> <span class="nf">_prepare_atoms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 
-        <span class="n">atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_transformed_atoms</span><span class="p">()</span>
+        <span class="n">atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformed_atoms</span><span class="p">()</span>
         <span class="n">cutoffs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cutoffs</span><span class="p">()</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">integrator</span><span class="o">.</span><span class="n">finite</span><span class="p">:</span>
@@ -1734,7 +1757,7 @@ title="Open an issue"
 
     <span class="k">def</span> <span class="nf">_from_partitioned_args</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="n">frozen_phonons_partial</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">_from_partitioned_args</span><span class="p">()</span>
-        <span class="n">kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;atoms&quot;</span><span class="p">,))</span>
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;atoms&quot;</span><span class="p">,</span> <span class="s2">&quot;sampling&quot;</span><span class="p">))</span>
         <span class="k">return</span> <span class="n">partial</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">potential</span><span class="p">,</span> <span class="n">frozen_phonons_partial</span><span class="o">=</span><span class="n">frozen_phonons_partial</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
         <span class="p">)</span>
@@ -1790,7 +1813,7 @@ title="Open an issue"
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="n">array</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_grid</span> <span class="o">=</span> <span class="n">Grid</span><span class="p">(</span><span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:],</span> <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_slice_thickness</span> <span class="o">=</span> <span class="n">validate_slice_thickness</span><span class="p">(</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_slice_thickness</span> <span class="o">=</span> <span class="n">_validate_slice_thickness</span><span class="p">(</span>
             <span class="n">slice_thickness</span><span class="p">,</span> <span class="n">num_slices</span><span class="o">=</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">]</span>
         <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_exit_planes</span> <span class="o">=</span> <span class="n">_validate_exit_planes</span><span class="p">(</span>
@@ -1858,6 +1881,7 @@ title="Open an issue"
         <span class="n">kwargs</span> <span class="o">=</span> <span class="n">potential_array</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;slice_thickness&quot;</span><span class="p">))</span>
         <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">array</span>
         <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;slice_thickness&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">slice_thickness</span>
+        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;sampling&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">return</span> <span class="n">potential_array</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
     <span class="k">def</span> <span class="nf">build</span><span class="p">(</span>
@@ -1954,7 +1978,9 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">_from_partitioned_args</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">partial</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_from_partitioned_args_func</span><span class="p">,</span>
-            <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;ensemble_axes_metadata&quot;</span><span class="p">)),</span>
+            <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span>
+                <span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;sampling&quot;</span><span class="p">,</span> <span class="s2">&quot;ensemble_axes_metadata&quot;</span><span class="p">)</span>
+            <span class="p">),</span>
         <span class="p">)</span>
 
 <div class="viewcode-block" id="PotentialArray.generate_slices"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
@@ -1981,17 +2007,6 @@ title="Open an issue"
             <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span>
                 <span class="n">array</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">i</span> <span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span> <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span>
             <span class="p">)</span></div>
-
-<div class="viewcode-block" id="PotentialArray.get_chunk"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.get_chunk">[docs]</a>    <span class="k">def</span> <span class="nf">get_chunk</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;TODO: check if can be made internal or deleted.&quot;&quot;&quot;</span>
-        <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">]</span>
-
-        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
-            <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
-
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span>
-            <span class="n">array</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">],</span> <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span>
-        <span class="p">)</span></div>
 
 <div class="viewcode-block" id="PotentialArray.transmission_function"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.transmission_function">[docs]</a>    <span class="k">def</span> <span class="nf">transmission_function</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
@@ -2083,9 +2098,10 @@ title="Open an issue"
 <span class="sd">        transmissionfunction : TransmissionFunction</span>
 <span class="sd">            Transmission function for the wave function through the potential slice.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">transmission_function</span><span class="p">(</span><span class="n">waves</span><span class="o">.</span><span class="n">energy</span><span class="p">)</span><span class="o">.</span><span class="n">transmit</span><span class="p">(</span>
-            <span class="n">waves</span><span class="p">,</span> <span class="n">conjugate</span><span class="o">=</span><span class="n">conjugate</span>
-        <span class="p">)</span></div>
+
+        <span class="n">transmission_function</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transmission_function</span><span class="p">(</span><span class="n">waves</span><span class="o">.</span><span class="n">energy</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">transmission_function</span><span class="o">.</span><span class="n">transmit</span><span class="p">(</span><span class="n">waves</span><span class="p">,</span> <span class="n">conjugate</span><span class="o">=</span><span class="n">conjugate</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="PotentialArray.images"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.images">[docs]</a>    <span class="k">def</span> <span class="nf">images</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;Convert slices of the potential to a stack of images.&quot;&quot;&quot;</span>
@@ -2149,7 +2165,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_accelerator</span> <span class="o">=</span> <span class="n">Accelerator</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="n">energy</span><span class="p">)</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="p">,</span> <span class="n">extent</span><span class="p">,</span> <span class="n">sampling</span><span class="p">)</span></div>
 
-<div class="viewcode-block" id="TransmissionFunction.get_chunk"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.get_chunk">[docs]</a>    <span class="k">def</span> <span class="nf">get_chunk</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
+    <span class="k">def</span> <span class="nf">get_chunk</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">]</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
             <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
@@ -2158,7 +2174,7 @@ title="Open an issue"
             <span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">],</span>
             <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span><span class="p">,</span>
             <span class="n">energy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">energy</span><span class="p">,</span>
-        <span class="p">)</span></div>
+        <span class="p">)</span>
 
 <div class="viewcode-block" id="TransmissionFunction.transmission_function"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.transmission_function">[docs]</a>    <span class="k">def</span> <span class="nf">transmission_function</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">energy</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
@@ -2252,13 +2268,15 @@ title="Open an issue"
 
             <span class="bp">self</span><span class="o">.</span><span class="n">_seeds</span> <span class="o">=</span> <span class="n">_validate_seeds</span><span class="p">(</span><span class="n">seeds</span><span class="p">,</span> <span class="n">num_frozen_phonons</span><span class="p">)</span>
 
-        <span class="c1"># TODO: check if still needed</span>
-        <span class="c1"># if (potential_unit.num_frozen_phonon_configs == 1) &amp; (num_frozen_phonon_configs &gt; 1):</span>
-        <span class="c1">#     warnings.warn(&#39;&quot;num_frozen_phonon_configs&quot; is greater than one, but the potential unit does not have&#39;</span>
-        <span class="c1">#                   &#39;frozen phonons&#39;)</span>
-        <span class="c1">#</span>
-        <span class="c1"># if (potential_unit.num_frozen_phonon_configs &gt; 1) &amp; (num_frozen_phonon_configs == 1):</span>
-        <span class="c1">#     warnings.warn(&#39;the potential unit has frozen phonons, but &quot;num_frozen_phonon_configs&quot; is set to 1&#39;)</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">potential_unit</span><span class="o">.</span><span class="n">num_frozen_phonons</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">num_frozen_phonons</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">num_frozen_phonons</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                <span class="s2">&quot;&#39;num_frozen_phonons&#39; is greater than one, but the potential unit does not have frozen phonons&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="p">(</span><span class="n">potential_unit</span><span class="o">.</span><span class="n">num_frozen_phonons</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">num_frozen_phonons</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">):</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                <span class="s2">&quot;the potential unit has frozen phonons, but &#39;num_frozen_phonon&#39; is not set&quot;</span>
+            <span class="p">)</span>
 
         <span class="n">gpts</span> <span class="o">=</span> <span class="p">(</span>
             <span class="n">potential_unit</span><span class="o">.</span><span class="n">gpts</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
@@ -2268,12 +2286,11 @@ title="Open an issue"
             <span class="n">potential_unit</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
             <span class="n">potential_unit</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
         <span class="p">)</span>
-        <span class="n">sampling</span> <span class="o">=</span> <span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="n">gpts</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">gpts</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
         <span class="n">box</span> <span class="o">=</span> <span class="n">extent</span> <span class="o">+</span> <span class="p">(</span><span class="n">potential_unit</span><span class="o">.</span><span class="n">thickness</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">[</span><span class="mi">2</span><span class="p">],)</span>
         <span class="n">slice_thickness</span> <span class="o">=</span> <span class="n">potential_unit</span><span class="o">.</span><span class="n">slice_thickness</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
             <span class="n">gpts</span><span class="o">=</span><span class="n">gpts</span><span class="p">,</span>
-            <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">,</span>
             <span class="n">cell</span><span class="o">=</span><span class="n">Cell</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">box</span><span class="p">)),</span>
             <span class="n">slice_thickness</span><span class="o">=</span><span class="n">slice_thickness</span><span class="p">,</span>
             <span class="n">exit_planes</span><span class="o">=</span><span class="n">exit_planes</span><span class="p">,</span>
@@ -2287,13 +2304,12 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_potential_unit</span> <span class="o">=</span> <span class="n">potential_unit</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_repetitions</span> <span class="o">=</span> <span class="n">repetitions</span></div>
 
-    <span class="c1"># TODO: check if could be documented</span>
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">ensemble_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_seeds</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">return</span> <span class="p">()</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_frozen_phonons</span><span class="p">,)</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_frozen_phonons</span><span class="p">,</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">num_frozen_phonons</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2343,11 +2359,7 @@ title="Open an issue"
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">seeds</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">return</span> <span class="p">[]</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="p">[</span>
-                <span class="n">FrozenPhononsAxis</span><span class="p">(</span>
-                    <span class="n">_ensemble_mean</span><span class="o">=</span><span class="kc">True</span>
-                <span class="p">)</span>
-            <span class="p">]</span>
+            <span class="k">return</span> <span class="p">[</span><span class="n">FrozenPhononsAxis</span><span class="p">(</span><span class="n">_ensemble_mean</span><span class="o">=</span><span class="kc">True</span><span class="p">)]</span>
 
     <span class="nd">@staticmethod</span>
     <span class="k">def</span> <span class="nf">_wrap_partition_args</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">):</span>

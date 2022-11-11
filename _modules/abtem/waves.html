@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,9 +33,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -54,7 +52,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -108,7 +106,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -297,6 +295,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -867,13 +880,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1069,14 +1082,18 @@ title="Open an issue"
 
 <span class="k">def</span> <span class="nf">_extract_measurement</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">index</span><span class="p">):</span>
     <span class="k">if</span> <span class="n">array</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">array</span>  <span class="c1"># np.zeros((7,0,64,1), dtype=np.float32)</span>
+        <span class="k">return</span> <span class="n">array</span>
 
     <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">item</span><span class="p">()[</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">array</span>
     <span class="k">return</span> <span class="n">array</span>
 
 
+<span class="k">def</span> <span class="nf">_wrap_measurements</span><span class="p">(</span><span class="n">measurements</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">measurements</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">ComputableList</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span>
+
+
 <span class="k">def</span> <span class="nf">_finalize_lazy_measurements</span><span class="p">(</span>
-    <span class="n">arrays</span><span class="p">,</span> <span class="n">waves</span><span class="p">,</span> <span class="n">detectors</span><span class="p">,</span> <span class="n">extra_ensemble_axes_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">chunks</span><span class="o">=</span><span class="kc">None</span>
+        <span class="n">arrays</span><span class="p">,</span> <span class="n">waves</span><span class="p">,</span> <span class="n">detectors</span><span class="p">,</span> <span class="n">extra_ensemble_axes_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">chunks</span><span class="o">=</span><span class="kc">None</span>
 <span class="p">):</span>
     <span class="n">measurements</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">detector</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">detectors</span><span class="p">):</span>
@@ -1121,7 +1138,7 @@ title="Open an issue"
 
         <span class="n">measurements</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">measurement</span><span class="p">)</span>
 
-    <span class="k">return</span> <span class="n">measurements</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">ComputableList</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">measurements</span>
 
 
 <span class="k">def</span> <span class="nf">_ensure_parity</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">even</span><span class="p">,</span> <span class="n">v</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
@@ -1176,6 +1193,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">fourier_space_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]:</span>
+
         <span class="bp">self</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">check_is_defined</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">accelerator</span><span class="o">.</span><span class="n">check_is_defined</span><span class="p">()</span>
         <span class="k">return</span> <span class="p">[</span>
@@ -1201,6 +1219,10 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">antialias_valid_gpts</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The number of grid points along the x and y direction in the simulation grid for the largest rectangle that fits</span>
+<span class="sd">        within antialiasing cutoff scattering angle.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_gpts_within_angle</span><span class="p">(</span><span class="s2">&quot;valid&quot;</span><span class="p">,</span> <span class="s2">&quot;same&quot;</span><span class="p">)</span>
 
     <span class="nd">@property</span>
@@ -1212,10 +1234,14 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">antialias_cutoff_gpts</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The number of grid points along the x and y direction in the simulation grid at the antialiasing cutoff</span>
+<span class="sd">        scattering angle.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_gpts_within_angle</span><span class="p">(</span><span class="s2">&quot;cutoff&quot;</span><span class="p">,</span> <span class="s2">&quot;same&quot;</span><span class="p">)</span>
 
     <span class="k">def</span> <span class="nf">_gpts_within_angle</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">parity</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;same&quot;</span>
+            <span class="bp">self</span><span class="p">,</span> <span class="n">angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">parity</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;same&quot;</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
 
         <span class="k">if</span> <span class="n">angle</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">angle</span> <span class="o">==</span> <span class="s2">&quot;full&quot;</span><span class="p">:</span>
@@ -1325,14 +1351,14 @@ title="Open an issue"
     <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># The dimension of waves is assumed to be 2D.</span>
 
 <div class="viewcode-block" id="Waves.__init__"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-        <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-        <span class="n">extent</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">reciprocal_space</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-        <span class="n">ensemble_axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+            <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+            <span class="n">extent</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">reciprocal_space</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="n">ensemble_axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
@@ -1391,7 +1417,7 @@ title="Open an issue"
 
 <div class="viewcode-block" id="Waves.from_array_and_metadata"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.from_array_and_metadata">[docs]</a>    <span class="nd">@classmethod</span>
     <span class="k">def</span> <span class="nf">from_array_and_metadata</span><span class="p">(</span>
-        <span class="bp">cls</span><span class="p">,</span> <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">],</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="bp">cls</span><span class="p">,</span> <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">],</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
 
         <span class="sd">&quot;&quot;&quot;</span>
@@ -1437,12 +1463,11 @@ title="Open an issue"
         <span class="n">alpha</span> <span class="o">*=</span> <span class="bp">self</span><span class="o">.</span><span class="n">wavelength</span>
         <span class="k">return</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">phi</span>
 
-    <span class="c1"># TODO: check that axes_metadata being optional is correctly handled. Also, rename &quot;reciprocal_space&quot; to &quot;reciprocal_space&quot;, but carefully.</span>
 <div class="viewcode-block" id="Waves.convolve"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.convolve">[docs]</a>    <span class="k">def</span> <span class="nf">convolve</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">kernel</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-        <span class="n">axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">out_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;in_space&quot;</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">kernel</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+            <span class="n">axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">out_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;in_space&quot;</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Convolve the wave-function array with a given array.</span>
@@ -1468,6 +1493,12 @@ title="Open an issue"
             <span class="n">fourier_space_out</span> <span class="o">=</span> <span class="n">out_space</span> <span class="o">==</span> <span class="s2">&quot;reciprocal_space&quot;</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span>
+
+        <span class="k">if</span> <span class="n">axes_metadata</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">axes_metadata</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">if</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">kernel</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">axes_metadata</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;provide axes metadata for each ensemble axis&quot;</span><span class="p">)</span>
 
         <span class="n">waves</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ensure_reciprocal_space</span><span class="p">(</span><span class="n">in_place</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
@@ -1530,7 +1561,6 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="n">waves</span></div>
 
-    <span class="c1"># TODO: throw an error if wave functions are in reciprocal space.</span>
 <div class="viewcode-block" id="Waves.tile"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.tile">[docs]</a>    <span class="k">def</span> <span class="nf">tile</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="n">renormalize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Tile the wave functions. Can only be applied in real space.</span>
@@ -1548,8 +1578,10 @@ title="Open an issue"
 <span class="sd">            The tiled wave functions.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
-        <span class="n">d</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;extent&quot;</span><span class="p">))</span>
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">reciprocal_space</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
             <span class="n">tile_func</span> <span class="o">=</span> <span class="n">da</span><span class="o">.</span><span class="n">tile</span>
@@ -1561,12 +1593,13 @@ title="Open an issue"
         <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="s2">&quot;rechunk&quot;</span><span class="p">):</span>
             <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">rechunk</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">))</span>
 
-        <span class="n">d</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">array</span>
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;extent&quot;</span><span class="p">))</span>
+        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">array</span>
 
         <span class="k">if</span> <span class="n">renormalize</span><span class="p">:</span>
-            <span class="n">d</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">/=</span> <span class="n">xp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">repetitions</span><span class="p">))</span>
+            <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">/=</span> <span class="n">xp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">repetitions</span><span class="p">))</span>
 
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">d</span><span class="p">)</span></div>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="Waves.ensure_reciprocal_space"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.ensure_reciprocal_space">[docs]</a>    <span class="k">def</span> <span class="nf">ensure_reciprocal_space</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_place</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
@@ -1691,10 +1724,10 @@ title="Open an issue"
         <span class="p">)</span></div>
 
 <div class="viewcode-block" id="Waves.downsample"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.downsample">[docs]</a>    <span class="k">def</span> <span class="nf">downsample</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">max_angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;cutoff&quot;</span><span class="p">,</span>
-        <span class="n">gpts</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">normalization</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;values&quot;</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">max_angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;cutoff&quot;</span><span class="p">,</span>
+            <span class="n">gpts</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">normalization</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;values&quot;</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Downsample the wave functions to a lower maximum scattering angle.</span>
@@ -1756,12 +1789,12 @@ title="Open an issue"
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="Waves.diffraction_patterns"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.diffraction_patterns">[docs]</a>    <span class="k">def</span> <span class="nf">diffraction_patterns</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">max_angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;cutoff&quot;</span><span class="p">,</span>
-        <span class="n">block_direct</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-        <span class="n">fftshift</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-        <span class="n">parity</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;odd&quot;</span><span class="p">,</span>
-        <span class="n">return_complex</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">max_angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;cutoff&quot;</span><span class="p">,</span>
+            <span class="n">block_direct</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="n">fftshift</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+            <span class="n">parity</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;odd&quot;</span><span class="p">,</span>
+            <span class="n">return_complex</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DiffractionPatterns</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Calculate the intensity of the wave functions at the diffraction plane.</span>
@@ -1864,7 +1897,7 @@ title="Open an issue"
         <span class="k">return</span> <span class="n">waves</span><span class="o">.</span><span class="n">array</span>
 
 <div class="viewcode-block" id="Waves.apply_transform"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.apply_transform">[docs]</a>    <span class="k">def</span> <span class="nf">apply_transform</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">transform</span><span class="p">:</span> <span class="n">WaveTransform</span><span class="p">,</span> <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span>
+            <span class="bp">self</span><span class="p">,</span> <span class="n">transform</span><span class="p">:</span> <span class="n">WaveTransform</span><span class="p">,</span> <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Transform the wave functions by a given transformation.</span>
@@ -1874,8 +1907,9 @@ title="Open an issue"
 <span class="sd">        transform : WaveTransform</span>
 <span class="sd">            The wave-function transformation to apply.</span>
 <span class="sd">        max_batch : int, optional</span>
-<span class="sd">            The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are</span>
-<span class="sd">            automatically set based on the user configuration.</span>
+<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the batch size is</span>
+<span class="sd">            automatically chosen based on the abtem user configuration settings &quot;dask.chunk-size&quot; and</span>
+<span class="sd">            &quot;dask.chunk-size-gpu&quot;.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
@@ -1922,14 +1956,14 @@ title="Open an issue"
 
             <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">array</span>
             <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;ensemble_axes_metadata&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">transform</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span> <span class="o">+</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;ensemble_axes_metadata&quot;</span><span class="p">]</span>
+                    <span class="n">transform</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span> <span class="o">+</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;ensemble_axes_metadata&quot;</span><span class="p">]</span>
             <span class="p">)</span>
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">transform</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="Waves.apply_ctf"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.apply_ctf">[docs]</a>    <span class="k">def</span> <span class="nf">apply_ctf</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">ctf</span><span class="p">:</span> <span class="n">CTF</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
+            <span class="bp">self</span><span class="p">,</span> <span class="n">ctf</span><span class="p">:</span> <span class="n">CTF</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Apply the aberrations and apertures of a contrast transfer function to the wave functions.</span>
@@ -1939,8 +1973,9 @@ title="Open an issue"
 <span class="sd">        ctf : CTF, optional</span>
 <span class="sd">            Contrast transfer function to be applied.</span>
 <span class="sd">        max_batch : int, optional</span>
-<span class="sd">            The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are</span>
-<span class="sd">            automatically set based on the user configuration.</span>
+<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the batch size is</span>
+<span class="sd">            automatically chosen based on the abtem user configuration settings &quot;dask.chunk-size&quot; and</span>
+<span class="sd">            &quot;dask.chunk-size-gpu&quot;.</span>
 <span class="sd">        kwargs :</span>
 <span class="sd">            Provide the parameters of the contrast transfer function as keyword arguments (see :class:`.CTF`).</span>
 
@@ -1976,11 +2011,11 @@ title="Open an issue"
         <span class="k">return</span> <span class="n">arr</span>
 
 <div class="viewcode-block" id="Waves.multislice"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.multislice">[docs]</a>    <span class="k">def</span> <span class="nf">multislice</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">potential</span><span class="p">:</span> <span class="n">BasePotential</span><span class="p">,</span>
-        <span class="n">detectors</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">conjugate</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-        <span class="n">transpose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">potential</span><span class="p">:</span> <span class="n">BasePotential</span><span class="p">,</span>
+            <span class="n">detectors</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">conjugate</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="n">transpose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Propagate and transmit wave function through the provided potential using the multislice algorithm. When detector(s)</span>
@@ -2012,7 +2047,9 @@ title="Open an issue"
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
             <span class="n">potential_blocks</span> <span class="o">=</span> <span class="n">potential</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">()</span>
-            <span class="n">potential_blocks</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">((</span><span class="n">block</span><span class="p">,</span> <span class="p">(</span><span class="n">i</span><span class="p">,))</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">block</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">potential_blocks</span><span class="p">))</span>
+            <span class="n">potential_blocks</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+                <span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="p">(</span><span class="n">i</span><span class="p">,))</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">block</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">potential_blocks</span><span class="p">)</span>
+            <span class="p">)</span>
 
             <span class="n">num_new_symbols</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">potential</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span>
             <span class="n">extra_ensemble_axes_metadata</span> <span class="o">=</span> <span class="n">potential</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span>
@@ -2027,8 +2064,15 @@ title="Open an issue"
                 <span class="n">new_axes</span> <span class="o">=</span> <span class="kc">None</span>
 
             <span class="n">axes_blocks</span> <span class="o">=</span> <span class="p">()</span>
-            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">axis</span><span class="p">,</span> <span class="n">chunks</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">)):</span>
-                <span class="n">axes_blocks</span> <span class="o">+=</span> <span class="p">(</span><span class="n">axis</span><span class="o">.</span><span class="n">_to_blocks</span><span class="p">((</span><span class="n">chunks</span><span class="p">),),</span> <span class="p">(</span><span class="n">num_new_symbols</span> <span class="o">+</span> <span class="n">i</span><span class="p">,))</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">axis</span><span class="p">,</span> <span class="n">chunks</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
+                    <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">)</span>
+            <span class="p">):</span>
+                <span class="n">axes_blocks</span> <span class="o">+=</span> <span class="p">(</span>
+                    <span class="n">axis</span><span class="o">.</span><span class="n">_to_blocks</span><span class="p">(</span>
+                        <span class="p">(</span><span class="n">chunks</span><span class="p">),</span>
+                    <span class="p">),</span>
+                    <span class="p">(</span><span class="n">num_new_symbols</span> <span class="o">+</span> <span class="n">i</span><span class="p">,),</span>
+                <span class="p">)</span>
 
             <span class="n">arrays</span> <span class="o">=</span> <span class="n">da</span><span class="o">.</span><span class="n">blockwise</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_lazy_multislice</span><span class="p">,</span>
@@ -2047,7 +2091,7 @@ title="Open an issue"
                 <span class="n">meta</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">((),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">complex64</span><span class="p">)</span>
             <span class="p">)</span>
 
-            <span class="k">return</span> <span class="n">_finalize_lazy_measurements</span><span class="p">(</span>
+            <span class="n">measurements</span> <span class="o">=</span> <span class="n">_finalize_lazy_measurements</span><span class="p">(</span>
                 <span class="n">arrays</span><span class="p">,</span>
                 <span class="bp">self</span><span class="p">,</span>
                 <span class="n">detectors</span><span class="p">,</span>
@@ -2068,9 +2112,7 @@ title="Open an issue"
                 <span class="k">for</span> <span class="n">measurement</span> <span class="ow">in</span> <span class="n">measurements</span>
             <span class="p">)</span>
 
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="n">measurements</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">ComputableList</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span>
-        <span class="p">)</span></div>
+        <span class="k">return</span> <span class="n">_wrap_measurements</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="Waves.show"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.show">[docs]</a>    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
@@ -2165,12 +2207,11 @@ title="Open an issue"
         <span class="k">return</span> <span class="n">arr</span>
 
     <span class="k">def</span> <span class="nf">_lazy_build_multislice_detect</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">detectors</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">],</span>
-        <span class="n">max_batch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">potential</span><span class="p">:</span> <span class="n">BasePotential</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">events</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-        <span class="n">multislice_func</span><span class="o">=</span><span class="n">multislice_and_detect</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">detectors</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">],</span>
+            <span class="n">max_batch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">potential</span><span class="p">:</span> <span class="n">BasePotential</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">multislice_func</span><span class="o">=</span><span class="n">multislice_and_detect</span><span class="p">,</span>
     <span class="p">):</span>
 
         <span class="n">args</span> <span class="o">=</span> <span class="p">()</span>
@@ -2218,9 +2259,7 @@ title="Open an issue"
         <span class="n">transform_symbols</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
             <span class="nb">range</span><span class="p">(</span><span class="n">max_symbol</span><span class="p">,</span> <span class="n">max_symbol</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">transforms</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">))</span>
         <span class="p">)</span>
-        <span class="n">transform_chunks</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">_ensemble_chunks</span><span class="p">(</span>
-            <span class="n">max_batch</span><span class="p">,</span> <span class="n">base_shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gpts</span>
-        <span class="p">)</span>
+        <span class="n">transform_chunks</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">_ensemble_chunks</span><span class="p">(</span><span class="n">max_batch</span><span class="p">,</span> <span class="n">base_shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gpts</span><span class="p">)</span>
 
         <span class="n">args</span> <span class="o">+=</span> <span class="nb">tuple</span><span class="p">(</span>
             <span class="n">itertools</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span>
@@ -2259,15 +2298,16 @@ title="Open an issue"
                 <span class="n">meta</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">((),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
             <span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">_finalize_lazy_measurements</span><span class="p">(</span>
+        <span class="n">measurements</span> <span class="o">=</span> <span class="n">_finalize_lazy_measurements</span><span class="p">(</span>
             <span class="n">array</span><span class="p">,</span>
             <span class="n">waves</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
             <span class="n">detectors</span><span class="o">=</span><span class="n">detectors</span><span class="p">,</span>
             <span class="n">extra_ensemble_axes_metadata</span><span class="o">=</span><span class="n">extra_ensemble_axes_metadata</span><span class="p">,</span>
         <span class="p">)</span>
 
+        <span class="k">return</span> <span class="n">measurements</span>
 
-<span class="c1"># TODO: thrown a warning if both gpts and sampling are given</span>
+
 <div class="viewcode-block" id="PlaneWave"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.PlaneWave.html#abtem.waves.PlaneWave">[docs]</a><span class="k">class</span> <span class="nc">PlaneWave</span><span class="p">(</span><span class="n">_WavesFactory</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Represents electron probe wave functions for simulating experiments with a plane-wave probe, such as HRTEM and SAED.</span>
@@ -2291,15 +2331,15 @@ title="Open an issue"
 <span class="sd">    &quot;&quot;&quot;</span>
 
 <div class="viewcode-block" id="PlaneWave.__init__"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.PlaneWave.html#abtem.waves.PlaneWave.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">extent</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">normalize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-        <span class="n">tilt</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
-        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">transforms</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">WaveTransform</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">extent</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">normalize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="n">tilt</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+            <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">transforms</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">WaveTransform</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_grid</span> <span class="o">=</span> <span class="n">Grid</span><span class="p">(</span><span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="n">gpts</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">)</span>
@@ -2347,9 +2387,9 @@ title="Open an issue"
         <span class="p">)</span>
 
 <div class="viewcode-block" id="PlaneWave.build"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.PlaneWave.html#abtem.waves.PlaneWave.build">[docs]</a>    <span class="k">def</span> <span class="nf">build</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">max_batch</span><span class="o">=</span><span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">max_batch</span><span class="o">=</span><span class="s2">&quot;auto&quot;</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Waves</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Build plane-wave wave functions.</span>
@@ -2360,8 +2400,9 @@ title="Open an issue"
 <span class="sd">            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the</span>
 <span class="sd">            setting in the user configuration file.</span>
 <span class="sd">        max_batch : int, optional</span>
-<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the number of chunks are</span>
-<span class="sd">            automatically estimated based on the user configuration.</span>
+<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the batch size is</span>
+<span class="sd">            automatically chosen based on the abtem user configuration settings &quot;dask.chunk-size&quot; and</span>
+<span class="sd">            &quot;dask.chunk-size-gpu&quot;.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
@@ -2375,22 +2416,25 @@ title="Open an issue"
 
         <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
             <span class="n">detectors</span> <span class="o">=</span> <span class="p">[</span><span class="n">WavesDetector</span><span class="p">()]</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lazy_build_multislice_detect</span><span class="p">(</span>
+
+            <span class="n">measurements</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lazy_build_multislice_detect</span><span class="p">(</span>
                 <span class="n">detectors</span><span class="o">=</span><span class="n">detectors</span><span class="p">,</span> <span class="n">max_batch</span><span class="o">=</span><span class="n">max_batch</span>
             <span class="p">)</span>
+
+            <span class="k">return</span> <span class="n">_wrap_measurements</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span>
 
         <span class="n">waves</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_base_waves_partial</span><span class="p">()()</span>
         <span class="k">return</span> <span class="n">waves</span></div>
 
     <span class="c1"># TODO: multislice should probably take only a keyword for core-loss, and transition_potentials should be a property of the potential</span>
 <div class="viewcode-block" id="PlaneWave.multislice"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.PlaneWave.html#abtem.waves.PlaneWave.multislice">[docs]</a>    <span class="k">def</span> <span class="nf">multislice</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">potential</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BasePotential</span><span class="p">,</span> <span class="n">Atoms</span><span class="p">],</span>
-        <span class="n">detectors</span><span class="p">:</span> <span class="n">BaseDetector</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
-        <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">ctf</span><span class="p">:</span> <span class="n">CTF</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">transition_potentials</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">potential</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BasePotential</span><span class="p">,</span> <span class="n">Atoms</span><span class="p">],</span>
+            <span class="n">detectors</span><span class="p">:</span> <span class="n">BaseDetector</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+            <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">ctf</span><span class="p">:</span> <span class="n">CTF</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">transition_potentials</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Waves</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Run the multislice algorithm, after building the plane-wave wave function as needed. The grid of the wave</span>
@@ -2404,8 +2448,9 @@ title="Open an issue"
 <span class="sd">            A detector or a list of detectors defining how the wave functions should be converted to measurements after</span>
 <span class="sd">            running the multislice algorithm.</span>
 <span class="sd">        max_batch : int, optional</span>
-<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39;, the number of chunks are</span>
-<span class="sd">            automatically estimated based on the user configuration.</span>
+<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the batch size is</span>
+<span class="sd">            automatically chosen based on the abtem user configuration settings &quot;dask.chunk-size&quot; and</span>
+<span class="sd">            &quot;dask.chunk-size-gpu&quot;.</span>
 <span class="sd">        lazy : bool, optional</span>
 <span class="sd">            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the</span>
 <span class="sd">            setting in the user configuration file.</span>
@@ -2449,7 +2494,7 @@ title="Open an issue"
                 <span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">,</span>
                 <span class="n">multislice_func</span><span class="o">=</span><span class="n">multislice_func</span><span class="p">,</span>
             <span class="p">)</span>
-
+            <span class="n">measurements</span> <span class="o">=</span> <span class="n">_wrap_measurements</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">waves</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">lazy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
             <span class="n">measurements</span> <span class="o">=</span> <span class="n">waves</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span>
@@ -2493,25 +2538,25 @@ title="Open an issue"
 <span class="sd">    &quot;&quot;&quot;</span>
 
 <div class="viewcode-block" id="Probe.__init__"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">semiangle_cutoff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">extent</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">taper</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span><span class="p">,</span>
-        <span class="n">tilt</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
-            <span class="n">Tuple</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">BaseDistribution</span><span class="p">],</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">BaseDistribution</span><span class="p">]],</span>
-            <span class="n">BaseDistribution</span><span class="p">,</span>
-        <span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="mf">0.0</span><span class="p">,</span>
-            <span class="mf">0.0</span><span class="p">,</span>
-        <span class="p">),</span>
-        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">aperture</span><span class="p">:</span> <span class="n">Aperture</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">aberrations</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Aberrations</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">transforms</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">WaveTransform</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="o">**</span><span class="n">kwargs</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">semiangle_cutoff</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">extent</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">taper</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span><span class="p">,</span>
+            <span class="n">tilt</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
+                <span class="n">Tuple</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">BaseDistribution</span><span class="p">],</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">BaseDistribution</span><span class="p">]],</span>
+                <span class="n">BaseDistribution</span><span class="p">,</span>
+            <span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="mf">0.0</span><span class="p">,</span>
+                    <span class="mf">0.0</span><span class="p">,</span>
+            <span class="p">),</span>
+            <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">aperture</span><span class="p">:</span> <span class="n">Aperture</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">aberrations</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Aberrations</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">transforms</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">WaveTransform</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="o">**</span><span class="n">kwargs</span>
     <span class="p">):</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_accelerator</span> <span class="o">=</span> <span class="n">Accelerator</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="n">energy</span><span class="p">)</span>
@@ -2607,10 +2652,10 @@ title="Open an issue"
         <span class="p">)</span>
 
 <div class="viewcode-block" id="Probe.build"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.build">[docs]</a>    <span class="k">def</span> <span class="nf">build</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">scan</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">,</span> <span class="n">BaseScan</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
-        <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">scan</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">,</span> <span class="n">BaseScan</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+            <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Waves</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Build probe wave functions at the provided positions.</span>
@@ -2620,8 +2665,9 @@ title="Open an issue"
 <span class="sd">        scan : array of `xy`-positions or BaseScan, optional</span>
 <span class="sd">            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.</span>
 <span class="sd">        max_batch : int, optional</span>
-<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39;, the number of chunks are</span>
-<span class="sd">            automatically estimated based on the user configuration.</span>
+<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the batch size is</span>
+<span class="sd">            automatically chosen based on the abtem user configuration settings &quot;dask.chunk-size&quot; and</span>
+<span class="sd">            &quot;dask.chunk-size-gpu&quot;.</span>
 <span class="sd">        lazy : bool, optional</span>
 <span class="sd">            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the</span>
 <span class="sd">            setting in the user configuration file.</span>
@@ -2660,6 +2706,8 @@ title="Open an issue"
                 <span class="n">detectors</span><span class="o">=</span><span class="n">detectors</span><span class="p">,</span> <span class="n">max_batch</span><span class="o">=</span><span class="n">max_batch</span>
             <span class="p">)</span>
 
+            <span class="n">waves</span> <span class="o">=</span> <span class="n">_wrap_measurements</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
+
         <span class="k">else</span><span class="p">:</span>
             <span class="n">waves</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">_base_waves_partial</span><span class="p">()()</span>
 
@@ -2672,13 +2720,13 @@ title="Open an issue"
         <span class="k">return</span> <span class="n">waves</span></div>
 
 <div class="viewcode-block" id="Probe.multislice"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.multislice">[docs]</a>    <span class="k">def</span> <span class="nf">multislice</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">potential</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BasePotential</span><span class="p">,</span> <span class="n">Atoms</span><span class="p">],</span>
-        <span class="n">scan</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">,</span> <span class="n">BaseScan</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">detectors</span><span class="p">:</span> <span class="n">BaseDetector</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
-        <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">transition_potentials</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">potential</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BasePotential</span><span class="p">,</span> <span class="n">Atoms</span><span class="p">],</span>
+            <span class="n">scan</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">tuple</span><span class="p">,</span> <span class="n">BaseScan</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">detectors</span><span class="p">:</span> <span class="n">BaseDetector</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+            <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">transition_potentials</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseMeasurement</span><span class="p">,</span> <span class="n">Waves</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">BaseMeasurement</span><span class="p">,</span> <span class="n">Waves</span><span class="p">]]]:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Run the multislice algorithm for probe wave functions at the provided positions.</span>
@@ -2692,9 +2740,10 @@ title="Open an issue"
 <span class="sd">        detectors : BaseDetector or list of BaseDetector, optional</span>
 <span class="sd">            A detector or a list of detectors defining how the wave functions should be converted to measurements after</span>
 <span class="sd">            running the multislice algorithm. If not given, defaults to the flexible annular detector.</span>
-<span class="sd">         max_batch : int, optional</span>
-<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39;, the number of chunks are</span>
-<span class="sd">            automatically estimated based on the user configuration.</span>
+<span class="sd">        max_batch : int, optional</span>
+<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the batch size is</span>
+<span class="sd">            automatically chosen based on the abtem user configuration settings &quot;dask.chunk-size&quot; and</span>
+<span class="sd">            &quot;dask.chunk-size-gpu&quot;.</span>
 <span class="sd">        lazy : bool, optional</span>
 <span class="sd">            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the</span>
 <span class="sd">            setting in the user configuration file.</span>
@@ -2750,8 +2799,12 @@ title="Open an issue"
             <span class="n">multislice_func</span><span class="o">=</span><span class="n">multislice_func</span><span class="p">,</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">squeeze</span><span class="p">:</span>
-            <span class="n">measurements</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="n">squeeze</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">measurement</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">measurements</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">squeeze</span><span class="p">:</span>
+                <span class="n">measurements</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">measurement</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="n">squeeze</span><span class="p">)</span>
+            <span class="n">measurement</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">metadata</span><span class="p">)</span>
+
+        <span class="n">measurements</span> <span class="o">=</span> <span class="n">_wrap_measurements</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="ow">not</span> <span class="n">lazy</span><span class="p">:</span>
             <span class="n">measurements</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
@@ -2759,13 +2812,13 @@ title="Open an issue"
         <span class="k">return</span> <span class="n">measurements</span></div>
 
 <div class="viewcode-block" id="Probe.scan"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.scan">[docs]</a>    <span class="k">def</span> <span class="nf">scan</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">potential</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Atoms</span><span class="p">,</span> <span class="n">BasePotential</span><span class="p">],</span>
-        <span class="n">scan</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseScan</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">detectors</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
-        <span class="n">transition_potentials</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-        <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">potential</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Atoms</span><span class="p">,</span> <span class="n">BasePotential</span><span class="p">],</span>
+            <span class="n">scan</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseScan</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">detectors</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">max_batch</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+            <span class="n">transition_potentials</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">BaseMeasurement</span><span class="p">,</span> <span class="n">Waves</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">BaseMeasurement</span><span class="p">,</span> <span class="n">Waves</span><span class="p">]]]:</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Run the multislice algorithm from probe wave functions over the provided scan.</span>
@@ -2780,8 +2833,9 @@ title="Open an issue"
 <span class="sd">            A detector or a list of detectors defining how the wave functions should be converted to measurements after</span>
 <span class="sd">            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.</span>
 <span class="sd">        max_batch : int, optional</span>
-<span class="sd">            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are</span>
-<span class="sd">            automatically estimated based on &quot;dask.chunk-size&quot; in the user configuration.</span>
+<span class="sd">            The number of wave functions in each chunk of the Dask array. If &#39;auto&#39; (default), the batch size is</span>
+<span class="sd">            automatically chosen based on the abtem user configuration settings &quot;dask.chunk-size&quot; and</span>
+<span class="sd">            &quot;dask.chunk-size-gpu&quot;.</span>
 <span class="sd">        lazy : bool, optional</span>
 <span class="sd">            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value</span>
 <span class="sd">            set in the configuration file.</span>

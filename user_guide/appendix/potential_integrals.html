@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -59,7 +57,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Parallel performance tips" href="performance_tips.html" />
     <link rel="prev" title="Sampling and antialiasing" href="antialiasing.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -113,7 +111,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -302,6 +300,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -872,13 +885,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1146,11 +1159,11 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="potential-integrals">
-<h1>Potential integrals<a class="headerlink" href="#potential-integrals" title="Permalink to this heading">#</a></h1>
+<h1>Potential integrals<a class="headerlink" href="#potential-integrals" title="Permalink to this headline">#</a></h1>
 <section id="real-space-integrators">
-<h2>Real space integrators<a class="headerlink" href="#real-space-integrators" title="Permalink to this heading">#</a></h2>
+<h2>Real space integrators<a class="headerlink" href="#real-space-integrators" title="Permalink to this headline">#</a></h2>
 <section id="quadrature-rule">
-<h3>Quadrature rule<a class="headerlink" href="#quadrature-rule" title="Permalink to this heading">#</a></h3>
+<h3>Quadrature rule<a class="headerlink" href="#quadrature-rule" title="Permalink to this headline">#</a></h3>
 <p>The numerical integrals by creating a table of integrals by using the Gaussian quadrature method , which is designed for accurate results using a minimum number of evaluations for functions with singularities.</p>
 <p>The potential of a single atom is localized, but in principle infinite in extent, hence we need to set a reasonable cutoff. The cutoff is calculated by solving the equation</p>
 <div class="math notranslate nohighlight">
@@ -1186,7 +1199,7 @@ V(r) = V_{tol} \quad ,
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./user_guide\appendix"
+            path: "./user_guide/appendix"
         },
         predefinedOutput: true
     }

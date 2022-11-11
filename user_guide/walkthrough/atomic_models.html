@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,9 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
@@ -59,7 +57,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Potentials" href="potentials.html" />
     <link rel="prev" title="Walkthrough" href="walkthrough.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -113,7 +111,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM!
+                    Welcome!
                 </a>
             </li>
         </ul>
@@ -302,6 +300,21 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../examples/notebooks/stem_quickstart.html">
      STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/4d-stem_quickstart.html">
+     4D-STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/saed_quickstart.html">
+     SAED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/ped_quickstart.html">
+     PED quickstart
     </a>
    </li>
    <li class="toctree-l2">
@@ -872,13 +885,13 @@ const thebe_selector_output = ".output, .cell_output"
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/contributing.html">
-   Contributing
+  <a class="reference internal" href="../../abtem/contribute.html">
+   Contribute
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../abtem/citing.html">
-   Citing
+  <a class="reference internal" href="../../abtem/cite.html">
+   Cite
   </a>
  </li>
  <li class="toctree-l1">
@@ -1197,11 +1210,11 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="atomic-models">
-<span id="walkthrough-atomic-models"></span><h1>Atomic models<a class="headerlink" href="#atomic-models" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-atomic-models"></span><h1>Atomic models<a class="headerlink" href="#atomic-models" title="Permalink to this headline">#</a></h1>
 <p><em>ab</em>TEM uses the Atomic Simulation Environment (<a class="reference external" href="https://wiki.fysik.dtu.dk/ase/">ASE</a>) for creating model atomic structures <span id="id1">[<a class="reference internal" href="../bibliography.html#id8" title="Ask Hjorth Larsen, Jens Jørgen Mortensen, Jakob Blomqvist, Ivano E Castelli, Rune Christensen, Marcin Dułak, Jesper Friis, Michael N Groves, Bjørk Hammer, Cory Hargus, Eric D Hermes, Paul C Jennings, Peter Bjerre Jensen, James Kermode, John R Kitchin, Esben Leonhard Kolsbjerg, Joseph Kubal, Kristen Kaasbjerg, Steen Lysgaard, Jón Bergmann Maronsson, Tristan Maxson, Thomas Olsen, Lars Pastewka, Andrew Peterson, Carsten Rostgaard, Jakob Schiøtz, Ole Schütt, Mikkel Strange, Kristian S Thygesen, Tejs Vegge, Lasse Vilhelmsen, Michael Walter, Zhenhua Zeng, and Karsten W Jacobsen. The atomic simulation environment — a python library for working with atoms. Journal of Physics: Condensed Matter, 29(27):273002, 2017.">LMB+17</a>]</span>. ASE is a set of open-source tools and Python modules for setting up, manipulating, visualizing and analyzing atomistic simulations. It is also used in conjunction with other simulation codes such as <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/">GPAW</a> for running density functional theory (DFT) simulations.</p>
 <p>Here, we introduce the set of features of ASE needed for image simulations; please refer to the ASE <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/ase.html">documentation</a> for a more general introduction.</p>
 <section id="atoms">
-<h2><code class="docutils literal notranslate"><span class="pre">Atoms</span></code><a class="headerlink" href="#atoms" title="Permalink to this heading">#</a></h2>
+<h2><code class="docutils literal notranslate"><span class="pre">Atoms</span></code><a class="headerlink" href="#atoms" title="Permalink to this headline">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">Atoms</span></code> object defines a collection of atoms, ie. our specimen. Here is how to set up an N<sub>2</sub> molecule by directly specifying the position of the two nitrogen atoms (in units of Ångstrom, which is the default in both ASE and <em>ab</em>TEM).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1275,7 +1288,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="import-export">
-<h2>Import/export<a class="headerlink" href="#import-export" title="Permalink to this heading">#</a></h2>
+<h2>Import/export<a class="headerlink" href="#import-export" title="Permalink to this headline">#</a></h2>
 <p>In addition to defining structures using code, ASE can import all the common atomic structure formats, see a full list <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/io/io.html">here</a>. Below we import a .cif-file defining a unit cell of strontium titanate (SrTiO<sub>3</sub>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1296,19 +1309,9 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>You can obtain structure files for most crystal structures from internet databases through your browser. The structure file imported above was downloaded from the <a class="reference external" href="https://materialsproject.org/">Materials Project</a>, but note that you need a free account to download data. We recommend this database because it is open source and provides a huge number of high-quality structures. It should howdever be noted that structures in the Materials Project database are determined computationally, and hence they may differ slightly from experiment.</p>
-<p>The simplest way to get a structure from the Materials Project is to find it through their web interface, but you can also access their database through an API. Below we use the API to obtain the same strontium titanate structure. To run this code, you need an API key from the materials project and insert it in place of “your_api_key”. In the example below, which is shown but not excuted, we additionally use the <a class="reference external" href="https://pymatgen.org/">pymatgen</a> package to adapt the structure into the ASE format.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">mp_api.client</span> <span class="kn">import</span> <span class="n">MPRester</span>
-<span class="kn">from</span> <span class="nn">pymatgen.io.ase</span> <span class="kn">import</span> <span class="n">AseAtomsAdaptor</span>
-
-<span class="k">with</span> <span class="n">MPRester</span><span class="p">(</span><span class="s2">&quot;your_api_key&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">mpr</span><span class="p">:</span>
-    <span class="n">docs</span> <span class="o">=</span> <span class="n">mpr</span><span class="o">.</span><span class="n">summary</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">material_ids</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;mp-5229&quot;</span><span class="p">],</span> <span class="n">fields</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;structure&quot;</span><span class="p">])</span>
-    <span class="n">srtio3</span> <span class="o">=</span> <span class="n">AseAtomsAdaptor</span><span class="p">()</span><span class="o">.</span><span class="n">get_atoms</span><span class="p">(</span><span class="n">docs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">structure</span><span class="p">)</span>
-</pre></div>
-</div>
 </section>
 <section id="visualizing-structures">
-<h2>Visualizing structures<a class="headerlink" href="#visualizing-structures" title="Permalink to this heading">#</a></h2>
+<h2>Visualizing structures<a class="headerlink" href="#visualizing-structures" title="Permalink to this headline">#</a></h2>
 <p>The simplest way to visualize the atoms is our <code class="docutils literal notranslate"><span class="pre">show_atoms</span></code> function. This creates a <code class="docutils literal notranslate"><span class="pre">matplotlib</span></code> figure of an 2D orthogonal projection of the structure perpendicular to a specified plane (default being the <code class="docutils literal notranslate"><span class="pre">xy</span></code> plane that is perpendicular to the default propagation direction in <em>ab</em>TEM).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1322,7 +1325,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/atomic_models_17_0.png" src="../../_images/atomic_models_17_0.png" />
+<img alt="../../_images/atomic_models_16_0.png" src="../../_images/atomic_models_16_0.png" />
 </div>
 </div>
 <p>The multislice algorithm requires periodic boundary conditions, and thus we should imagine that the atoms at a boundary have an equivalent image at the opposite side. We can show the periodic images of the boundary atoms by setting <code class="docutils literal notranslate"><span class="pre">show_periodic=True</span></code>.</p>
@@ -1338,7 +1341,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/atomic_models_19_0.png" src="../../_images/atomic_models_19_0.png" />
+<img alt="../../_images/atomic_models_18_0.png" src="../../_images/atomic_models_18_0.png" />
 </div>
 </div>
 <p>Alternatively, we may center a copy of the atoms (copied to avoid changing the original atoms) before displaying them using the <code class="docutils literal notranslate"><span class="pre">center</span></code> method, but this may later not be ideal for visualizing the potential.</p>
@@ -1356,25 +1359,16 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/atomic_models_21_0.png" src="../../_images/atomic_models_21_0.png" />
+<img alt="../../_images/atomic_models_20_0.png" src="../../_images/atomic_models_20_0.png" />
 </div>
-</div>
-<p>To view the atoms in an interactive 3D graphical user interface (GUI) viewer, we can use ASE’s <code class="docutils literal notranslate"><span class="pre">view</span></code> function (see the documentation <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/visualize/visualize.html">here</a>). Note that this may not work in a remote environment unless X11 forwarding is correctly set up (below we simply show the code instead of running it).</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase.visualize</span> <span class="kn">import</span> <span class="n">view</span>
-<span class="n">view</span><span class="p">(</span><span class="n">srtio3</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>If you are working in a remote environment or prefer to embed the 3D viewer in the notebook, you need to install <a class="reference external" href="https://github.com/nglviewer/nglview">nglview</a> (which is not a default dependency of <em>ab</em>TEM). This will allow you to use the nglview backend for the <code class="docutils literal notranslate"><span class="pre">view</span></code> function.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">view</span><span class="p">(</span><span class="n">srtio3</span><span class="p">,</span> <span class="n">viewer</span><span class="o">=</span><span class="s1">&#39;nglview&#39;</span><span class="p">)</span>
-</pre></div>
 </div>
 </section>
 <section id="manipulating-structures">
-<h2>Manipulating structures<a class="headerlink" href="#manipulating-structures" title="Permalink to this heading">#</a></h2>
+<h2>Manipulating structures<a class="headerlink" href="#manipulating-structures" title="Permalink to this headline">#</a></h2>
 <p>The structure you import or build may not match your requirements or the requirements of <em>ab</em>TEM. The most commonly needed manipulation is to repeat the structure to create a supercell.</p>
 <p>For many more examples, see our <a class="reference internal" href="../tutorials/advanced_atomic_models.html"><span class="doc std std-doc">tutorial on advanced atomic models</span></a>, which includes examples on rotating, scaling, and combining structures, and our tools for creating orthogonal periodic supercells that are required for multislice simulations.</p>
 <section id="repeating-the-structure">
-<h3>Repeating the structure<a class="headerlink" href="#repeating-the-structure" title="Permalink to this heading">#</a></h3>
+<h3>Repeating the structure<a class="headerlink" href="#repeating-the-structure" title="Permalink to this headline">#</a></h3>
 <p>It is often necessary to create a larger supercell from a unit cell. For example, you may need to increase the thickness of the structure by repeating it along the <span class="math notranslate nohighlight">\(z\)</span>-axis.</p>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
@@ -1393,7 +1387,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/atomic_models_27_0.png" src="../../_images/atomic_models_27_0.png" />
+<img alt="../../_images/atomic_models_25_0.png" src="../../_images/atomic_models_25_0.png" />
 </div>
 </div>
 <p>Let us then move on to discuss how we create the electrostatic scattering potentials from such atomic structures (click “Potentials” at the bottom-right of the page).</p>
@@ -1410,16 +1404,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem"
+            mode: "abtem-dask"
         },
         kernelOptions: {
-            kernelName: "abtem",
-            path: "./user_guide\walkthrough"
+            kernelName: "abtem-dask",
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem'</script>
+    <script>kernelName = 'abtem-dask'</script>
 
               </div>
               

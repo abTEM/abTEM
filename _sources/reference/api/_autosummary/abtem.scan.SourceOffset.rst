@@ -23,6 +23,7 @@ SourceOffset
       ~SourceOffset.ensemble_partial
       ~SourceOffset.evaluate
       ~SourceOffset.generate_blocks
+      ~SourceOffset.generate_blocks_by_extents
       ~SourceOffset.get_positions
       ~SourceOffset.get_weights
       ~SourceOffset.select_block

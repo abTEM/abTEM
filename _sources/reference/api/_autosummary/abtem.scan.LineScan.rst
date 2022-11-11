@@ -17,6 +17,7 @@ LineScan
    .. autosummary::
    
       ~LineScan.__init__
+      ~LineScan.add_margin
       ~LineScan.add_to_plot
       ~LineScan.apply
       ~LineScan.at_position
@@ -25,6 +26,7 @@ LineScan
       ~LineScan.evaluate
       ~LineScan.from_fractional_coordinates
       ~LineScan.generate_blocks
+      ~LineScan.generate_blocks_by_extents
       ~LineScan.get_positions
       ~LineScan.get_weights
       ~LineScan.match_probe

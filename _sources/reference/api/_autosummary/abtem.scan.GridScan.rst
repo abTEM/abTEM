@@ -24,6 +24,7 @@ GridScan
       ~GridScan.evaluate
       ~GridScan.from_fractional_coordinates
       ~GridScan.generate_blocks
+      ~GridScan.generate_blocks_by_extents
       ~GridScan.get_positions
       ~GridScan.get_weights
       ~GridScan.match_grid
