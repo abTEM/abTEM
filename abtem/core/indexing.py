@@ -222,6 +222,26 @@ def find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
     return spots
 
 
+def index_diffraction_patterns(diffraction_patterns, cell, tol:float=1e-6):
+    if len(diffraction_patterns.shape) > 3:
+        raise NotImplementedError
+    elif len(diffraction_patterns.shape) == 3:
+        array = diffraction_patterns.array.sum(-3)
+        ensemble_shape = diffraction_patterns.array.shape[-3]
+    else:
+        array = diffraction_patterns.array
+        ensemble_shape = 1
+
+    bins, miller_indices = map_all_bin_indices_to_miller_indices(
+        array, diffraction_patterns.sampling, cell, tolerance=tol * ensemble_shape
+    )
+
+    all_intensities = diffraction_patterns._select_frequency_bin(bins)
+    spots = {tuple(hkl): intensities for hkl, intensities in zip(miller_indices, all_intensities.T)}
+    assert len(spots) == len(bins)
+    return bins, spots
+
+
 def tabulate_diffraction_pattern(
         diffraction_pattern,
         cell,
@@ -299,11 +319,17 @@ class IndexedDiffractionPatterns:
     def vectors(self):
         return self._vectors
 
-    def remove_equivalent(self, divide_threshold=1.0):
+    def remove_equivalent(self, divide_threshold: float= 1.0):
         miller_indices, intensities = self._dict_to_arrays(self._spots)
+
+        if len(intensities.shape) > 1:
+            summed_intensities = intensities.sum(-1)
+        else:
+            summed_intensities = intensities
+
         include = find_equivalent_spots(
             miller_indices,
-            intensities=intensities,
+            intensities=summed_intensities,
             intensity_split=divide_threshold,
         )
 
@@ -314,7 +340,14 @@ class IndexedDiffractionPatterns:
 
     def remove_low_intensity(self, threshold: float = 1e-3):
         miller_indices, intensities = self._dict_to_arrays(self._spots)
-        include = intensities > threshold * intensities.max()
+
+        if len(intensities.shape) > 1:
+            summed_intensities = intensities.sum(-1, keepdims=True)
+        else:
+            summed_intensities = intensities
+
+        include = summed_intensities > threshold * summed_intensities.max()
+        include = np.squeeze(include)
 
         vectors = self._vectors[include]
         miller_indices, intensities = miller_indices[include], intensities[include]
@@ -335,13 +368,17 @@ class IndexedDiffractionPatterns:
             cls,
             diffraction_patterns,
             cell,
+            tol: float = 1e-6
     ):
-        bins, miller_indices = map_all_bin_indices_to_miller_indices(
-            diffraction_patterns.array, diffraction_patterns.sampling, cell
-        )
-        intensities = diffraction_patterns._select_frequency_bin(bins)
-        spots = cls._arrays_to_dict(miller_indices, intensities)
+        bins, spots = index_diffraction_patterns(diffraction_patterns, cell, tol=tol)
+
+        # bins, miller_indices = map_all_bin_indices_to_miller_indices(
+        #     diffraction_patterns.array, diffraction_patterns.sampling, cell
+        # )
+        # intensities = diffraction_patterns._select_frequency_bin(bins)
+        # spots = cls._arrays_to_dict(miller_indices, intensities)
         vectors = bins * diffraction_patterns.sampling
+
         return cls(spots, vectors)
 
     def normalize_intensity(self, spot=None):
@@ -359,13 +396,14 @@ class IndexedDiffractionPatterns:
             intensity_threshold: float = 1e-2,
             divide_threshold: float = 1.0,
             normalize: bool = False,
-            index: Union[int, str] = 0,
     ):
         import pandas as pd
 
         indexed = self.remove_equivalent(
             divide_threshold=divide_threshold
-        ).remove_low_intensity(intensity_threshold)
+        )
+
+        indexed = indexed.remove_low_intensity(intensity_threshold)
 
         if normalize is True:
             indexed = indexed.normalize_intensity(spot=None)
@@ -378,7 +416,10 @@ class IndexedDiffractionPatterns:
         }
         spots = dict(sorted(spots.items()))
 
-        return pd.DataFrame(spots, index=[index])
+        try:
+            return pd.DataFrame(spots)
+        except ValueError:
+            return pd.DataFrame(spots, index=[0])
 
     def show(self, **kwargs):
         from abtem.visualize import plot_diffraction_pattern
