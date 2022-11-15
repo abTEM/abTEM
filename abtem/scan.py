@@ -32,6 +32,7 @@ def _validate_scan(scan, probe=None):
         scan = CustomScan(scan)
 
     if probe is not None:
+        scan = scan.copy()
         scan.match_probe(probe)
 
     return scan
