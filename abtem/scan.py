@@ -38,6 +38,14 @@ def _validate_scan(scan, probe=None):
     return scan
 
 
+def _validate_scan_sampling(scan, probe):
+    if scan.sampling is None:
+        if hasattr(probe, "aperture"):
+            scan.sampling = 0.9 * probe.aperture.nyquist_sampling
+        elif hasattr(probe, "planewave_cutoff"):
+            scan.sampling = 0.9 * probe.planewave_cutoff
+
+
 class BaseScan(WaveTransform, metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
@@ -396,8 +404,7 @@ class LineScan(BaseScan):
         if self.end is None and probe.extent is not None:
             self.end = (0.0, probe.extent[1])
 
-        if self.sampling is None:
-            self.sampling = 0.9 * probe.aperture.nyquist_sampling
+        _validate_scan_sampling(self, probe)
 
     @property
     def extent(self) -> Union[float, None]:
@@ -740,8 +747,7 @@ class GridScan(HasGridMixin, BaseScan):
         if self.end is None:
             self.end = probe.extent
 
-        if self.sampling is None:
-            self.sampling = 0.9 * probe.aperture.nyquist_sampling
+        _validate_scan_sampling(self, probe)
 
     def _x_coordinates(self):
         return np.linspace(

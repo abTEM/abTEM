@@ -218,7 +218,7 @@ class AnnularDetector(BaseDetector):
 
         return measurement
 
-    def show(self, waves: "Waves", cmap="Greys", **kwargs):
+    def get_detector_region(self, waves):
         array = _polar_detector_bins(
             gpts=waves.gpts,
             sampling=waves.angular_sampling,
@@ -226,11 +226,15 @@ class AnnularDetector(BaseDetector):
             outer=self.outer,
             nbins_radial=1,
             nbins_azimuthal=1,
-            fftshift=True,
+            fftshift=False,
             rotation=0.0,
             offset=self.offset,
             return_indices=False,
         )
+        return array >= 0
+
+    def show(self, waves: "Waves", cmap="Greys", **kwargs):
+        array = self.get_detector_region(waves)
         metadata = {"energy": waves.energy}
         return DiffractionPatterns(
             array, metadata=metadata, sampling=waves.fourier_space_sampling

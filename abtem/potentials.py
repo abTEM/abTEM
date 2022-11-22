@@ -263,6 +263,9 @@ def _validate_potential(
 
 def _validate_exit_planes(exit_planes, num_slices):
     if isinstance(exit_planes, int):
+        if exit_planes >= num_slices:
+            return (num_slices - 1,)
+
         exit_planes = list(range(exit_planes - 1, num_slices, exit_planes))
         if exit_planes[-1] != (num_slices - 1):
             exit_planes.append(num_slices - 1)
