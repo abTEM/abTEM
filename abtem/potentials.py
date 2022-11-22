@@ -38,7 +38,8 @@ from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     DummyFrozenPhonons,
-    _validate_seeds, MDFrozenPhonons,
+    _validate_seeds,
+    MDFrozenPhonons,
 )
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.measurements import Images
@@ -62,7 +63,6 @@ if TYPE_CHECKING:
     from abtem.core.parametrizations.base import Parametrization
 
 
-
 class BasePotential(
     Ensemble,
     HasAxes,
@@ -73,6 +73,12 @@ class BasePotential(
     metaclass=ABCMeta,
 ):
     """Base class of all potentials. Documented in the subclasses."""
+
+    # def generate_blocks(self, chunks: Chunks = 1):
+    #     if self.ensemble_shape:
+    #         potential_generator = super().generate_blocks()
+    #     else:
+    #         potential_generator = ((0, (0, 1), self) for _ in range(1))
 
     @property
     @abstractmethod
@@ -117,9 +123,38 @@ class BasePotential(
         pass
 
     @property
+    def exit_plane_after(self):
+        exit_plane_index = 0
+        exit_planes = self.exit_planes
+
+        if exit_planes[0] == -1:
+            exit_plane_index += 1
+
+        is_exit_plane = np.zeros(len(self), dtype=bool)
+        for i in range(len(is_exit_plane)):
+            if i == exit_planes[exit_plane_index]:
+                is_exit_plane[i] = True
+                exit_plane_index += 1
+
+        return is_exit_plane
+
+    @property
     def exit_thicknesses(self) -> Tuple[float]:
-        thicknesses = np.insert(np.cumsum(self.slice_thickness), 0, 0)
-        return tuple(thicknesses[list(self.exit_planes)])
+        thicknesses = np.cumsum(self.slice_thickness)
+
+        if self.exit_planes[0] == -1:
+
+            return tuple(
+                np.insert(
+                    thicknesses[np.array(self.exit_planes[1:], dtype=int)], 0, 0.0
+                )
+            )
+        else:
+            return tuple(thicknesses[np.array(self.exit_planes, dtype=int)])
+
+        # return tuple(thicknesses[list(exit_planes)])
+        # else:
+        #    return tuple(thicknesses[list(self.exit_planes)])
 
     @property
     def num_exit_planes(self) -> int:
@@ -228,12 +263,12 @@ def _validate_potential(
 
 def _validate_exit_planes(exit_planes, num_slices):
     if isinstance(exit_planes, int):
-        exit_planes = list(range(0, num_slices, exit_planes))
-        if exit_planes[-1] != num_slices:
-            exit_planes.append(num_slices)
-        exit_planes = tuple(exit_planes)
+        exit_planes = list(range(exit_planes - 1, num_slices, exit_planes))
+        if exit_planes[-1] != (num_slices - 1):
+            exit_planes.append(num_slices - 1)
+        exit_planes = (-1,) + tuple(exit_planes)
     elif exit_planes is None:
-        exit_planes = (num_slices,)
+        exit_planes = (num_slices - 1,)
 
     return exit_planes
 
@@ -652,7 +687,9 @@ class Potential(_PotentialBuilder):
 
         return self._sliced_atoms
 
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+    def generate_slices(
+        self, first_slice: int = 0, last_slice: int = None, return_depth: float = False
+    ):
         """
         Generate the slices for the potential.
 
@@ -686,6 +723,9 @@ class Potential(_PotentialBuilder):
             for number in numbers
         }
 
+        exit_plane_after = self.exit_plane_after
+
+        cum_thickness = np.cumsum(self.slice_thickness)
         for start, stop in generate_chunks(
             last_slice - first_slice, chunks=1, start=first_slice
         ):
@@ -706,11 +746,20 @@ class Potential(_PotentialBuilder):
 
             array -= array.min()
 
-            yield PotentialArray(
+            exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+
+            potential_array = PotentialArray(
                 array,
                 slice_thickness=self.slice_thickness[start:stop],
+                exit_planes=exit_planes,
                 extent=self.extent,
             )
+
+            if return_depth:
+                depth = cum_thickness[stop - 1]
+                yield depth, potential_array
+            else:
+                yield potential_array
 
     @property
     def ensemble_axes_metadata(self):
@@ -1238,7 +1287,11 @@ class CrystalPotential(_PotentialBuilder):
 
             self._seeds = _validate_seeds(seeds, num_frozen_phonons)
 
-        if (potential_unit.num_frozen_phonons == 1) and (num_frozen_phonons is not None) and (num_frozen_phonons > 1):
+        if (
+            (potential_unit.num_frozen_phonons == 1)
+            and (num_frozen_phonons is not None)
+            and (num_frozen_phonons > 1)
+        ):
             warnings.warn(
                 "'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons"
             )
@@ -1279,7 +1332,7 @@ class CrystalPotential(_PotentialBuilder):
         if self._seeds is None:
             return ()
         else:
-            return self.num_frozen_phonons,
+            return (self.num_frozen_phonons,)
 
     @property
     def num_frozen_phonons(self):
@@ -1407,7 +1460,9 @@ class CrystalPotential(_PotentialBuilder):
             self._crystal_potential, potential_partial=potential_partial, **kwargs
         )
 
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+    def generate_slices(
+        self, first_slice: int = 0, last_slice: int = None, return_depth: bool = False
+    ):
         """
         Generate the slices for the potential.
 
@@ -1435,11 +1490,26 @@ class CrystalPotential(_PotentialBuilder):
         else:
             rng = np.random.default_rng(self.seeds[0])
 
+        exit_plane_after = self.exit_plane_after
+        cum_thickness = np.cumsum(self.slice_thickness)
+        start = first_slice
+        stop = first_slice + 1
         for i in range(self.repetitions[2]):
             generator = potentials[
                 rng.integers(0, potentials.shape[0])
             ].generate_slices()
+
             for i in range(len(self.potential_unit)):
                 slic = next(generator).tile(self.repetitions[:2])
 
-                yield slic
+                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+
+                slic._exit_planes = exit_planes
+
+                start += 1
+                stop += 1
+
+                if return_depth:
+                    yield cum_thickness[stop - 1], slic
+                else:
+                    yield slic
