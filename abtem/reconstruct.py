@@ -649,11 +649,6 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         # Probes Initialization
         if self._probes is None:
-            # ctf = CTF(
-            #     energy=self._energy,
-            #     semiangle_cutoff=self._semiangle_cutoff,
-            #     **self._polar_parameters,
-            # )
             self._probes = (
                 Probe(
                     semiangle_cutoff=self._semiangle_cutoff,
@@ -1555,19 +1550,14 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         # Probes Initialization
         if self._probes is None:
-            ctf = CTF(
-                energy=self._energy,
-                semiangle_cutoff=self._semiangle_cutoff,
-                parameters=self._polar_parameters,
-            )
             self._probes = (
                 Probe(
                     semiangle_cutoff=self._semiangle_cutoff,
                     energy=self._energy,
                     gpts=self._region_of_interest_shape,
                     sampling=self.sampling,
-                    ctf=ctf,
                     device=self._device,
+                    **self._polar_parameters
                 )
                 .build()
                 .array
@@ -3083,21 +3073,16 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         # Probes Initialization
         if self._probes is None:
-            ctf = CTF(
-                energy=self._energy,
-                semiangle_cutoff=self._semiangle_cutoff,
-                parameters=self._polar_parameters,
-            )
             self._probes = (
                 Probe(
                     semiangle_cutoff=self._semiangle_cutoff,
                     energy=self._energy,
                     gpts=self._region_of_interest_shape,
                     sampling=self.sampling,
-                    ctf=ctf,
                     device=self._device,
+                    **self._polar_parameters,
                 )
-                .build()
+                .build(lazy=False)
                 .array
             )
         else:
@@ -3841,8 +3826,8 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         position_px_padding = xp.array(
             self._experimental_parameters["object_px_padding"]
         )
-        center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
-        sobel = get_scipy_module(xp).ndimage.sobel
+        center_of_mass = get_ndimage_module(xp).center_of_mass
+        sobel = get_ndimage_module(xp).sobel
 
         if return_iterations:
             objects_iterations = []
@@ -4243,19 +4228,14 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         # Probes Initialization
         if self._probes is None:
-            ctf = CTF(
-                energy=self._energy,
-                semiangle_cutoff=self._semiangle_cutoff,
-                parameters=self._polar_parameters,
-            )
             _probes = (
                 Probe(
                     semiangle_cutoff=self._semiangle_cutoff,
                     energy=self._energy,
                     gpts=self._region_of_interest_shape,
                     sampling=self.sampling,
-                    ctf=ctf,
                     device=self._device,
+                    **self._polar_parameters,
                 )
                 .build()
                 .array
