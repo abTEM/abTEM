@@ -33,37 +33,41 @@ class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
         self,
         cutoff: float = 2.0 / 3.0,
         taper: float = TAPER,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        device: str = "cpu",
     ):
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._cutoff = cutoff
         self._taper = taper
-        self._device = device
+        self._key = None
         self._array = None
 
-    @property
-    def array(self):
-        if self._array is None:
-            self._array = self._calculate_array()
+    def get_array(self, x):
+
+        key = (
+            self._cutoff,
+            self._taper,
+            x.gpts,
+            x.sampling,
+            x.energy,
+            x.device,
+        )
+
+        if key == self._key:
+            return self._array
+
+        self._array = antialias_aperture(
+            self._cutoff,
+            self._taper,
+            x.gpts,
+            x.sampling,
+            get_array_module(x.device),
+        )
+        self._key = key
 
         return self._array
 
-    def _calculate_array(self):
-        self.grid.check_is_defined()
-        array = antialias_aperture(
-            self.cutoff,
-            self.taper,
-            self.gpts,
-            self.sampling,
-            get_array_module(self._device),
-        )
-        return array
-
     def bandlimit(self, x):
-        x._array = fft2_convolve(x.array, self.array, overwrite_x=False)
+        array = self.get_array(x)
+
+        x._array = fft2_convolve(x.array, array, overwrite_x=False)
 
         if hasattr(x, "_antialias_cutoff_gpts"):
             x._antialias_cutoff_gpts = x.antialias_cutoff_gpts
