@@ -222,7 +222,7 @@ def find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
     return spots
 
 
-def index_diffraction_patterns(diffraction_patterns, cell, tol:float=1e-6):
+def index_diffraction_patterns(diffraction_patterns, cell, tol: float = 1e-6):
     if len(diffraction_patterns.shape) > 3:
         raise NotImplementedError
     elif len(diffraction_patterns.shape) == 3:
@@ -319,7 +319,7 @@ class IndexedDiffractionPatterns:
     def vectors(self):
         return self._vectors
 
-    def remove_equivalent(self, divide_threshold: float= 1.0):
+    def remove_equivalent(self, divide_threshold: float = 1.0):
         miller_indices, intensities = self._dict_to_arrays(self._spots)
 
         if len(intensities.shape) > 1:
@@ -396,7 +396,10 @@ class IndexedDiffractionPatterns:
             intensity_threshold: float = 1e-2,
             divide_threshold: float = 1.0,
             normalize: bool = False,
+            index: Union[str, int] = 0,
     ):
+
+
         import pandas as pd
 
         indexed = self.remove_equivalent(
@@ -419,7 +422,7 @@ class IndexedDiffractionPatterns:
         try:
             return pd.DataFrame(spots)
         except ValueError:
-            return pd.DataFrame(spots, index=[0])
+            return pd.DataFrame(spots, index=[index])
 
     def show(self, **kwargs):
         from abtem.visualize import plot_diffraction_pattern
