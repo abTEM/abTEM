@@ -502,10 +502,12 @@ def rotate_atoms_to_plane(
         return atoms
 
     atoms = atoms.copy()
-    R = rotation_matrix_from_plane(plane)
+    axes = plane_to_axes(plane)
 
-    atoms.positions[:] = np.dot(atoms.positions[:], R.T)
-    atoms.cell[:] = np.dot(atoms.cell[:], R.T)
+    atoms.positions[:] = atoms.positions[:][:, list(axes)]
+    atoms.cell[:] = atoms.cell[:][:, list(axes)]
+    #atoms.positions[:] = np.dot(atoms.positions[:], R.T)
+    #atoms.cell[:] = np.dot(atoms.cell[:], R.T)
     return atoms
 
 
