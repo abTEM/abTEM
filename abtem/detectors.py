@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 
 def _validate_detectors(
-    detectors: Union["BaseDetector", List["BaseDetector"]]
+        detectors: Union["BaseDetector", List["BaseDetector"]]
 ) -> List["BaseDetector"]:
     if hasattr(detectors, "detect"):
         detectors = [detectors]
@@ -33,8 +33,8 @@ def _validate_detectors(
         detectors = [WavesDetector()]
 
     elif not (
-        isinstance(detectors, list)
-        and all(hasattr(detector, "detect") for detector in detectors)
+            isinstance(detectors, list)
+            and all(hasattr(detector, "detect") for detector in detectors)
     ):
 
         raise RuntimeError(
@@ -130,12 +130,12 @@ class AnnularDetector(BaseDetector):
     """
 
     def __init__(
-        self,
-        inner: float,
-        outer: float,
-        offset: Tuple[float, float] = (0.0, 0.0),
-        to_cpu: bool = True,
-        url: str = None,
+            self,
+            inner: float,
+            outer: float,
+            offset: Tuple[float, float] = (0.0, 0.0),
+            to_cpu: bool = True,
+            url: str = None,
     ):
 
         self._inner = inner
@@ -195,7 +195,7 @@ class AnnularDetector(BaseDetector):
         return np.float32
 
     def measurement_type(
-        self, waves: "BaseWaves"
+            self, waves: "BaseWaves"
     ) -> Union[type(RealSpaceLineProfiles), type(Images)]:
         return _scanned_measurement_type(waves)
 
@@ -218,7 +218,10 @@ class AnnularDetector(BaseDetector):
 
         return measurement
 
-    def get_detector_region(self, waves):
+    def add_to_plot(self, ax):
+        pass
+
+    def get_detector_region(self, waves: "Waves", fftshift: bool = True):
         array = _polar_detector_bins(
             gpts=waves.gpts,
             sampling=waves.angular_sampling,
@@ -226,7 +229,7 @@ class AnnularDetector(BaseDetector):
             outer=self.outer,
             nbins_radial=1,
             nbins_azimuthal=1,
-            fftshift=False,
+            fftshift=fftshift,
             rotation=0.0,
             offset=self.offset,
             return_indices=False,
@@ -234,7 +237,7 @@ class AnnularDetector(BaseDetector):
         return array >= 0
 
     def show(self, waves: "Waves", cmap="Greys", **kwargs):
-        array = self.get_detector_region(waves)
+        array = self.get_detector_region(waves, fftshift=True)
         metadata = {"energy": waves.energy}
         return DiffractionPatterns(
             array, metadata=metadata, sampling=waves.fourier_space_sampling
@@ -243,13 +246,13 @@ class AnnularDetector(BaseDetector):
 
 class _AbstractRadialDetector(BaseDetector):
     def __init__(
-        self,
-        inner: float,
-        outer: float,
-        rotation: float,
-        offset: Tuple[float, float],
-        to_cpu: bool = True,
-        url: str = None,
+            self,
+            inner: float,
+            outer: float,
+            rotation: float,
+            offset: Tuple[float, float],
+            to_cpu: bool = True,
+            url: str = None,
     ):
         self._inner = inner
         self._outer = outer
@@ -424,12 +427,12 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     """
 
     def __init__(
-        self,
-        step_size: float = 1.0,
-        inner: float = 0.0,
-        outer: float = None,
-        to_cpu: bool = True,
-        url: str = None,
+            self,
+            step_size: float = 1.0,
+            inner: float = 0.0,
+            outer: float = None,
+            to_cpu: bool = True,
+            url: str = None,
     ):
         self._step_size = step_size
         super().__init__(
@@ -495,15 +498,15 @@ class SegmentedDetector(_AbstractRadialDetector):
     """
 
     def __init__(
-        self,
-        nbins_radial: int,
-        nbins_azimuthal: int,
-        inner: float,
-        outer: float,
-        rotation: float = 0.0,
-        offset: Tuple[float, float] = (0.0, 0.0),
-        to_cpu: bool = False,
-        url: str = None,
+            self,
+            nbins_radial: int,
+            nbins_azimuthal: int,
+            inner: float,
+            outer: float,
+            rotation: float = 0.0,
+            offset: Tuple[float, float] = (0.0, 0.0),
+            to_cpu: bool = False,
+            url: str = None,
     ):
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
@@ -582,12 +585,12 @@ class PixelatedDetector(BaseDetector):
     """
 
     def __init__(
-        self,
-        max_angle: Union[str, float] = "valid",
-        resample: bool = False,
-        fourier_space: bool = True,
-        to_cpu: bool = True,
-        url: str = None,
+            self,
+            max_angle: Union[str, float] = "valid",
+            resample: bool = False,
+            fourier_space: bool = True,
+            to_cpu: bool = True,
+            url: str = None,
     ):
         self._resample = resample
         self._max_angle = max_angle
