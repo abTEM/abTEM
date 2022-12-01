@@ -5,9 +5,11 @@ from functools import partial
 from typing import Union, Sequence, Mapping, Callable, Iterable
 
 import numpy as np
-from tqdm.auto import tqdm
 
-from abtem.core.axes import ThicknessAxis
+from abtem import stack
+# from tqdm.auto import tqdm
+
+from abtem.core.axes import ThicknessAxis, OrdinalAxis
 from abtem.core.backend import (
     copy_to_device,
     get_array_module,
@@ -73,7 +75,7 @@ class ProgressBar:
 
 
 def _wrapped_indices_2D_window(
-    center_position: np.ndarray, window_shape: Sequence[int], array_shape: Sequence[int]
+        center_position: np.ndarray, window_shape: Sequence[int], array_shape: Sequence[int]
 ):
     """
     Computes periodic indices for a window_shape probe centered at center_position, in object of size array_shape.
@@ -117,13 +119,13 @@ def _orthogonalize(V):
 
 
 def _propagate_array(
-    propagator: FresnelPropagator,
-    waves_array: np.ndarray,
-    sampling: Sequence[float],
-    wavelength: float,
-    thickness: float,
-    overwrite: bool = False,
-    xp=np,
+        propagator: FresnelPropagator,
+        waves_array: np.ndarray,
+        sampling: Sequence[float],
+        wavelength: float,
+        thickness: float,
+        overwrite: bool = False,
+        xp=np,
 ):
     """
     Propagates complex wave function array through free space distance dz.
@@ -189,7 +191,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
     @staticmethod
     @abstractmethod
     def _update_function(
-        objects, probes, position, exit_waves, modified_exit_waves, **kwargs
+            objects, probes, position, exit_waves, modified_exit_waves, **kwargs
     ):
         """Abstract method all subclasses must define to update the current probes, objects, and position estimates."""
         pass
@@ -216,15 +218,15 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @abstractmethod
     def reconstruct(
-        self,
-        max_iterations,
-        return_iterations,
-        fix_com,
-        random_seed,
-        verbose,
-        functions_queue,
-        parameters,
-        **kwargs,
+            self,
+            max_iterations,
+            return_iterations,
+            fix_com,
+            random_seed,
+            verbose,
+            functions_queue,
+            parameters,
+            **kwargs,
     ):
         """
         Abstract method all subclasses must define which does the following:
@@ -241,9 +243,9 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @staticmethod
     def _update_parameters(
-        parameters: dict,
-        polar_parameters: dict = {},
-        experimental_parameters: dict = {},
+            parameters: dict,
+            polar_parameters: dict = {},
+            experimental_parameters: dict = {},
     ):
         """
         Common static method to update polar and experimental parameters during initialization.
@@ -280,7 +282,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @staticmethod
     def _pad_diffraction_patterns(
-        diffraction_patterns: np.ndarray, region_of_interest_shape: Sequence[int]
+            diffraction_patterns: np.ndarray, region_of_interest_shape: Sequence[int]
     ):
         """
         Common static method to zero-pad CBED patterns to a certain region of interest shape.
@@ -303,17 +305,17 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         xp = get_array_module(diffraction_patterns)
 
         if any(
-            dp_shape > roi_shape
-            for dp_shape, roi_shape in zip(
-                diffraction_patterns_size, region_of_interest_shape
-            )
+                dp_shape > roi_shape
+                for dp_shape, roi_shape in zip(
+                    diffraction_patterns_size, region_of_interest_shape
+                )
         ):
             raise ValueError()
 
         if diffraction_patterns_size != region_of_interest_shape:
             padding_list = [(0, 0)]  # No padding along first dimension
             for current_dim, target_dim in zip(
-                diffraction_patterns_size, region_of_interest_shape
+                    diffraction_patterns_size, region_of_interest_shape
             ):
                 pad_value = target_dim - current_dim
                 pad_tuple = (pad_value // 2, pad_value // 2 + pad_value % 2)
@@ -327,7 +329,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @staticmethod
     def _extract_calibrations_from_measurement_object(
-        measurement: DiffractionPatterns, energy: float = None
+            measurement: DiffractionPatterns, energy: float = None
     ):
         """
         Common static method to extract angular sampling and scan step sizes from Measurement object.
@@ -373,10 +375,10 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @staticmethod
     def _calculate_scan_positions_in_pixels(
-        positions: np.ndarray,
-        sampling: Sequence[float],
-        region_of_interest_shape: Sequence[int],
-        experimental_parameters: dict,
+            positions: np.ndarray,
+            sampling: Sequence[float],
+            region_of_interest_shape: Sequence[int],
+            experimental_parameters: dict,
     ):
         """
         Common static method to compute the initial guess of scan positions in pixels.
@@ -505,25 +507,25 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
     """
 
     def __init__(
-        self,
-        diffraction_patterns: Union[np.ndarray, DiffractionPatterns],
-        energy: float,
-        region_of_interest_shape: Sequence[int] = None,
-        objects: np.ndarray = None,
-        probes: Union[np.ndarray, Probe] = None,
-        positions: np.ndarray = None,
-        semiangle_cutoff: float = None,
-        preprocess: bool = False,
-        device: str = "cpu",
-        parameters: Mapping[str, float] = None,
-        **kwargs,
+            self,
+            diffraction_patterns: Union[np.ndarray, DiffractionPatterns],
+            energy: float,
+            region_of_interest_shape: Sequence[int] = None,
+            objects: np.ndarray = None,
+            probes: Union[np.ndarray, Probe] = None,
+            positions: np.ndarray = None,
+            semiangle_cutoff: float = None,
+            preprocess: bool = False,
+            device: str = "cpu",
+            parameters: Mapping[str, float] = None,
+            **kwargs,
     ):
 
         for key in kwargs.keys():
             if (
-                (key not in polar_symbols)
-                and (key not in polar_aliases.keys())
-                and (key not in experimental_symbols)
+                    (key not in polar_symbols)
+                    and (key not in polar_aliases.keys())
+                    and (key not in experimental_symbols)
             ):
                 raise ValueError("{} not a recognized parameter".format(key))
 
@@ -608,7 +610,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             self._diffraction_patterns[
                 self._diffraction_patterns
                 < self._experimental_parameters["background_counts_cutoff"]
-            ] = 0.0
+                ] = 0.0
 
         if self._experimental_parameters["counts_scaling_factor"] is not None:
             self._diffraction_patterns /= self._experimental_parameters[
@@ -665,7 +667,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             if isinstance(self._probes, Probe):
                 if self._probes.gpts != self._region_of_interest_shape:
                     raise ValueError()
-                self._probes = copy_to_device(self._probes.build().array, self._device)
+                self._probes = copy_to_device(self._probes.build(lazy=False).array, self._device)
             else:
                 self._probes = copy_to_device(self._probes, self._device)
 
@@ -673,12 +675,12 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _overlap_projection(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        old_position: np.ndarray,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            old_position: np.ndarray,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE overlap projection static method:
@@ -722,11 +724,11 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fourier_projection(
-        exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        sse: float,
-        xp=np,
-        **kwargs,
+            exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            sse: float,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE fourier projection static method:
@@ -755,7 +757,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         exit_wave_fft = xp.fft.fft2(exit_waves)
         sse += xp.mean(
             xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns) ** 2
-        ) / xp.sum(diffraction_patterns**2)
+        ) / xp.sum(diffraction_patterns ** 2)
         modified_exit_wave = xp.fft.ifft2(
             diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft))
         )
@@ -764,18 +766,18 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _update_function(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        exit_waves: np.ndarray,
-        modified_exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        fix_probe: bool = False,
-        position_correction: Callable = None,
-        sobel: Callable = None,
-        reconstruction_parameters: Mapping[str, float] = None,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            exit_waves: np.ndarray,
+            modified_exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            fix_probe: bool = False,
+            position_correction: Callable = None,
+            sobel: Callable = None,
+            reconstruction_parameters: Mapping[str, float] = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE objects and probes update static method:
@@ -848,20 +850,20 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         alpha = reconstruction_parameters["alpha"]
         object_step_size = reconstruction_parameters["object_step_size"]
         objects[object_indices] += (
-            object_step_size
-            * probe_conj
-            * exit_wave_diff
-            / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
+                object_step_size
+                * probe_conj
+                * exit_wave_diff
+                / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
         )
 
         if not fix_probe:
             beta = reconstruction_parameters["beta"]
             probe_step_size = reconstruction_parameters["probe_step_size"]
             probes += (
-                probe_step_size
-                * obj_conj
-                * exit_wave_diff
-                / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
+                    probe_step_size
+                    * obj_conj
+                    * exit_wave_diff
+                    / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
             )
 
         return objects, probes, position
@@ -904,16 +906,16 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _position_correction(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        exit_wave: np.ndarray,
-        modified_exit_wave: np.ndarray,
-        diffraction_pattern: np.ndarray,
-        sobel: Callable,
-        position_step_size: float = 1.0,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            exit_wave: np.ndarray,
+            modified_exit_wave: np.ndarray,
+            diffraction_pattern: np.ndarray,
+            sobel: Callable,
+            position_step_size: float = 1.0,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE probe position correction method.
@@ -969,7 +971,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fix_probe_center_of_mass(
-        probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
+            probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
     ):
         """
         Regularized-PIE probe center correction method.
@@ -997,11 +999,11 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         return probes
 
     def _prepare_functions_queue(
-        self,
-        max_iterations: int,
-        pre_position_correction_update_steps: int = None,
-        pre_probe_correction_update_steps: int = None,
-        **kwargs,
+            self,
+            max_iterations: int,
+            pre_position_correction_update_steps: int = None,
+            pre_probe_correction_update_steps: int = None,
+            **kwargs,
     ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
@@ -1050,7 +1052,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             )
 
             remaining_update_steps = (
-                total_update_steps - pre_position_correction_update_steps
+                    total_update_steps - pre_position_correction_update_steps
             )
             functions_queue += [functions_tuple] * remaining_update_steps
             queue_summary += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
@@ -1063,22 +1065,22 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
 
         functions_queue = [
-            functions_queue[x : x + self._num_diffraction_patterns]
+            functions_queue[x: x + self._num_diffraction_patterns]
             for x in range(0, total_update_steps, self._num_diffraction_patterns)
         ]
 
         return functions_queue, queue_summary
 
     def reconstruct(
-        self,
-        max_iterations: int = 5,
-        return_iterations: bool = False,
-        fix_com: bool = True,
-        random_seed=None,
-        verbose: bool = False,
-        functions_queue: Iterable = None,
-        parameters: Mapping[str, float] = None,
-        **kwargs,
+            self,
+            max_iterations: int = 5,
+            return_iterations: bool = False,
+            fix_com: bool = True,
+            random_seed=None,
+            verbose: bool = False,
+            functions_queue: Iterable = None,
+            parameters: Mapping[str, float] = None,
+            **kwargs,
     ):
         """
         Main reconstruction loop method to do the following:
@@ -1145,10 +1147,10 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                         for function_tuples in functions_queue
                     ]
             elif (
-                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+                    len(functions_queue) == max_iterations * self._num_diffraction_patterns
             ):
                 functions_queue = [
-                    functions_queue[x : x + self._num_diffraction_patterns]
+                    functions_queue[x: x + self._num_diffraction_patterns]
                     for x in range(
                         0, total_update_steps, self._num_diffraction_patterns
                     )
@@ -1160,14 +1162,16 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         ### Main Loop
         xp = get_array_module(self._device)
-        outer_pbar = ProgressBar(total=max_iterations, leave=False)
-        inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
+        # outer_pbar = ProgressBar(total=max_iterations, leave=False)
+        # inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
         indices = np.arange(self._num_diffraction_patterns)
         position_px_padding = xp.array(
             self._experimental_parameters["object_px_padding"]
         )
         center_of_mass = get_ndimage_module(xp).center_of_mass
         sobel = get_ndimage_module(xp).sobel
+
+
 
         if return_iterations:
             objects_iterations = []
@@ -1180,7 +1184,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         for iteration_index, iteration_step in enumerate(self._functions_queue):
 
-            inner_pbar.reset()
+            # inner_pbar.reset()
 
             # Set iteration-specific parameters
             np.random.shuffle(indices)
@@ -1195,25 +1199,25 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 # Skip empty diffraction patterns
                 diffraction_pattern = self._diffraction_patterns[index]
                 if xp.sum(diffraction_pattern) == 0.0:
-                    inner_pbar.update(1)
+                    # inner_pbar.update(1)
                     continue
 
                 # Set update-specific parameters
                 global_iteration_i = (
-                    iteration_index * self._num_diffraction_patterns + update_index
+                        iteration_index * self._num_diffraction_patterns + update_index
                 )
 
                 if (
-                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
-                    is None
+                        self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                        is None
                 ):
                     fix_probe = False
                 else:
                     fix_probe = (
-                        global_iteration_i
-                        < self._reconstruction_parameters[
-                            "pre_probe_correction_update_steps"
-                        ]
+                            global_iteration_i
+                            < self._reconstruction_parameters[
+                                "pre_probe_correction_update_steps"
+                            ]
                     )
 
                 (
@@ -1250,7 +1254,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 )
 
                 old_position = position
-                inner_pbar.update(1)
+                # inner_pbar.update(1)
 
             # Shift probe back to origin
             self._probes = fft_shift(self._probes, xp.round(position) - position)
@@ -1264,7 +1268,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             # Positions CoM
             if _position_correction is not None:
                 self._positions_px -= (
-                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                        xp.mean(self._positions_px, axis=0) - self._positions_px_com
                 )
                 self._reconstruction_parameters[
                     "position_step_size"
@@ -1292,13 +1296,15 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                     f"----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}"
                 )
 
-            outer_pbar.update(1)
+            # outer_pbar.update(1)
 
-        inner_pbar.close()
-        outer_pbar.close()
+        # inner_pbar.close()
+        # outer_pbar.close()
 
         #  Return Results
         if return_iterations:
+            axis_metadata = OrdinalAxis(label="Iteration", values=tuple(range(len(objects_iterations))))
+
             results = map(
                 self._prepare_measurement_outputs,
                 objects_iterations,
@@ -1307,7 +1313,11 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 sse_iterations,
             )
 
-            return tuple(map(list, zip(*results)))
+            objects, probes, positions, sse = list(map(list, zip(*results)))
+            objects = stack(objects, axis_metadata)
+            probes = stack(probes, axis_metadata)
+
+            return objects, probes, positions, sse
         else:
             results = self._prepare_measurement_outputs(
                 self._objects,
@@ -1318,11 +1328,11 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             return results
 
     def _prepare_measurement_outputs(
-        self,
-        objects: np.ndarray,
-        probes: np.ndarray,
-        positions: np.ndarray,
-        sse: np.ndarray,
+            self,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            positions: np.ndarray,
+            sse: np.ndarray,
     ):
         """
         Method to format the reconstruction outputs as DiffractionPatterns objects.
@@ -1401,20 +1411,20 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     """
 
     def __init__(
-        self,
-        diffraction_patterns: Union[
-            Sequence[np.ndarray], Sequence[DiffractionPatterns]
-        ],
-        energy: float,
-        region_of_interest_shape: Sequence[int] = None,
-        objects: np.ndarray = None,
-        probes: Union[np.ndarray, Probe] = None,
-        positions: np.ndarray = None,
-        semiangle_cutoff: float = None,
-        preprocess: bool = False,
-        device: str = "cpu",
-        parameters: Mapping[str, float] = None,
-        **kwargs,
+            self,
+            diffraction_patterns: Union[
+                Sequence[np.ndarray], Sequence[DiffractionPatterns]
+            ],
+            energy: float,
+            region_of_interest_shape: Sequence[int] = None,
+            objects: np.ndarray = None,
+            probes: Union[np.ndarray, Probe] = None,
+            positions: np.ndarray = None,
+            semiangle_cutoff: float = None,
+            preprocess: bool = False,
+            device: str = "cpu",
+            parameters: Mapping[str, float] = None,
+            **kwargs,
     ):
 
         if len(diffraction_patterns) != 2:
@@ -1426,9 +1436,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         for key in kwargs.keys():
             if (
-                (key not in polar_symbols)
-                and (key not in polar_aliases.keys())
-                and (key not in experimental_symbols)
+                    (key not in polar_symbols)
+                    and (key not in polar_aliases.keys())
+                    and (key not in experimental_symbols)
             ):
                 raise ValueError("{} not a recognized parameter".format(key))
 
@@ -1500,7 +1510,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             if self._experimental_parameters["background_counts_cutoff"] is not None:
                 _dp[
                     _dp < self._experimental_parameters["background_counts_cutoff"]
-                ] = 0.0
+                    ] = 0.0
 
             if self._experimental_parameters["counts_scaling_factor"] is not None:
                 _dp /= self._experimental_parameters["counts_scaling_factor"]
@@ -1559,7 +1569,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     device=self._device,
                     **self._polar_parameters
                 )
-                .build()
+                .build(lazy=False)
                 .array
             )
 
@@ -1571,7 +1581,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                 if self._probes[0].gpts != self._region_of_interest_shape:
                     raise ValueError()
                 self._probes = tuple(
-                    copy_to_device(_probe.build().array, self._device)
+                    copy_to_device(_probe.build(lazy=False).array, self._device)
                     for _probe in self._probes
                 )
             else:
@@ -1583,12 +1593,12 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _warmup_overlap_projection(
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        position: np.ndarray,
-        old_position: np.ndarray,
-        xp=np,
-        **kwargs,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            position: np.ndarray,
+            old_position: np.ndarray,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE overlap projection static method using the forward probe and electrostatic object
@@ -1639,12 +1649,12 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _overlap_projection(
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        position: np.ndarray,
-        old_position: np.ndarray,
-        xp=np,
-        **kwargs,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            position: np.ndarray,
+            old_position: np.ndarray,
+            xp=np,
+            **kwargs,
     ):
         """
         Simultaneous-PIE overlap projection static method:
@@ -1701,12 +1711,12 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _alternative_overlap_projection(
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        position: np.ndarray,
-        old_position: np.ndarray,
-        xp=np,
-        **kwargs,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            position: np.ndarray,
+            old_position: np.ndarray,
+            xp=np,
+            **kwargs,
     ):
         """
         Simultaneous-PIE overlap projection static method using a common probe
@@ -1760,11 +1770,11 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _warmup_fourier_projection(
-        exit_waves: Sequence[np.ndarray],
-        diffraction_patterns: Sequence[np.ndarray],
-        sse: float,
-        xp=np,
-        **kwargs,
+            exit_waves: Sequence[np.ndarray],
+            diffraction_patterns: Sequence[np.ndarray],
+            sse: float,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE fourier projection static method:
@@ -1796,7 +1806,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         exit_wave_forward_fft = xp.fft.fft2(exit_wave_forward)
         sse += xp.mean(
             xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward) ** 2
-        ) / xp.sum(diffraction_forward**2)
+        ) / xp.sum(diffraction_forward ** 2)
         modified_exit_wave_forward = xp.fft.ifft2(
             diffraction_forward * xp.exp(1j * xp.angle(exit_wave_forward_fft))
         )
@@ -1805,11 +1815,11 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fourier_projection(
-        exit_waves: Sequence[np.ndarray],
-        diffraction_patterns: Sequence[np.ndarray],
-        sse: float,
-        xp=np,
-        **kwargs,
+            exit_waves: Sequence[np.ndarray],
+            diffraction_patterns: Sequence[np.ndarray],
+            sse: float,
+            xp=np,
+            **kwargs,
     ):
         """
         Simultaneous-PIE fourier projection static method:
@@ -1843,14 +1853,14 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         exit_wave_reverse_fft = xp.fft.fft2(exit_wave_reverse)
 
         sse += (
-            xp.mean(xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward) ** 2)
-            / xp.sum(diffraction_forward**2)
-            / 2
+                xp.mean(xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward) ** 2)
+                / xp.sum(diffraction_forward ** 2)
+                / 2
         )
         sse += (
-            xp.mean(xp.abs(xp.abs(exit_wave_reverse_fft) - diffraction_reverse) ** 2)
-            / xp.sum(diffraction_reverse**2)
-            / 2
+                xp.mean(xp.abs(xp.abs(exit_wave_reverse_fft) - diffraction_reverse) ** 2)
+                / xp.sum(diffraction_reverse ** 2)
+                / 2
         )
 
         modified_exit_wave_forward = xp.fft.ifft2(
@@ -1864,18 +1874,18 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _warmup_update_function(
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        position: np.ndarray,
-        exit_waves: Sequence[np.ndarray],
-        modified_exit_waves: Sequence[np.ndarray],
-        diffraction_patterns: Sequence[np.ndarray],
-        fix_probe: bool = False,
-        position_correction: Callable = None,
-        sobel: Callable = None,
-        reconstruction_parameters: Mapping[str, float] = None,
-        xp=np,
-        **kwargs,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            position: np.ndarray,
+            exit_waves: Sequence[np.ndarray],
+            modified_exit_waves: Sequence[np.ndarray],
+            diffraction_patterns: Sequence[np.ndarray],
+            fix_probe: bool = False,
+            position_correction: Callable = None,
+            sobel: Callable = None,
+            reconstruction_parameters: Mapping[str, float] = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE objects and probes update static method:
@@ -1954,25 +1964,25 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             beta = reconstruction_parameters["beta"]
             probe_step_size = reconstruction_parameters["probe_step_size"]
             probe_forward += (
-                probe_step_size
-                * electrostatic_conj
-                * exit_wave_diff_forward
-                / (
-                    (1 - beta) * electrostatic_abs_squared
-                    + beta * xp.max(electrostatic_abs_squared)
-                )
+                    probe_step_size
+                    * electrostatic_conj
+                    * exit_wave_diff_forward
+                    / (
+                            (1 - beta) * electrostatic_abs_squared
+                            + beta * xp.max(electrostatic_abs_squared)
+                    )
             )
 
         alpha = reconstruction_parameters["alpha"]
         object_step_size = reconstruction_parameters["object_step_size"]
         electrostatic_object[object_indices] += (
-            object_step_size
-            * probe_forward_conj
-            * exit_wave_diff_forward
-            / (
-                (1 - alpha) * probe_forward_abs_squared
-                + alpha * xp.max(probe_forward_abs_squared)
-            )
+                object_step_size
+                * probe_forward_conj
+                * exit_wave_diff_forward
+                / (
+                        (1 - alpha) * probe_forward_abs_squared
+                        + alpha * xp.max(probe_forward_abs_squared)
+                )
         )
 
         return (
@@ -1983,18 +1993,18 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _update_function(
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        position: np.ndarray,
-        exit_waves: Sequence[np.ndarray],
-        modified_exit_waves: Sequence[np.ndarray],
-        diffraction_patterns: Sequence[np.ndarray],
-        fix_probe: bool = False,
-        position_correction: Callable = None,
-        sobel: Callable = None,
-        reconstruction_parameters: Mapping[str, float] = None,
-        xp=np,
-        **kwargs,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            position: np.ndarray,
+            exit_waves: Sequence[np.ndarray],
+            modified_exit_waves: Sequence[np.ndarray],
+            diffraction_patterns: Sequence[np.ndarray],
+            fix_probe: bool = False,
+            position_correction: Callable = None,
+            sobel: Callable = None,
+            reconstruction_parameters: Mapping[str, float] = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Simultaneous-PIE objects and probes update static method.
@@ -2056,13 +2066,13 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         probe_forward_magnetic_abs_squared = xp.abs(probe_forward * magnetic_roi) ** 2
         probe_reverse_magnetic_abs_squared = xp.abs(probe_reverse * magnetic_roi) ** 2
         probe_forward_electrostatic_abs_squared = (
-            xp.abs(probe_forward * electrostatic_roi) ** 2
+                xp.abs(probe_forward * electrostatic_roi) ** 2
         )
         probe_reverse_electrostatic_abs_squared = (
-            xp.abs(probe_reverse * electrostatic_roi) ** 2
+                xp.abs(probe_reverse * electrostatic_roi) ** 2
         )
         electrostatic_magnetic_abs_squared = (
-            xp.abs(electrostatic_roi * magnetic_roi) ** 2
+                xp.abs(electrostatic_roi * magnetic_roi) ** 2
         )
 
         if position_correction is not None:
@@ -2083,74 +2093,74 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             beta = reconstruction_parameters["beta"]
             probe_step_size = reconstruction_parameters["probe_step_size"]
             probe_forward += (
-                probe_step_size
-                * electrostatic_conj
-                * magnetic_conj
-                * exit_wave_diff_forward
-                / (
-                    (1 - beta) * electrostatic_magnetic_abs_squared
-                    + beta * xp.max(electrostatic_magnetic_abs_squared)
-                )
-                / 2
+                    probe_step_size
+                    * electrostatic_conj
+                    * magnetic_conj
+                    * exit_wave_diff_forward
+                    / (
+                            (1 - beta) * electrostatic_magnetic_abs_squared
+                            + beta * xp.max(electrostatic_magnetic_abs_squared)
+                    )
+                    / 2
             )
             probe_reverse += (
-                probe_step_size
-                * electrostatic_conj
-                * magnetic_roi
-                * exit_wave_diff_reverse
-                / (
-                    (1 - beta) * electrostatic_magnetic_abs_squared
-                    + beta * xp.max(electrostatic_magnetic_abs_squared)
-                )
-                / 2
+                    probe_step_size
+                    * electrostatic_conj
+                    * magnetic_roi
+                    * exit_wave_diff_reverse
+                    / (
+                            (1 - beta) * electrostatic_magnetic_abs_squared
+                            + beta * xp.max(electrostatic_magnetic_abs_squared)
+                    )
+                    / 2
             )
 
         alpha = reconstruction_parameters["alpha"]
         object_step_size = reconstruction_parameters["object_step_size"]
         electrostatic_object[object_indices] += (
-            object_step_size
-            * probe_forward_conj
-            * magnetic_conj
-            * exit_wave_diff_forward
-            / (
-                (1 - alpha) * probe_forward_magnetic_abs_squared
-                + alpha * xp.max(probe_forward_magnetic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_forward_conj
+                * magnetic_conj
+                * exit_wave_diff_forward
+                / (
+                        (1 - alpha) * probe_forward_magnetic_abs_squared
+                        + alpha * xp.max(probe_forward_magnetic_abs_squared)
+                )
+                / 2
         )
         electrostatic_object[object_indices] += (
-            object_step_size
-            * probe_reverse_conj
-            * magnetic_roi
-            * exit_wave_diff_reverse
-            / (
-                (1 - alpha) * probe_reverse_magnetic_abs_squared
-                + alpha * xp.max(probe_reverse_magnetic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_reverse_conj
+                * magnetic_roi
+                * exit_wave_diff_reverse
+                / (
+                        (1 - alpha) * probe_reverse_magnetic_abs_squared
+                        + alpha * xp.max(probe_reverse_magnetic_abs_squared)
+                )
+                / 2
         )
 
         magnetic_object[object_indices] += (
-            object_step_size
-            * probe_forward_conj
-            * electrostatic_conj
-            * exit_wave_diff_forward
-            / (
-                (1 - alpha) * probe_forward_electrostatic_abs_squared
-                + alpha * xp.max(probe_forward_electrostatic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_forward_conj
+                * electrostatic_conj
+                * exit_wave_diff_forward
+                / (
+                        (1 - alpha) * probe_forward_electrostatic_abs_squared
+                        + alpha * xp.max(probe_forward_electrostatic_abs_squared)
+                )
+                / 2
         )
         magnetic_object[object_indices] -= (
-            object_step_size
-            * probe_reverse_conj
-            * electrostatic_conj
-            * exit_wave_diff_reverse
-            / (
-                (1 - alpha) * probe_reverse_electrostatic_abs_squared
-                + alpha * xp.max(probe_reverse_electrostatic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_reverse_conj
+                * electrostatic_conj
+                * exit_wave_diff_reverse
+                / (
+                        (1 - alpha) * probe_reverse_electrostatic_abs_squared
+                        + alpha * xp.max(probe_reverse_electrostatic_abs_squared)
+                )
+                / 2
         )
 
         return (
@@ -2161,18 +2171,18 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _alternative_update_function(
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        position: np.ndarray,
-        exit_waves: Sequence[np.ndarray],
-        modified_exit_waves: Sequence[np.ndarray],
-        diffraction_patterns: Sequence[np.ndarray],
-        fix_probe: bool = False,
-        position_correction: Callable = None,
-        sobel: Callable = None,
-        reconstruction_parameters: Mapping[str, float] = None,
-        xp=np,
-        **kwargs,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            position: np.ndarray,
+            exit_waves: Sequence[np.ndarray],
+            modified_exit_waves: Sequence[np.ndarray],
+            diffraction_patterns: Sequence[np.ndarray],
+            fix_probe: bool = False,
+            position_correction: Callable = None,
+            sobel: Callable = None,
+            reconstruction_parameters: Mapping[str, float] = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Simultaneous-PIE objects and probes update static method using a common probe.
@@ -2232,10 +2242,10 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         probe_forward_magnetic_abs_squared = xp.abs(probe_forward * magnetic_roi) ** 2
         probe_forward_electrostatic_abs_squared = (
-            xp.abs(probe_forward * electrostatic_roi) ** 2
+                xp.abs(probe_forward * electrostatic_roi) ** 2
         )
         electrostatic_magnetic_abs_squared = (
-            xp.abs(electrostatic_roi * magnetic_roi) ** 2
+                xp.abs(electrostatic_roi * magnetic_roi) ** 2
         )
 
         if position_correction is not None:
@@ -2256,74 +2266,74 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             beta = reconstruction_parameters["beta"]
             probe_step_size = reconstruction_parameters["probe_step_size"]
             probe_forward += (
-                probe_step_size
-                * electrostatic_conj
-                * magnetic_conj
-                * exit_wave_diff_forward
-                / (
-                    (1 - beta) * electrostatic_magnetic_abs_squared
-                    + beta * xp.max(electrostatic_magnetic_abs_squared)
-                )
-                / 2
+                    probe_step_size
+                    * electrostatic_conj
+                    * magnetic_conj
+                    * exit_wave_diff_forward
+                    / (
+                            (1 - beta) * electrostatic_magnetic_abs_squared
+                            + beta * xp.max(electrostatic_magnetic_abs_squared)
+                    )
+                    / 2
             )
             probe_forward += (
-                probe_step_size
-                * electrostatic_conj
-                * magnetic_roi
-                * exit_wave_diff_reverse
-                / (
-                    (1 - beta) * electrostatic_magnetic_abs_squared
-                    + beta * xp.max(electrostatic_magnetic_abs_squared)
-                )
-                / 2
+                    probe_step_size
+                    * electrostatic_conj
+                    * magnetic_roi
+                    * exit_wave_diff_reverse
+                    / (
+                            (1 - beta) * electrostatic_magnetic_abs_squared
+                            + beta * xp.max(electrostatic_magnetic_abs_squared)
+                    )
+                    / 2
             )
 
         alpha = reconstruction_parameters["alpha"]
         object_step_size = reconstruction_parameters["object_step_size"]
         electrostatic_object[object_indices] += (
-            object_step_size
-            * probe_forward_conj
-            * magnetic_conj
-            * exit_wave_diff_forward
-            / (
-                (1 - alpha) * probe_forward_magnetic_abs_squared
-                + alpha * xp.max(probe_forward_magnetic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_forward_conj
+                * magnetic_conj
+                * exit_wave_diff_forward
+                / (
+                        (1 - alpha) * probe_forward_magnetic_abs_squared
+                        + alpha * xp.max(probe_forward_magnetic_abs_squared)
+                )
+                / 2
         )
         electrostatic_object[object_indices] += (
-            object_step_size
-            * probe_forward_conj
-            * magnetic_roi
-            * exit_wave_diff_reverse
-            / (
-                (1 - alpha) * probe_forward_magnetic_abs_squared
-                + alpha * xp.max(probe_forward_magnetic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_forward_conj
+                * magnetic_roi
+                * exit_wave_diff_reverse
+                / (
+                        (1 - alpha) * probe_forward_magnetic_abs_squared
+                        + alpha * xp.max(probe_forward_magnetic_abs_squared)
+                )
+                / 2
         )
 
         magnetic_object[object_indices] += (
-            object_step_size
-            * probe_forward_conj
-            * electrostatic_conj
-            * exit_wave_diff_forward
-            / (
-                (1 - alpha) * probe_forward_electrostatic_abs_squared
-                + alpha * xp.max(probe_forward_electrostatic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_forward_conj
+                * electrostatic_conj
+                * exit_wave_diff_forward
+                / (
+                        (1 - alpha) * probe_forward_electrostatic_abs_squared
+                        + alpha * xp.max(probe_forward_electrostatic_abs_squared)
+                )
+                / 2
         )
         magnetic_object[object_indices] -= (
-            object_step_size
-            * probe_forward_conj
-            * electrostatic_conj
-            * exit_wave_diff_reverse
-            / (
-                (1 - alpha) * probe_forward_electrostatic_abs_squared
-                + alpha * xp.max(probe_forward_electrostatic_abs_squared)
-            )
-            / 2
+                object_step_size
+                * probe_forward_conj
+                * electrostatic_conj
+                * exit_wave_diff_reverse
+                / (
+                        (1 - alpha) * probe_forward_electrostatic_abs_squared
+                        + alpha * xp.max(probe_forward_electrostatic_abs_squared)
+                )
+                / 2
         )
 
         return (
@@ -2334,16 +2344,16 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _position_correction(
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        position: np.ndarray,
-        exit_wave: Sequence[np.ndarray],
-        modified_exit_wave: Sequence[np.ndarray],
-        diffraction_pattern: Sequence[np.ndarray],
-        sobel: Callable,
-        position_step_size: float = 1.0,
-        xp=np,
-        **kwargs,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            position: np.ndarray,
+            exit_wave: Sequence[np.ndarray],
+            modified_exit_wave: Sequence[np.ndarray],
+            diffraction_pattern: Sequence[np.ndarray],
+            sobel: Callable,
+            position_step_size: float = 1.0,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE probe position correction method.
@@ -2405,7 +2415,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fix_probe_center_of_mass(
-        probes: Sequence[np.ndarray], center_of_mass: Callable, xp=np, **kwargs
+            probes: Sequence[np.ndarray], center_of_mass: Callable, xp=np, **kwargs
     ):
         """
         Simultaneous-PIE probe center correction method.
@@ -2436,13 +2446,13 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         return tuple(_probes)
 
     def _prepare_functions_queue(
-        self,
-        max_iterations: int,
-        warmup_update_steps: int = 0,
-        common_probe: bool = False,
-        pre_position_correction_update_steps: int = None,
-        pre_probe_correction_update_steps: int = None,
-        **kwargs,
+            self,
+            max_iterations: int,
+            warmup_update_steps: int = 0,
+            common_probe: bool = False,
+            pre_position_correction_update_steps: int = None,
+            pre_probe_correction_update_steps: int = None,
+            **kwargs,
     ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
@@ -2513,7 +2523,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     None,
                 )
                 remaining_update_steps = (
-                    pre_position_correction_update_steps - warmup_update_steps
+                        pre_position_correction_update_steps - warmup_update_steps
                 )
                 functions_queue += [functions_tuple] * remaining_update_steps
                 queue_summary += (
@@ -2527,7 +2537,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     self._position_correction,
                 )
                 remaining_update_steps = (
-                    total_update_steps - pre_position_correction_update_steps
+                        total_update_steps - pre_position_correction_update_steps
                 )
                 functions_queue += [functions_tuple] * remaining_update_steps
                 queue_summary += f"\n--Simultaneous PIE with position correction for {remaining_update_steps} steps"
@@ -2542,7 +2552,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     self._position_correction,
                 )
                 remaining_update_steps = (
-                    warmup_update_steps - pre_position_correction_update_steps
+                        warmup_update_steps - pre_position_correction_update_steps
                 )
                 functions_queue += [functions_tuple] * remaining_update_steps
                 queue_summary += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
@@ -2570,24 +2580,24 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             )
 
         functions_queue = [
-            functions_queue[x : x + self._num_diffraction_patterns]
+            functions_queue[x: x + self._num_diffraction_patterns]
             for x in range(0, total_update_steps, self._num_diffraction_patterns)
         ]
 
         return functions_queue, queue_summary
 
     def reconstruct(
-        self,
-        max_iterations: int = 5,
-        return_iterations: bool = False,
-        warmup_update_steps: int = 0,
-        common_probe: bool = False,
-        fix_com: bool = True,
-        random_seed=None,
-        verbose: bool = False,
-        functions_queue: Iterable = None,
-        parameters: Mapping[str, float] = None,
-        **kwargs,
+            self,
+            max_iterations: int = 5,
+            return_iterations: bool = False,
+            warmup_update_steps: int = 0,
+            common_probe: bool = False,
+            fix_com: bool = True,
+            random_seed=None,
+            verbose: bool = False,
+            functions_queue: Iterable = None,
+            parameters: Mapping[str, float] = None,
+            **kwargs,
     ):
         """
         Main reconstruction loop method to do the following:
@@ -2660,10 +2670,10 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                         for function_tuples in functions_queue
                     ]
             elif (
-                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+                    len(functions_queue) == max_iterations * self._num_diffraction_patterns
             ):
                 functions_queue = [
-                    functions_queue[x : x + self._num_diffraction_patterns]
+                    functions_queue[x: x + self._num_diffraction_patterns]
                     for x in range(
                         0, total_update_steps, self._num_diffraction_patterns
                     )
@@ -2718,24 +2728,24 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
                 # Set update-specific parameters
                 global_iteration_i = (
-                    iteration_index * self._num_diffraction_patterns + update_index
+                        iteration_index * self._num_diffraction_patterns + update_index
                 )
 
                 if (
-                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
-                    is None
+                        self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                        is None
                 ):
                     fix_probe = False
                 else:
                     fix_probe = (
-                        global_iteration_i
-                        < self._reconstruction_parameters[
-                            "pre_probe_correction_update_steps"
-                        ]
+                            global_iteration_i
+                            < self._reconstruction_parameters[
+                                "pre_probe_correction_update_steps"
+                            ]
                     )
 
                 if warmup_update_steps != 0 and global_iteration_i == (
-                    warmup_update_steps + 1
+                        warmup_update_steps + 1
                 ):
                     self._probes = (self._probes[0], self._probes[0].copy())
 
@@ -2790,7 +2800,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             # Positions CoM
             if _position_correction is not None:
                 self._positions_px -= (
-                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                        xp.mean(self._positions_px, axis=0) - self._positions_px_com
                 )
                 self._reconstruction_parameters[
                     "position_step_size"
@@ -2844,11 +2854,11 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             return results
 
     def _prepare_measurement_outputs(
-        self,
-        objects: Sequence[np.ndarray],
-        probes: Sequence[np.ndarray],
-        positions: np.ndarray,
-        sse: np.ndarray,
+            self,
+            objects: Sequence[np.ndarray],
+            probes: Sequence[np.ndarray],
+            positions: np.ndarray,
+            sse: np.ndarray,
     ):
         """
         Method to format the reconstruction outputs as Measurement objects.
@@ -2927,26 +2937,26 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
     """
 
     def __init__(
-        self,
-        diffraction_patterns: Union[np.ndarray, DiffractionPatterns],
-        energy: float,
-        num_probes: int,
-        region_of_interest_shape: Sequence[int] = None,
-        objects: np.ndarray = None,
-        probes: Union[np.ndarray, Probe] = None,
-        positions: np.ndarray = None,
-        semiangle_cutoff: float = None,
-        preprocess: bool = False,
-        device: str = "cpu",
-        parameters: Mapping[str, float] = None,
-        **kwargs,
+            self,
+            diffraction_patterns: Union[np.ndarray, DiffractionPatterns],
+            energy: float,
+            num_probes: int,
+            region_of_interest_shape: Sequence[int] = None,
+            objects: np.ndarray = None,
+            probes: Union[np.ndarray, Probe] = None,
+            positions: np.ndarray = None,
+            semiangle_cutoff: float = None,
+            preprocess: bool = False,
+            device: str = "cpu",
+            parameters: Mapping[str, float] = None,
+            **kwargs,
     ):
 
         for key in kwargs.keys():
             if (
-                (key not in polar_symbols)
-                and (key not in polar_aliases.keys())
-                and (key not in experimental_symbols)
+                    (key not in polar_symbols)
+                    and (key not in polar_aliases.keys())
+                    and (key not in experimental_symbols)
             ):
                 raise ValueError("{} not a recognized parameter".format(key))
 
@@ -3032,7 +3042,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             self._diffraction_patterns[
                 self._diffraction_patterns
                 < self._experimental_parameters["background_counts_cutoff"]
-            ] = 0.0
+                ] = 0.0
 
         if self._experimental_parameters["counts_scaling_factor"] is not None:
             self._diffraction_patterns /= self._experimental_parameters[
@@ -3089,7 +3099,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             if isinstance(self._probes, Probe):
                 if self._probes.gpts != self._region_of_interest_shape:
                     raise ValueError()
-                self._probes = copy_to_device(self._probes.build().array, self._device)
+                self._probes = copy_to_device(self._probes.build(lazy=False).array, self._device)
             else:
                 self._probes = copy_to_device(self._probes, self._device)
 
@@ -3100,12 +3110,12 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _warmup_overlap_projection(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        old_position: np.ndarray,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            old_position: np.ndarray,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE overlap projection static method using a single probe:
@@ -3149,12 +3159,12 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _overlap_projection(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        old_position: np.ndarray,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            old_position: np.ndarray,
+            xp=np,
+            **kwargs,
     ):
         """
         Mixed-State-PIE overlap projection static method:
@@ -3201,11 +3211,11 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _warmup_fourier_projection(
-        exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        sse: float,
-        xp=np,
-        **kwargs,
+            exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            sse: float,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE fourier projection static method using a single probe:
@@ -3234,7 +3244,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         exit_wave_fft = xp.fft.fft2(exit_waves)
         sse += xp.mean(
             xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns) ** 2
-        ) / xp.sum(diffraction_patterns**2)
+        ) / xp.sum(diffraction_patterns ** 2)
         modified_exit_wave = xp.fft.ifft2(
             diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft))
         )
@@ -3243,11 +3253,11 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fourier_projection(
-        exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        sse: float,
-        xp=np,
-        **kwargs,
+            exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            sse: float,
+            xp=np,
+            **kwargs,
     ):
         """
         Mixed-State-PIE fourier projection static method:
@@ -3277,7 +3287,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         intensity_norm = xp.sqrt(xp.sum(xp.abs(exit_waves_fft) ** 2, axis=0))
         amplitude_modification = diffraction_patterns / intensity_norm
         sse += xp.mean(xp.abs(intensity_norm - diffraction_patterns) ** 2) / xp.sum(
-            diffraction_patterns**2
+            diffraction_patterns ** 2
         )
 
         modified_exit_wave = xp.fft.ifft2(
@@ -3288,18 +3298,18 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _warmup_update_function(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        exit_waves: np.ndarray,
-        modified_exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        fix_probe: bool = False,
-        position_correction: Callable = None,
-        sobel: Callable = None,
-        reconstruction_parameters: Mapping[str, float] = None,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            exit_waves: np.ndarray,
+            modified_exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            fix_probe: bool = False,
+            position_correction: Callable = None,
+            sobel: Callable = None,
+            reconstruction_parameters: Mapping[str, float] = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE objects and probes update static method using a single probe:
@@ -3372,39 +3382,39 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         alpha = reconstruction_parameters["alpha"]
         object_step_size = reconstruction_parameters["object_step_size"]
         objects[object_indices] += (
-            object_step_size
-            * probe_conj
-            * exit_wave_diff
-            / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
+                object_step_size
+                * probe_conj
+                * exit_wave_diff
+                / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
         )
 
         if not fix_probe:
             beta = reconstruction_parameters["beta"]
             probe_step_size = reconstruction_parameters["probe_step_size"]
             probes[0] += (
-                probe_step_size
-                * obj_conj
-                * exit_wave_diff
-                / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
+                    probe_step_size
+                    * obj_conj
+                    * exit_wave_diff
+                    / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
             )
 
         return objects, probes, position
 
     @staticmethod
     def _update_function(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        exit_waves: np.ndarray,
-        modified_exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        fix_probe: bool = False,
-        orthogonalize_probes: bool = False,
-        position_correction: Callable = None,
-        sobel: Callable = None,
-        reconstruction_parameters: Mapping[str, float] = None,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            exit_waves: np.ndarray,
+            modified_exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            fix_probe: bool = False,
+            orthogonalize_probes: bool = False,
+            position_correction: Callable = None,
+            sobel: Callable = None,
+            reconstruction_parameters: Mapping[str, float] = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Mixed-State-PIE objects and probes update static method:
@@ -3477,12 +3487,12 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         alpha = reconstruction_parameters["alpha"]
         object_step_size = reconstruction_parameters["object_step_size"]
         objects[object_indices] += (
-            object_step_size
-            * xp.sum(probe_conj * exit_wave_diff, axis=0)
-            / (
-                (1 - alpha) * probe_abs_squared_norm
-                + alpha * xp.max(probe_abs_squared_norm)
-            )
+                object_step_size
+                * xp.sum(probe_conj * exit_wave_diff, axis=0)
+                / (
+                        (1 - alpha) * probe_abs_squared_norm
+                        + alpha * xp.max(probe_abs_squared_norm)
+                )
         )
 
         if not fix_probe:
@@ -3503,16 +3513,16 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _position_correction(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        exit_wave: np.ndarray,
-        modified_exit_wave: np.ndarray,
-        diffraction_pattern: np.ndarray,
-        sobel: Callable,
-        position_step_size: float = 1.0,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            exit_wave: np.ndarray,
+            modified_exit_wave: np.ndarray,
+            diffraction_pattern: np.ndarray,
+            sobel: Callable,
+            position_step_size: float = 1.0,
+            xp=np,
+            **kwargs,
     ):
         """
         Regularized-PIE probe position correction method.
@@ -3568,7 +3578,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fix_probe_center_of_mass(
-        probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
+            probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
     ):
         """
         Mixed-State-PIE probe center correction method.
@@ -3597,12 +3607,12 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         return probes
 
     def _prepare_functions_queue(
-        self,
-        max_iterations: int,
-        warmup_update_steps: int = 0,
-        pre_position_correction_update_steps: int = None,
-        pre_probe_correction_update_steps: int = None,
-        **kwargs,
+            self,
+            max_iterations: int,
+            warmup_update_steps: int = 0,
+            pre_position_correction_update_steps: int = None,
+            pre_probe_correction_update_steps: int = None,
+            **kwargs,
     ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
@@ -3662,7 +3672,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     None,
                 )
                 remaining_update_steps = (
-                    pre_position_correction_update_steps - warmup_update_steps
+                        pre_position_correction_update_steps - warmup_update_steps
                 )
                 functions_queue += [functions_tuple] * remaining_update_steps
                 queue_summary += (
@@ -3676,7 +3686,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     self._position_correction,
                 )
                 remaining_update_steps = (
-                    total_update_steps - pre_position_correction_update_steps
+                        total_update_steps - pre_position_correction_update_steps
                 )
                 functions_queue += [functions_tuple] * remaining_update_steps
                 queue_summary += f"\n--Mixed-State PIE with position correction for {remaining_update_steps} steps"
@@ -3691,7 +3701,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     self._position_correction,
                 )
                 remaining_update_steps = (
-                    warmup_update_steps - pre_position_correction_update_steps
+                        warmup_update_steps - pre_position_correction_update_steps
                 )
                 functions_queue += [functions_tuple] * remaining_update_steps
                 queue_summary += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
@@ -3714,24 +3724,24 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
 
         functions_queue = [
-            functions_queue[x : x + self._num_diffraction_patterns]
+            functions_queue[x: x + self._num_diffraction_patterns]
             for x in range(0, total_update_steps, self._num_diffraction_patterns)
         ]
 
         return functions_queue, queue_summary
 
     def reconstruct(
-        self,
-        max_iterations: int = 5,
-        return_iterations: bool = False,
-        probe_orthogonalization_frequency: int = None,
-        warmup_update_steps: int = 0,
-        fix_com: bool = True,
-        random_seed=None,
-        verbose: bool = False,
-        parameters: Mapping[str, float] = None,
-        functions_queue: Iterable = None,
-        **kwargs,
+            self,
+            max_iterations: int = 5,
+            return_iterations: bool = False,
+            probe_orthogonalization_frequency: int = None,
+            warmup_update_steps: int = 0,
+            fix_com: bool = True,
+            random_seed=None,
+            verbose: bool = False,
+            parameters: Mapping[str, float] = None,
+            functions_queue: Iterable = None,
+            **kwargs,
     ):
         """
         Main reconstruction loop method to do the following:
@@ -3805,10 +3815,10 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                         for function_tuples in functions_queue
                     ]
             elif (
-                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+                    len(functions_queue) == max_iterations * self._num_diffraction_patterns
             ):
                 functions_queue = [
-                    functions_queue[x : x + self._num_diffraction_patterns]
+                    functions_queue[x: x + self._num_diffraction_patterns]
                     for x in range(
                         0, total_update_steps, self._num_diffraction_patterns
                     )
@@ -3860,27 +3870,27 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
                 # Set update-specific parameters
                 global_iteration_i = (
-                    iteration_index * self._num_diffraction_patterns + update_index
+                        iteration_index * self._num_diffraction_patterns + update_index
                 )
 
                 if (
-                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
-                    is None
+                        self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                        is None
                 ):
                     fix_probe = False
                 else:
                     fix_probe = (
-                        global_iteration_i
-                        < self._reconstruction_parameters[
-                            "pre_probe_correction_update_steps"
-                        ]
+                            global_iteration_i
+                            < self._reconstruction_parameters[
+                                "pre_probe_correction_update_steps"
+                            ]
                     )
 
                 if probe_orthogonalization_frequency is None:
                     orthogonalize_probes = False
                 else:
                     orthogonalize_probes = not (
-                        global_iteration_i % probe_orthogonalization_frequency
+                            global_iteration_i % probe_orthogonalization_frequency
                     )
 
                 (
@@ -3938,7 +3948,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             # Positions CoM
             if _position_correction is not None:
                 self._positions_px -= (
-                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                        xp.mean(self._positions_px, axis=0) - self._positions_px_com
                 )
                 self._reconstruction_parameters[
                     "position_step_size"
@@ -3992,11 +4002,11 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             return results
 
     def _prepare_measurement_outputs(
-        self,
-        objects: np.ndarray,
-        probes: np.ndarray,
-        positions: np.ndarray,
-        sse: np.ndarray,
+            self,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            positions: np.ndarray,
+            sse: np.ndarray,
     ):
         """
         Method to format the reconstruction outputs as Measurement objects.
@@ -4076,27 +4086,27 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
     """
 
     def __init__(
-        self,
-        diffraction_patterns: Union[np.ndarray, DiffractionPatterns],
-        energy: float,
-        num_slices: int,
-        slice_thicknesses: Union[float, Sequence[float]],
-        region_of_interest_shape: Sequence[int] = None,
-        objects: np.ndarray = None,
-        probes: Union[np.ndarray, Probe] = None,
-        positions: np.ndarray = None,
-        semiangle_cutoff: float = None,
-        preprocess: bool = False,
-        device: str = "cpu",
-        parameters: Mapping[str, float] = None,
-        **kwargs,
+            self,
+            diffraction_patterns: Union[np.ndarray, DiffractionPatterns],
+            energy: float,
+            num_slices: int,
+            slice_thicknesses: Union[float, Sequence[float]],
+            region_of_interest_shape: Sequence[int] = None,
+            objects: np.ndarray = None,
+            probes: Union[np.ndarray, Probe] = None,
+            positions: np.ndarray = None,
+            semiangle_cutoff: float = None,
+            preprocess: bool = False,
+            device: str = "cpu",
+            parameters: Mapping[str, float] = None,
+            **kwargs,
     ):
 
         for key in kwargs.keys():
             if (
-                (key not in polar_symbols)
-                and (key not in polar_aliases.keys())
-                and (key not in experimental_symbols)
+                    (key not in polar_symbols)
+                    and (key not in polar_aliases.keys())
+                    and (key not in experimental_symbols)
             ):
                 raise ValueError("{} not a recognized parameter".format(key))
 
@@ -4187,7 +4197,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             self._diffraction_patterns[
                 self._diffraction_patterns
                 < self._experimental_parameters["background_counts_cutoff"]
-            ] = 0.0
+                ] = 0.0
 
         if self._experimental_parameters["counts_scaling_factor"] is not None:
             self._diffraction_patterns /= self._experimental_parameters[
@@ -4237,7 +4247,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                     device=self._device,
                     **self._polar_parameters,
                 )
-                .build()
+                .build(lazy=False)
                 .array
             )
 
@@ -4245,7 +4255,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             if isinstance(self._probes, Probe):
                 if self._probes.gpts != self._region_of_interest_shape:
                     raise ValueError()
-                _probes = copy_to_device(self._probes.build().array, self._device)
+                _probes = copy_to_device(self._probes.build(lazy=False).array, self._device)
             else:
                 _probes = copy_to_device(self._probes, self._device)
 
@@ -4256,16 +4266,16 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _overlap_projection(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        old_position: np.ndarray,
-        propagator: FresnelPropagator = None,
-        slice_thicknesses: Sequence[float] = None,
-        sampling: Sequence[float] = None,
-        wavelength: float = None,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            old_position: np.ndarray,
+            propagator: FresnelPropagator = None,
+            slice_thicknesses: Sequence[float] = None,
+            sampling: Sequence[float] = None,
+            wavelength: float = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Multislice-PIE overlap projection static method:
@@ -4325,11 +4335,11 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fourier_projection(
-        exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        sse: float,
-        xp=np,
-        **kwargs,
+            exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            sse: float,
+            xp=np,
+            **kwargs,
     ):
         """
         Multislice-PIE fourier projection static method:
@@ -4364,7 +4374,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         exit_wave_fft = xp.fft.fft2(exit_waves[-1])
         sse += xp.mean(
             xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns) ** 2
-        ) / xp.sum(diffraction_patterns**2)
+        ) / xp.sum(diffraction_patterns ** 2)
         modified_exit_waves[-1] = xp.fft.ifft2(
             diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft))
         )
@@ -4373,22 +4383,22 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _update_function(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        exit_waves: np.ndarray,
-        modified_exit_waves: np.ndarray,
-        diffraction_patterns: np.ndarray,
-        fix_probe: bool = False,
-        position_correction: Callable = None,
-        sobel: Callable = None,
-        reconstruction_parameters: Mapping[str, float] = None,
-        propagator: FresnelPropagator = None,
-        slice_thicknesses: Sequence[float] = None,
-        sampling: Sequence[float] = None,
-        wavelength: float = None,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            exit_waves: np.ndarray,
+            modified_exit_waves: np.ndarray,
+            diffraction_patterns: np.ndarray,
+            fix_probe: bool = False,
+            position_correction: Callable = None,
+            sobel: Callable = None,
+            reconstruction_parameters: Mapping[str, float] = None,
+            propagator: FresnelPropagator = None,
+            slice_thicknesses: Sequence[float] = None,
+            sampling: Sequence[float] = None,
+            wavelength: float = None,
+            xp=np,
+            **kwargs,
     ):
         """
         Multislice-PIE objects and probes update static method:
@@ -4459,20 +4469,20 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             alpha = reconstruction_parameters["alpha"]
             object_step_size = reconstruction_parameters["object_step_size"]
             objects[s][object_indices] += (
-                object_step_size
-                * probe_conj
-                * exit_wave_diff
-                / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
+                    object_step_size
+                    * probe_conj
+                    * exit_wave_diff
+                    / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
             )
 
             if not fix_probe or s > 0:
                 beta = reconstruction_parameters["beta"]
                 probe_step_size = reconstruction_parameters["probe_step_size"]
                 probes[s] += (
-                    probe_step_size
-                    * obj_conj
-                    * exit_wave_diff
-                    / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
+                        probe_step_size
+                        * obj_conj
+                        * exit_wave_diff
+                        / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
                 )
 
             if s > 0:
@@ -4490,16 +4500,16 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _position_correction(
-        objects: np.ndarray,
-        probes: np.ndarray,
-        position: np.ndarray,
-        exit_wave: np.ndarray,
-        modified_exit_wave: np.ndarray,
-        diffraction_pattern: np.ndarray,
-        sobel: Callable,
-        position_step_size: float = 1.0,
-        xp=np,
-        **kwargs,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            position: np.ndarray,
+            exit_wave: np.ndarray,
+            modified_exit_wave: np.ndarray,
+            diffraction_pattern: np.ndarray,
+            sobel: Callable,
+            position_step_size: float = 1.0,
+            xp=np,
+            **kwargs,
     ):
         """
         Multislice-PIE probe position correction method using the last slice.
@@ -4555,7 +4565,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
     @staticmethod
     def _fix_probe_center_of_mass(
-        probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
+            probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
     ):
         """
         Multislice-PIE probe center correction method.
@@ -4583,11 +4593,11 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         return probes
 
     def _prepare_functions_queue(
-        self,
-        max_iterations: int,
-        pre_position_correction_update_steps: int = None,
-        pre_probe_correction_update_steps: int = None,
-        **kwargs,
+            self,
+            max_iterations: int,
+            pre_position_correction_update_steps: int = None,
+            pre_probe_correction_update_steps: int = None,
+            **kwargs,
     ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
@@ -4636,7 +4646,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             )
 
             remaining_update_steps = (
-                total_update_steps - pre_position_correction_update_steps
+                    total_update_steps - pre_position_correction_update_steps
             )
             functions_queue += [functions_tuple] * remaining_update_steps
             queue_summary += f"\n--Multislice PIE with position correction for {remaining_update_steps} steps"
@@ -4649,23 +4659,23 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
 
         functions_queue = [
-            functions_queue[x : x + self._num_diffraction_patterns]
+            functions_queue[x: x + self._num_diffraction_patterns]
             for x in range(0, total_update_steps, self._num_diffraction_patterns)
         ]
 
         return functions_queue, queue_summary
 
     def reconstruct(
-        self,
-        max_iterations: int = 5,
-        return_iterations: bool = False,
-        fix_com: bool = True,
-        random_seed=None,
-        verbose: bool = False,
-        parameters: Mapping[str, float] = None,
-        measurement_output_view: str = "padded",
-        functions_queue: Iterable = None,
-        **kwargs,
+            self,
+            max_iterations: int = 5,
+            return_iterations: bool = False,
+            fix_com: bool = True,
+            random_seed=None,
+            verbose: bool = False,
+            parameters: Mapping[str, float] = None,
+            measurement_output_view: str = "padded",
+            functions_queue: Iterable = None,
+            **kwargs,
     ):
         """
         Main reconstruction loop method to do the following:
@@ -4732,10 +4742,10 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                         for function_tuples in functions_queue
                     ]
             elif (
-                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+                    len(functions_queue) == max_iterations * self._num_diffraction_patterns
             ):
                 functions_queue = [
-                    functions_queue[x : x + self._num_diffraction_patterns]
+                    functions_queue[x: x + self._num_diffraction_patterns]
                     for x in range(
                         0, total_update_steps, self._num_diffraction_patterns
                     )
@@ -4789,20 +4799,20 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
                 # Set update-specific parameters
                 global_iteration_i = (
-                    iteration_index * self._num_diffraction_patterns + update_index
+                        iteration_index * self._num_diffraction_patterns + update_index
                 )
 
                 if (
-                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
-                    is None
+                        self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                        is None
                 ):
                     fix_probe = False
                 else:
                     fix_probe = (
-                        global_iteration_i
-                        < self._reconstruction_parameters[
-                            "pre_probe_correction_update_steps"
-                        ]
+                            global_iteration_i
+                            < self._reconstruction_parameters[
+                                "pre_probe_correction_update_steps"
+                            ]
                     )
 
                 (
@@ -4865,7 +4875,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             # Positions CoM
             if _position_correction is not None:
                 self._positions_px -= (
-                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                        xp.mean(self._positions_px, axis=0) - self._positions_px_com
                 )
                 self._reconstruction_parameters[
                     "position_step_size"
@@ -4924,12 +4934,12 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             return results
 
     def _prepare_measurement_outputs(
-        self,
-        objects: np.ndarray,
-        probes: np.ndarray,
-        positions: np.ndarray,
-        sse: np.ndarray,
-        slice_thicknesses: Sequence[float] = None,
+            self,
+            objects: np.ndarray,
+            probes: np.ndarray,
+            positions: np.ndarray,
+            sse: np.ndarray,
+            slice_thicknesses: Sequence[float] = None,
     ):
         """
         Method to format the reconstruction outputs as Measurement objects.
