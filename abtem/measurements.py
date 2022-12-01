@@ -423,8 +423,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         valid = xp.abs(self.array) >= min_relative_tol * self.array.max()
         difference._array[valid] /= self.array[valid]
-        difference._array[valid == 0] = difference.array.min()
-
+        difference._array[valid == 0] = np.nan
         difference._array *= 100.0
 
         difference.metadata["label"] = "Relative difference"
@@ -845,8 +844,8 @@ class Images(BaseMeasurement):
                 ``values`` :
                     The pixel-wise values of the images are preserved.
 
-                ``amplitude`` :
-                    The total amplitude of the images is preserved.
+                ``intensity`` :
+                    The total intensity of the images is preserved.
 
         cval : scalar, optional
             Value to fill past edges in spline interpolation input if boundary is 'constant' (default is 0.0).
@@ -966,15 +965,15 @@ class Images(BaseMeasurement):
         )
 
     def interpolate_line(
-        self,
-        start: Union[Tuple[float, float], Atom] = None,
-        end: Union[Tuple[float, float], Atom] = None,
-        sampling: float = None,
-        gpts: int = None,
-        width: float = 0.0,
-        margin: float = 0.0,
-        order: int = 3,
-        endpoint: bool = False,
+            self,
+            start: Union[Tuple[float, float], Atom] = None,
+            end: Union[Tuple[float, float], Atom] = None,
+            sampling: float = None,
+            gpts: int = None,
+            width: float = 0.0,
+            margin: float = 0.0,
+            order: int = 3,
+            endpoint: bool = False,
     ) -> "RealSpaceLineProfiles":
         """
         Interpolate image(s) along a given line. Either 'sampling' or 'gpts' must be provided.
@@ -1763,6 +1762,55 @@ def _fourier_space_bilinear_nodes_and_weight(
     return v, u, vw, uw
 
 
+def _gaussian_source_size(
+        measurements, sigma: Union[float, Tuple[float, float]]
+):
+    if len(_scan_axes(measurements)) < 2:
+        raise RuntimeError(
+            "Gaussian source size not implemented for diffraction patterns with less than two scan axes."
+        )
+
+    if np.isscalar(sigma):
+        sigma = (sigma,) * 2
+
+    xp = get_array_module(measurements.array)
+    gaussian_filter = get_ndimage_module(measurements._array).gaussian_filter
+
+    padded_sigma = ()
+    depth = ()
+    i = 0
+    for axis, n in zip(measurements.ensemble_axes, measurements.ensemble_shape):
+        if axis in _scan_axes(measurements):
+            scan_sampling = _scan_sampling(measurements)[i]
+            padded_sigma += (sigma[i] / scan_sampling,)
+            depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
+            i += 1
+        else:
+            padded_sigma += (0.0,)
+            depth += (0,)
+
+    padded_sigma += (0.0,) * 2
+    depth += (0,) * 2
+
+    if measurements.is_lazy:
+        array = measurements.array.map_overlap(
+            gaussian_filter,
+            sigma=padded_sigma,
+            mode="wrap",
+            depth=depth,
+            meta=xp.array((), dtype=xp.float32),
+        )
+    else:
+        array = gaussian_filter(measurements.array, sigma=padded_sigma, mode="wrap")
+
+    kwargs = measurements._copy_kwargs(exclude=("array",))
+
+    return measurements.__class__(
+        array,
+        **kwargs
+    )
+
+
 class DiffractionPatterns(BaseMeasurement):
     """
     One or more diffraction patterns.
@@ -2119,51 +2167,54 @@ class DiffractionPatterns(BaseMeasurement):
         filtered_diffraction_patterns : DiffractionPatterns
             The filtered diffraction pattern(s).
         """
-        if len(_scan_axes(self)) < 2:
-            raise RuntimeError(
-                "Gaussian source size not implemented for diffraction patterns with less than two scan axes."
-            )
 
-        if np.isscalar(sigma):
-            sigma = (sigma,) * 2
+        return _gaussian_source_size(self, sigma)
 
-        xp = get_array_module(self.array)
-        gaussian_filter = get_ndimage_module(self._array).gaussian_filter
-
-        padded_sigma = ()
-        depth = ()
-        i = 0
-        for axis, n in zip(self.ensemble_axes, self.ensemble_shape):
-            if axis in _scan_axes(self):
-                scan_sampling = _scan_sampling(self)[i]
-                padded_sigma += (sigma[i] / scan_sampling,)
-                depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
-                i += 1
-            else:
-                padded_sigma += (0.0,)
-                depth += (0,)
-
-        padded_sigma += (0.0,) * 2
-        depth += (0,) * 2
-
-        if self.is_lazy:
-            array = self.array.map_overlap(
-                gaussian_filter,
-                sigma=padded_sigma,
-                mode="wrap",
-                depth=depth,
-                meta=xp.array((), dtype=xp.float32),
-            )
-        else:
-            array = gaussian_filter(self.array, sigma=padded_sigma, mode="wrap")
-
-        return self.__class__(
-            array,
-            sampling=self.sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=self.metadata,
-            fftshift=self.fftshift,
-        )
+        # if len(_scan_axes(self)) < 2:
+        #     raise RuntimeError(
+        #         "Gaussian source size not implemented for diffraction patterns with less than two scan axes."
+        #     )
+        #
+        # if np.isscalar(sigma):
+        #     sigma = (sigma,) * 2
+        #
+        # xp = get_array_module(self.array)
+        # gaussian_filter = get_ndimage_module(self._array).gaussian_filter
+        #
+        # padded_sigma = ()
+        # depth = ()
+        # i = 0
+        # for axis, n in zip(self.ensemble_axes, self.ensemble_shape):
+        #     if axis in _scan_axes(self):
+        #         scan_sampling = _scan_sampling(self)[i]
+        #         padded_sigma += (sigma[i] / scan_sampling,)
+        #         depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
+        #         i += 1
+        #     else:
+        #         padded_sigma += (0.0,)
+        #         depth += (0,)
+        #
+        # padded_sigma += (0.0,) * 2
+        # depth += (0,) * 2
+        #
+        # if self.is_lazy:
+        #     array = self.array.map_overlap(
+        #         gaussian_filter,
+        #         sigma=padded_sigma,
+        #         mode="wrap",
+        #         depth=depth,
+        #         meta=xp.array((), dtype=xp.float32),
+        #     )
+        # else:
+        #     array = gaussian_filter(self.array, sigma=padded_sigma, mode="wrap")
+        #
+        # return self.__class__(
+        #     array,
+        #     sampling=self.sampling,
+        #     ensemble_axes_metadata=self.ensemble_axes_metadata,
+        #     metadata=self.metadata,
+        #     fftshift=self.fftshift,
+        # )
 
     def polar_binning(
             self,
@@ -2283,8 +2334,6 @@ class DiffractionPatterns(BaseMeasurement):
                 nbins_azimuthal=nbins_azimuthal,
                 sampling=self.angular_sampling,
             )
-
-
 
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
@@ -2944,26 +2993,52 @@ class PolarMeasurements(BaseMeasurement):
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
-    # TODO: to be revised and documented.
+    def gaussian_source_size(
+            self, sigma: Union[float, Tuple[float, float]]
+    ) -> "PolarMeasurements":
+        """
+        Simulate the effect of a finite source size on diffraction pattern(s) using a Gaussian filter.
+
+        The filter is not applied to diffraction pattern individually, but the intensity of diffraction patterns are mixed
+        across scan axes. Applying this filter requires two linear scan axes.
+
+        Applying this filter before integrating the diffraction patterns will produce the same image as integrating
+        the diffraction patterns first then applying a Gaussian filter.
+
+        Parameters
+        ----------
+        sigma : float or two float
+            Standard deviation of Gaussian kernel in the `x` and `y`-direction. If given as a single number, the standard
+            deviation is equal for both axes.
+
+        Returns
+        -------
+        filtered_diffraction_patterns : DiffractionPatterns
+            The filtered diffraction pattern(s).
+        """
+
+        return _gaussian_source_size(self, sigma)
+
     def differentials(
             self,
-            direction_1_plus,
-            direction_1_minus,
-            direction_2_plus,
-            direction_2_minus,
+            direction_1,
+            direction_2,
             return_complex: bool = True,
     ):
-
         differential_1 = self.integrate(
-            detector_regions=direction_1_plus
-        ) - self.integrate(detector_regions=direction_1_minus)
+            detector_regions=direction_1[1]
+        ) - self.integrate(detector_regions=direction_1[0])
 
         differential_2 = self.integrate(
-            detector_regions=direction_2_plus
-        ) - self.integrate(detector_regions=direction_2_minus)
+            detector_regions=direction_2[1]
+        ) - self.integrate(detector_regions=direction_2[0])
+
+        if not return_complex:
+            return differential_1, differential_2
 
         xp = get_array_module(self.device)
         array = xp.zeros_like(differential_1.array, dtype=xp.complex64)
+
         array.real = differential_1.array
         array.imag = differential_2.array
 
