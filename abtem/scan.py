@@ -97,7 +97,6 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
         for sub_scan in self.generate_blocks(chunks):
             yield sub_scan
 
-
     def evaluate(self, waves):
         device = validate_device(waves.device)
         xp = get_array_module(device)
@@ -226,7 +225,7 @@ class CustomScan(BaseScan):
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            positions.itemset(i, self._positions[start_chunk : start_chunk + chunk])
+            positions.itemset(i, self._positions[start_chunk: start_chunk + chunk])
 
         if lazy:
             positions = da.from_array(positions, chunks=1)
@@ -239,10 +238,10 @@ class CustomScan(BaseScan):
         start = 0
         for x_extents, y_extents in itertools.product(*extents):
             mask = (
-                (self.positions[:, 0] >= x_extents[0])
-                * (self.positions[:, 0] < x_extents[1])
-                * (self.positions[:, 1] >= y_extents[0])
-                * (self.positions[:, 1] < y_extents[1])
+                    (self.positions[:, 0] >= x_extents[0])
+                    * (self.positions[:, 0] < x_extents[1])
+                    * (self.positions[:, 1] >= y_extents[0])
+                    * (self.positions[:, 1] < y_extents[1])
             )
 
             n = np.sum(mask)
@@ -273,6 +272,37 @@ class CustomScan(BaseScan):
         return self._positions
 
 
+def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
+    if isinstance(coordinate, Atom):
+        if fractional:
+            raise ValueError()
+
+        coordinate = coordinate.x, coordinate.y
+
+    if fractional:
+        if potential is None:
+            raise ValueError("provide potential for fractional coordinates")
+
+        potential = _validate_potential(potential)
+
+        coordinate = (potential.extent[0] * coordinate[0], potential.extent[1] * coordinate[1])
+
+    coordinate = coordinate if coordinate is None else tuple(coordinate)
+
+    return coordinate
+
+
+def _validate_coordinates(start, end, potential, fractional):
+    start = _validate_coordinate(start, potential, fractional)
+    end = _validate_coordinate(end, potential, fractional)
+
+    if start is not None and end is not None:
+        if np.allclose(start, end):
+            raise RuntimeError("scan start and end is identical")
+
+    return start, end
+
+
 class LineScan(BaseScan):
     """
     A scan along a straight line.
@@ -293,30 +323,21 @@ class LineScan(BaseScan):
     """
 
     def __init__(
-        self,
-        start: Union[Tuple[float, float], None] = (0.0, 0.0),
-        end: Union[Tuple[float, float], None] = None,
-        gpts: int = None,
-        sampling: float = None,
-        endpoint: bool = True,
+            self,
+            start: Union[Tuple[float, float], None] = (0.0, 0.0),
+            end: Union[Tuple[float, float], None] = None,
+            gpts: int = None,
+            sampling: float = None,
+            endpoint: bool = True,
+            fractional: bool = False,
+            potential: BasePotential = None,
     ):
 
         super().__init__()
         self._gpts = gpts
         self._sampling = sampling
 
-        if isinstance(start, Atom):
-            start = start.x, start.y
-
-        if isinstance(end, Atom):
-            end = end.x, end.y
-
-        self._start = start if start is None else tuple(start)
-        self._end = end if end is None else tuple(end)
-
-        if self.start is not None and self.end is not None:
-            if np.allclose(self._start, self._end):
-                raise RuntimeError("line scan start and end is identical")
+        self._start, self._end = _validate_coordinates(start, end, potential, fractional)
 
         self._endpoint = endpoint
         self._adjust_gpts()
@@ -324,12 +345,12 @@ class LineScan(BaseScan):
 
     @classmethod
     def from_fractional_coordinates(
-        cls,
-        potential: BasePotential,
-        start: Tuple[float, float] = (0.0, 0.0),
-        end: Tuple[float, float] = (1.0, 1.0),
-        sampling: Union[float, Tuple[float, float]] = None,
-        endpoint: Union[bool, Tuple[bool, bool]] = False,
+            cls,
+            potential: BasePotential,
+            start: Tuple[float, float] = (0.0, 0.0),
+            end: Tuple[float, float] = (1.0, 1.0),
+            sampling: Union[float, Tuple[float, float]] = None,
+            endpoint: Union[bool, Tuple[bool, bool]] = False,
     ) -> "LineScan":
         """
         Create grid scan using fractional coordinates.
@@ -352,18 +373,7 @@ class LineScan(BaseScan):
         grid_scan : GridScan
         """
 
-        potential = _validate_potential(potential)
-
-        if np.isscalar(start):
-            start = (start, start)
-
-        if np.isscalar(end):
-            end = (end, end)
-
-        start = (potential.extent[0] * start[0], potential.extent[1] * start[1])
-        end = (potential.extent[0] * end[0], potential.extent[1] * end[1])
-
-        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint)
+        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint, potential=potential, fractional=True)
 
     def add_margin(self, margin: Union[float, Tuple[float, float]]):
         if isinstance(margin, Number):
@@ -377,13 +387,13 @@ class LineScan(BaseScan):
 
     @classmethod
     def at_position(
-        cls,
-        position: Union[Tuple[float, float], Atom],
-        extent: float = 1.0,
-        angle: float = 0.0,
-        gpts: int = None,
-        sampling: float = None,
-        endpoint: bool = True,
+            cls,
+            position: Union[Tuple[float, float], Atom],
+            extent: float = 1.0,
+            angle: float = 0.0,
+            gpts: int = None,
+            sampling: float = None,
+            endpoint: bool = True,
     ):
 
         if isinstance(position, Atom):
@@ -618,15 +628,19 @@ class GridScan(HasGridMixin, BaseScan):
     """
 
     def __init__(
-        self,
-        start: Tuple[float, float] = (0.0, 0.0),
-        end: Tuple[float, float] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        endpoint: Union[bool, Tuple[bool, bool]] = False,
+            self,
+            start: Tuple[float, float] = (0.0, 0.0),
+            end: Tuple[float, float] = None,
+            gpts: Union[int, Tuple[int, int]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            endpoint: Union[bool, Tuple[bool, bool]] = False,
+            fractional: bool = False,
+            potential: BasePotential = None,
     ):
 
         super().__init__()
+
+        start, end = _validate_coordinates(start, end, potential, fractional)
 
         if start is not None:
             if np.isscalar(start):
@@ -659,12 +673,12 @@ class GridScan(HasGridMixin, BaseScan):
 
     @classmethod
     def from_fractional_coordinates(
-        cls,
-        potential: BasePotential,
-        start: Tuple[float, float] = (0.0, 0.0),
-        end: Tuple[float, float] = (1.0, 1.0),
-        sampling: Union[float, Tuple[float, float]] = None,
-        endpoint: Union[bool, Tuple[bool, bool]] = False,
+            cls,
+            potential: BasePotential,
+            start: Tuple[float, float] = (0.0, 0.0),
+            end: Tuple[float, float] = (1.0, 1.0),
+            sampling: Union[float, Tuple[float, float]] = None,
+            endpoint: Union[bool, Tuple[bool, bool]] = False,
     ) -> "GridScan":
         """
         Create grid scan using fractional coordinates.
@@ -685,18 +699,8 @@ class GridScan(HasGridMixin, BaseScan):
         -------
         grid_scan : GridScan
         """
-        potential = _validate_potential(potential)
 
-        if np.isscalar(start):
-            start = (start, start)
-
-        if np.isscalar(end):
-            end = (end, end)
-
-        start = (potential.extent[0] * start[0], potential.extent[1] * start[1])
-        end = (potential.extent[0] * end[0], potential.extent[1] * end[1])
-
-        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint)
+        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint, potential=potential, fractional=True)
 
     @property
     def dimensions(self):
@@ -770,7 +774,7 @@ class GridScan(HasGridMixin, BaseScan):
     def get_positions(self) -> np.ndarray:
         xi = []
         for start, end, gpts, endpoint in zip(
-            self.start, self.end, self.gpts, self.endpoint
+                self.start, self.end, self.gpts, self.endpoint
         ):
             xi.append(
                 np.linspace(start, end, gpts, endpoint=endpoint, dtype=np.float32)
@@ -811,7 +815,7 @@ class GridScan(HasGridMixin, BaseScan):
         axes_metadata = []
         labels = ("x", "y", "z")
         for label, sampling, offset, endpoint in zip(
-            labels, self.sampling, self.start, self.endpoint
+                labels, self.sampling, self.start, self.endpoint
         ):
             axes_metadata.append(
                 ScanAxis(
@@ -870,12 +874,12 @@ class GridScan(HasGridMixin, BaseScan):
         return blocks
 
     def add_to_plot(
-        self,
-        ax,
-        alpha: float = 0.33,
-        facecolor: str = "r",
-        edgecolor: str = "r",
-        **kwargs
+            self,
+            ax,
+            alpha: float = 0.33,
+            facecolor: str = "r",
+            edgecolor: str = "r",
+            **kwargs
     ):
         """
         Add a visualization of the scan area to a matplotlib plot.
