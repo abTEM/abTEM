@@ -223,8 +223,8 @@ def _potential_ensemble_shape_and_metadata(potential):
     extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
 
     if len(potential.exit_planes) > 1:
-        extra_ensemble_axes_shape += (len(potential.exit_planes),)
-        extra_ensemble_axes_metadata += [potential.exit_planes_axes_metadata]
+        extra_ensemble_axes_shape = extra_ensemble_axes_shape + (len(potential.exit_planes),)
+        extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [potential.exit_planes_axes_metadata]
 
     return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
@@ -399,10 +399,10 @@ def multislice_and_detect(
         Exit waves or detected measurements or lists of measurements.
     """
 
+
     antialias_aperture = AntialiasAperture()
 
     propagator = FresnelPropagator()
-
     (
         extra_ensemble_axes_shape,
         extra_ensemble_axes_metadata,
@@ -430,6 +430,8 @@ def multislice_and_detect(
 
         for potential_slice in potential_configuration.generate_slices():
 
+            #print(exit_plane_index, potential_slice)
+
             waves = multislice_step(
                 waves,
                 potential_slice,
@@ -440,7 +442,6 @@ def multislice_and_detect(
             )
 
             if potential_slice.exit_planes:
-
                 measurement_index = _validate_potential_ensemble_indices(
                     potential_index, exit_plane_index, potential_configuration
                 )

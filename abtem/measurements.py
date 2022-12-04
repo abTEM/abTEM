@@ -2037,7 +2037,7 @@ class DiffractionPatterns(BaseMeasurement):
     #     return array
     #     # print(array.chunks[-2:], gpts[0] / self.scan_shape[0] * sum(array.chunks[-2]), gpts)
 
-    def interpolate(self, sampling: Union[str, float, Tuple[float, float]] = None):
+    def interpolate(self, sampling: Union[str, float, Tuple[float, float]] = None, gpts=None):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a different sampling.
 
@@ -2053,14 +2053,16 @@ class DiffractionPatterns(BaseMeasurement):
         interpolated_diffraction_patterns : DiffractionPatterns
             The interpolated diffraction pattern(s).
         """
+        if gpts is None:
+            if sampling == "uniform":
+                sampling = (max(self.sampling),) * 2
 
-        if sampling == "uniform":
-            sampling = (max(self.sampling),) * 2
+            elif not isinstance(sampling, str) and np.isscalar(sampling):
+                sampling = (sampling,) * 2
 
-        elif not isinstance(sampling, str) and np.isscalar(sampling):
-            sampling = (sampling,) * 2
-
-        sampling, gpts = adjusted_gpts(sampling, self.sampling, self.base_shape)
+            sampling, gpts = adjusted_gpts(sampling, self.sampling, self.base_shape)
+        else:
+            sampling = tuple(d * old_n / new_n for d, old_n, new_n in zip(self.sampling, self.base_shape, gpts))
 
         if self.is_lazy:
             array = self.array.map_blocks(
@@ -2095,6 +2097,60 @@ class DiffractionPatterns(BaseMeasurement):
                     f"Outer integration limit cannot exceed the maximum simulated angle ({outer} mrad > "
                     f"{min(self.max_angles)} mrad), please increase the number of grid points."
                 )
+
+    def gaussian_filter(self, sigma):
+        # if len(_scan_axes(self)) < 2:
+        #     raise RuntimeError(
+        #         "Gaussian source size not implemented for diffraction patterns with less than two scan axes."
+        #     )
+        #
+        # if np.isscalar(sigma):
+        #     sigma = (sigma,) * 2
+
+        xp = get_array_module(self.array)
+        gaussian_filter = get_ndimage_module(self._array).gaussian_filter
+
+        # padded_sigma = ()
+        # depth = ()
+        # i = 0
+        # for axis, n in zip(self.ensemble_axes, self.ensemble_shape):
+        #     if axis in _scan_axes(self):
+        #         scan_sampling = _scan_sampling(self)[i]
+        #         padded_sigma += (sigma[i] / scan_sampling,)
+        #         depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
+        #         i += 1
+        #     else:
+        #         padded_sigma += (0.0,)
+        #         depth += (0,)
+        #
+        # padded_sigma += (0.0,) * 2
+        # depth += (0,) * 2
+
+        if np.isscalar(sigma):
+            sigma = (sigma,) * 2
+
+        sigma = tuple(s / d for s, d in zip(sigma, self.sampling))
+        padded_sigma = (0,) * len(self.ensemble_shape) + sigma
+        depth = tuple(int(np.ceil(4.0 * ps)) for ps in padded_sigma)
+
+        if self.is_lazy:
+            array = self.array.map_overlap(
+                gaussian_filter,
+                sigma=padded_sigma,
+                mode="wrap",
+                depth=depth,
+                meta=xp.array((), dtype=xp.float32),
+            )
+        else:
+            array = gaussian_filter(self.array, sigma=padded_sigma, mode="wrap")
+
+        return self.__class__(
+            array,
+            sampling=self.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+            fftshift=self.fftshift,
+        )
 
     def gaussian_source_size(
             self, sigma: Union[float, Tuple[float, float]]
@@ -2532,11 +2588,13 @@ class DiffractionPatterns(BaseMeasurement):
         kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def crop(self, max_angle):
-        gpts = (
-            int(2 * np.round(max_angle / self.angular_sampling[0])) + 1,
-            int(2 * np.round(max_angle / self.angular_sampling[1])) + 1,
-        )
+    def crop(self, max_angle=None, gpts=None):
+        if gpts is None:
+            gpts = (
+                int(2 * np.round(max_angle / self.angular_sampling[0])) + 1,
+                int(2 * np.round(max_angle / self.angular_sampling[1])) + 1,
+            )
+
 
         xp = get_array_module(self.array)
         array = xp.fft.fftshift(

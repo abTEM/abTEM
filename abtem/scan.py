@@ -784,19 +784,28 @@ class GridScan(HasGridMixin, BaseScan):
     def sort_into_extents(self, extents):
         x_chunks = ()
         for start, end in extents[0]:
+            end_with_endpoint = self.end[0]
+
+            if self.endpoint:
+                end_with_endpoint = end_with_endpoint + self.sampling[0]
+
             start_gpt = safe_floor_int(max(start, self.start[0]) / self.sampling[0])
-            end_gpt = safe_floor_int(min(end, self.end[0]) / self.sampling[0])
+            end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[0])
 
             start_gpt = max(0, start_gpt)
             end_gpt = min(self.gpts[0], end_gpt)
 
-            x_chunks += (end_gpt - start_gpt,)
+            x_chunks += (max(end_gpt - start_gpt, 0),)
+
         assert sum(x_chunks) == self.gpts[0]
 
         y_chunks = ()
         for start, end in extents[1]:
+            end_with_endpoint = self.end[1]
+            if self.endpoint:
+                end_with_endpoint = end_with_endpoint + self.sampling[1]
             start_gpt = safe_floor_int(max(start, self.start[1]) / self.sampling[1])
-            end_gpt = safe_floor_int(min(end, self.end[1]) / self.sampling[1])
+            end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[1])
 
             start_gpt = max(0, start_gpt)
             end_gpt = min(self.gpts[1], end_gpt)

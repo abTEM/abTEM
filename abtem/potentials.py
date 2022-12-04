@@ -973,6 +973,7 @@ class PotentialArray(BasePotential, HasArray):
                 blocks = np.zeros((1,), dtype=object)
             else:
                 blocks = np.zeros(chunk_shape(chunks), dtype=object)
+
             ensemble_axes_metadata = self._partition_ensemble_axes_metadata(
                 chunks, lazy=False
             )
@@ -1023,12 +1024,28 @@ class PotentialArray(BasePotential, HasArray):
         if last_slice is None:
             last_slice = len(self)
 
+        exit_plane_after = self.exit_plane_after
+        cum_thickness = np.cumsum(self.slice_thickness)
+        start = first_slice
+        stop = first_slice + 1
+
         for i in range(first_slice, last_slice):
             s = (0,) * (len(self.array.shape) - 3) + (i,)
             array = self.array[s][None]
-            yield self.__class__(
+
+            slic = self.__class__(
                 array, self.slice_thickness[i : i + 1], extent=self.extent
             )
+
+            exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+
+            slic._exit_planes = exit_planes
+
+            start += 1
+            stop += 1
+
+            yield slic
+
 
     def transmission_function(self, energy: float) -> "TransmissionFunction":
         """
@@ -1497,6 +1514,7 @@ class CrystalPotential(_PotentialBuilder):
         cum_thickness = np.cumsum(self.slice_thickness)
         start = first_slice
         stop = first_slice + 1
+
         for i in range(self.repetitions[2]):
             generator = potentials[
                 rng.integers(0, potentials.shape[0])
