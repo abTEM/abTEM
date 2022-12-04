@@ -55,7 +55,7 @@ from abtem.atoms import (
     best_orthogonal_cell,
     cut_cell,
     rotation_matrix_from_plane,
-    pad_atoms,
+    pad_atoms, plane_to_axes, standardize_cell,
 )
 
 if TYPE_CHECKING:
@@ -294,8 +294,8 @@ class _PotentialBuilder(BasePotential):
     ):
 
         if self._require_cell_transform(cell, box=box, plane=plane, origin=origin):
-            R = rotation_matrix_from_plane(plane)
-            cell = np.dot(cell, R.T)
+            axes = plane_to_axes(plane)
+            cell = cell[:, list(axes)]
             box = tuple(best_orthogonal_cell(cell))
 
         elif box is None:
