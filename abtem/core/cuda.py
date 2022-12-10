@@ -86,6 +86,9 @@ def interpolate_radial_functions(array,
                                  radial_gpts,
                                  radial_functions,
                                  radial_derivative):
+    if len(positions) == 0:
+        return array
+
     threadsperblock = (1, 256)
     blockspergrid_x = int(math.ceil(positions.shape[0] / threadsperblock[0]))
     blockspergrid_y = int(math.ceil(disk_indices.shape[0] / threadsperblock[1]))
