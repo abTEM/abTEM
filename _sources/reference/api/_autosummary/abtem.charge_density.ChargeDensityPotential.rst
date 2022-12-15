@@ -1,4 +1,4 @@
-ChargeDensityPotential
+﻿ChargeDensityPotential
 ======================
 
 .. currentmodule:: abtem.charge_density
@@ -46,6 +46,7 @@ ChargeDensityPotential
       ~ChargeDensityPotential.ensemble_axes
       ~ChargeDensityPotential.ensemble_axes_metadata
       ~ChargeDensityPotential.ensemble_shape
+      ~ChargeDensityPotential.exit_plane_after
       ~ChargeDensityPotential.exit_planes
       ~ChargeDensityPotential.exit_planes_axes_metadata
       ~ChargeDensityPotential.exit_thicknesses

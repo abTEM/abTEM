@@ -50,10 +50,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="Configuration" href="../../config.html" />
-    <link rel="prev" title="multislice_step" href="abtem.multislice.multislice_step.html" />
+    <link rel="prev" title="transition_potential_multislice_and_detect" href="abtem.multislice.transition_potential_multislice_and_detect.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="None">
     
@@ -842,6 +844,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul class="current">
      <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -854,6 +861,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3 current active">
@@ -1099,7 +1111,15 @@ title="Print to PDF"
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.multislice.FresnelPropagator.__init__" title="abtem.multislice.FresnelPropagator.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.multislice.FresnelPropagator.propagate" title="abtem.multislice.FresnelPropagator.propagate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">propagate</span></code></a>(waves, thickness[, overwrite_x])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_array</span></code>(waves, thickness)</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.multislice.FresnelPropagator.propagate" title="abtem.multislice.FresnelPropagator.propagate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">propagate</span></code></a>(waves, thickness[, overwrite_x])</p></td>
 <td><p>Propagate wave functions through free space.</p></td>
 </tr>
 </tbody>
@@ -1156,11 +1176,11 @@ title="Print to PDF"
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="abtem.multislice.multislice_step.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="abtem.multislice.transition_potential_multislice_and_detect.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">multislice_step</p>
+            <p class="prev-next-title">transition_potential_multislice_and_detect</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="../../config.html" title="next page">

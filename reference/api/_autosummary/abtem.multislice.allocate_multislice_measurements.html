@@ -50,10 +50,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="multislice_and_detect" href="abtem.multislice.multislice_and_detect.html" />
-    <link rel="prev" title="multislice" href="abtem.multislice.html" />
+    <link rel="prev" title="allocate_measurement" href="abtem.multislice.allocate_measurement.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="None">
     
@@ -841,6 +843,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul class="current">
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
      <li class="toctree-l3 current active">
       <a class="current reference internal" href="#">
        allocate_multislice_measurements
@@ -854,6 +861,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1080,7 +1092,7 @@ title="Print to PDF"
 <h1>allocate_multislice_measurements<a class="headerlink" href="#allocate-multislice-measurements" title="Permalink to this headline">#</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.multislice.allocate_multislice_measurements">
-<span class="sig-prename descclassname"><span class="pre">abtem.multislice.</span></span><span class="sig-name descname"><span class="pre">allocate_multislice_measurements</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waves</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">detectors</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extra_ensemble_axes_shape</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extra_ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/multislice.html#allocate_multislice_measurements"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.multislice.allocate_multislice_measurements" title="Permalink to this definition">#</a></dt>
+<span class="sig-prename descclassname"><span class="pre">abtem.multislice.</span></span><span class="sig-name descname"><span class="pre">allocate_multislice_measurements</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waves</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">detectors</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extra_ensemble_axes_shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extra_ensemble_axes_metadata</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/multislice.html#allocate_multislice_measurements"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.multislice.allocate_multislice_measurements" title="Permalink to this definition">#</a></dt>
 <dd><p>Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved
 numerical efficiency.</p>
 <dl class="field-list simple">
@@ -1130,11 +1142,11 @@ numerical efficiency.</p>
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="abtem.multislice.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="abtem.multislice.allocate_measurement.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">multislice</p>
+            <p class="prev-next-title">allocate_measurement</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="abtem.multislice.multislice_and_detect.html" title="next page">

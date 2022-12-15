@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -844,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -856,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1119,7 +1131,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="sampling-and-antialiasing">
-<h1>Sampling and antialiasing<a class="headerlink" href="#sampling-and-antialiasing" title="Permalink to this headline">#</a></h1>
+<span id="appendix-antialiasing"></span><h1>Sampling and antialiasing<a class="headerlink" href="#sampling-and-antialiasing" title="Permalink to this headline">#</a></h1>
 <p>In abTEM, the wave function is represented on a rectangular grid of <span class="math notranslate nohighlight">\(N_x \times N_y\)</span> grid points (<code class="docutils literal notranslate"><span class="pre">gpts</span></code>) or pixels. Given an orthogonal cell with the sidelengths <span class="math notranslate nohighlight">\(L_x\)</span> and <span class="math notranslate nohighlight">\(L_y\)</span>, in the <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>-direction, the real space sampling (or dimensions of the pixels) is <span class="math notranslate nohighlight">\(\Delta x = L_x / N_x\)</span> in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(\Delta y=L_y / N_y\)</span>.
 The real space coordinates take on only discrete values of:</p>
 <div class="math notranslate nohighlight">

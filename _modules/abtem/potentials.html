@@ -49,6 +49,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -839,6 +841,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -851,6 +858,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1068,7 +1080,8 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.inelastic.phonons</span> <span class="kn">import</span> <span class="p">(</span>
     <span class="n">BaseFrozenPhonons</span><span class="p">,</span>
     <span class="n">DummyFrozenPhonons</span><span class="p">,</span>
-    <span class="n">_validate_seeds</span><span class="p">,</span> <span class="n">MDFrozenPhonons</span><span class="p">,</span>
+    <span class="n">_validate_seeds</span><span class="p">,</span>
+    <span class="n">MDFrozenPhonons</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span> <span class="nn">abtem.inelastic.phonons</span> <span class="kn">import</span> <span class="n">FrozenPhonons</span>
 <span class="kn">from</span> <span class="nn">abtem.measurements</span> <span class="kn">import</span> <span class="n">Images</span>
@@ -1084,13 +1097,12 @@ title="Open an issue"
     <span class="n">best_orthogonal_cell</span><span class="p">,</span>
     <span class="n">cut_cell</span><span class="p">,</span>
     <span class="n">rotation_matrix_from_plane</span><span class="p">,</span>
-    <span class="n">pad_atoms</span><span class="p">,</span>
+    <span class="n">pad_atoms</span><span class="p">,</span> <span class="n">plane_to_axes</span><span class="p">,</span> <span class="n">standardize_cell</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
     <span class="kn">from</span> <span class="nn">abtem.waves</span> <span class="kn">import</span> <span class="n">Waves</span>
     <span class="kn">from</span> <span class="nn">abtem.core.parametrizations.base</span> <span class="kn">import</span> <span class="n">Parametrization</span>
-
 
 
 <div class="viewcode-block" id="BasePotential"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential">[docs]</a><span class="k">class</span> <span class="nc">BasePotential</span><span class="p">(</span>
@@ -1103,6 +1115,12 @@ title="Open an issue"
     <span class="n">metaclass</span><span class="o">=</span><span class="n">ABCMeta</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;Base class of all potentials. Documented in the subclasses.&quot;&quot;&quot;</span>
+
+    <span class="c1"># def generate_blocks(self, chunks: Chunks = 1):</span>
+    <span class="c1">#     if self.ensemble_shape:</span>
+    <span class="c1">#         potential_generator = super().generate_blocks()</span>
+    <span class="c1">#     else:</span>
+    <span class="c1">#         potential_generator = ((0, (0, 1), self) for _ in range(1))</span>
 
     <span class="nd">@property</span>
     <span class="nd">@abstractmethod</span>
@@ -1147,9 +1165,38 @@ title="Open an issue"
         <span class="k">pass</span>
 
     <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">exit_plane_after</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">exit_plane_index</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">exit_planes</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">exit_planes</span>
+
+        <span class="k">if</span> <span class="n">exit_planes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+            <span class="n">exit_plane_index</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="n">is_exit_plane</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">is_exit_plane</span><span class="p">)):</span>
+            <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="n">exit_planes</span><span class="p">[</span><span class="n">exit_plane_index</span><span class="p">]:</span>
+                <span class="n">is_exit_plane</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">exit_plane_index</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="k">return</span> <span class="n">is_exit_plane</span>
+
+    <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">exit_thicknesses</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">]:</span>
-        <span class="n">thicknesses</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
-        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">thicknesses</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">exit_planes</span><span class="p">)])</span>
+        <span class="n">thicknesses</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">exit_planes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span>
+                    <span class="n">thicknesses</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">exit_planes</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)],</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">thicknesses</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">exit_planes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)])</span>
+
+        <span class="c1"># return tuple(thicknesses[list(exit_planes)])</span>
+        <span class="c1"># else:</span>
+        <span class="c1">#    return tuple(thicknesses[list(self.exit_planes)])</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">num_exit_planes</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -1258,12 +1305,15 @@ title="Open an issue"
 
 <span class="k">def</span> <span class="nf">_validate_exit_planes</span><span class="p">(</span><span class="n">exit_planes</span><span class="p">,</span> <span class="n">num_slices</span><span class="p">):</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">exit_planes</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
-        <span class="n">exit_planes</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_slices</span><span class="p">,</span> <span class="n">exit_planes</span><span class="p">))</span>
-        <span class="k">if</span> <span class="n">exit_planes</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">num_slices</span><span class="p">:</span>
-            <span class="n">exit_planes</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">num_slices</span><span class="p">)</span>
-        <span class="n">exit_planes</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">exit_planes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">exit_planes</span> <span class="o">&gt;=</span> <span class="n">num_slices</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">num_slices</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,)</span>
+
+        <span class="n">exit_planes</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">exit_planes</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">num_slices</span><span class="p">,</span> <span class="n">exit_planes</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">exit_planes</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="p">(</span><span class="n">num_slices</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="n">exit_planes</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">num_slices</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">exit_planes</span> <span class="o">=</span> <span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,)</span> <span class="o">+</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">exit_planes</span><span class="p">)</span>
     <span class="k">elif</span> <span class="n">exit_planes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">exit_planes</span> <span class="o">=</span> <span class="p">(</span><span class="n">num_slices</span><span class="p">,)</span>
+        <span class="n">exit_planes</span> <span class="o">=</span> <span class="p">(</span><span class="n">num_slices</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,)</span>
 
     <span class="k">return</span> <span class="n">exit_planes</span>
 
@@ -1286,8 +1336,8 @@ title="Open an issue"
     <span class="p">):</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_require_cell_transform</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">box</span><span class="o">=</span><span class="n">box</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="n">plane</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="n">origin</span><span class="p">):</span>
-            <span class="n">R</span> <span class="o">=</span> <span class="n">rotation_matrix_from_plane</span><span class="p">(</span><span class="n">plane</span><span class="p">)</span>
-            <span class="n">cell</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">R</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+            <span class="n">axes</span> <span class="o">=</span> <span class="n">plane_to_axes</span><span class="p">(</span><span class="n">plane</span><span class="p">)</span>
+            <span class="n">cell</span> <span class="o">=</span> <span class="n">cell</span><span class="p">[:,</span> <span class="nb">list</span><span class="p">(</span><span class="n">axes</span><span class="p">)]</span>
             <span class="n">box</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">best_orthogonal_cell</span><span class="p">(</span><span class="n">cell</span><span class="p">))</span>
 
         <span class="k">elif</span> <span class="n">box</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -1682,7 +1732,9 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sliced_atoms</span>
 
-<div class="viewcode-block" id="Potential.generate_slices"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.Potential.html#abtem.potentials.Potential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<div class="viewcode-block" id="Potential.generate_slices"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.Potential.html#abtem.potentials.Potential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">return_depth</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Generate the slices for the potential.</span>
 
@@ -1716,6 +1768,9 @@ title="Open an issue"
             <span class="k">for</span> <span class="n">number</span> <span class="ow">in</span> <span class="n">numbers</span>
         <span class="p">}</span>
 
+        <span class="n">exit_plane_after</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">exit_plane_after</span>
+
+        <span class="n">cum_thickness</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">start</span><span class="p">,</span> <span class="n">stop</span> <span class="ow">in</span> <span class="n">generate_chunks</span><span class="p">(</span>
             <span class="n">last_slice</span> <span class="o">-</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">chunks</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="n">first_slice</span>
         <span class="p">):</span>
@@ -1736,11 +1791,20 @@ title="Open an issue"
 
             <span class="n">array</span> <span class="o">-=</span> <span class="n">array</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
 
-            <span class="k">yield</span> <span class="n">PotentialArray</span><span class="p">(</span>
+            <span class="n">exit_planes</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">exit_plane_after</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">stop</span><span class="p">])[</span><span class="mi">0</span><span class="p">])</span>
+
+            <span class="n">potential_array</span> <span class="o">=</span> <span class="n">PotentialArray</span><span class="p">(</span>
                 <span class="n">array</span><span class="p">,</span>
                 <span class="n">slice_thickness</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">stop</span><span class="p">],</span>
+                <span class="n">exit_planes</span><span class="o">=</span><span class="n">exit_planes</span><span class="p">,</span>
                 <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span><span class="p">,</span>
-            <span class="p">)</span></div>
+            <span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">return_depth</span><span class="p">:</span>
+                <span class="n">depth</span> <span class="o">=</span> <span class="n">cum_thickness</span><span class="p">[</span><span class="n">stop</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+                <span class="k">yield</span> <span class="n">depth</span><span class="p">,</span> <span class="n">potential_array</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="n">potential_array</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">ensemble_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2268,7 +2332,11 @@ title="Open an issue"
 
             <span class="bp">self</span><span class="o">.</span><span class="n">_seeds</span> <span class="o">=</span> <span class="n">_validate_seeds</span><span class="p">(</span><span class="n">seeds</span><span class="p">,</span> <span class="n">num_frozen_phonons</span><span class="p">)</span>
 
-        <span class="k">if</span> <span class="p">(</span><span class="n">potential_unit</span><span class="o">.</span><span class="n">num_frozen_phonons</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">num_frozen_phonons</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">num_frozen_phonons</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="p">(</span><span class="n">potential_unit</span><span class="o">.</span><span class="n">num_frozen_phonons</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="ow">and</span> <span class="p">(</span><span class="n">num_frozen_phonons</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="ow">and</span> <span class="p">(</span><span class="n">num_frozen_phonons</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="p">):</span>
             <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
                 <span class="s2">&quot;&#39;num_frozen_phonons&#39; is greater than one, but the potential unit does not have frozen phonons&quot;</span>
             <span class="p">)</span>
@@ -2309,7 +2377,7 @@ title="Open an issue"
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_seeds</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">return</span> <span class="p">()</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_frozen_phonons</span><span class="p">,</span>
+            <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_frozen_phonons</span><span class="p">,)</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">num_frozen_phonons</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2437,7 +2505,9 @@ title="Open an issue"
             <span class="bp">self</span><span class="o">.</span><span class="n">_crystal_potential</span><span class="p">,</span> <span class="n">potential_partial</span><span class="o">=</span><span class="n">potential_partial</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
         <span class="p">)</span>
 
-<div class="viewcode-block" id="CrystalPotential.generate_slices"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.CrystalPotential.html#abtem.potentials.CrystalPotential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<div class="viewcode-block" id="CrystalPotential.generate_slices"><a class="viewcode-back" href="../../reference/api/_autosummary/abtem.potentials.CrystalPotential.html#abtem.potentials.CrystalPotential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">return_depth</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Generate the slices for the potential.</span>
 
@@ -2465,14 +2535,29 @@ title="Open an issue"
         <span class="k">else</span><span class="p">:</span>
             <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seeds</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
 
+        <span class="n">exit_plane_after</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">exit_plane_after</span>
+        <span class="n">cum_thickness</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">)</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="n">first_slice</span>
+        <span class="n">stop</span> <span class="o">=</span> <span class="n">first_slice</span> <span class="o">+</span> <span class="mi">1</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span><span class="p">[</span><span class="mi">2</span><span class="p">]):</span>
             <span class="n">generator</span> <span class="o">=</span> <span class="n">potentials</span><span class="p">[</span>
                 <span class="n">rng</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">potentials</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
             <span class="p">]</span><span class="o">.</span><span class="n">generate_slices</span><span class="p">()</span>
+
             <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">potential_unit</span><span class="p">)):</span>
                 <span class="n">slic</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">generator</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span><span class="p">[:</span><span class="mi">2</span><span class="p">])</span>
 
-                <span class="k">yield</span> <span class="n">slic</span></div></div>
+                <span class="n">exit_planes</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">exit_plane_after</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">stop</span><span class="p">])[</span><span class="mi">0</span><span class="p">])</span>
+
+                <span class="n">slic</span><span class="o">.</span><span class="n">_exit_planes</span> <span class="o">=</span> <span class="n">exit_planes</span>
+
+                <span class="n">start</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="n">stop</span> <span class="o">+=</span> <span class="mi">1</span>
+
+                <span class="k">if</span> <span class="n">return_depth</span><span class="p">:</span>
+                    <span class="k">yield</span> <span class="n">cum_thickness</span><span class="p">[</span><span class="n">stop</span> <span class="o">-</span> <span class="mi">1</span><span class="p">],</span> <span class="n">slic</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">yield</span> <span class="n">slic</span></div></div>
 </pre></div>
 
               </div>

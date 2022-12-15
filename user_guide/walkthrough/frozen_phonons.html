@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -844,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -856,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1190,7 +1202,7 @@ title="Print to PDF"
 <p>As an illustration, we simulate SrTiO<sub>3</sub><span class="math notranslate nohighlight">\((100)\)</span> with frozen phonons. In order to observe visible Kikuchi lines, the sample needs some thickness, hence the unit cell is repeated 50 times along the <span class="math notranslate nohighlight">\(z\)</span>-direction. We also need to repeat the atoms in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span> to obtain a statistically significant ensemble.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">repetitions</span> <span class="o">=</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">repetitions</span> <span class="o">=</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
 <span class="n">atoms</span> <span class="o">=</span> <span class="n">ase</span><span class="o">.</span><span class="n">io</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;data/srtio3.cif&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="n">repetitions</span>
 </pre></div>
 </div>
@@ -1215,7 +1227,17 @@ title="Print to PDF"
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms_configuration</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">))</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms_configuration</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.4</span><span class="p">,</span> <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms_configuration</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.4</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Beam view&quot;</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span>
+    <span class="n">atoms_configuration</span><span class="p">,</span>
+    <span class="n">scale</span><span class="o">=</span><span class="mf">0.4</span><span class="p">,</span>
+    <span class="n">plane</span><span class="o">=</span><span class="s2">&quot;xz&quot;</span><span class="p">,</span>
+    <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span>
+    <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Side view&quot;</span><span class="p">,</span>
+    <span class="n">linewidth</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+<span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -1226,8 +1248,8 @@ title="Print to PDF"
 <p><code class="docutils literal notranslate"><span class="pre">FrozenPhonons</span></code> may be used instead of <code class="docutils literal notranslate"><span class="pre">Atoms</span></code> to create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_static</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-<span class="n">potential_phonon</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_static</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">432</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<span class="n">potential_phonon</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">432</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1240,7 +1262,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(10, 99, 512, 512)
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(10, 79, 432, 432)
 </pre></div>
 </div>
 </div>
@@ -1256,8 +1278,8 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  8.1s
-[########################################] | 100% Completed | 28.6s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1.8s
+[########################################] | 100% Completed |  7.0s
 </pre></div>
 </div>
 </div>
@@ -1270,7 +1292,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(10, 512, 512)
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(10, 432, 432)
 </pre></div>
 </div>
 </div>
@@ -1300,9 +1322,10 @@ title="Print to PDF"
 <span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
 <span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
-    <span class="p">[</span><span class="n">diffraction_patterns_static</span><span class="p">,</span> <span class="n">diffraction_patterns_phonons</span><span class="p">,],</span>
-    <span class="p">(</span><span class="s2">&quot;static&quot;</span><span class="p">,</span> <span class="s2">&quot;phonons&quot;</span><span class="p">),</span>
-<span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">diffraction_patterns_static</span><span class="p">,</span> <span class="n">diffraction_patterns_phonons</span><span class="p">,],</span> <span class="p">(</span><span class="s2">&quot;static&quot;</span><span class="p">,</span> <span class="s2">&quot;phonons&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+
+<span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">power</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>
     <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span>
@@ -1321,20 +1344,9 @@ title="Print to PDF"
 <p>We tabulate the diffraction spots up 3rd order confirming the above observations.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">table_static</span> <span class="o">=</span> <span class="p">(</span>
-    <span class="n">diffraction_patterns_static</span><span class="o">.</span><span class="n">crop</span><span class="p">(</span><span class="mi">25</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="mf">3.945</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">normalize_intensity</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
-    <span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s2">&quot;static&quot;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">crop</span><span class="p">(</span><span class="mi">25</span><span class="p">)</span><span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="mf">3.945</span><span class="p">)</span><span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span>
+    <span class="n">normalize</span><span class="o">=</span><span class="kc">True</span>
 <span class="p">)</span>
-<span class="n">table_phonons</span> <span class="o">=</span> <span class="p">(</span>
-    <span class="n">diffraction_patterns_phonons</span><span class="o">.</span><span class="n">crop</span><span class="p">(</span><span class="mi">25</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="mf">3.945</span><span class="p">)</span>
-    <span class="o">.</span><span class="n">normalize_intensity</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
-    <span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s2">&quot;phonons&quot;</span><span class="p">)</span>
-<span class="p">)</span>
-
-<span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">((</span><span class="n">table_static</span><span class="p">,</span> <span class="n">table_phonons</span><span class="p">))</span>
 </pre></div>
 </div>
 </div>
@@ -1357,7 +1369,6 @@ title="Print to PDF"
   <thead>
     <tr style="text-align: right;">
       <th></th>
-      <th>100</th>
       <th>110</th>
       <th>200</th>
       <th>220</th>
@@ -1366,20 +1377,18 @@ title="Print to PDF"
   </thead>
   <tbody>
     <tr>
-      <th>static</th>
-      <td>0.010758</td>
-      <td>1.0</td>
-      <td>0.529651</td>
-      <td>0.168959</td>
-      <td>0.031614</td>
+      <th>0</th>
+      <td>1.000000</td>
+      <td>0.137309</td>
+      <td>0.047772</td>
+      <td>0.024526</td>
     </tr>
     <tr>
-      <th>phonons</th>
-      <td>0.012823</td>
-      <td>1.0</td>
-      <td>0.167864</td>
-      <td>0.030687</td>
-      <td>0.037931</td>
+      <th>1</th>
+      <td>0.636691</td>
+      <td>0.337175</td>
+      <td>0.098481</td>
+      <td>0.022349</td>
     </tr>
   </tbody>
 </table>
@@ -1416,7 +1425,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  3min 55.3s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1min  2.8s
 </pre></div>
 </div>
 </div>

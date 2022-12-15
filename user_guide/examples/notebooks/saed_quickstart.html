@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="PED quickstart" href="ped_quickstart.html" />
@@ -842,6 +844,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -854,6 +861,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1122,7 +1134,7 @@ title="Print to PDF"
 <span id="examples-saed-quickstart"></span><h1>SAED quickstart<a class="headerlink" href="#saed-quickstart" title="Permalink to this headline">#</a></h1>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s2">&quot;../../data/SiO2_zeolite.cif&quot;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s2">&quot;sio2.cif&quot;</span><span class="p">)</span>
 
 <span class="n">cell</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
@@ -1173,10 +1185,10 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 1.77 ss
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 7.43 ss
 </pre></div>
 </div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.DiffractionPatterns object at 0x0000019056A42430&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.DiffractionPatterns object at 0x7fab81f4ed30&gt;
 </pre></div>
 </div>
 </div>
@@ -1196,10 +1208,20 @@ title="Print to PDF"
 </div>
 <div class="cell_output docutils container">
 <div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 432x288 with 2 Axes&gt;,
- &lt;Axes: xlabel=&#39;kx [1 / Å]&#39;, ylabel=&#39;ky [1 / Å]&#39;&gt;)
+ &lt;Axes:xlabel=&#39;kx [1 / Å]&#39;, ylabel=&#39;ky [1 / Å]&#39;&gt;)
 </pre></div>
 </div>
 <img alt="../../../_images/saed_quickstart_9_1.png" src="../../../_images/saed_quickstart_9_1.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">spots</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">spot_scale</span><span class="o">=</span><span class="mf">.5</span><span class="p">,</span> <span class="n">overlay_indices</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../../_images/saed_quickstart_10_0.png" src="../../../_images/saed_quickstart_10_0.png" />
 </div>
 </div>
 <div class="cell docutils container">
@@ -1211,7 +1233,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../../_images/saed_quickstart_10_0.png" src="../../../_images/saed_quickstart_10_0.png" />
+<img alt="../../../_images/saed_quickstart_11_0.png" src="../../../_images/saed_quickstart_11_0.png" />
 </div>
 </div>
 </section>
@@ -1225,16 +1247,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem-dask-gpu"
+            mode: "test_threads"
         },
         kernelOptions: {
-            kernelName: "abtem-dask-gpu",
+            kernelName: "test_threads",
             path: "./user_guide/examples/notebooks"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem-dask-gpu'</script>
+    <script>kernelName = 'test_threads'</script>
 
               </div>
               

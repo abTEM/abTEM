@@ -1,4 +1,4 @@
-Potential
+﻿Potential
 =========
 
 .. currentmodule:: abtem.potentials
@@ -47,6 +47,7 @@ Potential
       ~Potential.ensemble_axes
       ~Potential.ensemble_axes_metadata
       ~Potential.ensemble_shape
+      ~Potential.exit_plane_after
       ~Potential.exit_planes
       ~Potential.exit_planes_axes_metadata
       ~Potential.exit_thicknesses

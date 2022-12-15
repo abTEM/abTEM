@@ -1,4 +1,4 @@
-PotentialArray
+﻿PotentialArray
 ==============
 
 .. currentmodule:: abtem.potentials
@@ -71,6 +71,7 @@ PotentialArray
       ~PotentialArray.ensemble_axes
       ~PotentialArray.ensemble_axes_metadata
       ~PotentialArray.ensemble_shape
+      ~PotentialArray.exit_plane_after
       ~PotentialArray.exit_planes
       ~PotentialArray.exit_planes_axes_metadata
       ~PotentialArray.exit_thicknesses

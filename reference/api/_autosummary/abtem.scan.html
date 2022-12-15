@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="BaseScan" href="abtem.scan.BaseScan.html" />
@@ -842,6 +844,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -854,6 +861,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1092,10 +1104,10 @@ title="Print to PDF"
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.scan.CustomScan.html#abtem.scan.CustomScan" title="abtem.scan.CustomScan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">CustomScan</span></code></a>([positions])</p></td>
 <td><p>Custom scan based on explicit 2D probe positions.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.scan.GridScan.html#abtem.scan.GridScan" title="abtem.scan.GridScan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">GridScan</span></code></a>([start, end, gpts, sampling, endpoint])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.scan.GridScan.html#abtem.scan.GridScan" title="abtem.scan.GridScan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">GridScan</span></code></a>([start, end, gpts, sampling, ...])</p></td>
 <td><p>A scan over a regular grid for calculating scanning transmission electron microscopy.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.scan.LineScan.html#abtem.scan.LineScan" title="abtem.scan.LineScan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">LineScan</span></code></a>([start, end, gpts, sampling, endpoint])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.scan.LineScan.html#abtem.scan.LineScan" title="abtem.scan.LineScan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">LineScan</span></code></a>([start, end, gpts, sampling, ...])</p></td>
 <td><p>A scan along a straight line.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.scan.SourceOffset.html#abtem.scan.SourceOffset" title="abtem.scan.SourceOffset"><code class="xref py py-obj docutils literal notranslate"><span class="pre">SourceOffset</span></code></a>(distribution)</p></td>

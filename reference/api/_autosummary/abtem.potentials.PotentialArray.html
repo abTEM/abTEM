@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="TransmissionFunction" href="abtem.potentials.TransmissionFunction.html" />
@@ -842,6 +844,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -854,6 +861,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1332,7 +1344,10 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">exit_planes</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">exit_plane_after</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">exit_planes</span></code></p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</p>
@@ -1340,10 +1355,10 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">exit_planes_axes_metadata</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">exit_planes_axes_metadata</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">exit_thicknesses</span></code></p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">exit_thicknesses</span></code></p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]</p>
@@ -1351,55 +1366,55 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.extent" title="abtem.potentials.PotentialArray.extent"><code class="xref py py-obj docutils literal notranslate"><span class="pre">extent</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.extent" title="abtem.potentials.PotentialArray.extent"><code class="xref py py-obj docutils literal notranslate"><span class="pre">extent</span></code></a></p></td>
 <td><p>Extent of grid for each dimension in Ångstrom.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.fourier_space_sampling" title="abtem.potentials.PotentialArray.fourier_space_sampling"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fourier_space_sampling</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.fourier_space_sampling" title="abtem.potentials.PotentialArray.fourier_space_sampling"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fourier_space_sampling</span></code></a></p></td>
 <td><p>Reciprocal-space sampling in reciprocal Ångstrom.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.gpts" title="abtem.potentials.PotentialArray.gpts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">gpts</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.gpts" title="abtem.potentials.PotentialArray.gpts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">gpts</span></code></a></p></td>
 <td><p>Number of grid points for each dimension.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.grid" title="abtem.potentials.PotentialArray.grid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">grid</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.grid" title="abtem.potentials.PotentialArray.grid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">grid</span></code></a></p></td>
 <td><p>Simulation grid.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_complex</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_complex</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_lazy</span></code></p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_lazy</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">metadata</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">metadata</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_axes" title="abtem.potentials.PotentialArray.num_axes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_axes</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_axes" title="abtem.potentials.PotentialArray.num_axes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_axes</span></code></a></p></td>
 <td><p>Number of axes.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_base_axes" title="abtem.potentials.PotentialArray.num_base_axes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_base_axes</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_base_axes" title="abtem.potentials.PotentialArray.num_base_axes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_base_axes</span></code></a></p></td>
 <td><p>Number of base axes.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_ensemble_axes" title="abtem.potentials.PotentialArray.num_ensemble_axes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_ensemble_axes</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_ensemble_axes" title="abtem.potentials.PotentialArray.num_ensemble_axes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_ensemble_axes</span></code></a></p></td>
 <td><p>Number of ensemble axes.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_exit_planes" title="abtem.potentials.PotentialArray.num_exit_planes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_exit_planes</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_exit_planes" title="abtem.potentials.PotentialArray.num_exit_planes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_exit_planes</span></code></a></p></td>
 <td><p>Number of exit planes.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_frozen_phonons</span></code></p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_frozen_phonons</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_slices" title="abtem.potentials.PotentialArray.num_slices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_slices</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.num_slices" title="abtem.potentials.PotentialArray.num_slices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_slices</span></code></a></p></td>
 <td><p>Number of projected potential slices.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.sampling" title="abtem.potentials.PotentialArray.sampling"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sampling</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.sampling" title="abtem.potentials.PotentialArray.sampling"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sampling</span></code></a></p></td>
 <td><p>Grid sampling for each dimension in Ångstrom per grid point.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.shape" title="abtem.potentials.PotentialArray.shape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">shape</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.shape" title="abtem.potentials.PotentialArray.shape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">shape</span></code></a></p></td>
 <td><p>The size of each axis.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.slice_limits" title="abtem.potentials.PotentialArray.slice_limits"><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice_limits</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.slice_limits" title="abtem.potentials.PotentialArray.slice_limits"><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice_limits</span></code></a></p></td>
 <td><p>The entrance and exit depths of each slice [Å].</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice_thickness</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice_thickness</span></code></p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</p>
@@ -1407,7 +1422,7 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.thickness" title="abtem.potentials.PotentialArray.thickness"><code class="xref py py-obj docutils literal notranslate"><span class="pre">thickness</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.PotentialArray.thickness" title="abtem.potentials.PotentialArray.thickness"><code class="xref py py-obj docutils literal notranslate"><span class="pre">thickness</span></code></a></p></td>
 <td><p>The thickness of the potential [Å].</p></td>
 </tr>
 </tbody>

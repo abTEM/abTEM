@@ -1,3 +1,4 @@
+(reference:configuration)=
 # Configuration
 
 You can configure *ab*TEM with a YAML configuration file (`abtem.yaml`), which controls a number of options and

@@ -1,4 +1,4 @@
-AnnularDetector
+﻿AnnularDetector
 ===============
 
 .. currentmodule:: abtem.detectors
@@ -17,9 +17,11 @@ AnnularDetector
    .. autosummary::
    
       ~AnnularDetector.__init__
+      ~AnnularDetector.add_to_plot
       ~AnnularDetector.angular_limits
       ~AnnularDetector.copy
       ~AnnularDetector.detect
+      ~AnnularDetector.get_detector_region
       ~AnnularDetector.measurement_axes_metadata
       ~AnnularDetector.measurement_meta
       ~AnnularDetector.measurement_metadata

@@ -1,4 +1,4 @@
-CrystalPotential
+﻿CrystalPotential
 ================
 
 .. currentmodule:: abtem.potentials
@@ -45,6 +45,7 @@ CrystalPotential
       ~CrystalPotential.ensemble_axes
       ~CrystalPotential.ensemble_axes_metadata
       ~CrystalPotential.ensemble_shape
+      ~CrystalPotential.exit_plane_after
       ~CrystalPotential.exit_planes
       ~CrystalPotential.exit_planes_axes_metadata
       ~CrystalPotential.exit_thicknesses

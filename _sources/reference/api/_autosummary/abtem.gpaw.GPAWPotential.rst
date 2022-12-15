@@ -1,4 +1,4 @@
-GPAWPotential
+﻿GPAWPotential
 =============
 
 .. currentmodule:: abtem.gpaw
@@ -46,6 +46,7 @@ GPAWPotential
       ~GPAWPotential.ensemble_axes
       ~GPAWPotential.ensemble_axes_metadata
       ~GPAWPotential.ensemble_shape
+      ~GPAWPotential.exit_plane_after
       ~GPAWPotential.exit_planes
       ~GPAWPotential.exit_planes_axes_metadata
       ~GPAWPotential.exit_thicknesses

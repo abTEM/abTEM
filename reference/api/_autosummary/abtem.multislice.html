@@ -50,9 +50,11 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="allocate_multislice_measurements" href="abtem.multislice.allocate_multislice_measurements.html" />
+    <link rel="next" title="allocate_measurement" href="abtem.multislice.allocate_measurement.html" />
     <link rel="prev" title="wrap_with_tolerance" href="abtem.atoms.wrap_with_tolerance.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="None">
@@ -842,6 +844,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -854,6 +861,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1086,14 +1098,20 @@ title="Print to PDF"
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.multislice.allocate_multislice_measurements.html#abtem.multislice.allocate_multislice_measurements" title="abtem.multislice.allocate_multislice_measurements"><code class="xref py py-obj docutils literal notranslate"><span class="pre">allocate_multislice_measurements</span></code></a>(waves, ...)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.multislice.allocate_measurement.html#abtem.multislice.allocate_measurement" title="abtem.multislice.allocate_measurement"><code class="xref py py-obj docutils literal notranslate"><span class="pre">allocate_measurement</span></code></a>(waves, detector, ...)</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.multislice.allocate_multislice_measurements.html#abtem.multislice.allocate_multislice_measurements" title="abtem.multislice.allocate_multislice_measurements"><code class="xref py py-obj docutils literal notranslate"><span class="pre">allocate_multislice_measurements</span></code></a>(waves, ...)</p></td>
 <td><p>Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved numerical efficiency.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.multislice.multislice_and_detect.html#abtem.multislice.multislice_and_detect" title="abtem.multislice.multislice_and_detect"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multislice_and_detect</span></code></a>(waves, potential, ...)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.multislice.multislice_and_detect.html#abtem.multislice.multislice_and_detect" title="abtem.multislice.multislice_and_detect"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multislice_and_detect</span></code></a>(waves, potential, ...)</p></td>
 <td><p>Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting at each of the exit planes specified in the potential.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.multislice.multislice_step.html#abtem.multislice.multislice_step" title="abtem.multislice.multislice_step"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multislice_step</span></code></a>(waves, potential_slice, ...)</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.multislice.multislice_step.html#abtem.multislice.multislice_step" title="abtem.multislice.multislice_step"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multislice_step</span></code></a>(waves, potential_slice, ...)</p></td>
 <td><p>Calculate one step of the multislice algorithm for the given batch of wave functions through a given potential slice.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.multislice.transition_potential_multislice_and_detect.html#abtem.multislice.transition_potential_multislice_and_detect" title="abtem.multislice.transition_potential_multislice_and_detect"><code class="xref py py-obj docutils literal notranslate"><span class="pre">transition_potential_multislice_and_detect</span></code></a>(...)</p></td>
+<td><p>Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting at each of the exit planes specified in the potential.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1145,10 +1163,10 @@ title="Print to PDF"
             <p class="prev-next-title">wrap_with_tolerance</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="abtem.multislice.allocate_multislice_measurements.html" title="next page">
+    <a class='right-next' id="next-link" href="abtem.multislice.allocate_measurement.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">allocate_multislice_measurements</p>
+        <p class="prev-next-title">allocate_measurement</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

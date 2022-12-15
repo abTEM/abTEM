@@ -17,6 +17,7 @@ FresnelPropagator
    .. autosummary::
    
       ~FresnelPropagator.__init__
+      ~FresnelPropagator.get_array
       ~FresnelPropagator.propagate
    
    

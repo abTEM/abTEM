@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -844,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -856,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1297,7 +1309,7 @@ title="Print to PDF"
 <span class="n">difference</span> <span class="o">=</span> <span class="n">projected_potential_dft</span> <span class="o">-</span> <span class="n">projected_potential_iam</span>
 
 <span class="n">relative_difference</span> <span class="o">=</span> <span class="n">projected_potential_dft</span><span class="o">.</span><span class="n">relative_difference</span><span class="p">(</span>
-    <span class="n">projected_potential_iam</span><span class="p">,</span>
+    <span class="n">projected_potential_iam</span><span class="p">,</span> <span class="n">min_relative_tol</span><span class="o">=</span><span class="mf">.01</span>
 <span class="p">)</span>
 
 
@@ -1447,24 +1459,24 @@ title="Print to PDF"
     <tr>
       <th>iam</th>
       <td>1.0</td>
-      <td>1.052713</td>
-      <td>0.163061</td>
-      <td>0.933537</td>
-      <td>0.155534</td>
+      <td>1.052699</td>
+      <td>0.163064</td>
+      <td>0.933526</td>
+      <td>0.155531</td>
       <td>0.058092</td>
       <td>0.062024</td>
-      <td>0.136435</td>
+      <td>0.136433</td>
     </tr>
     <tr>
       <th>dft</th>
       <td>1.0</td>
-      <td>1.050152</td>
-      <td>0.215294</td>
-      <td>1.168096</td>
-      <td>0.210582</td>
-      <td>0.071467</td>
-      <td>0.074027</td>
-      <td>0.168128</td>
+      <td>1.050133</td>
+      <td>0.215298</td>
+      <td>1.168078</td>
+      <td>0.210578</td>
+      <td>0.071466</td>
+      <td>0.074026</td>
+      <td>0.168126</td>
     </tr>
     <tr>
       <th>Exp.</th>

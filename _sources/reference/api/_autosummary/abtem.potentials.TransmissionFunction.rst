@@ -1,4 +1,4 @@
-TransmissionFunction
+﻿TransmissionFunction
 ====================
 
 .. currentmodule:: abtem.potentials
@@ -74,6 +74,7 @@ TransmissionFunction
       ~TransmissionFunction.ensemble_axes
       ~TransmissionFunction.ensemble_axes_metadata
       ~TransmissionFunction.ensemble_shape
+      ~TransmissionFunction.exit_plane_after
       ~TransmissionFunction.exit_planes
       ~TransmissionFunction.exit_planes_axes_metadata
       ~TransmissionFunction.exit_thicknesses

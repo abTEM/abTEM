@@ -1,4 +1,4 @@
-BasePotential
+﻿BasePotential
 =============
 
 .. currentmodule:: abtem.potentials
@@ -44,6 +44,7 @@ BasePotential
       ~BasePotential.ensemble_axes
       ~BasePotential.ensemble_axes_metadata
       ~BasePotential.ensemble_shape
+      ~BasePotential.exit_plane_after
       ~BasePotential.exit_planes
       ~BasePotential.exit_planes_axes_metadata
       ~BasePotential.exit_thicknesses

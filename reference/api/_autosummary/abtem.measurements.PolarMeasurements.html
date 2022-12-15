@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="RealSpaceLineProfiles" href="abtem.measurements.RealSpaceLineProfiles.html" />
@@ -842,6 +844,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -854,6 +861,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1132,7 +1144,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.copy_to_device" title="abtem.measurements.PolarMeasurements.copy_to_device"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy_to_device</span></code></a>(device)</p></td>
 <td><p>Copy array to specified device.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">differentials</span></code>(direction_1_plus, ...[, ...])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">differentials</span></code>(direction_1, direction_2[, ...])</p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_lazy</span></code>([chunks])</p></td>
@@ -1157,7 +1169,10 @@ The bins may be rotated around the origin, and their center may be shifted from 
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.from_zarr" title="abtem.measurements.PolarMeasurements.from_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_zarr</span></code></a>(url[, chunks])</p></td>
 <td><p>Read wave functions from a hdf5 file.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.gaussian_source_size" title="abtem.measurements.PolarMeasurements.gaussian_source_size"><code class="xref py py-obj docutils literal notranslate"><span class="pre">gaussian_source_size</span></code></a>(sigma)</p></td>
+<td><p>Simulate the effect of a finite source size on diffraction pattern(s) using a Gaussian filter.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1165,22 +1180,22 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.imag" title="abtem.measurements.PolarMeasurements.imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">imag</span></code></a>()</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.imag" title="abtem.measurements.PolarMeasurements.imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">imag</span></code></a>()</p></td>
 <td><p>Returns the imaginary part of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.integrate" title="abtem.measurements.PolarMeasurements.integrate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrate</span></code></a>([radial_limits, azimuthal_limits, ...])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.integrate" title="abtem.measurements.PolarMeasurements.integrate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrate</span></code></a>([radial_limits, azimuthal_limits, ...])</p></td>
 <td><p>Integrate polar regions to produce an image or line profiles.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.integrate_radial" title="abtem.measurements.PolarMeasurements.integrate_radial"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrate_radial</span></code></a>(inner, outer)</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.integrate_radial" title="abtem.measurements.PolarMeasurements.integrate_radial"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrate_radial</span></code></a>(inner, outer)</p></td>
 <td><p>Create images by integrating the polar measurements over an annulus defined by an inner and outer integration angle.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.intensity" title="abtem.measurements.PolarMeasurements.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.intensity" title="abtem.measurements.PolarMeasurements.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
 <td><p>Calculates the squared norm of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">iterate_ensemble</span></code>([keep_dims])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">iterate_ensemble</span></code>([keep_dims])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1188,7 +1203,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mean</span></code>([axes])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mean</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1196,7 +1211,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1204,34 +1219,34 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.phase" title="abtem.measurements.PolarMeasurements.phase"><code class="xref py py-obj docutils literal notranslate"><span class="pre">phase</span></code></a>()</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.phase" title="abtem.measurements.PolarMeasurements.phase"><code class="xref py py-obj docutils literal notranslate"><span class="pre">phase</span></code></a>()</p></td>
 <td><p>Calculates the phase of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.poisson_noise" title="abtem.measurements.PolarMeasurements.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.poisson_noise" title="abtem.measurements.PolarMeasurements.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
 <td><p>Add Poisson noise (i.e.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.real" title="abtem.measurements.PolarMeasurements.real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">real</span></code></a>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.real" title="abtem.measurements.PolarMeasurements.real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">real</span></code></a>()</p></td>
 <td><p>Returns the real part of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.reduce_ensemble" title="abtem.measurements.PolarMeasurements.reduce_ensemble"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code></a>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.reduce_ensemble" title="abtem.measurements.PolarMeasurements.reduce_ensemble"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code></a>()</p></td>
 <td><p>Takes the mean of an ensemble measurement (e.g.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.relative_difference" title="abtem.measurements.PolarMeasurements.relative_difference"><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code></a>(other[, min_relative_tol])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.relative_difference" title="abtem.measurements.PolarMeasurements.relative_difference"><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code></a>(other[, min_relative_tol])</p></td>
 <td><p>Calculates the relative difference with respect to another compatible measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code>([ax, title, min_azimuthal_division, ...])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code>([ax, title, min_azimuthal_division, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1239,7 +1254,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">std</span></code>([axes])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">std</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1247,7 +1262,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1255,7 +1270,7 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_cpu</span></code>()</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_cpu</span></code>()</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1263,10 +1278,10 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_delayed</span></code>()</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_delayed</span></code>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_gpu</span></code>()</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_gpu</span></code>()</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1274,13 +1289,13 @@ The bins may be rotated around the origin, and their center may be shifted from 
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.to_hyperspy" title="abtem.measurements.PolarMeasurements.to_hyperspy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code></a>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.to_hyperspy" title="abtem.measurements.PolarMeasurements.to_hyperspy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code></a>()</p></td>
 <td><p>Convert measurement to a Hyperspy signal.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.to_zarr" title="abtem.measurements.PolarMeasurements.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.PolarMeasurements.to_zarr" title="abtem.measurements.PolarMeasurements.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
 <td><p>Write wave functions to a zarr file.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">visualize_graph</span></code>(**kwargs)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">visualize_graph</span></code>(**kwargs)</p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -1530,6 +1545,28 @@ s3:// for remote data.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.PolarMeasurements.gaussian_source_size">
+<span class="sig-name descname"><span class="pre">gaussian_source_size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sigma</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#PolarMeasurements.gaussian_source_size"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.PolarMeasurements.gaussian_source_size" title="Permalink to this definition">#</a></dt>
+<dd><p>Simulate the effect of a finite source size on diffraction pattern(s) using a Gaussian filter.</p>
+<p>The filter is not applied to diffraction pattern individually, but the intensity of diffraction patterns are mixed
+across scan axes. Applying this filter requires two linear scan axes.</p>
+<p>Applying this filter before integrating the diffraction patterns will produce the same image as integrating
+the diffraction patterns first then applying a Gaussian filter.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>sigma</strong> (<em>float</em><em> or </em><em>two float</em>) – Standard deviation of Gaussian kernel in the <cite>x</cite> and <cite>y</cite>-direction. If given as a single number, the standard
+deviation is equal for both axes.</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>filtered_diffraction_patterns</strong> – The filtered diffraction pattern(s).</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
 </dd>
 </dl>
 </dd></dl>

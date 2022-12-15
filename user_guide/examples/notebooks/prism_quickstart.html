@@ -50,6 +50,10 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
+    <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="STEM quickstart" href="stem_quickstart.html" />
@@ -842,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -854,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1104,8 +1118,43 @@ title="Print to PDF"
     <nav id="bd-toc-nav" aria-label="Page">
         <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#create-atomic-model">
-   Create atomic model
+  <a class="reference internal nav-link" href="#configure">
+   Configure
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#atomic-model">
+   Atomic model
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#potential-with-frozen-phonons">
+   Potential with frozen phonons
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-smatrix">
+   Create SMatrix
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-contrast-transfer-function">
+   Create contrast transfer function
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-a-ctf-a-detector-and-a-scan">
+   Create a CTF, a detector and a scan
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#integrate-flexible-measurement">
+   Integrate “flexible” measurement
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#postprocess-simulation-result">
+   Postprocess simulation result
   </a>
  </li>
 </ul>
@@ -1128,8 +1177,43 @@ title="Print to PDF"
                         <nav aria-label="Page">
                             <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#create-atomic-model">
-   Create atomic model
+  <a class="reference internal nav-link" href="#configure">
+   Configure
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#atomic-model">
+   Atomic model
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#potential-with-frozen-phonons">
+   Potential with frozen phonons
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-smatrix">
+   Create SMatrix
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-contrast-transfer-function">
+   Create contrast transfer function
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-a-ctf-a-detector-and-a-scan">
+   Create a CTF, a detector and a scan
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#integrate-flexible-measurement">
+   Integrate “flexible” measurement
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#postprocess-simulation-result">
+   Postprocess simulation result
   </a>
  </li>
 </ul>
@@ -1148,206 +1232,142 @@ title="Print to PDF"
 <span class="kn">import</span> <span class="nn">dask</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">bulk</span>
 <span class="kn">from</span> <span class="nn">ase.cluster</span> <span class="kn">import</span> <span class="n">Decahedron</span>
+<span class="kn">from</span> <span class="nn">dask.distributed</span> <span class="kn">import</span> <span class="n">Client</span>
 </pre></div>
 </div>
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="prism-quickstart">
 <span id="examples-prism-quickstart"></span><h1>PRISM quickstart<a class="headerlink" href="#prism-quickstart" title="Permalink to this headline">#</a></h1>
+<p>This is a short example of running a STEM simulation with the PRISM algorithm. See our <a class="reference internal" href="../../tutorials/prism.html#tutorials-prism"><span class="std std-ref">tutorial</span></a> for a more in depth description.</p>
+<section id="configure">
+<h2>Configure<a class="headerlink" href="#configure" title="Permalink to this headline">#</a></h2>
+<p>We start by customizing our configuration, see our <a class="reference internal" href="../../../reference/config.html#reference-configuration"><span class="std std-ref">documentation on configuration</span></a>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;device&quot;</span><span class="p">:</span> <span class="s2">&quot;gpu&quot;</span><span class="p">})</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;device&quot;</span><span class="p">:</span> <span class="s2">&quot;cpu&quot;</span><span class="p">})</span>
+
 <span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;fft&quot;</span><span class="p">:</span> <span class="s2">&quot;mkl&quot;</span><span class="p">})</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x24274719640&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7fad93d05c10&gt;
 </pre></div>
 </div>
 </div>
 </div>
-<section id="create-atomic-model">
-<h2>Create atomic model<a class="headerlink" href="#create-atomic-model" title="Permalink to this headline">#</a></h2>
+<p>To run the simulation using a distributed scheduler we create a Dask <code class="docutils literal notranslate"><span class="pre">Client</span></code>, see our <a class="reference internal" href="../../walkthrough/parallelization.html#walkthrough-parallelization"><span class="std std-ref">walkthrough on parallelization</span></a>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">carbon</span> <span class="o">=</span> <span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;C&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="n">carbon</span> <span class="o">*=</span> <span class="p">(</span><span class="mi">14</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">20</span><span class="p">)</span>
-<span class="n">carbon</span><span class="o">.</span><span class="n">positions</span><span class="p">[:]</span> <span class="o">+=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">carbon</span><span class="p">),</span> <span class="mi">3</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.5</span>
-<span class="n">carbon</span><span class="o">.</span><span class="n">wrap</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">cluster</span> <span class="o">=</span> <span class="n">Decahedron</span><span class="p">(</span><span class="s2">&quot;Cu&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
-<span class="n">cluster</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="o">-</span><span class="mi">30</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">center_height</span> <span class="o">=</span> <span class="o">-</span><span class="mi">45</span>
-
-<span class="n">translated_cluster</span> <span class="o">=</span> <span class="n">cluster</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-
-<span class="n">translated_cluster</span><span class="o">.</span><span class="n">translate</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">carbon</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span> <span class="o">+</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">center_height</span><span class="p">))</span>
-
-<span class="n">cluster_on_carbon</span> <span class="o">=</span> <span class="n">carbon</span> <span class="o">+</span> <span class="n">translated_cluster</span>
-
-<span class="n">cluster_on_carbon</span><span class="o">.</span><span class="n">center</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">cluster_on_carbon</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s2">&quot;xz&quot;</span><span class="p">,</span> <span class="n">merge</span><span class="o">=</span><span class="mf">.5</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">client</span> <span class="o">=</span> <span class="n">Client</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 1 Axes&gt;,
- &lt;AxesSubplot: xlabel=&#39;x [Å]&#39;, ylabel=&#39;z [Å]&#39;&gt;)
+<div class="output stderr highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>2022-11-16 15:45:48,519 - distributed.diskutils - INFO - Found stale lock file and directory &#39;/var/folders/_p/k7hrlnh132n933827sxdjkrm0000gn/T/dask-worker-space/worker-ilg1a7d6&#39;, purging
 </pre></div>
 </div>
-<img alt="../../../_images/prism_quickstart_6_1.png" src="../../../_images/prism_quickstart_6_1.png" />
+</div>
+</div>
+</section>
+<section id="atomic-model">
+<h2>Atomic model<a class="headerlink" href="#atomic-model" title="Permalink to this headline">#</a></h2>
+<p>We create an atomic model of a decahedral copper nanoparticle. See <a class="reference internal" href="../../walkthrough/atomic_models.html#walkthrough-atomic-models"><span class="std std-ref">walkthrough</span></a> and <a class="reference internal" href="../../tutorials/advanced_atomic_models.html#tutorials-advanced-atomic-models"><span class="std std-ref">tutorial</span></a> on creating atomic models.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">Decahedron</span><span class="p">(</span><span class="s2">&quot;Cu&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">atoms</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="o">-</span><span class="mi">30</span><span class="p">)</span>
+<span class="n">atoms</span><span class="o">.</span><span class="n">center</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+</div>
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">frozen_phonons</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FrozenPhonons</span><span class="p">(</span><span class="n">cluster_on_carbon</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;C&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="s2">&quot;Cu&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">})</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s2">&quot;xy&quot;</span><span class="p">,</span> <span class="n">merge</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../../_images/prism_quickstart_8_0.png" src="../../../_images/prism_quickstart_8_0.png" />
+</div>
+</div>
+</section>
+<section id="potential-with-frozen-phonons">
+<h2>Potential with frozen phonons<a class="headerlink" href="#potential-with-frozen-phonons" title="Permalink to this headline">#</a></h2>
+<p>We create <code class="docutils literal notranslate"><span class="pre">FrozenPhonons</span></code> with a standard deviation of atomic displacements of <span class="math notranslate nohighlight">\(0.07 \ \mathrm{Å}\)</span>, see our <a class="reference internal" href="../../walkthrough/frozen_phonons.html#walkthrough-frozen-phonons"><span class="std std-ref">walkthrough on frozen phonons</span></a>. We then create a standard potential with <span class="math notranslate nohighlight">\(1024\times1024\)</span> grid points with a slice thickness of <span class="math notranslate nohighlight">\(2 \ \mathrm{Å}\)</span>, see our <a class="reference internal" href="../../walkthrough/potentials.html#walkthrough-potentials"><span class="std std-ref">walkthrough on potential</span></a>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">frozen_phonons</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;Cu&quot;</span><span class="p">:</span> <span class="mf">0.07</span><span class="p">})</span>
 
 <span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
     <span class="n">frozen_phonons</span><span class="p">,</span>
-    <span class="n">gpts</span><span class="o">=</span><span class="mi">900</span><span class="p">,</span>
-    <span class="n">projection</span><span class="o">=</span><span class="s2">&quot;infinite&quot;</span><span class="p">,</span>
+    <span class="n">gpts</span><span class="o">=</span><span class="mi">768</span><span class="p">,</span>
     <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
 <span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </div>
+</section>
+<section id="create-smatrix">
+<h2>Create SMatrix<a class="headerlink" href="#create-smatrix" title="Permalink to this headline">#</a></h2>
+<p>We create a the SMatrix by providing our potential, an acceleration voltage <span class="math notranslate nohighlight">\(150 \ \mathrm{eV}\)</span>, a cutoff of the plane wave expansion of the probe of <span class="math notranslate nohighlight">\(20 \ \mathrm{mrad}\)</span> and an interpolation factor of 4 in both <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>. See our <a class="reference internal" href="../../tutorials/prism.html#tutorials-prism"><span class="std std-ref">tutorial on PRISM</span></a></p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">s_matrix</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">SMatrix</span><span class="p">(</span>
-    <span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span> <span class="n">planewave_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">interpolation</span><span class="o">=</span><span class="mi">3</span>
+    <span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">150e3</span><span class="p">,</span> <span class="n">planewave_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">interpolation</span><span class="o">=</span><span class="mi">4</span>
 <span class="p">)</span>
-
-<span class="n">s_matrix</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">array</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>The S-Matrix is four-dimensional, there are ten instances</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">s_matrix</span><span class="o">.</span><span class="n">shape</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_html"><table>
-    <tr>
-        <td>
-            <table>
-                <thead>
-                    <tr>
-                        <td> </td>
-                        <th> Array </th>
-                        <th> Chunk </th>
-                    </tr>
-                </thead>
-                <tbody>
-
-                    <tr>
-                        <th> Bytes </th>
-                        <td> 1.48 GiB </td>
-                        <td> 216.98 MiB </td>
-                    </tr>
-
-                    <tr>
-                        <th> Shape </th>
-                        <td> (1, 553, 600, 600) </td>
-                        <td> (1, 79, 600, 600) </td>
-                    </tr>
-                    <tr>
-                        <th> Count </th>
-                        <td> 5 Graph Layers </td>
-                        <td> 7 Chunks </td>
-                    </tr>
-                    <tr>
-                    <th> Type </th>
-                    <td> complex64 </td>
-                    <td> cupy.ndarray </td>
-                    </tr>
-                </tbody>
-            </table>
-        </td>
-        <td>
-        <svg width="425" height="235" style="stroke:rgb(0,0,0);stroke-width:1" >
-
-  <!-- Horizontal lines -->
-  <line x1="0" y1="0" x2="25" y2="0" style="stroke-width:2" />
-  <line x1="0" y1="25" x2="25" y2="25" style="stroke-width:2" />
-
-  <!-- Vertical lines -->
-  <line x1="0" y1="0" x2="0" y2="25" style="stroke-width:2" />
-  <line x1="25" y1="0" x2="25" y2="25" style="stroke-width:2" />
-
-  <!-- Colored Rectangle -->
-  <polygon points="0.0,0.0 25.412616514582485,0.0 25.412616514582485,25.412616514582485 0.0,25.412616514582485" style="fill:#ECB172A0;stroke-width:0"/>
-
-  <!-- Text -->
-  <text x="12.706308" y="45.412617" font-size="1.0rem" font-weight="100" text-anchor="middle" >1</text>
-  <text x="45.412617" y="12.706308" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(0,45.412617,12.706308)">1</text>
-
-
-  <!-- Horizontal lines -->
-  <line x1="95" y1="0" x2="160" y2="65" style="stroke-width:2" />
-  <line x1="95" y1="120" x2="160" y2="185" style="stroke-width:2" />
-
-  <!-- Vertical lines -->
-  <line x1="95" y1="0" x2="95" y2="120" style="stroke-width:2" />
-  <line x1="104" y1="9" x2="104" y2="129" />
-  <line x1="113" y1="18" x2="113" y2="138" />
-  <line x1="122" y1="27" x2="122" y2="147" />
-  <line x1="132" y1="37" x2="132" y2="157" />
-  <line x1="141" y1="46" x2="141" y2="166" />
-  <line x1="150" y1="55" x2="150" y2="175" />
-  <line x1="160" y1="65" x2="160" y2="185" style="stroke-width:2" />
-
-  <!-- Colored Rectangle -->
-  <polygon points="95.0,0.0 160.05882352941177,65.05882352941177 160.05882352941177,185.05882352941177 95.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
-
-  <!-- Horizontal lines -->
-  <line x1="95" y1="0" x2="215" y2="0" style="stroke-width:2" />
-  <line x1="104" y1="9" x2="224" y2="9" />
-  <line x1="113" y1="18" x2="233" y2="18" />
-  <line x1="122" y1="27" x2="242" y2="27" />
-  <line x1="132" y1="37" x2="252" y2="37" />
-  <line x1="141" y1="46" x2="261" y2="46" />
-  <line x1="150" y1="55" x2="270" y2="55" />
-  <line x1="160" y1="65" x2="280" y2="65" style="stroke-width:2" />
-
-  <!-- Vertical lines -->
-  <line x1="95" y1="0" x2="160" y2="65" style="stroke-width:2" />
-  <line x1="215" y1="0" x2="280" y2="65" style="stroke-width:2" />
-
-  <!-- Colored Rectangle -->
-  <polygon points="95.0,0.0 215.0,0.0 280.05882352941177,65.05882352941177 160.05882352941177,65.05882352941177" style="fill:#ECB172A0;stroke-width:0"/>
-
-  <!-- Horizontal lines -->
-  <line x1="160" y1="65" x2="280" y2="65" style="stroke-width:2" />
-  <line x1="160" y1="185" x2="280" y2="185" style="stroke-width:2" />
-
-  <!-- Vertical lines -->
-  <line x1="160" y1="65" x2="160" y2="185" style="stroke-width:2" />
-  <line x1="280" y1="65" x2="280" y2="185" style="stroke-width:2" />
-
-  <!-- Colored Rectangle -->
-  <polygon points="160.05882352941177,65.05882352941177 280.05882352941177,65.05882352941177 280.05882352941177,185.05882352941177 160.05882352941177,185.05882352941177" style="fill:#ECB172A0;stroke-width:0"/>
-
-  <!-- Text -->
-  <text x="220.058824" y="205.058824" font-size="1.0rem" font-weight="100" text-anchor="middle" >600</text>
-  <text x="300.058824" y="125.058824" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,300.058824,125.058824)">600</text>
-  <text x="117.529412" y="172.529412" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,117.529412,172.529412)">553</text>
-</svg>
-        </td>
-    </tr>
-</table></div></div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(10, 163, 768, 768)
+</pre></div>
 </div>
+</div>
+</div>
+</section>
+<section id="create-contrast-transfer-function">
+<h2>Create contrast transfer function<a class="headerlink" href="#create-contrast-transfer-function" title="Permalink to this headline">#</a></h2>
+<p>To include defocus, spherical aberration and other phase aberrations, we should define a contrast transfer function. Here we create one with a spherical aberration of <span class="math notranslate nohighlight">\(20 \ \mu m\)</span>, the defocus is adjusted to the according <span class="xref myst">Scherzer defocus</span> .</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="mf">20e-6</span> <span class="o">*</span> <span class="mf">1e10</span>  <span class="c1"># 20 micrometers</span>
+
+<span class="n">defocus</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">transfer</span><span class="o">.</span><span class="n">scherzer_defocus</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="n">s_matrix</span><span class="o">.</span><span class="n">energy</span><span class="p">)</span>
+
+<span class="n">ctf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="n">defocus</span><span class="p">)</span>
+
+<span class="c1"># ctf.defocus</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>We always ensure that the interpolation factor is sufficiently small to avoid self-interaction errors. We can check that by showing the equivalent probe at the entrance and exit plane.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+<span class="n">s_matrix</span><span class="o">.</span><span class="n">equivalent_probe</span><span class="p">(</span><span class="n">plane</span><span class="o">=</span><span class="s2">&quot;entrance&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;entrance&quot;</span><span class="p">)</span>
+<span class="n">s_matrix</span><span class="o">.</span><span class="n">equivalent_probe</span><span class="p">(</span><span class="n">plane</span><span class="o">=</span><span class="s2">&quot;exit&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;exit&quot;</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../../_images/prism_quickstart_18_0.png" src="../../../_images/prism_quickstart_18_0.png" />
+</div>
+</div>
+<p>We should also check that our real space sampling is good enough for detecting electrons at our desired detector angles. In this case up to <span class="math notranslate nohighlight">\(165 \ \mathrm{mrad}\)</span>. See our <a class="reference internal" href="../../appendix/antialiasing.html#appendix-antialiasing"><span class="std std-ref">description of sampling</span></a>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">s_matrix</span><span class="o">.</span><span class="n">cutoff_angles</span>
@@ -1355,11 +1375,14 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(150.53625640653343, 150.53625640653343)
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(165.12427635020188, 165.22860223619813)
 </pre></div>
 </div>
 </div>
 </div>
+</section>
+<section id="create-a-ctf-a-detector-and-a-scan">
+<h2>Create a CTF, a detector and a scan<a class="headerlink" href="#create-a-ctf-a-detector-and-a-scan" title="Permalink to this headline">#</a></h2>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">detectors</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FlexibleAnnularDetector</span><span class="p">()</span>
@@ -1391,19 +1414,19 @@ title="Print to PDF"
 
                     <tr>
                         <th> Bytes </th>
-                        <td> 12.09 MiB </td>
-                        <td> 1.37 MiB </td>
+                        <td> 4.69 MiB </td>
+                        <td> 1.19 MiB </td>
                     </tr>
 
                     <tr>
                         <th> Shape </th>
-                        <td> (178, 178, 100, 1) </td>
-                        <td> (60, 60, 100, 1) </td>
+                        <td> (138, 122, 73, 1) </td>
+                        <td> (35, 122, 73, 1) </td>
                     </tr>
                     <tr>
                         <th> Count </th>
-                        <td> 19 Graph Layers </td>
-                        <td> 9 Chunks </td>
+                        <td> 24 Graph Layers </td>
+                        <td> 4 Chunks </td>
                     </tr>
                     <tr>
                     <th> Type </th>
@@ -1414,7 +1437,7 @@ title="Print to PDF"
             </table>
         </td>
         <td>
-        <svg width="526" height="188" style="stroke:rgb(0,0,0);stroke-width:1" >
+        <svg width="517" height="175" style="stroke:rgb(0,0,0);stroke-width:1" >
 
   <!-- Horizontal lines -->
   <line x1="0" y1="0" x2="120" y2="0" style="stroke-width:2" />
@@ -1422,59 +1445,56 @@ title="Print to PDF"
 
   <!-- Vertical lines -->
   <line x1="0" y1="0" x2="0" y2="25" style="stroke-width:2" />
-  <line x1="39" y1="0" x2="39" y2="25" />
-  <line x1="79" y1="0" x2="79" y2="25" />
+  <line x1="29" y1="0" x2="29" y2="25" />
+  <line x1="60" y1="0" x2="60" y2="25" />
+  <line x1="89" y1="0" x2="89" y2="25" />
   <line x1="120" y1="0" x2="120" y2="25" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
   <polygon points="0.0,0.0 120.0,0.0 120.0,25.412616514582485 0.0,25.412616514582485" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Text -->
-  <text x="60.000000" y="45.412617" font-size="1.0rem" font-weight="100" text-anchor="middle" >178</text>
+  <text x="60.000000" y="45.412617" font-size="1.0rem" font-weight="100" text-anchor="middle" >138</text>
   <text x="140.000000" y="12.706308" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(0,140.000000,12.706308)">1</text>
 
 
   <!-- Horizontal lines -->
-  <line x1="190" y1="0" x2="260" y2="70" style="stroke-width:2" />
-  <line x1="190" y1="67" x2="260" y2="138" style="stroke-width:2" />
+  <line x1="190" y1="0" x2="252" y2="62" style="stroke-width:2" />
+  <line x1="190" y1="63" x2="252" y2="125" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="190" y1="0" x2="190" y2="67" style="stroke-width:2" />
-  <line x1="213" y1="23" x2="213" y2="90" />
-  <line x1="236" y1="46" x2="236" y2="114" />
-  <line x1="260" y1="70" x2="260" y2="138" style="stroke-width:2" />
+  <line x1="190" y1="0" x2="190" y2="63" style="stroke-width:2" />
+  <line x1="252" y1="62" x2="252" y2="125" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="190.0,0.0 260.5882352941177,70.58823529411765 260.5882352941177,138.0039656311963 190.0,67.41573033707866" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="190.0,0.0 252.40409207161127,62.40409207161126 252.40409207161127,125.88235294117648 190.0,63.47826086956522" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Horizontal lines -->
   <line x1="190" y1="0" x2="215" y2="0" style="stroke-width:2" />
-  <line x1="213" y1="23" x2="238" y2="23" />
-  <line x1="236" y1="46" x2="262" y2="46" />
-  <line x1="260" y1="70" x2="286" y2="70" style="stroke-width:2" />
+  <line x1="252" y1="62" x2="277" y2="62" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="190" y1="0" x2="260" y2="70" style="stroke-width:2" />
-  <line x1="215" y1="0" x2="286" y2="70" style="stroke-width:2" />
+  <line x1="190" y1="0" x2="252" y2="62" style="stroke-width:2" />
+  <line x1="215" y1="0" x2="277" y2="62" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="190.0,0.0 215.41261651458248,0.0 286.00085180870013,70.58823529411765 260.5882352941177,70.58823529411765" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="190.0,0.0 215.41261651458248,0.0 277.8167085861937,62.40409207161126 252.40409207161127,62.40409207161126" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Horizontal lines -->
-  <line x1="260" y1="70" x2="286" y2="70" style="stroke-width:2" />
-  <line x1="260" y1="138" x2="286" y2="138" style="stroke-width:2" />
+  <line x1="252" y1="62" x2="277" y2="62" style="stroke-width:2" />
+  <line x1="252" y1="125" x2="277" y2="125" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="260" y1="70" x2="260" y2="138" style="stroke-width:2" />
-  <line x1="286" y1="70" x2="286" y2="138" style="stroke-width:2" />
+  <line x1="252" y1="62" x2="252" y2="125" style="stroke-width:2" />
+  <line x1="277" y1="62" x2="277" y2="125" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="260.5882352941177,70.58823529411765 286.0008518087002,70.58823529411765 286.0008518087002,138.0039656311963 260.5882352941177,138.0039656311963" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="252.40409207161127,62.40409207161126 277.8167085861938,62.40409207161126 277.8167085861938,125.88235294117648 252.40409207161127,125.88235294117648" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Text -->
-  <text x="273.294544" y="158.003966" font-size="1.0rem" font-weight="100" text-anchor="middle" >1</text>
-  <text x="306.000852" y="104.296100" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,306.000852,104.296100)">100</text>
-  <text x="215.294118" y="122.709848" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,215.294118,122.709848)">178</text>
+  <text x="265.110400" y="145.882353" font-size="1.0rem" font-weight="100" text-anchor="middle" >1</text>
+  <text x="297.816709" y="94.143223" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(0,297.816709,94.143223)">73</text>
+  <text x="211.202046" y="114.680307" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,211.202046,114.680307)">122</text>
 </svg>
         </td>
     </tr>
@@ -1482,19 +1502,19 @@ title="Print to PDF"
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">compute</span><span class="p">(</span><span class="n">num_workers</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 39.26 s
-</pre></div>
-</div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x00000243B9D8B610&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x7fdace7f1a00&gt;
 </pre></div>
 </div>
 </div>
 </div>
+</section>
+<section id="integrate-flexible-measurement">
+<h2>Integrate “flexible” measurement<a class="headerlink" href="#integrate-flexible-measurement" title="Permalink to this headline">#</a></h2>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">integrated_measurement</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
@@ -1507,12 +1527,15 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../../_images/prism_quickstart_13_0.png" src="../../../_images/prism_quickstart_13_0.png" />
+<img alt="../../../_images/prism_quickstart_28_0.png" src="../../../_images/prism_quickstart_28_0.png" />
 </div>
 </div>
+</section>
+<section id="postprocess-simulation-result">
+<h2>Postprocess simulation result<a class="headerlink" href="#postprocess-simulation-result" title="Permalink to this headline">#</a></h2>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">filtered_measurement</span> <span class="o">=</span> <span class="n">integrated_measurement</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">.35</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">filtered_measurement</span> <span class="o">=</span> <span class="n">integrated_measurement</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">0.35</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1529,7 +1552,7 @@ title="Print to PDF"
 <div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 640x480 with 2 Axes&gt;, &lt;Axes: xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
 </pre></div>
 </div>
-<img alt="../../../_images/prism_quickstart_15_1.png" src="../../../_images/prism_quickstart_15_1.png" />
+<img alt="../../../_images/prism_quickstart_31_1.png" src="../../../_images/prism_quickstart_31_1.png" />
 </div>
 </div>
 </section>
@@ -1544,16 +1567,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem-dask-gpu"
+            mode: "test_threads"
         },
         kernelOptions: {
-            kernelName: "abtem-dask-gpu",
+            kernelName: "test_threads",
             path: "./user_guide/examples/notebooks"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem-dask-gpu'</script>
+    <script>kernelName = 'test_threads'</script>
 
               </div>
               

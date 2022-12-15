@@ -1,4 +1,4 @@
-PolarMeasurements
+﻿PolarMeasurements
 =================
 
 .. currentmodule:: abtem.measurements
@@ -27,6 +27,7 @@ PolarMeasurements
       ~PolarMeasurements.expand_dims
       ~PolarMeasurements.from_array_and_metadata
       ~PolarMeasurements.from_zarr
+      ~PolarMeasurements.gaussian_source_size
       ~PolarMeasurements.get_items
       ~PolarMeasurements.imag
       ~PolarMeasurements.integrate

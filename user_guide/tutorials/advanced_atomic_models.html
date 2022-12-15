@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -844,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -856,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1595,18 +1607,6 @@ Cell([1.0, 2.0, 3.0])
 <img alt="../../_images/advanced_atomic_models_32_0.png" src="../../_images/advanced_atomic_models_32_0.png" />
 </div>
 </div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">graphene</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span><span class="o">.</span><span class="n">_transformed_atoms</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Atoms(symbols=&#39;C4&#39;, pbc=[True, True, False], cell=[2.46, 4.260844986619438, 4.0])
-</pre></div>
-</div>
-</div>
-</div>
 <p>The minimal unit cell of graphene is hexagonal. To make the unit cell orthogonal, we can use abTEM’s <code class="docutils literal notranslate"><span class="pre">orthogonalize_cell</span></code> function.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1618,6 +1618,9 @@ Cell([1.0, 2.0, 3.0])
 </pre></div>
 </div>
 </div>
+<div class="cell_output docutils container">
+<img alt="../../_images/advanced_atomic_models_34_0.png" src="../../_images/advanced_atomic_models_34_0.png" />
+</div>
 </div>
 <p>Hexagonal cells can be made orthogonal by doubling the cell size without introducing any strain. However, this is not always possible, which we can realize by returning the transformation required for making the structure orthogonal by setting <code class="docutils literal notranslate"><span class="pre">return_transform=True</span></code>.</p>
 <p>Printing this particular transformation, we see that no additional transformation was necessary, as expected.</p>
@@ -1626,6 +1629,13 @@ Cell([1.0, 2.0, 3.0])
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.atoms</span> <span class="kn">import</span> <span class="n">pretty_print_transform</span>
 
 <span class="n">pretty_print_transform</span><span class="p">(</span><span class="n">transform</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Euler angles (degrees): 	 x = 0.000, 	 y = -0.000, 	 z = 0.000
+Normal strains (percent): 	 x = 0.000, 	 y = 0.000, 	 z = 0.000
+Shear strains (percent): 	 xy = 0.000, 	 xz = 0.000, 	 xz = 0.000
 </pre></div>
 </div>
 </div>
@@ -1645,17 +1655,27 @@ Cell([1.0, 2.0, 3.0])
 
 <span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">gold</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">scale_atoms</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Rotated gold beam view&quot;</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">gold</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Rotated gold beam view&quot;</span><span class="p">)</span>
 
 <span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">gold</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s2">&quot;xz&quot;</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Rotated gold side view&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/advanced_atomic_models_38_0.png" src="../../_images/advanced_atomic_models_38_0.png" />
 </div>
 </div>
 <p>As shown below, creating the rotated structure required an additional rotation of 0.538°, around the <span class="math notranslate nohighlight">\(y\)</span>-axis. This means that within the contraint of repeating the structure at most 10 times in either direction (set by the parameter <code class="docutils literal notranslate"><span class="pre">max_repetitions</span></code>), the closest periodic and orthogonal structure is rotated by 10.538° and not the desired 10.0°. This may be close enough, but if not then the number of repetitions can be increased. For example, within <code class="docutils literal notranslate"><span class="pre">max_repetitions</span></code> of 20, the required transform is just -0.008°, around the <span class="math notranslate nohighlight">\(y\)</span>-axis.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pretty_print_transform</span><span class="p">(</span><span class="n">transform</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Euler angles (degrees): 	 x = 0.000, 	 y = 0.538, 	 z = 0.000
+Normal strains (percent): 	 x = 0.000, 	 y = 0.000, 	 z = -0.000
+Shear strains (percent): 	 xy = 0.000, 	 xz = 0.000, 	 xz = 0.000
 </pre></div>
 </div>
 </div>

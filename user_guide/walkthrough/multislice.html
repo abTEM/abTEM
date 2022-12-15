@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -844,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -856,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1289,9 +1301,11 @@ title="Print to PDF"
 <p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> representing gold in the <span class="math notranslate nohighlight">\(\left&lt;100\right&gt;\)</span> zone axis and use a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> as the initial wave function.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">ase</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">35</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">ase</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">28</span><span class="p">)</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.9</span><span class="p">);</span>
+<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Beam view&quot;</span><span class="p">);</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s2">&quot;xz&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Side view&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -1356,7 +1370,7 @@ title="Print to PDF"
 <p>Instead of an image, we can instead simulate a <a class="reference external" href="https://en.wikipedia.org/wiki/Selected_area_diffraction">selected area diffraction (SAD)</a> experiment by using the <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code> method. We use <code class="docutils literal notranslate"><span class="pre">block_direct=True</span></code> to block the direct beam: it typically has a much higher intensity than the scattered beams, and thus it is typically not possible to show it on the same scale.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span>
 <span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>
 </div>
@@ -1369,13 +1383,13 @@ title="Print to PDF"
 <p>We can use <code class="docutils literal notranslate"><span class="pre">index_diffraction_spots</span></code> to create a represent SAD patterns as a mapping of Miller indices to the intensity of the corresponding reflections. The cell size of the <em>conventional</em> unit cell have to be provided in order to index the pattern.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed</span> <span class="o">=</span> <span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="mf">4.08</span><span class="p">)</span>
-<span class="n">indexed</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed_spots</span> <span class="o">=</span> <span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="mf">4.08</span><span class="p">)</span>
+<span class="n">indexed_spots</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.core.indexing.IndexedDiffractionPatterns at 0x7fdb0cfe11f0&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.core.indexing.IndexedDiffractionPatterns at 0x7fe20db1aeb0&gt;
 </pre></div>
 </div>
 </div>
@@ -1383,7 +1397,7 @@ title="Print to PDF"
 <p><code class="docutils literal notranslate"><span class="pre">IndexedDiffractionPatterns</span></code> facilitates the creation of a visualization that corresponds closer with typical textbook illustrations overlaying the Miller indices of the non-equivalent diffraction spots. We see that the <span class="math notranslate nohighlight">\((100)\)</span> reflection is extinguished, as is expected for a FCC crystal in the <span class="math notranslate nohighlight">\(\left&lt;100\right&gt;\)</span> zone axis.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed</span><span class="o">.</span><span class="n">remove_low_intensity</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">spot_scale</span><span class="o">=</span><span class="mi">1</span><span class="p">);</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed_spots</span><span class="o">.</span><span class="n">remove_low_intensity</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>
 </div>
 </div>
@@ -1394,7 +1408,9 @@ title="Print to PDF"
 <p>It is also possible to obtain a table of the intensity values of the indexed diffraction spots. We have normalized their intensity to the most intense spot (not including the direct beam) and only spots with an intensity of at least <span class="math notranslate nohighlight">\(1 \ \%\)</span> that are included (as determined by the <code class="docutils literal notranslate"><span class="pre">remove_low_intensity(0.01)</span></code> method above).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed</span><span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span><span class="n">normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">df</span> <span class="o">=</span> <span class="n">indexed_spots</span><span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span><span class="n">normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">df</span>
 </pre></div>
 </div>
 </div>
@@ -1422,22 +1438,30 @@ title="Print to PDF"
       <th>400</th>
       <th>420</th>
       <th>440</th>
+      <th>600</th>
+      <th>620</th>
+      <th>640</th>
+      <th>660</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <th>0</th>
-      <td>0.452805</td>
+      <td>0.825826</td>
       <td>1.0</td>
-      <td>0.572664</td>
-      <td>0.499756</td>
-      <td>0.200151</td>
+      <td>0.610905</td>
+      <td>0.461012</td>
+      <td>0.18335</td>
+      <td>0.163078</td>
+      <td>0.117389</td>
+      <td>0.066688</td>
+      <td>0.046653</td>
     </tr>
   </tbody>
 </table>
 </div></div></div>
 </div>
-<p>It may be slightly surprising that <span class="math notranslate nohighlight">\((220)\)</span> spots have a higher intensity than the <span class="math notranslate nohighlight">\((200)\)</span> spots; this is due to dynamical scattering — which is accounted for by the multislice algorithm.</p>
+<p>We observe that the <span class="math notranslate nohighlight">\((220)\)</span> spots have a higher intensity than the <span class="math notranslate nohighlight">\((200)\)</span> spots; this is due to dynamical scattering — which is accounted for by the multislice algorithm.</p>
 </section>
 </section>
 <section id="writing-exit-wave-functions">
@@ -1506,7 +1530,9 @@ title="Print to PDF"
 <p>We can naturally do the same with diffraction patterns.</p>
 <div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_series</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns_series</span> <span class="o">=</span> <span class="n">exit_wave_series</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span>
+
+<span class="n">diffraction_patterns_series</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
     <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
@@ -1536,8 +1562,18 @@ title="Print to PDF"
 <section id="self-interaction">
 <h3>Self-interaction<a class="headerlink" href="#self-interaction" title="Permalink to this headline">#</a></h3>
 <p>Self-interaction errors happen when the probe overlaps with its periodic images. We see this happening below: the clearest visual clue is that the probe does not have a circular symmetry, even though we defined no non-symmetric aberrations. (Note that we need to define a grid for the probe to display it, which can be done manually above, or by matching it to the grid of the potential as below).</p>
-<p>probe.grid.match(potential)</p>
-<p>probe.build().show();</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+
+<span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_37_0.png" src="../../_images/multislice_37_0.png" />
+</div>
+</div>
 <p>We get rid of self-interaction by increasing the extent of the potential until the probe intensity is sufficiently small at the boundary. Note that this should be true at any slice of the potential when running the multislice algorithm.</p>
 <p>The potential may be extended by modifying the atoms, but for crystals we can also use the <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> we introduced earlier. Here we repeat the potential used above by <span class="math notranslate nohighlight">\(5\)</span> times in and <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>.</p>
 <div class="cell docutils container">
@@ -1568,18 +1604,18 @@ title="Print to PDF"
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">center</span> <span class="o">=</span> <span class="p">(</span><span class="n">tiled_potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">tiled_potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
 
-<span class="n">positions</span> <span class="o">=</span> <span class="n">center</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">2.04</span><span class="p">,</span> <span class="mf">2.04</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">5</span><span class="p">)])</span><span class="o">.</span><span class="n">T</span>
+<span class="n">positions</span> <span class="o">=</span> <span class="n">center</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">1.02</span><span class="p">,</span> <span class="mf">1.02</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">5</span><span class="p">)])</span><span class="o">.</span><span class="n">T</span>
 
 <span class="n">positions</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>array([[ 8.16, 10.2 ],
-       [ 9.18, 10.2 ],
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>array([[ 9.18, 10.2 ],
+       [ 9.69, 10.2 ],
        [10.2 , 10.2 ],
-       [11.22, 10.2 ],
-       [12.24, 10.2 ]])
+       [10.71, 10.2 ],
+       [11.22, 10.2 ]])
 </pre></div>
 </div>
 </div>
@@ -1616,10 +1652,10 @@ title="Print to PDF"
 <img alt="../../_images/multislice_48_0.png" src="../../_images/multislice_48_0.png" />
 </div>
 </div>
-<p>The diffraction pattern is rather pixelated due to our limited sampling. Improving reciprocal-space sampling is equivalent to tiling in real space. Below the potential is repeated by <span class="math notranslate nohighlight">\(15\)</span> times in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, thus improving the Fourier space sampling by a factor of <span class="math notranslate nohighlight">\(3\)</span>. We also set <code class="docutils literal notranslate"><span class="pre">exit_planes=36</span></code> to obtain a series of <span class="math notranslate nohighlight">\(5\)</span> exit waves.</p>
+<p>The diffraction pattern is rather pixelated due to our limited sampling. Improving reciprocal-space sampling is equivalent to tiling in real space. Below the potential is repeated by <span class="math notranslate nohighlight">\(10\)</span> times in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, thus improving the Fourier space sampling by a factor of <span class="math notranslate nohighlight">\(2\)</span>. We also set <code class="docutils literal notranslate"><span class="pre">exit_planes=36</span></code> to obtain a series of <span class="math notranslate nohighlight">\(5\)</span> exit waves.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_extra_tiled</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">15</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">exit_planes</span><span class="o">=</span><span class="mi">36</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_extra_tiled</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">exit_planes</span><span class="o">=</span><span class="mi">36</span><span class="p">)</span>
 
 <span class="n">exit_wave_extra_tiled</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential_extra_tiled</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 </pre></div>
@@ -1653,10 +1689,10 @@ title="Print to PDF"
 <p class="admonition-title">See also</p>
 <p>See our example on simulating precession electron diffraction experiments.</p>
 </div>
-<p>In <em>ab</em>TEM, beam tilt may be included using the <code class="docutils literal notranslate"><span class="pre">tilt</span></code> keyword of either <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> and <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. Below we create the same <code class="docutils literal notranslate"><span class="pre">Probe</span></code> used above with a series of <span class="math notranslate nohighlight">\(5\)</span> tilts ranging from <span class="math notranslate nohighlight">\(0 \ \mathrm{mrad}\)</span> to <span class="math notranslate nohighlight">\(8 \ \mathrm{mrad}\)</span> along the <span class="math notranslate nohighlight">\(x\)</span>-axis using our built-in <code class="docutils literal notranslate"><span class="pre">distributions</span></code> module.</p>
+<p>In <em>ab</em>TEM, beam tilt may be included using the <code class="docutils literal notranslate"><span class="pre">tilt</span></code> keyword of either <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> and <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. Below we create the same <code class="docutils literal notranslate"><span class="pre">Probe</span></code> used above with a series of <span class="math notranslate nohighlight">\(5\)</span> tilts ranging from <span class="math notranslate nohighlight">\(0 \ \mathrm{mrad}\)</span> to <span class="math notranslate nohighlight">\(9.4 \ \mathrm{mrad}\)</span> along the <span class="math notranslate nohighlight">\(x\)</span>-axis using our built-in <code class="docutils literal notranslate"><span class="pre">distributions</span></code> module.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">tilt_x</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">tilt_x</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mf">9.4</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
 
 <span class="n">probe_tilt</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
     <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.4</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">tilt</span><span class="o">=</span><span class="p">(</span><span class="n">tilt_x</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
@@ -1670,26 +1706,14 @@ title="Print to PDF"
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_tilt</span> <span class="o">=</span> <span class="n">probe_tilt</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span>
-    <span class="n">potential</span><span class="o">=</span><span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+    <span class="n">potential</span><span class="o">=</span><span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
 <span class="p">)</span>
-<span class="n">exit_wave_tilt</span><span class="o">.</span><span class="n">shape</span>
+<span class="n">exit_wave_tilt</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(5, 820, 820)
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_tilt</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x7fdb0eb49eb0&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x7fe20cb2f190&gt;
 </pre></div>
 </div>
 </div>
@@ -1704,7 +1728,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_59_0.png" src="../../_images/multislice_59_0.png" />
+<img alt="../../_images/multislice_58_0.png" src="../../_images/multislice_58_0.png" />
 </div>
 </div>
 <div class="admonition note">

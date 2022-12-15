@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -844,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -856,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1199,7 +1211,7 @@ title="Print to PDF"
 </ul>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
-<p>The PRISM algorithm uses <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>, which is not included in the list above. However, in most ways it can be used similar to <code class="docutils literal notranslate"><span class="pre">Probe</span></code>; see our <a class="reference internal" href="../tutorials/prism.html#walkthrough-prism"><span class="std std-ref">introduction to PRISM in abTEM</span></a> for more detail.</p>
+<p>The PRISM algorithm uses <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>, which is not included in the list above. However, in most ways it can be used similar to <code class="docutils literal notranslate"><span class="pre">Probe</span></code>; see our <span class="xref myst">introduction to PRISM in abTEM</span> for more detail.</p>
 </div>
 <section id="plane-wave-functions">
 <span id="wave-functions-plane-wave"></span><h2>Plane wave functions<a class="headerlink" href="#plane-wave-functions" title="Permalink to this headline">#</a></h2>
@@ -1257,7 +1269,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x7fb1648e8340&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x7fd1c16359d0&gt;
 </pre></div>
 </div>
 </div>
@@ -1532,8 +1544,7 @@ title="Print to PDF"
 </div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
-<p>Not every parameter in <em>ab</em>TEM allows this!</p>
-<p>The uniform distribution created by <code class="docutils literal notranslate"><span class="pre">abtem.distributions.uniform</span></code> is not just <code class="docutils literal notranslate"><span class="pre">np.linspace</span></code> under a different name. We explain distributions in our <a class="reference internal" href="../tutorials/partial_coherence.html"><span class="doc std std-doc">tutorial on partial coherence</span></a>.</p>
+<p>Not every parameter in <em>ab</em>TEM allows this.</p>
 </div>
 <p>Now <code class="docutils literal notranslate"><span class="pre">Waves</span></code> is a 1D ensemble of 2D wave functions, hence its shape is 3D.</p>
 <div class="cell docutils container">
@@ -1618,9 +1629,108 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
 </div>
 </div>
 </div>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>Be careful when adding ensemble dimensions without also applying a reduction operation, such as taking an ensemble mean or applying a detector. The above wave function ensemble would require <span class="math notranslate nohighlight">\(5\times 43 \times 43 \times 500 \times 500 \times 32 \ \mathrm{bits} \sim 18 \ \mathrm{GB}\)</span> of memory to store.</p>
+<p>Be careful about running the <code class="docutils literal notranslate"><span class="pre">compute</span></code> method after adding ensemble dimensions without before applying a reduction operation, such as taking an ensemble mean or applying a detector. The below ensemble would take <span class="math notranslate nohighlight">\(\sim 4.51 \ \mathrm{GB}\)</span> of memory to store, as the Dask array <code class="docutils literal notranslate"><span class="pre">__repr__</span></code> shows.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves_focal_series_scanned</span><span class="o">.</span><span class="n">array</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_html"><table>
+<tr>
+<td>
+<table>
+  <thead>
+    <tr><td> </td><th> Array </th><th> Chunk </th></tr>
+  </thead>
+  <tbody>
+    <tr><th> Bytes </th><td> 4.51 GiB </td> <td> 105.00 MiB </td></tr>
+    <tr><th> Shape </th><td> (5, 43, 43, 256, 256) </td> <td> (5, 6, 7, 256, 256) </td></tr>
+    <tr><th> Count </th><td> 128 Tasks </td><td> 56 Chunks </td></tr>
+    <tr><th> Type </th><td> complex64 </td><td> numpy.ndarray </td></tr>
+  </tbody>
+</table>
+</td>
+<td>
+<svg width="416" height="194" style="stroke:rgb(0,0,0);stroke-width:1" >
+
+  <!-- Horizontal lines -->
+  <line x1="0" y1="0" x2="41" y2="0" style="stroke-width:2" />
+  <line x1="0" y1="28" x2="41" y2="28" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="0" y1="0" x2="0" y2="28" style="stroke-width:2" />
+  <line x1="5" y1="0" x2="5" y2="28" />
+  <line x1="11" y1="0" x2="11" y2="28" />
+  <line x1="17" y1="0" x2="17" y2="28" />
+  <line x1="23" y1="0" x2="23" y2="28" />
+  <line x1="28" y1="0" x2="28" y2="28" />
+  <line x1="34" y1="0" x2="34" y2="28" />
+  <line x1="40" y1="0" x2="40" y2="28" />
+  <line x1="41" y1="0" x2="41" y2="28" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="0.0,0.0 41.239669149709265,0.0 41.239669149709265,28.897464417751184 0.0,28.897464417751184" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Text -->
+  <text x="20.619835" y="48.897464" font-size="1.0rem" font-weight="100" text-anchor="middle" >43</text>
+  <text x="61.239669" y="14.448732" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(0,61.239669,14.448732)">5</text>
+
+
+  <!-- Horizontal lines -->
+  <line x1="111" y1="0" x2="135" y2="24" style="stroke-width:2" />
+  <line x1="111" y1="120" x2="135" y2="144" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="111" y1="0" x2="111" y2="120" style="stroke-width:2" />
+  <line x1="114" y1="3" x2="114" y2="123" />
+  <line x1="118" y1="7" x2="118" y2="127" />
+  <line x1="122" y1="11" x2="122" y2="131" />
+  <line x1="126" y1="15" x2="126" y2="135" />
+  <line x1="130" y1="19" x2="130" y2="139" />
+  <line x1="134" y1="23" x2="134" y2="143" />
+  <line x1="135" y1="24" x2="135" y2="144" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="111.0,0.0 135.2586289115937,24.258628911593686 135.2586289115937,144.2586289115937 111.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Horizontal lines -->
+  <line x1="111" y1="0" x2="231" y2="0" style="stroke-width:2" />
+  <line x1="114" y1="3" x2="234" y2="3" />
+  <line x1="118" y1="7" x2="238" y2="7" />
+  <line x1="122" y1="11" x2="242" y2="11" />
+  <line x1="126" y1="15" x2="246" y2="15" />
+  <line x1="130" y1="19" x2="250" y2="19" />
+  <line x1="134" y1="23" x2="254" y2="23" />
+  <line x1="135" y1="24" x2="255" y2="24" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="111" y1="0" x2="135" y2="24" style="stroke-width:2" />
+  <line x1="231" y1="0" x2="255" y2="24" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="111.0,0.0 231.0,0.0 255.2586289115937,24.258628911593686 135.2586289115937,24.258628911593686" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Horizontal lines -->
+  <line x1="135" y1="24" x2="255" y2="24" style="stroke-width:2" />
+  <line x1="135" y1="144" x2="255" y2="144" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="135" y1="24" x2="135" y2="144" style="stroke-width:2" />
+  <line x1="255" y1="24" x2="255" y2="144" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="135.2586289115937,24.258628911593686 255.2586289115937,24.258628911593686 255.2586289115937,144.2586289115937 135.2586289115937,144.2586289115937" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Text -->
+  <text x="195.258629" y="164.258629" font-size="1.0rem" font-weight="100" text-anchor="middle" >256</text>
+  <text x="275.258629" y="84.258629" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,275.258629,84.258629)">256</text>
+  <text x="113.129314" y="152.129314" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,113.129314,152.129314)">43</text>
+</svg>
+</td>
+</tr>
+</table></div></div>
 </div>
 </section>
 </section>

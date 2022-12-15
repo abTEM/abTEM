@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -844,6 +846,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_measurement.html">
+       allocate_measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
@@ -856,6 +863,11 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.transition_potential_multislice_and_detect.html">
+       transition_potential_multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
@@ -1124,6 +1136,23 @@ title="Print to PDF"
   <a class="reference internal nav-link" href="#post-processing-stem-measurements">
    Post-processing STEM measurements
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#interpolation">
+     Interpolation
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#blurring">
+     Blurring
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#noise">
+     Noise
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#detectors">
@@ -1197,6 +1226,23 @@ title="Print to PDF"
   <a class="reference internal nav-link" href="#post-processing-stem-measurements">
    Post-processing STEM measurements
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#interpolation">
+     Interpolation
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#blurring">
+     Blurring
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#noise">
+     Noise
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#detectors">
@@ -1269,7 +1315,9 @@ title="Print to PDF"
 
 <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span> <span class="o">*</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Beam view&quot;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">);</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s2">&quot;xz&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Side view&quot;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -1277,12 +1325,12 @@ title="Print to PDF"
 <img alt="../../_images/scan_and_detect_2_0.png" src="../../_images/scan_and_detect_2_0.png" />
 </div>
 </div>
-<p>Next, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> with a sampling of <span class="math notranslate nohighlight">\(0.05 \ \mathrm{Å}\)</span> and a <code class="docutils literal notranslate"><span class="pre">Probe</span></code> with an energy of <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span> and a convergence semiangle of <span class="math notranslate nohighlight">\(30 \ \mathrm{mrad}\)</span> (and match its sampling to the potential).</p>
+<p>Next, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> with a sampling of <span class="math notranslate nohighlight">\(0.05 \ \mathrm{Å}\)</span> and a <code class="docutils literal notranslate"><span class="pre">Probe</span></code> with an energy of <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span> and a convergence semiangle of <span class="math notranslate nohighlight">\(20 \ \mathrm{mrad}\)</span> (and match its sampling to the potential).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span>
 
-<span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
 <span class="n">probe</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -1295,14 +1343,14 @@ title="Print to PDF"
 <li><p><code class="docutils literal notranslate"><span class="pre">CustomScan</span></code>: Defines the probe positions as an arbitrary <span class="math notranslate nohighlight">\(N \times 2\)</span> array of numbers.</p></li>
 </ul>
 <p>The <code class="docutils literal notranslate"><span class="pre">GridScan</span></code> is most commonly used, however, the <code class="docutils literal notranslate"><span class="pre">LineScan</span></code> may be a way to save computations.</p>
-<p>Below we create a <code class="docutils literal notranslate"><span class="pre">LineScan</span></code> by giving the <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">end</span></code> point as a fraction of the <code class="docutils literal notranslate"><span class="pre">potential.extent</span></code>. We specify 100 grid points along the scan. We set <code class="docutils literal notranslate"><span class="pre">endpoint=False</span></code>, because the scan covers a periodic region and thus the specified <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">end</span></code> is equivalent. Setting <code class="docutils literal notranslate"><span class="pre">endpoint=False</span></code> when scanning over a periodic unit will allow us to tile the resulting measurement.</p>
+<p>Below we create a <code class="docutils literal notranslate"><span class="pre">LineScan</span></code> by giving the <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">end</span></code> point as a fraction of the <code class="docutils literal notranslate"><span class="pre">potential.extent</span></code>. We specify 50 grid points along the scan. We set <code class="docutils literal notranslate"><span class="pre">endpoint=False</span></code>, because the scan covers a periodic region and thus the specified <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">end</span></code> is equivalent. Setting <code class="docutils literal notranslate"><span class="pre">endpoint=False</span></code> when scanning over a periodic unit will allow us to tile the resulting measurement.</p>
 <p>The scan types may be overlaid (red line) on top of a visualization of the atoms using <code class="docutils literal notranslate"><span class="pre">add_to_plot</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">line_scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">LineScan</span><span class="p">(</span>
     <span class="n">start</span><span class="o">=</span><span class="p">(</span><span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mf">5.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
     <span class="n">end</span><span class="o">=</span><span class="p">(</span><span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mf">5.0</span><span class="p">,</span> <span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mf">3.0</span><span class="p">),</span>
-    <span class="n">gpts</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span>
+    <span class="n">gpts</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span>
     <span class="n">endpoint</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span>
 
@@ -1315,7 +1363,7 @@ title="Print to PDF"
 <img alt="../../_images/scan_and_detect_6_0.png" src="../../_images/scan_and_detect_6_0.png" />
 </div>
 </div>
-<p>Calling <code class="docutils literal notranslate"><span class="pre">multislice</span></code> with the <code class="docutils literal notranslate"><span class="pre">LineScan</span></code> and <code class="docutils literal notranslate"><span class="pre">Potential</span></code> will result in the exit wave functions for every probe position along the scan, i.e. an ensemble of <span class="math notranslate nohighlight">\(100\)</span> wave functions.</p>
+<p>Calling <code class="docutils literal notranslate"><span class="pre">multislice</span></code> with the <code class="docutils literal notranslate"><span class="pre">LineScan</span></code> and <code class="docutils literal notranslate"><span class="pre">Potential</span></code> will result in the exit wave functions for every probe position along the scan, i.e. an ensemble of <span class="math notranslate nohighlight">\(50\)</span> wave functions.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_waves_line</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">line_scan</span><span class="p">)</span>
@@ -1325,7 +1373,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(100, 318, 331)
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(50, 318, 331)
 </pre></div>
 </div>
 </div>
@@ -1378,7 +1426,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.RealSpaceLineProfiles object at 0x7fdc040b33a0&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.RealSpaceLineProfiles object at 0x7fa90c753760&gt;
 </pre></div>
 </div>
 </div>
@@ -1393,7 +1441,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 16.7s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  6.6s
 </pre></div>
 </div>
 </div>
@@ -1414,7 +1462,7 @@ title="Print to PDF"
 <img alt="../../_images/scan_and_detect_18_0.png" src="../../_images/scan_and_detect_18_0.png" />
 </div>
 </div>
-<p>The probe is normalized to integrate to <span class="math notranslate nohighlight">\(1\)</span> in Fourier space. Looking at the plot showing the bright field intensity, we can conclude that there is almost no scattering in the hexagon centers (i.e. for <span class="math notranslate nohighlight">\(r\sim 2 \mathrm{Å}\)</span>), while <span class="math notranslate nohighlight">\(\sim10 \%\)</span> of the electrons scatter outside the bright-field disk when the probe is placed directly on the atoms (i.e. for <span class="math notranslate nohighlight">\(r = 0\)</span>).</p>
+<p>The probe is normalized to integrate to <span class="math notranslate nohighlight">\(1\)</span> in Fourier space. Looking at the plot showing the bright field intensity, we can conclude that there is almost no scattering in the hexagon centers (i.e. for <span class="math notranslate nohighlight">\(r\sim 2 \mathrm{Å}\)</span>), while <span class="math notranslate nohighlight">\(\sim5 \%\)</span> of the electrons scatter outside the bright-field disk when the probe is placed directly on the atoms (i.e. for <span class="math notranslate nohighlight">\(r = 0\)</span>).</p>
 </section>
 <section id="stem-simulations">
 <h2>STEM simulations<a class="headerlink" href="#stem-simulations" title="Permalink to this headline">#</a></h2>
@@ -1427,7 +1475,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Nyquist sampling = 0.348 Å/pixel
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Nyquist sampling = 0.522 Å/pixel
 </pre></div>
 </div>
 </div>
@@ -1456,9 +1504,9 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[&lt;abtem.measurements.Images object at 0x7fdbcd1a04f0&gt;,
- &lt;abtem.measurements.Images object at 0x7fdbcd1a0bb0&gt;,
- &lt;abtem.measurements.Images object at 0x7fdbcd1a0af0&gt;]
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[&lt;abtem.measurements.Images object at 0x7fa8e1fe7070&gt;,
+ &lt;abtem.measurements.Images object at 0x7fa8e1fe7790&gt;,
+ &lt;abtem.measurements.Images object at 0x7fa8e1fe7ee0&gt;]
 </pre></div>
 </div>
 </div>
@@ -1479,7 +1527,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 33.1s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 10.1s
 </pre></div>
 </div>
 </div>
@@ -1506,22 +1554,27 @@ title="Print to PDF"
 <section id="post-processing-stem-measurements">
 <h2>Post-processing STEM measurements<a class="headerlink" href="#post-processing-stem-measurements" title="Permalink to this headline">#</a></h2>
 <p>STEM simulations usually requires some post-processing, and we apply the most common steps below.</p>
+<section id="interpolation">
+<h3>Interpolation<a class="headerlink" href="#interpolation" title="Permalink to this headline">#</a></h3>
 <p>We saved a lot of computational time by scanning at the Nyquist frequency, but the result is quite pixelated. To address this, we interpolate the images to a sampling of <span class="math notranslate nohighlight">\(0.1 \ \mathrm{Å / pixel}\)</span>. <em>ab</em>TEM’s default interpolation algorithm is Fourier-space padding, but spline interpolation is also available, which is more appropriate if the image in non-periodic.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_measurement</span> <span class="o">=</span> <span class="n">imported_measurements</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="n">sampling</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_measurement</span> <span class="o">=</span> <span class="n">imported_measurements</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="n">sampling</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">normalization</span><span class="o">=</span><span class="s2">&quot;intensity&quot;</span><span class="p">)</span>
 
 <span class="n">interpolated_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.4s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.1s
 </pre></div>
 </div>
 <img alt="../../_images/scan_and_detect_31_1.png" src="../../_images/scan_and_detect_31_1.png" />
 </div>
 </div>
+</section>
+<section id="blurring">
+<h3>Blurring<a class="headerlink" href="#blurring" title="Permalink to this headline">#</a></h3>
 <p>A finite Gaussian-shaped source will result in a blurring of the image. Vibrations and other instabilities may further contribute to the blur. We apply a Gaussian blur with a standard deviation of <span class="math notranslate nohighlight">\(0.5 \ \mathrm{Å}\)</span> (corresponding to a source of approximately that size).</p>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
@@ -1542,6 +1595,9 @@ title="Print to PDF"
 <img alt="../../_images/scan_and_detect_33_1.png" src="../../_images/scan_and_detect_33_1.png" />
 </div>
 </div>
+</section>
+<section id="noise">
+<h3>Noise<a class="headerlink" href="#noise" title="Permalink to this headline">#</a></h3>
 <p>Simulations such as the above corresponds to the limit of an infinite electron dose. An image with a finite electron dose will contain <a class="reference external" href="https://en.wikipedia.org/wiki/Shot_noise">shot noise</a>. We can get a random sample for a finite dose by drawing random numbers from a Poisson distribution for every pixel. The Poisson distribution has a mean of</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1556,23 +1612,24 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>We apply Poisson noise corresponding a dose per area of <span class="math notranslate nohighlight">\(5\times 10^4 \ \mathrm{e}^- / \mathrm{Å}\)</span>.</p>
+<p>We apply Poisson noise corresponding a dose per area of <span class="math notranslate nohighlight">\(10^5 \ \mathrm{e}^- / \mathrm{Å}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">noisy_measurement</span> <span class="o">=</span> <span class="n">tiled_measurement</span><span class="o">.</span><span class="n">poisson_noise</span><span class="p">(</span><span class="n">dose_per_area</span><span class="o">=</span><span class="mf">5e4</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">noisy_measurement</span> <span class="o">=</span> <span class="n">tiled_measurement</span><span class="o">.</span><span class="n">poisson_noise</span><span class="p">(</span><span class="n">dose_per_area</span><span class="o">=</span><span class="mf">10e5</span><span class="p">)</span>
 
 <span class="n">noisy_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.4s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.1s
 </pre></div>
 </div>
 <img alt="../../_images/scan_and_detect_37_1.png" src="../../_images/scan_and_detect_37_1.png" />
 </div>
 </div>
 <p>Poisson noise is generally the most important source of noise in STEM images, but scan noise due to vibrations and voltage instabilities in the scan coils may also be significant<span id="id1">[<a class="reference internal" href="../bibliography.html#id13" title="Lewys Jones and Peter D. Nellist. Identifying and correcting scan noise and drift in the scanning transmission electron microscope. Microscopy and Microanalysis, 19(4):1050–1060, 2013. doi:10.1017/S1431927613001402.">JN13</a>]</span>, see <code class="docutils literal notranslate"><span class="pre">abtem.measure.apply_scan_noise</span></code>. For completeness, we note that thermal noise in the detector material may also contribute.</p>
+</section>
 </section>
 <section id="detectors">
 <h2>Detectors<a class="headerlink" href="#detectors" title="Permalink to this headline">#</a></h2>
@@ -1588,10 +1645,10 @@ title="Print to PDF"
 <section id="flexibleannulardetector">
 <h3><code class="docutils literal notranslate"><span class="pre">FlexibleAnnularDetector</span></code><a class="headerlink" href="#flexibleannulardetector" title="Permalink to this headline">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">FlexibleAnnularDetector</span></code> radially bins the diffraction pattern, thus allowing us to choose the integration limits after running the simulation. Compared to saving the full diffraction pattern, the advantage of this detector is its significantly reduced memory or disk usage. The <code class="docutils literal notranslate"><span class="pre">FlexibleAnnularDetector</span></code> is the default detector for STEM simulations in <em>ab</em>TEM.</p>
-<p>Here, we create a detector with a spacing between detector bins of <span class="math notranslate nohighlight">\(10 \ \mathrm{mrad}\)</span>.</p>
+<p>Here, we create a detector with a spacing between detector bins of <span class="math notranslate nohighlight">\(1 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">flexible_detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FlexibleAnnularDetector</span><span class="p">(</span><span class="n">step_size</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">flexible_detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FlexibleAnnularDetector</span><span class="p">(</span><span class="n">step_size</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1606,6 +1663,22 @@ title="Print to PDF"
 </div>
 </div>
 </div>
+<p>We can compute <em>before</em> choosing the integration limits</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">flexible_measurement</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  9.4s
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x7fa90cbe8250&gt;
+</pre></div>
+</div>
+</div>
+</div>
 <p>The result is <code class="docutils literal notranslate"><span class="pre">PolarMeasurements</span></code>; the measurement values are binned on a uniform polar grid, where two base axes represents the radial and azimuthal directions, respectively. In this case, there is only a single azimuthal coordinate.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1615,16 +1688,16 @@ title="Print to PDF"
 </div>
 <div class="cell_output docutils container">
 <div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>type        label                             coordinates
-----------  --------------------------------  ---------------------
-ScanAxis    x [Å]                             0.00 0.32 ... 2.86
-ScanAxis    y [Å]                             0.00 0.34 ... 5.16
-LinearAxis  Radial scattering angle [mrad]    0.00 10.00 ... 260.00
+----------  --------------------------------  --------------------
+ScanAxis    x [Å]                             0.00 0.45 ... 2.73
+ScanAxis    y [Å]                             0.00 0.50 ... 5.01
+LinearAxis  Radial scattering angle [mrad]    0.00 1.00 ... 276.00
 LinearAxis  Azimuthal scattering angle [rad]  0.00
 </pre></div>
 </div>
 </div>
 </div>
-<p>We can reproduce the BF, MAADF and HAADF measurements obtained from the <code class="docutils literal notranslate"><span class="pre">AnnularDetector</span></code> above by integrating the <code class="docutils literal notranslate"><span class="pre">PolarMeasurements</span></code> (this will again take around 20 s to run).</p>
+<p>We can reproduce the BF, MAADF and HAADF measurements obtained from the <code class="docutils literal notranslate"><span class="pre">AnnularDetector</span></code> above by integrating the <code class="docutils literal notranslate"><span class="pre">PolarMeasurements</span></code>.</p>
 <div class="cell tag_skip-test docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">stacked</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
@@ -1634,12 +1707,7 @@ LinearAxis  Azimuthal scattering angle [rad]  0.00
         <span class="n">flexible_measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">90</span><span class="p">,</span> <span class="mi">200</span><span class="p">),</span>
     <span class="p">],</span>
     <span class="p">(</span><span class="s2">&quot;BF&quot;</span><span class="p">,</span> <span class="s2">&quot;MAADF&quot;</span><span class="p">,</span> <span class="s2">&quot;HAADF&quot;</span><span class="p">),</span>
-<span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 47.1s
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1653,7 +1721,7 @@ LinearAxis  Azimuthal scattering angle [rad]  0.00
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_47_0.png" src="../../_images/scan_and_detect_47_0.png" />
+<img alt="../../_images/scan_and_detect_49_0.png" src="../../_images/scan_and_detect_49_0.png" />
 </div>
 </div>
 </section>
@@ -1679,7 +1747,7 @@ into <span class="math notranslate nohighlight">\(2\)</span> radial regions, eac
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_51_0.png" src="../../_images/scan_and_detect_51_0.png" />
+<img alt="../../_images/scan_and_detect_53_0.png" src="../../_images/scan_and_detect_53_0.png" />
 </div>
 </div>
 <p>We then run the scanned multislice simulation. The resulting <code class="docutils literal notranslate"><span class="pre">PolarMeasurement</span></code> is 4D, the first two (ensemble) axes representing the scan directions and the last two (base) axes represents the radial and azimuthal bin axes.</p>
@@ -1695,8 +1763,8 @@ into <span class="math notranslate nohighlight">\(2\)</span> radial regions, eac
 <div class="cell_output docutils container">
 <div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>type        label                             coordinates
 ----------  --------------------------------  ------------------
-ScanAxis    x [Å]                             0.00 0.32 ... 2.86
-ScanAxis    y [Å]                             0.00 0.34 ... 5.16
+ScanAxis    x [Å]                             0.00 0.45 ... 2.73
+ScanAxis    y [Å]                             0.00 0.50 ... 5.01
 LinearAxis  Radial scattering angle [mrad]    40.00 60.00
 LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </pre></div>
@@ -1710,10 +1778,10 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1min 15.7s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  9.3s
 </pre></div>
 </div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x7fdc04684970&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.PolarMeasurements object at 0x7fa8cf749e50&gt;
 </pre></div>
 </div>
 </div>
@@ -1726,17 +1794,15 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_56_0.png" src="../../_images/scan_and_detect_56_0.png" />
+<img alt="../../_images/scan_and_detect_58_0.png" src="../../_images/scan_and_detect_58_0.png" />
 </div>
 </div>
 <p>Below we calculate the differential signals in the <span class="math notranslate nohighlight">\(x\)</span>- and <span class="math notranslate nohighlight">\(y\)</span>-directions. The differential signal in the <span class="math notranslate nohighlight">\(x\)</span>-direction is calculated as the difference between detector regions 1 and 3, for the <span class="math notranslate nohighlight">\(y\)</span>-direction it is the difference between detector regions 0 and 2.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">differential</span> <span class="o">=</span> <span class="n">segmented_measurement</span><span class="o">.</span><span class="n">differentials</span><span class="p">(</span>
-    <span class="n">direction_1_plus</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,),</span>
-    <span class="n">direction_1_minus</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="p">,),</span>
-    <span class="n">direction_2_plus</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,),</span>
-    <span class="n">direction_2_minus</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="p">,),</span>
+    <span class="n">direction_1</span><span class="o">=</span><span class="p">[(</span><span class="mi">3</span><span class="p">,),</span> <span class="p">(</span><span class="mi">1</span><span class="p">,)],</span>
+    <span class="n">direction_2</span><span class="o">=</span><span class="p">[(</span><span class="mi">2</span><span class="p">,),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,)],</span>
     <span class="n">return_complex</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span>
 </pre></div>
@@ -1747,7 +1813,7 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 <p>To show the results, we first interpolate and tile. The different representations of the complex parts are stacked to show an exploded plot.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_differential</span> <span class="o">=</span> <span class="n">differential</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_differential</span> <span class="o">=</span> <span class="n">differential</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">.3</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
 
 <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
     <span class="p">[</span>
@@ -1762,18 +1828,18 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_60_0.png" src="../../_images/scan_and_detect_60_0.png" />
+<img alt="../../_images/scan_and_detect_62_0.png" src="../../_images/scan_and_detect_62_0.png" />
 </div>
 </div>
 <p>We can also display the complex <code class="docutils literal notranslate"><span class="pre">Images</span></code> using domain coloring.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_differential</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mf">0.0027</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">);</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_differential</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_62_0.png" src="../../_images/scan_and_detect_62_0.png" />
+<img alt="../../_images/scan_and_detect_64_0.png" src="../../_images/scan_and_detect_64_0.png" />
 </div>
 </div>
 </section>
@@ -1793,10 +1859,10 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1min  0.2s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  9.2s
 </pre></div>
 </div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.DiffractionPatterns object at 0x7fdbcd1a93d0&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.DiffractionPatterns object at 0x7fa8b53d4c40&gt;
 </pre></div>
 </div>
 </div>
@@ -1819,7 +1885,7 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_66_0.png" src="../../_images/scan_and_detect_66_0.png" />
+<img alt="../../_images/scan_and_detect_68_0.png" src="../../_images/scan_and_detect_68_0.png" />
 </div>
 </div>
 <p>We can obtain the annular integrated measurements from the diffraction patterns by integrating radially as shown below.</p>
@@ -1841,13 +1907,13 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_68_0.png" src="../../_images/scan_and_detect_68_0.png" />
+<img alt="../../_images/scan_and_detect_70_0.png" src="../../_images/scan_and_detect_70_0.png" />
 </div>
 </div>
-<p>The center of mass (COM) of a diffraction pattern may be calculated as</p>
+<p>The center of mass, <span class="math notranslate nohighlight">\(\vec{I}_{com}(\vec{r}_p)\)</span>, of the diffraction pattern at a probe position, <span class="math notranslate nohighlight">\(\vec{r}_p\)</span>, may be calculated as</p>
 <div class="math notranslate nohighlight">
 \[
-    \vec{k}_{com} = \int \hat{I}(\vec{k}) \vec{k} d\vec{k} \quad ,
+    \vec{I}_{com}(\vec{r}_p) = \int \hat{I}(\vec{k}, \vec{r}_p) \vec{k} d^2\vec{k} \quad ,
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(\hat{I}(\vec{k})\)</span> is a diffraction pattern intensity. Doing this for every diffraction pattern, we obtain the image shown below. The center of mass is returned as complex <code class="docutils literal notranslate"><span class="pre">Images</span></code>, where the real and imaginary parts correspond to the <span class="math notranslate nohighlight">\(x\)</span>- and <span class="math notranslate nohighlight">\(y\)</span>-direction, respectively. We set <code class="docutils literal notranslate"><span class="pre">units=&quot;reciprocal&quot;</span></code>, hence each complex component is in units of <span class="math notranslate nohighlight">\(\mathrm{Å}^{-1}\)</span>.</p>
 <div class="cell docutils container">
@@ -1856,15 +1922,20 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 
 <span class="n">interpolated_center_of_mass</span> <span class="o">=</span> <span class="n">center_of_mass</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
 
-<span class="n">interpolated_center_of_mass</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mf">0.08</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">);</span>
+<span class="n">interpolated_center_of_mass</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_70_0.png" src="../../_images/scan_and_detect_70_0.png" />
+<img alt="../../_images/scan_and_detect_72_0.png" src="../../_images/scan_and_detect_72_0.png" />
 </div>
 </div>
-<p>Interpreting the real and imaginary part of the COM as the gradient in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, we may integrate it to obtain the integrated center of mass (iCOM).</p>
+<p>It may be shown<span id="id2">[<a class="reference internal" href="../bibliography.html#id19" title="Ivan Lazić, Eric G.T. Bosch, and Sorin Lazar. Phase contrast stem for thin samples: integrated differential phase contrast. Ultramicroscopy, 160:265-280, 2016. doi:https://doi.org/10.1016/j.ultramic.2015.10.011.">LBL16</a>]</span>, in the weak-phase approximation, that by integrating <span class="math notranslate nohighlight">\(\vec{I}_{com}(\vec{r}_p)\)</span>, we can obtain the phase change of the exit wave, <span class="math notranslate nohighlight">\(\phi(\vec{r_p})\)</span>, cross-correlated with the probe intensity</p>
+<div class="math notranslate nohighlight">
+\[
+\vec{I}_{iCOM}(\vec{r}_p) = \frac{1}{2\pi} \left[\|\psi_0(\vec{r})\|^2 \star \phi(\vec{r})\right](\vec{r}_p) \quad .
+\]</div>
+<p>This is the so-called integrated center of mass. We can calculate this using the <code class="docutils literal notranslate"><span class="pre">integrate_gradient</span></code> method, which assumes a complex <code class="docutils literal notranslate"><span class="pre">Image</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">integrated_gradient</span> <span class="o">=</span> <span class="n">center_of_mass</span><span class="o">.</span><span class="n">integrate_gradient</span><span class="p">()</span>
@@ -1876,7 +1947,7 @@ LinearAxis  Azimuthal scattering angle [rad]  0.79 2.36 ... 5.50
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/scan_and_detect_72_0.png" src="../../_images/scan_and_detect_72_0.png" />
+<img alt="../../_images/scan_and_detect_74_0.png" src="../../_images/scan_and_detect_74_0.png" />
 </div>
 </div>
 </section>
