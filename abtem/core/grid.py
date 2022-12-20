@@ -30,6 +30,11 @@ def adjusted_gpts(
     return new_sampling, new_gpts
 
 
+
+
+
+
+
 class GridUndefinedError(Exception):
     pass
 
@@ -206,7 +211,7 @@ class Grid(CopyMixin, EqualityMixin):
             self._adjust_sampling(self.extent, self.gpts)
 
     @property
-    def fourier_space_sampling(self) -> Tuple[float, float]:
+    def reciprocal_space_sampling(self) -> Tuple[float, float]:
         self.check_is_defined()
         return (
             1 / (self.gpts[0] * self.sampling[0]),
@@ -330,6 +335,7 @@ class Grid(CopyMixin, EqualityMixin):
         )
 
 
+
 class HasGridMixin:
     _grid: Grid
 
@@ -366,9 +372,9 @@ class HasGridMixin:
         self.grid.sampling = sampling
 
     @property
-    def fourier_space_sampling(self) -> Tuple[float, ...]:
+    def reciprocal_space_sampling(self) -> Tuple[float, ...]:
         """Reciprocal-space sampling in reciprocal Ångstrom."""
-        return self.grid.fourier_space_sampling
+        return self.grid.reciprocal_space_sampling
 
     def match_grid(self, other: "HasGridMixin", check_match: bool = False):
         """Match the grid to another object with a Grid."""
@@ -410,7 +416,7 @@ def polar_spatial_frequencies(gpts, sampling, xp=np):
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
-    phi = xp.arctan2(kx[:, None], ky[None])
+    phi = xp.arctan2(ky[None], kx[:, None])
     return k, phi
 
 

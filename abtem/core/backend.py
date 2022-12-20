@@ -63,6 +63,9 @@ def get_array_module(x):
     if x is np:
         return np
 
+    if isinstance(x, Number):
+        return np
+
     check_cupy_is_installed()
 
     if isinstance(x, cp.ndarray):
@@ -70,9 +73,6 @@ def get_array_module(x):
 
     if x is cp:
         return cp
-
-    if isinstance(x, Number):
-        return np
 
     raise ValueError(f'array module specification {x} not recognized')
 

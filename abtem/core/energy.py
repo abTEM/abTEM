@@ -67,6 +67,14 @@ def energy2sigma(energy: float) -> float:
             units._hplanck * units.s * units.J) ** 2)
 
 
+def reciprocal_space_sampling_to_angular_sampling(reciprocal_space_sampling, energy):
+    wavelength = energy2wavelength(energy)
+    return (
+        reciprocal_space_sampling[0] * wavelength * 1e3,
+        reciprocal_space_sampling[1] * wavelength * 1e3,
+    )
+
+
 class EnergyUndefinedError(Exception):
     pass
 
@@ -155,7 +163,8 @@ class Accelerator(EqualityMixin, CopyMixin):
         if other.energy is None:
             other.energy = self.energy
 
-        else:
+        elif self.energy != other.energy:
+
             self.energy = other.energy
 
 

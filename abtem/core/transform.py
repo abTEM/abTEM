@@ -2,12 +2,19 @@
 import itertools
 from abc import abstractmethod
 from functools import partial, reduce
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Union, Tuple
 
 import numpy as np
 
-from abtem.core.energy import HasAcceleratorMixin, Accelerator
+from abtem.core.backend import get_array_module
+from abtem.core.device import HasDeviceMixin
+from abtem.core.energy import (
+    HasAcceleratorMixin,
+    Accelerator,
+    reciprocal_space_sampling_to_angular_sampling,
+)
 from abtem.core.ensemble import Ensemble
+from abtem.core.grid import HasGridMixin, polar_spatial_frequencies, Grid
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -18,7 +25,6 @@ if TYPE_CHECKING:
 
 
 class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
-
     @property
     def metadata(self):
         return {}
@@ -142,18 +148,44 @@ class CompositeWaveTransform(WaveTransform):
         return partial(self.ctf, partials=partials)
 
 
-class FourierSpaceConvolution(WaveTransform, HasAcceleratorMixin):
-    def __init__(self, energy: float, **kwargs):
+class FourierSpaceConvolution(
+    WaveTransform, HasAcceleratorMixin, HasGridMixin, HasDeviceMixin
+):
+    def __init__(
+        self,
+        energy: float,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        device: str = "cpu",
+        **kwargs
+    ):
         self._accelerator = Accelerator(energy=energy, **kwargs)
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        self._device = device
 
     @abstractmethod
     def _evaluate_with_alpha_and_phi(self, alpha, phi):
         pass
 
-    def evaluate(self, waves: "Waves") -> np.ndarray:
-        self.accelerator.match(waves)
-        waves.grid.check_is_defined()
-        alpha, phi = waves._angular_grid()
+    @property
+    def angular_sampling(self):
+        return reciprocal_space_sampling_to_angular_sampling(
+            self.reciprocal_space_sampling, self.energy
+        )
+
+    def _angular_grid(self):
+        xp = get_array_module(self._device)
+        alpha, phi = polar_spatial_frequencies(self.gpts, self.sampling, xp=xp)
+        alpha *= self.wavelength
+        return alpha, phi
+
+    def evaluate(self, waves: "Waves" = None) -> np.ndarray:
+        if waves is not None:
+            self.accelerator.match(waves)
+            self.grid.match(waves)
+
+        alpha, phi = self._angular_grid()
         return self._evaluate_with_alpha_and_phi(alpha, phi)
 
     def apply(self, waves: "Waves") -> "Waves":
