@@ -145,6 +145,15 @@ def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float
     return xp.asarray([kx, ky]).T
 
 
+# def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float,
+#                        interpolation: Tuple[int, int], xp=np) -> np.ndarray:
+#     wavelength = energy2wavelength(energy)
+#
+
+
+
+
+
 def plane_waves(wave_vectors: np.ndarray,
                 extent: Tuple[float, float],
                 gpts: Tuple[int, int],

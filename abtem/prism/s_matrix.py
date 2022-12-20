@@ -11,7 +11,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.core.array import validate_lazy, HasArray, ComputableList
+from abtem.core.array import validate_lazy, HasArray, ComputableList, stack, concatenate
 from abtem.core.axes import OrdinalAxis, AxisMetadata, ScanAxis, UnknownAxis
 from abtem.core.backend import get_array_module, cp, validate_device, copy_to_device
 from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks, Chunks
@@ -27,7 +27,7 @@ from abtem.detectors import (
     WavesDetector,
     FlexibleAnnularDetector,
 )
-from abtem.potentials import BasePotential, _validate_potential
+from abtem.potentials import BasePotential, _validate_potential, Potential
 from abtem.waves import Waves, Probe, _finalize_lazy_measurements, _wrap_measurements
 from abtem.waves import BaseWaves
 from abtem.multislice import (
@@ -48,7 +48,7 @@ from abtem.transfer import CTF
 
 
 def _round_gpts_to_multiple_of_interpolation(
-    gpts: Tuple[int, int], interpolation: Tuple[int, int]
+        gpts: Tuple[int, int], interpolation: Tuple[int, int]
 ) -> Tuple[int, int]:
     return tuple(n + (-n) % f for f, n in zip(interpolation, gpts))  # noqa
 
@@ -61,21 +61,55 @@ class BaseSMatrix(BaseWaves):
     def wave_vectors(self):
         pass
 
+    @property
+    @abstractmethod
+    def semiangle_cutoff(self):
+        pass
+
+    @property
+    @abstractmethod
+    def window_extent(self):
+        pass
+
+    @property
+    @abstractmethod
+    def window_gpts(self):
+        pass
+
     def __len__(self) -> int:
         return len(self.wave_vectors)
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [
-            OrdinalAxis(
-                label="(n, m)",
-                values=_pack_wave_vectors(self.wave_vectors),
-            )
-        ] + super().base_axes_metadata  # noqa
+                   OrdinalAxis(
+                       label="(n, m)",
+                       values=self.wave_vectors,
+                   )
+               ] + super().base_axes_metadata  # noqa
 
     @property
     def base_shape(self):
         return (len(self),) + super().base_shape
+
+    def dummy_probes(self, scan: BaseScan = None, ctf: CTF = None):
+
+        if ctf is None:
+            ctf = CTF(energy=self.energy, semiangle_cutoff=self.semiangle_cutoff)
+
+        probes = Probe._from_ctf(
+            extent=self.window_extent,
+            gpts=self.window_gpts,
+            ctf=ctf,
+            energy=self.energy,
+            device=self._device,
+            metadata=self.metadata,
+        )
+
+        if scan is not None:
+            probes = probes.insert_transform(scan)
+
+        return probes
 
 
 def _validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
@@ -109,7 +143,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         Array defining the scattering matrix.
     wave_vectors : np.ndarray
         Array defining the wave vectors corresponding to each probe plane wave.
-    planewave_cutoff : float
+    semiangle_cutoff : float
         The radial cutoff of the plane-wave expansion [mrad].
     energy : float
         Electron energy [eV].
@@ -135,21 +169,21 @@ class SMatrixArray(HasArray, BaseSMatrix):
     _base_dims = 3  # S matrices are assumed to have three dimensions
 
     def __init__(
-        self,
-        array: np.ndarray,
-        wave_vectors: np.ndarray,
-        planewave_cutoff: float,
-        energy: float = None,
-        interpolation: Union[int, Tuple[int, int]] = (1, 1),
-        sampling: Union[float, Tuple[float, float]] = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        # tilt: Tuple[float, float] = (0.0, 0.0),
-        cropping_window: Tuple[int, int] = (0, 0),
-        window_offset: Tuple[int, int] = (0, 0),
-        periodic: Tuple[bool, bool] = (True, True),
-        device=None,
-        ensemble_axes_metadata: List[AxisMetadata] = None,
-        metadata: Dict = None,
+            self,
+            array: np.ndarray,
+            wave_vectors: np.ndarray,
+            semiangle_cutoff: float,
+            energy: float = None,
+            interpolation: Union[int, Tuple[int, int]] = (1, 1),
+            sampling: Union[float, Tuple[float, float]] = None,
+            extent: Union[float, Tuple[float, float]] = None,
+            # tilt: Tuple[float, float] = (0.0, 0.0),
+            window_gpts: Tuple[int, int] = (0, 0),
+            window_offset: Tuple[int, int] = (0, 0),
+            periodic: Tuple[bool, bool] = (True, True),
+            device=None,
+            ensemble_axes_metadata: List[AxisMetadata] = None,
+            metadata: Dict = None,
     ):
 
         if len(array.shape) < 2:
@@ -169,8 +203,8 @@ class SMatrixArray(HasArray, BaseSMatrix):
         self._metadata = {} if metadata is None else metadata
 
         self._wave_vectors = wave_vectors
-        self._planewave_cutoff = planewave_cutoff
-        self._cropping_window = tuple(cropping_window)
+        self._semiangle_cutoff = semiangle_cutoff
+        self._window_gpts = tuple(window_gpts)
         self._window_offset = tuple(window_offset)
         self._interpolation = _validate_interpolation(interpolation)
         self._device = device
@@ -197,6 +231,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
     @staticmethod
     def _packed_wave_vectors(wave_vectors):
+
         return _pack_wave_vectors(wave_vectors)
 
     @property
@@ -219,7 +254,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
             key: getattr(self, key) for key in _common_kwargs(self.__class__, Waves)
         }
         kwargs["ensemble_axes_metadata"] = (
-            kwargs["ensemble_axes_metadata"] + self.base_axes_metadata[:-2]
+                kwargs["ensemble_axes_metadata"] + self.base_axes_metadata[:-2]
         )
         return Waves(**kwargs)
 
@@ -265,27 +300,23 @@ class SMatrixArray(HasArray, BaseSMatrix):
             return self.__class__(array, **kwargs)
 
     @property
-    def planewave_cutoff(self) -> float:
-        return self._planewave_cutoff
+    def semiangle_cutoff(self) -> float:
+        return self._semiangle_cutoff
 
     @property
     def wave_vectors(self) -> np.ndarray:
         return self._wave_vectors
 
     @property
-    def cropping_window(self) -> Tuple[int, int]:
-        return self._cropping_window
+    def window_gpts(self) -> Tuple[int, int]:
+        return self._window_gpts
 
     @property
     def window_extent(self):
         return (
-            self.cropping_window[0] * self.sampling[0],
-            self.cropping_window[1] * self.sampling[1],
+            self.window_gpts[0] * self.sampling[0],
+            self.window_gpts[1] * self.sampling[1],
         )
-
-    @property
-    def antialias_cutoff_gpts(self):
-        return self.waves.antialias_cutoff_gpts
 
     @property
     def interpolated_antialias_cutoff_gpts(self):
@@ -302,32 +333,39 @@ class SMatrixArray(HasArray, BaseSMatrix):
         return self._copy_with_new_waves(waves)
 
     def _reduce_to_waves(
-        self,
-        array,
-        positions,
-        position_coefficients,
+            self,
+            array,
+            positions,
+            position_coefficients,
     ):
         xp = get_array_module(self._device)
 
-        if self.cropping_window != self.gpts:
+        if self._device == "gpu" and isinstance(array, np.ndarray):
+            array = xp.asarray(array)
+
+        position_coefficients = xp.array(position_coefficients, dtype=xp.complex64)
+
+        # print(type(position_coefficients), position_coefficients.dtype)
+        # print(type(array), array.dtype, array.shape, )
+
+        # return xp.zeros(position_coefficients.shape[:2] + self.window_gpts, dtype=xp.complex64)
+
+        if self.window_gpts != self.gpts:
             pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
                 self.window_offset
             )
 
-            crop_corner, size, corners = minimum_crop(
-                pixel_positions, self.cropping_window
-            )
+            crop_corner, size, corners = minimum_crop(pixel_positions, self.window_gpts)
             array = wrapped_crop_2d(array, crop_corner, size)
 
-            if self._device == "gpu" and isinstance(array, np.ndarray):
-                array = cp.asarray(array)
+            # print(array.dtype, type(array))
 
             array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
 
             if len(self.waves.shape) > 3:
                 array = xp.moveaxis(array, -3, 0)
 
-            array = batch_crop_2d(array, corners, self.cropping_window)
+            array = batch_crop_2d(array, corners, self.window_gpts)
 
         else:
             array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
@@ -336,24 +374,6 @@ class SMatrixArray(HasArray, BaseSMatrix):
                 array = xp.moveaxis(array, -3, 0)
 
         return array
-
-    def dummy_probes(self, scan: BaseScan = None, ctf: CTF = None):
-
-        if ctf is None:
-            ctf = CTF(energy=self.energy, semiangle_cutoff=self.planewave_cutoff)
-
-        probes = Probe._from_ctf(
-            extent=self.window_extent,
-            gpts=self.cropping_window,
-            ctf=ctf,
-            energy=self.energy,
-            device=self._device,
-        )
-
-        if scan is not None:
-            probes = probes.insert_transform(scan)
-
-        return probes
 
     def _calculate_positions_coefficients(self, scan):
         xp = get_array_module(self.wave_vectors)
@@ -380,18 +400,19 @@ class SMatrixArray(HasArray, BaseSMatrix):
         xp = get_array_module(wave_vectors)
 
         alpha = (
-            xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
+                xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
         )
-        phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
-
-        return ctf._evaluate_with_alpha_and_phi(alpha, phi)
+        phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
+        array = ctf._evaluate_with_alpha_and_phi(alpha, phi)
+        array = array / xp.sqrt((array ** 2).sum(axis=-1, keepdims=True))
+        return array
 
     def _batch_reduce_to_measurements(
-        self,
-        scan: BaseScan,
-        ctf: CTF,
-        detectors: List[BaseDetector],
-        max_batch_reduction: int,
+            self,
+            scan: BaseScan,
+            ctf: CTF,
+            detectors: List[BaseDetector],
+            max_batch_reduction: int,
     ) -> Tuple[Union[BaseMeasurement, Waves], ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
@@ -412,7 +433,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
         for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
 
-            ctf_coefficients = self._calculate_ctf_coefficients(ctf)
+            ctf_coefficients = self._calculate_ctf_coefficients(sub_ctf)
 
             for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
 
@@ -432,8 +453,10 @@ class SMatrixArray(HasArray, BaseSMatrix):
                         match_dims=[(-1,), (-1,)],
                     )
                     coefficients = positions_coefficients * expanded_ctf_coefficients
+                else:
+                    coefficients = positions_coefficients
 
-                ensemble_axes_metadata = [UnknownAxis()] * len(array.shape[:-3]) + [
+                ensemble_axes_metadata = [UnknownAxis()] * (len(array.shape[:-3]) + len(sub_ctf.ensemble_shape)) + [
                     ScanAxis() for _ in range(len(scan.shape))
                 ]
 
@@ -444,13 +467,18 @@ class SMatrixArray(HasArray, BaseSMatrix):
                     sampling=self.sampling,
                     energy=self.energy,
                     ensemble_axes_metadata=ensemble_axes_metadata,
+                    metadata=self.metadata,
                 )
 
                 indices = (
-                    (slice(None),) * (len(self.waves.shape) - 3) + ctf_slics + slics
+                        (slice(None),) * (len(self.waves.shape) - 3) + ctf_slics + slics
                 )
 
                 for detector, measurement in measurements.items():
+                    # measurement.array[indices] = xp.zeros_like(measurement.array[indices])
+
+                    # print(detector.detect(waves).array.shape)
+
                     measurement.array[indices] = detector.detect(waves).array
 
         return tuple(measurements.values())
@@ -464,10 +492,10 @@ class SMatrixArray(HasArray, BaseSMatrix):
         )
 
     def _window_overlap(self):
-        return self.cropping_window[0] // 2, self.cropping_window[1] // 2
+        return self.window_gpts[0] // 2, self.window_gpts[1] // 2
 
     def _overlap_depth(self):
-        if self.cropping_window == self.gpts:
+        if self.window_gpts == self.gpts:
             return 0
 
         window_overlap = self._window_overlap()
@@ -517,24 +545,24 @@ class SMatrixArray(HasArray, BaseSMatrix):
         return self.chunks[:-3] + ((shape[-3],),) + chunks
 
     def _validate_max_batch_reduction(
-        self, scan, max_batch_reduction: Union[int, str] = "auto"
+            self, scan, max_batch_reduction: Union[int, str] = "auto"
     ):
 
-        shape = (len(scan),) + self.cropping_window
+        shape = (len(scan),) + self.window_gpts
         chunks = (max_batch_reduction, -1, -1)
 
         return validate_chunks(shape, chunks, dtype=np.dtype("complex64"))[0][0]
 
     @staticmethod
     def _lazy_reduce(
-        array,
-        waves_partial,
-        ensemble_axes_metadata,
-        scan,
-        ctf,
-        detectors,
-        max_batch_reduction,
-        kwargs,
+            array,
+            waves_partial,
+            ensemble_axes_metadata,
+            scan,
+            ctf,
+            detectors,
+            max_batch_reduction,
+            kwargs,
     ):
 
         waves = waves_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
@@ -550,9 +578,10 @@ class SMatrixArray(HasArray, BaseSMatrix):
         return arr
 
     def _rechunk_for_reduction(self, rechunk):
-        array = self.array
 
         chunks = self._validate_rechunk_scheme(rechunk=rechunk)
+
+        array = self.array
 
         pad_amounts = tuple(
             0 if len(c) == 1 else o for o, c in zip(self._window_overlap(), chunks[-2:])
@@ -695,12 +724,12 @@ class SMatrixArray(HasArray, BaseSMatrix):
         return measurements
 
     def reduce(
-        self,
-        scan: BaseScan = None,
-        ctf: CTF = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        max_batch_reduction: Union[int, str] = "auto",
-        rechunk: Union[Tuple[int, int], str] = "auto",
+            self,
+            scan: BaseScan = None,
+            ctf: CTF = None,
+            detectors: Union[BaseDetector, List[BaseDetector]] = None,
+            max_batch_reduction: Union[int, str] = "auto",
+            rechunk: Union[Tuple[int, int], str] = "auto",
     ):
 
         """
@@ -727,10 +756,13 @@ class SMatrixArray(HasArray, BaseSMatrix):
         self.accelerator.check_is_defined()
 
         if ctf is None:
-            ctf = CTF(energy=self.waves.energy, semiangle_cutoff=self.planewave_cutoff)
+            ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)
+
+        ctf.grid.match(self.dummy_probes())
+        ctf.accelerator.match(self)
 
         if ctf.semiangle_cutoff == np.inf:
-            ctf.semiangle_cutoff = self.planewave_cutoff
+            ctf.semiangle_cutoff = self.semiangle_cutoff
 
         squeeze_scan = False
         if scan is None:
@@ -749,8 +781,6 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
         if self.is_lazy:
 
-            # s_matrix = self.rechunk_planewaves(rechunk_scheme=rechunk_scheme)
-
             measurements = self._index_overlap_reduce(
                 scan, detectors, ctf, rechunk, max_batch_reduction
             )
@@ -767,9 +797,9 @@ class SMatrixArray(HasArray, BaseSMatrix):
             #
             # kwargs = {
             #     "wave_vectors": self.wave_vectors,
-            #     "planewave_cutoff": self.planewave_cutoff,
+            #     "semiangle_cutoff": self.semiangle_cutoff,
             #     "device": self.device,
-            #     "cropping_window": self.cropping_window,
+            #     "cropping_window": self.window_gpts,
             #     "interpolation": self.interpolation,
             # }
             #
@@ -834,19 +864,17 @@ class SMatrixArray(HasArray, BaseSMatrix):
             )
 
         if squeeze_scan:
-            measurements = [
-                measurement.squeeze((-3,)) for measurement in measurements
-            ]
+            measurements = [measurement.squeeze((-3,)) for measurement in measurements]
 
         return _wrap_measurements(measurements)
 
     def scan(
-        self,
-        scan: BaseScan = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        ctf: CTF = None,
-        max_batch_reduction: Union[int, str] = "auto",
-        rechunk: Union[Tuple[int, int], str] = "auto",
+            self,
+            scan: BaseScan = None,
+            detectors: Union[BaseDetector, List[BaseDetector]] = None,
+            ctf: CTF = None,
+            max_batch_reduction: Union[int, str] = "auto",
+            rechunk: Union[Tuple[int, int], str] = "auto",
     ):
         """
         Reduce the SMatrix using coefficients calculated by a BaseScan and a CTF, to obtain the exit wave functions
@@ -900,7 +928,7 @@ class SMatrix(BaseSMatrix):
 
     Parameters
     ----------
-    planewave_cutoff : float
+    semiangle_cutoff : float
         The radial cutoff of the plane-wave expansion [mrad].
     energy : float
         Electron energy [eV].
@@ -941,19 +969,19 @@ class SMatrix(BaseSMatrix):
     """
 
     def __init__(
-        self,
-        planewave_cutoff: float,
-        energy: float,
-        potential: Union[Atoms, BasePotential] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        interpolation: Union[int, Tuple[int, int]] = 1,
-        normalize: str = "probe",
-        downsample: Union[bool, str] = "cutoff",
-        # tilt: Tuple[float, float] = (0.0, 0.0),
-        device: str = None,
-        store_on_host: bool = False,
+            self,
+            semiangle_cutoff: float,
+            energy: float,
+            potential: Union[Atoms, BasePotential] = None,
+            gpts: Union[int, Tuple[int, int]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            extent: Union[float, Tuple[float, float]] = None,
+            interpolation: Union[int, Tuple[int, int]] = 1,
+            normalize: str = "probe",
+            downsample: Union[bool, str] = "cutoff",
+            # tilt: Tuple[float, float] = (0.0, 0.0),
+            device: str = None,
+            store_on_host: bool = False,
     ):
 
         if downsample is True:
@@ -965,7 +993,7 @@ class SMatrix(BaseSMatrix):
         self.set_potential(potential)
 
         self._interpolation = _validate_interpolation(interpolation)
-        self._planewave_cutoff = planewave_cutoff
+        self._semiangle_cutoff = semiangle_cutoff
         self._downsample = downsample
 
         self._accelerator = Accelerator(energy=energy)
@@ -974,7 +1002,7 @@ class SMatrix(BaseSMatrix):
         self._normalize = normalize
         self._store_on_host = store_on_host
 
-        assert planewave_cutoff > 0.0
+        assert semiangle_cutoff > 0.0
 
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             warnings.warn(
@@ -1039,14 +1067,35 @@ class SMatrix(BaseSMatrix):
             return ()
 
     @property
-    def wave_vectors(self) -> List[Tuple[float, float]]:
+    def wave_vectors(self) -> np.ndarray:
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        xp = np if self.store_on_host else get_array_module(self.device)
-        wave_vectors = prism_wave_vectors(
-            self.planewave_cutoff, self.extent, self.energy, self.interpolation, xp=xp
-        )
-        return wave_vectors  # _validate_wave_vectors(wave_vectors)
+        dummy_probes = self.dummy_probes()
+
+        aperture = dummy_probes.aperture.evaluate(dummy_probes)
+
+        indices = np.where(aperture > 0.0)
+
+        n = np.fft.fftfreq(aperture.shape[0], d=1 / aperture.shape[0])[
+            indices[0],
+        ]
+        m = np.fft.fftfreq(aperture.shape[1], d=1 / aperture.shape[1])[
+            indices[1],
+        ]
+
+        w, h = self.extent
+
+        kx = n / w * np.float32(self.interpolation[0])
+        ky = m / h * np.float32(self.interpolation[1])
+
+        xp = get_array_module(self.device)
+        return xp.asarray([kx, ky]).T
+
+        # xp = np if self.store_on_host else get_array_module(self.device)
+        # wave_vectors = prism_wave_vectors(
+        #     self.semiangle_cutoff, self.extent, self.energy, self.interpolation, xp=xp
+        # )
+        # return wave_vectors  # _validate_wave_vectors(wave_vectors)
 
     @property
     def potential(self) -> BasePotential:
@@ -1062,13 +1111,13 @@ class SMatrix(BaseSMatrix):
         return self._normalize
 
     @property
-    def planewave_cutoff(self) -> float:
+    def semiangle_cutoff(self) -> float:
         """Plane-wave expansion cutoff."""
-        return self._planewave_cutoff
+        return self._semiangle_cutoff
 
-    @planewave_cutoff.setter
-    def planewave_cutoff(self, value: float):
-        self._planewave_cutoff = value
+    @semiangle_cutoff.setter
+    def semiangle_cutoff(self, value: float):
+        self._semiangle_cutoff = value
 
     @property
     def interpolation(self) -> Tuple[int, int]:
@@ -1099,9 +1148,10 @@ class SMatrix(BaseSMatrix):
     def downsampled_gpts(self) -> Tuple[int, int]:
         if self.downsample:
             downsampled_gpts = self._gpts_within_angle(self.downsample)
-            return _round_gpts_to_multiple_of_interpolation(
+            rounded = _round_gpts_to_multiple_of_interpolation(
                 downsampled_gpts, self.interpolation
             )
+            return rounded
         else:
             return self.gpts
 
@@ -1120,17 +1170,23 @@ class SMatrix(BaseSMatrix):
         #    / np.prod(self.interpolation)
         # )
 
-        # corner = cropping_window[0] // 2, cropping_window[1] // 2
-        # cropped_array = wrapped_crop_2d(array, corner, cropping_window)
+        # corner = window_gpts[0] // 2, window_gpts[1] // 2
+        # cropped_array = wrapped_crop_2d(array, corner, window_gpts)
         # normalization_constant = xp.sqrt(abs2(fft2(cropped_array.sum(0))).sum())
-
-        cropping_window = (
-            self.gpts[0] / self.interpolation[0],
-            self.gpts[1] / self.interpolation[1],
+        #
+        # window_gpts = (
+        #     self.gpts[0] / self.interpolation[0],
+        #     self.gpts[1] / self.interpolation[1],
+        # )
+        # normalization_constant = np.prod(window_gpts) * xp.sqrt(len(wave_vectors))
+        #
+        array = (
+                array
+                / xp.prod(xp.array(array.shape[-2:]), dtype=xp.float32)
+                * xp.prod(xp.array(self.interpolation), dtype=xp.float32)
         )
-        normalization_constant = np.prod(cropping_window) * xp.sqrt(len(wave_vectors))
 
-        array = array / normalization_constant.astype(xp.float32)
+        # array = array / (np.abs(np.fft.fft2(array)) ** 2).sum(keepdims=True, axis=(-2,-1))
 
         waves = Waves(
             array,
@@ -1156,11 +1212,19 @@ class SMatrix(BaseSMatrix):
         return waves
 
     @property
-    def cropping_window(self):
-        # print((self.downsampled_gpts[0] / self.interpolation[0] / 2) * 2)
+    def window_gpts(self):
         return (
             safe_ceiling_int(self.downsampled_gpts[0] / self.interpolation[0]),
             safe_ceiling_int(self.downsampled_gpts[1] / self.interpolation[1]),
+        )
+
+    @property
+    def window_extent(self):
+        sampling = (self.extent[0] / self.downsampled_gpts[0], self.extent[1] / self.downsampled_gpts[1])
+
+        return (
+            self.window_gpts[0] * sampling[0],
+            self.window_gpts[1] * sampling[1],
         )
 
     @staticmethod
@@ -1190,14 +1254,11 @@ class SMatrix(BaseSMatrix):
             **self._copy_kwargs(exclude=("potential",))
         )
 
-    def dummy_probes(self, scan=None, ctf=None):
-        return self.build(lazy=True).dummy_probes(scan=scan, ctf=ctf)
-
     def multislice(
-        self,
-        potential=None,
-        lazy: bool = None,
-        max_batch: Union[int, str] = "auto",
+            self,
+            potential=None,
+            lazy: bool = None,
+            max_batch: Union[int, str] = "auto",
     ):
         """
 
@@ -1221,7 +1282,7 @@ class SMatrix(BaseSMatrix):
         return s_matrix.build(lazy=lazy, max_batch=max_batch)
 
     def build(
-        self, lazy: bool = None, max_batch: Union[int, str] = "auto"
+            self, lazy: bool = None, max_batch: Union[int, str] = "auto"
     ) -> SMatrixArray:
         """
         Build the plane waves of the scattering matrix and propagate them through the potential using the
@@ -1304,29 +1365,38 @@ class SMatrix(BaseSMatrix):
                 energy=self.energy,
                 extent=self.extent,
                 ensemble_axes_metadata=ensemble_axes_metadata
-                + self.base_axes_metadata[:1],
+                                       + self.base_axes_metadata[:1],
             )
         else:
-            waves = self._build_s_matrix()
+            wave_vector_blocks = np.array(chunk_ranges(wave_vector_chunks)[0], dtype=int)
+
+            wave_vectors_stack = []
+            for wave_vectors_block in wave_vector_blocks:
+                wave_vectors_stack.append(self._build_s_matrix(slice(*wave_vectors_block)))
+
+            waves = concatenate(wave_vectors_stack)
+
+        if self.downsampled_gpts != self.gpts:
+            waves.metadata["adjusted_antialias_cutoff_gpts"] = self.antialias_cutoff_gpts
 
         return SMatrixArray.from_waves(
             waves,
             wave_vectors=self.wave_vectors,
             interpolation=self.interpolation,
-            planewave_cutoff=self.planewave_cutoff,
-            cropping_window=self.cropping_window,
+            semiangle_cutoff=self.semiangle_cutoff,
+            window_gpts=self.window_gpts,
             device=self.device,
         )
 
     def scan(
-        self,
-        scan: Union[np.ndarray, BaseScan] = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        ctf: Union[CTF, Dict] = None,
-        max_batch_multislice: Union[str, int] = "auto",
-        max_batch_reduction: Union[str, int] = "auto",
-        rechunk: Union[Tuple[int, int], str] = "auto",
-        lazy: bool = None,
+            self,
+            scan: Union[np.ndarray, BaseScan] = None,
+            detectors: Union[BaseDetector, List[BaseDetector]] = None,
+            ctf: Union[CTF, Dict] = None,
+            max_batch_multislice: Union[str, int] = "auto",
+            max_batch_reduction: Union[str, int] = "auto",
+            rechunk: Union[Tuple[int, int], str] = "auto",
+            lazy: bool = None,
     ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
 
         """
@@ -1380,14 +1450,14 @@ class SMatrix(BaseSMatrix):
         )
 
     def reduce(
-        self,
-        scan: Union[np.ndarray, BaseScan] = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        ctf: Union[CTF, Dict] = None,
-        rechunk: str = "auto",
-        max_batch_multislice: Union[str, int] = "auto",
-        max_batch_reduction: Union[str, int] = "auto",
-        lazy: bool = None,
+            self,
+            scan: Union[np.ndarray, BaseScan] = None,
+            detectors: Union[BaseDetector, List[BaseDetector]] = None,
+            ctf: Union[CTF, Dict] = None,
+            rechunk: str = "auto",
+            max_batch_multislice: Union[str, int] = "auto",
+            max_batch_reduction: Union[str, int] = "auto",
+            lazy: bool = None,
     ):
 
         """
@@ -1436,3 +1506,38 @@ class SMatrix(BaseSMatrix):
             max_batch_reduction=max_batch_reduction,
             ctf=ctf,
         )
+
+
+if __name__ == '__main__':
+    from ase.build import bulk
+
+    atoms = bulk("Au", cubic=True)
+    atoms *= (3, 3, 3)
+
+    cell = atoms.cell.copy()
+    cell[0, 0] = 512 * 0.025
+    cell[1, 1] = 512 * 0.025
+
+    atoms.set_cell(cell, scale_atoms=True)
+
+    atoms.center(axis=2, vacuum=6)
+    atoms.center()
+
+    potential = Potential(
+        atoms,
+        gpts=1024,
+        projection="infinite",
+        parametrization="kirkland",
+        slice_thickness=1,
+    )
+
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=200e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        store_on_host=True,
+        downsample=True,
+    )
+
+    measurements = s_matrix.scan(lazy=False)
