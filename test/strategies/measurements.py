@@ -11,7 +11,7 @@ from . import core as core_st
 
 
 @st.composite
-def images(draw, lazy=False, device='cpu', min_value=0., min_base_side=1):
+def images(draw, lazy=False, device='cpu', min_value=0., min_base_side=2):
     sampling = draw(core_st.sampling(allow_none=False))
     energy = draw(core_st.energy())
     metadata = {'energy': energy}
@@ -30,7 +30,7 @@ def images(draw, lazy=False, device='cpu', min_value=0., min_base_side=1):
 
 
 @st.composite
-def diffraction_patterns(draw, lazy=False, device='cpu', min_scan_dims=0, min_value=0., min_base_side=1):
+def diffraction_patterns(draw, lazy=False, device='cpu', min_scan_dims=0, min_value=0., min_base_side=2):
     sampling = draw(core_st.sampling(allow_none=False))
     metadata = {'energy': draw(core_st.energy())}
     fftshift = draw(st.booleans())
@@ -55,7 +55,7 @@ def diffraction_patterns(draw, lazy=False, device='cpu', min_scan_dims=0, min_va
 
 
 @st.composite
-def line_profiles(draw, lazy=False, device='cpu', min_value=0., min_base_side=1):
+def line_profiles(draw, lazy=False, device='cpu', min_value=0., min_base_side=2):
     sampling = draw(core_st.sensible_floats(min_value=0.01, max_value=0.1))
     metadata = {'energy': draw(core_st.energy())}
 
@@ -74,7 +74,7 @@ def line_profiles(draw, lazy=False, device='cpu', min_value=0., min_base_side=1)
 
 
 @st.composite
-def polar_measurements(draw, lazy=False, device='cpu', min_scan_dims=0, min_value=0., min_base_side=1):
+def polar_measurements(draw, lazy=False, device='cpu', min_scan_dims=0, min_value=0., min_base_side=2):
     radial_sampling = draw(core_st.sensible_floats(min_value=1, max_value=10.))
     radial_offset = draw(core_st.sensible_floats(min_value=0., max_value=10.))
 

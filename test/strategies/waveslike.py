@@ -89,8 +89,8 @@ def s_matrix(
     device="cpu",
     min_interpolation=1,
     max_interpolation=1,
-    min_planewave_cutoff=5.0,
-    max_planewave_cutoff=15.0,
+    min_semiangle_cutoff=5.0,
+    max_semiangle_cutoff=15.0,
     downsample=False,
     potential=None,
     allow_distribution=False,
@@ -108,8 +108,8 @@ def s_matrix(
     interpolation = draw(
         st.integers(min_value=min_interpolation, max_value=max_interpolation)
     )
-    planewave_cutoff = draw(
-        st.floats(min_value=min_planewave_cutoff, max_value=max_planewave_cutoff)
+    semiangle_cutoff = draw(
+        st.floats(min_value=min_semiangle_cutoff, max_value=max_semiangle_cutoff)
     )
 
     with warnings.catch_warnings():
@@ -121,7 +121,7 @@ def s_matrix(
             gpts=gpts,
             extent=extent,
             energy=energy,
-            planewave_cutoff=planewave_cutoff,
+            semiangle_cutoff=semiangle_cutoff,
             interpolation=interpolation,
             downsample=downsample,
             device=device,

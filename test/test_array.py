@@ -3,12 +3,11 @@ from numbers import Number
 import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, assume, reproduce_failure
+from hypothesis import given, assume
 
 import strategies as abtem_st
 from abtem.core.array import stack, concatenate
 from abtem.core.axes import OrdinalAxis
-from abtem.core.backend import cp
 from utils import assert_array_matches_device, gpu, remove_dummy_dimensions, assert_array_matches_laziness
 
 

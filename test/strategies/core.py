@@ -108,7 +108,7 @@ def shape(draw,
           max_base_side=32,
           min_ensemble_dims=0,
           max_ensemble_dims=2,
-          min_ensemble_side=1,
+          min_ensemble_side=2,
           max_ensemble_side=4):
     base_shape = draw(numpy_strats.array_shapes(min_dims=base_dims, max_dims=base_dims,
                                                 min_side=min_base_side, max_side=max_base_side))

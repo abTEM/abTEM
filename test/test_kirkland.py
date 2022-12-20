@@ -18,11 +18,11 @@ def test_fig_5_12(projection, lazy, integral_space):
     potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', projection=projection)
     waves = PlaneWave(energy=200e3)
 
-    waves = waves.multislice(potential, lazy=lazy)
+    exit_wave = waves.multislice(potential, lazy=lazy)
 
-    waves = waves.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=10.37, taper=0.)
+    exit_wave = exit_wave.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=10.37)
 
-    intensity = waves.intensity().compute().array
+    intensity = exit_wave.intensity().compute().array
 
     assert np.round(intensity.min(), 2) == np.float32(.72)
     assert np.round(intensity.max(), 2) == np.float32(1.03)

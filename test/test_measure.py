@@ -9,6 +9,7 @@ from hypothesis.strategies import composite
 
 import strategies as abtem_st
 from abtem.core.axes import ScanAxis, OrdinalAxis
+from abtem.core.backend import copy_to_device
 from abtem.measurements import Images, DiffractionPatterns, RealSpaceLineProfiles, _scan_shape, _scan_sampling
 from abtem.waves import Probe
 from utils import ensure_is_tuple, gpu, array_is_close
@@ -67,8 +68,8 @@ def test_inplace_add_subtract(data, measurement, method, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize('method', ['mean', 'sum', 'std'])
-@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize('method', ["sum", "mean", "std"])
+@pytest.mark.parametrize('device', [gpu])
 @pytest.mark.parametrize('measurement', [
     abtem_st.images,
     abtem_st.line_profiles,
@@ -76,7 +77,7 @@ def test_inplace_add_subtract(data, measurement, method, device):
     abtem_st.polar_measurements
 ])
 def test_reduce(data, measurement, method, device):
-    measurement = data.draw(measurement(lazy=False, device=device))
+    measurement = data.draw(measurement(lazy=True, device=device))
 
     axes_indices = st.integers(min_value=0, max_value=max(len(measurement.ensemble_axes) - 1, 0))
     axes_indices = st.lists(elements=axes_indices, min_size=0, max_size=len(measurement.ensemble_axes), unique=True)
@@ -84,7 +85,9 @@ def test_reduce(data, measurement, method, device):
 
     axes = tuple(measurement.ensemble_axes[i] for i in axes_indices)
     num_lost_dims = len(axes)
-    new_measurement = getattr(measurement, method)(axes)
+
+    new_measurement = getattr(measurement.compute(), method)(axes)
+
     assert len(new_measurement.shape) == len(measurement.shape) - num_lost_dims
 
 
@@ -160,7 +163,7 @@ def test_images_interpolate_line(data, lazy, device):
     image = wave.build((0, 0), lazy=False).intensity()
 
     line = image.interpolate_line(start=(0, 0), end=(0, wave.extent[1]), width=0.)
-    assert np.allclose(image.array[0], line.array, rtol=1e-6, atol=1e-6)
+    assert np.allclose(image.to_cpu().array[0], line.to_cpu().array, rtol=1e-6, atol=1e-6)
 
     coordinate = st.floats(min_value=0, max_value=wave.extent[0])
     center = data.draw(st.tuples(coordinate, coordinate))
@@ -170,17 +173,17 @@ def test_images_interpolate_line(data, lazy, device):
 
     image = wave.build(center, lazy=False).intensity()
     line1 = image.interpolate_line_at_position(center=center, angle=angle1, extent=wave.extent[0] / 2, width=width,
-                                               gpts=128)
+                                               gpts=128).to_cpu()
     line2 = image.interpolate_line_at_position(center=center, angle=angle2, extent=wave.extent[0] / 2, width=width,
-                                               gpts=128)
+                                               gpts=128).to_cpu()
 
     assert np.allclose(line1.array, line2.array, rtol=1e-6, atol=10)
 
 
 @given(data=st.data(), dose_per_area=abtem_st.sensible_floats(min_value=1e8, max_value=1e9))
-@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('lazy', [False, True])
 @pytest.mark.parametrize('device', ['cpu', gpu])
-@pytest.mark.parametrize('measurement', [abtem_st.images, abtem_st.images])
+@pytest.mark.parametrize('measurement', [abtem_st.images])
 def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
     measurement = data.draw(measurement(lazy=lazy, device=device, min_value=.5, min_base_side=16))
 
@@ -195,6 +198,9 @@ def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
         area = np.prod(measurement.scan_extent)
         expected_total_dose = area * dose_per_area * np.prod(measurement.ensemble_shape[:-2])
         actual_total_dose = (noisy.array.mean(axis=0) / measurement.array.sum((-2, -1), keepdims=True)).sum()
+
+    expected_total_dose = copy_to_device(expected_total_dose, "cpu")
+    actual_total_dose = copy_to_device(actual_total_dose, "cpu")
 
     assert np.allclose(expected_total_dose, actual_total_dose, rtol=0.1)
 
@@ -341,7 +347,7 @@ def test_interpolate_periodic_spline_and_fft():
 
 @given(gpts=st.integers(min_value=16, max_value=32), extent=st.floats(min_value=5, max_value=10))
 def test_diffraction_patterns_interpolate_uniform(gpts, extent):
-    probe = Probe(energy=100e3, semiangle_cutoff=20, extent=extent, gpts=gpts)
+    probe = Probe(energy=100e3, semiangle_cutoff=20, extent=extent, gpts=gpts, soft=False)
     diffraction_patterns = probe.build().diffraction_patterns(max_angle=None)
     probe.gpts = (gpts * 2, gpts)
     probe.extent = (extent * 2, extent)

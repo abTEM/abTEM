@@ -107,7 +107,7 @@ def test_integrate_consistent(data, lazy, device):
     gpts=st.integers(min_value=64, max_value=128),
     extent=st.floats(min_value=5, max_value=10),
 )
-@pytest.mark.parametrize("device", [gpu])
+@pytest.mark.parametrize("device", [gpu, "cpu"])
 def test_interpolate_diffraction_patterns(gpts, extent, device):
     probe1 = Probe(
         energy=100e3,
@@ -115,17 +115,19 @@ def test_interpolate_diffraction_patterns(gpts, extent, device):
         extent=(extent * 2, extent),
         gpts=(gpts * 2, gpts),
         device=device,
+        soft = False
     )
     probe2 = Probe(
-        energy=100e3, semiangle_cutoff=30, extent=extent, gpts=gpts, device=device
+        energy=100e3, semiangle_cutoff=30, extent=extent, gpts=gpts, device=device, soft=False
     )
 
     measurement1 = (
         probe1.build(lazy=False)
         .diffraction_patterns(max_angle=None)
         .interpolate("uniform")
+        .to_cpu()
     )
 
-    measurement2 = probe2.build(lazy=False).diffraction_patterns(max_angle=None)
+    measurement2 = probe2.build(lazy=False).diffraction_patterns(max_angle=None).to_cpu()
 
     assert np.allclose(measurement1.array, measurement2.array)

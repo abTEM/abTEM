@@ -90,17 +90,18 @@ def test_ensembles(data, ensemble):
 )
 def test_array_waves_transform(data, ensemble, chunks):
     ensemble = data.draw(ensemble())
-    blocks = ensemble.ensemble_blocks(chunks).compute()
+
+    blocks = ensemble.ensemble_blocks(1).compute()
 
     waves = data.draw(abtem_st.probe()).build()
     for i in np.ndindex(blocks.shape):
         blocks[i] = blocks[i].evaluate(waves)
-
+    blocks = concatenate_array_blocks(blocks)
     array = ensemble.evaluate(waves)
 
-    blocks = concatenate_array_blocks(blocks)
     assert array.shape[:-2] == ensemble.ensemble_shape
     assert blocks.shape[:-2] == ensemble.ensemble_shape
+
     assert np.allclose(blocks, array, atol=1e-5)
 
 
