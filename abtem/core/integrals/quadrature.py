@@ -107,7 +107,7 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         disk_indices = xp.asarray(disc_meshgrid(int(np.ceil(self._radial_gpts[-1] / np.min(sampling)))))
         radial_potential = xp.asarray(self.integrate(a, b))
 
-        positions = xp.asarray(positions)
+        positions = xp.asarray(positions, dtype=np.float32)
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
 
