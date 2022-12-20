@@ -240,7 +240,7 @@ class AnnularDetector(BaseDetector):
         array = self.get_detector_region(waves, fftshift=True)
         metadata = {"energy": waves.energy}
         return DiffractionPatterns(
-            array, metadata=metadata, sampling=waves.fourier_space_sampling
+            array, metadata=metadata, sampling=waves.reciprocal_space_sampling
         ).show(cmap=cmap, units='mrad', **kwargs)
 
 
@@ -462,7 +462,12 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         return 2 * np.pi
 
     def _calculate_nbins_radial(self, waves: "Waves") -> int:
-        return int(np.floor(min(waves.cutoff_angles)) / self.step_size)
+        if self.outer is None:
+            outer = min(waves.cutoff_angles)
+        else:
+            outer = self.outer
+
+        return int(np.floor(outer - self.inner) / self.step_size)
 
     def _calculate_nbins_azimuthal(self, waves: "Waves") -> int:
         return 1
@@ -638,7 +643,7 @@ class PixelatedDetector(BaseDetector):
 
     def measurement_axes_metadata(self, waves: "Waves") -> List[AxisMetadata]:
         if self.fourier_space:
-            sampling = waves.fourier_space_sampling
+            sampling = waves.reciprocal_space_sampling
             gpts = waves._gpts_within_angle(self.max_angle)
 
             return [
