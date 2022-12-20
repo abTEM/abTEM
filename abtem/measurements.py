@@ -1963,7 +1963,10 @@ class DiffractionPatterns(BaseMeasurement):
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
         """
-        return IndexedDiffractionPatterns.index_diffraction_patterns(self, cell)
+
+        diffraction_patterns = self.block_direct()
+
+        return IndexedDiffractionPatterns.index_diffraction_patterns(diffraction_patterns, cell)
 
     @property
     def fftshift(self):
