@@ -1,4 +1,8 @@
 .DS_Store
 .ipynb_checkpoints
+.hypothesis
+.idea
+.tox
+.pytest_cache
 *.pyc
 *.egg-info
