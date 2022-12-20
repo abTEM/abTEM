@@ -231,7 +231,7 @@ def _add_valence_density_correction(n_sg, gd, D_asp, setups, atoms):
     I_sa = _calculate_I_a(nspins, D_asp, setups)
 
     rho_MM = np.zeros((phi.Mmax, phi.Mmax))
-    print(rho_MM.shape)
+
     for s in range(nspins):
         M1 = 0
         for a, setup in enumerate(setups):
