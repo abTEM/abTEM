@@ -73,10 +73,16 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
     ----------
     semiangle_cutoff : float or BaseDistribution
         The cutoff semiangle of the aperture [mrad]. Alternatively, a distribution of angles may be provided.
-    taper : float, optional
-        Smoothen the edge of the aperture over a range of angles to eliminate aliasing [mrad] (default is 1 mrad).
+    soft : bool, optional
+        If True, the edge of the aperture is softened (default is True).
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     """
 
     def __init__(
@@ -168,24 +174,6 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         array = xp.clip(numerator / denominator + 0.5, a_min=0., a_max=1.)
         array[zeros] = 1.0
 
-        # if self.normalize:
-        # axes = tuple(range(len(self.ensemble_shape), len(array.shape)))
-        # array = array / xp.sqrt((array ** 2).sum(axis=axes, keepdims=True))
-
-        # if self.taper > 1.e-2:
-        #     taper = self.taper / 1000.0
-        #     array = 0.5 * (
-        #         1 + xp.cos(np.pi * (alpha - semiangle_cutoff + taper) / taper)
-        #     )
-        #     array[alpha > semiangle_cutoff] = 0.0
-        #     array = xp.where(
-        #         alpha > semiangle_cutoff - taper,
-        #         array,
-        #         xp.ones_like(alpha, dtype=xp.float32),
-        #     )
-        # else:
-        #     array = xp.array(alpha < semiangle_cutoff).astype(xp.float32)
-
         return array
 
 
@@ -207,6 +195,12 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
         The cutoff semiangle of the aperture [mrad].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     """
 
     def __init__(
@@ -294,6 +288,12 @@ class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
         The cutoff semiangle of the aperture [mrad].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     """
 
     def __init__(
@@ -347,6 +347,12 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
         Alternatively, a distribution of values may be provided.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     """
 
     def __init__(
@@ -627,6 +633,12 @@ class SpatialEnvelope(
         [Å] and angles should be given in [radian].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
     """
@@ -807,6 +819,12 @@ class Aberrations(
         [Å] and angles should be given in [radian].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
     """
@@ -970,8 +988,8 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     semiangle_cutoff: float, optional
         The semiangle cutoff describes the sharp reciprocal-space cutoff due to the objective aperture [mrad]
         (default is no cutoff).
-    taper: float, optional
-        Tapers the cutoff edge over the given angular range [mrad] (default is 0).
+    soft : bool, optional
+        If True, the edge of the aperture is softened (default is True).
     focal_spread: float, optional
         The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å]
         (default is 0).
@@ -982,6 +1000,12 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         [Å] and angles should be given in [radian].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
 

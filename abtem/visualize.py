@@ -701,6 +701,7 @@ def show_atoms(
     figsize: Tuple[float, float] = None,
     legend: bool = False,
     merge: float = 1e-2,
+    **kwargs
 ):
     """
     Display 2D projection of atoms as a matplotlib plot.
@@ -728,6 +729,7 @@ def show_atoms(
         If True, add a legend indicating the color of the atomic species.
     merge: float
         To speed up plotting large numbers of atoms, those closer than the given value [Å] are merged.
+    kwargs : Keyword arguments for matplotlib.collections.PatchCollection.
 
     Returns
     -------
@@ -767,7 +769,7 @@ def show_atoms(
         for position, size in zip(positions, sizes):
             circles.append(Circle(position, size))
 
-        coll = PatchCollection(circles, facecolors=colors, edgecolors="black")
+        coll = PatchCollection(circles, facecolors=colors, edgecolors="black", **kwargs)
         ax.add_collection(coll)
 
         ax.axis("equal")

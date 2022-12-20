@@ -42,8 +42,6 @@ def _validate_scan_sampling(scan, probe):
     if scan.sampling is None:
         if hasattr(probe, "aperture"):
             scan.sampling = 0.9 * probe.aperture.nyquist_sampling
-        elif hasattr(probe, "planewave_cutoff"):
-            scan.sampling = 0.9 * probe.planewave_cutoff
 
 
 class BaseScan(WaveTransform, metaclass=ABCMeta):
@@ -436,7 +434,7 @@ class LineScan(BaseScan):
         if self.extent is None or self.gpts is None:
             return
 
-        if self.endpoint:
+        if self.endpoint and self.gpts > 1:
             self._sampling = self.extent / (self.gpts - 1)
         else:
             self._sampling = self.extent / self.gpts
