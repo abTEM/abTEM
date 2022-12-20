@@ -234,9 +234,7 @@ class BaseWaves(
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
             return tuple(
                 min(n, m)
-                for n, m in zip(
-                    self.metadata["adjusted_antialias_cutoff_gpts"], gpts
-                )
+                for n, m in zip(self.metadata["adjusted_antialias_cutoff_gpts"], gpts)
             )
 
         return gpts
@@ -769,7 +767,9 @@ class Waves(HasArray, BaseWaves):
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         kwargs["sampling"] = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
-        kwargs["metadata"]["adjusted_antialias_cutoff_gpts"] = self.antialias_cutoff_gpts
+        kwargs["metadata"][
+            "adjusted_antialias_cutoff_gpts"
+        ] = self.antialias_cutoff_gpts
         return self.__class__(**kwargs)
 
     def diffraction_patterns(
@@ -1123,12 +1123,12 @@ class _WavesFactory(BaseWaves):
     @tilt.setter
     def tilt(self, value):
         old_tilt = self.tilt
-
-        for i, transform in self._transforms:
+        new_tilt = validate_tilt(value)
+        for i, transform in enumerate(self._transforms):
             if transform is old_tilt:
-                self._transforms[i] = value
+                self._transforms[i] = new_tilt
 
-        self._tilt = validate_tilt(value)
+        self._tilt = new_tilt
 
     @abstractmethod
     def metadata(self):
@@ -1410,7 +1410,6 @@ class PlaneWave(_WavesFactory):
         waves = self._base_waves_partial()()
         return waves
 
-    # TODO: multislice should probably take only a keyword for core-loss, and transition_potentials should be a property of the potential
     def multislice(
         self,
         potential: Union[BasePotential, Atoms],
@@ -1540,7 +1539,7 @@ class Probe(_WavesFactory):
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
         transforms: List[WaveTransform] = None,
-            metadata=None,
+        metadata=None,
         **kwargs
     ):
 
@@ -1610,7 +1609,12 @@ class Probe(_WavesFactory):
     @property
     def metadata(self) -> dict:
         """Metadata describing the probe wave functions."""
-        return {**self._metadata, "energy": self.energy, **self.aperture.metadata, **self._tilt.metadata}
+        return {
+            **self._metadata,
+            "energy": self.energy,
+            **self.aperture.metadata,
+            **self._tilt.metadata,
+        }
 
     def _base_waves_partial(self):
         def base_probe(gpts, extent, energy, device, metadata):
