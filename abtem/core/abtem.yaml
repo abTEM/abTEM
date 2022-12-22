@@ -1,5 +1,5 @@
 device: cpu
-fft: fftw
+fft: mkl
 local_diagnostics:
   progress_bar: true
 dask:
@@ -22,3 +22,6 @@ warnings:
   dask-blockwise-performance: false
   overspecified-grid: true
 extended_repr: false
+antialias:
+  taper: 0.
+  cutoff: 0.6666666

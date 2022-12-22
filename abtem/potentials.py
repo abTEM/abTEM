@@ -729,23 +729,37 @@ class Potential(_PotentialBuilder):
         exit_plane_after = self.exit_plane_after
 
         cum_thickness = np.cumsum(self.slice_thickness)
+
         for start, stop in generate_chunks(
             last_slice - first_slice, chunks=1, start=first_slice
         ):
-            array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
+
+            if len(numbers) > 1 or stop - start > 1:
+                array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
+            else:
+                array = None
+
             for i, slice_idx in enumerate(range(start, stop)):
 
                 for Z, integrator in integrators.items():
                     atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
 
-                    array[i] += integrator.integrate_on_grid(
-                        positions=atoms.positions,
-                        a=sliced_atoms.slice_limits[slice_idx][0],
-                        b=sliced_atoms.slice_limits[slice_idx][1],
-                        gpts=self.gpts,
-                        sampling=self.sampling,
-                        device=self.device,
-                    )
+                    new_array = integrator.integrate_on_grid(
+                            positions=atoms.positions,
+                            a=sliced_atoms.slice_limits[slice_idx][0],
+                            b=sliced_atoms.slice_limits[slice_idx][1],
+                            gpts=self.gpts,
+                            sampling=self.sampling,
+                            device=self.device,
+                        )
+
+                    if array is not None:
+                        array[i] += new_array
+                    else:
+                        array = new_array[None]
+
+            if array is None:
+                array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
 
             array -= array.min()
 

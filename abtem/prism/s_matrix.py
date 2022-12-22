@@ -155,8 +155,10 @@ class SMatrixArray(HasArray, BaseSMatrix):
     interpolation : one or two int, optional
         Interpolation factor in the `x` and `y` directions (default is 1, ie. no interpolation). If a single value is
         provided, assumed to be the same for both directions.
-    cropping_window : tuple of int
+    window_gpts : tuple of int
+        The number of grid points describing the cropping window of the wave functions.
     window_offset : tuple of int
+        The number of grid points describing the cropping window of the wave functions.
     device : str, optional
         The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is determined by the user configuration.
     ensemble_axes_metadata : list of AxesMetadata
@@ -345,10 +347,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
         position_coefficients = xp.array(position_coefficients, dtype=xp.complex64)
 
-        # print(type(position_coefficients), position_coefficients.dtype)
-        # print(type(array), array.dtype, array.shape, )
-
-        # return xp.zeros(position_coefficients.shape[:2] + self.window_gpts, dtype=xp.complex64)
+        #return xp.zeros(position_coefficients.shape[:2] + self.window_gpts, dtype=xp.complex64)
 
         if self.window_gpts != self.gpts:
             pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
@@ -358,8 +357,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
             crop_corner, size, corners = minimum_crop(pixel_positions, self.window_gpts)
             array = wrapped_crop_2d(array, crop_corner, size)
 
-            # print(array.dtype, type(array))
-
+            
             array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
 
             if len(self.waves.shape) > 3:
@@ -475,10 +473,6 @@ class SMatrixArray(HasArray, BaseSMatrix):
                 )
 
                 for detector, measurement in measurements.items():
-                    # measurement.array[indices] = xp.zeros_like(measurement.array[indices])
-
-                    # print(detector.detect(waves).array.shape)
-
                     measurement.array[indices] = detector.detect(waves).array
 
         return tuple(measurements.values())
@@ -937,12 +931,12 @@ class SMatrix(BaseSMatrix):
         If nothing is provided the scattering matrix will represent a vacuum potential, in which case the sampling and extent
         must be provided.
     gpts : one or two int, optional
-        Number of grid points describing the wave functions. Provide only if potential is not given.
+        Number of grid points describing the scattering matrix. Provide only if potential is not given.
     sampling : one or two float, optional
-        Lateral sampling of wave functions [1 / Å]. Provide only if potential is not given. Will be ignored if 'gpts'
+        Lateral sampling of scattering matrix [1 / Å]. Provide only if potential is not given. Will be ignored if 'gpts'
         is also provided.
     extent : one or two float, optional
-        Lateral extent of wave functions [Å]. Provide only if potential is not given.
+        Lateral extent of scattering matrix [Å]. Provide only if potential is not given.
     interpolation : one or two int, optional
         Interpolation factor in the `x` and `y` directions (default is 1, ie. no interpolation). If a single value is
         provided, assumed to be the same for both directions.
@@ -950,7 +944,7 @@ class SMatrix(BaseSMatrix):
         Normalization of the scattering matrix. The default 'probe' is standard S matrix formalism, whereby the sum of
         all waves in the PRISM expansion is equal to 1; 'planewaves' is needed for core-loss calculations.
     downsample : {'cutoff', 'valid'} or float or bool
-        Controls whether to downsample the probe wave functions after each run of the multislice algorithm.
+        Controls whether to downsample the scattering matrix after each run of the multislice algorithm.
 
             ``cutoff`` :
                 Downsample to the antialias cutoff scattering angle (default).

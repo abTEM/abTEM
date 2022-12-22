@@ -60,8 +60,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         try:
             func = self._functions[name]
-            parameters = self.scaled_parameters(symbol)[name]
-
+            parameters = np.array(self.scaled_parameters(symbol)[name], dtype=np.float32)
             return lambda r, *args, **kwargs: func(r, parameters, *args, **kwargs)
         except KeyError:
             raise RuntimeError(

@@ -104,6 +104,7 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
         positions = xp.asarray(self.get_positions()) / xp.asarray(
             waves.sampling
         ).astype(np.float32)
+
         kernel = fft_shift_kernel(positions, shape=waves.gpts)
 
         try:
@@ -113,10 +114,10 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
 
         return kernel
 
-    def apply(self, waves: "Waves") -> "Waves":
+    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
         array = self.evaluate(waves)
         axes_metadata = self.ensemble_axes_metadata
-        return waves.convolve(array, axes_metadata)
+        return waves.convolve(array, axes_metadata, overwrite_x=overwrite_x)
 
 
 class SourceOffset(BaseScan):

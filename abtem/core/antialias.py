@@ -1,49 +1,48 @@
-from typing import Union, Tuple
-
 import numpy as np
 
+from abtem.core import config
 from abtem.core.backend import get_array_module
-from abtem.core.fft import fft2_convolve
-from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.grid import polar_spatial_frequencies
+from abtem.core.fft import fft2, ifft2
+from abtem.core.grid import HasGridMixin, spatial_frequencies
 from abtem.core.utils import EqualityMixin, CopyMixin
 
-TAPER = 0.01
-CUTOFF = 2 / 3.0
 
+def antialias_aperture(gpts, sampling, xp):
+    cutoff = config.get("antialias.cutoff") / max(sampling) / 2
+    taper = config.get("antialias.taper") / max(sampling)
 
-def antialias_aperture(cutoff, taper, gpts, sampling, xp):
-    cutoff = cutoff / max(sampling) / 2
-    taper = taper / max(sampling)
-
-    r, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
+    kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+    r = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
 
     if taper > 0.0:
         array = 0.5 * (1 + xp.cos(np.pi * (r - cutoff + taper) / taper))
         array[r > cutoff] = 0.0
-        array = xp.where(r > cutoff - taper, array, xp.ones_like(r, dtype=np.float32))
+        array = xp.where(r > cutoff - taper, array, 1.)
     else:
-        array = xp.array(r < cutoff).astype(np.float32)
+        array = xp.array(r < cutoff)
 
     return array
 
 
+def _fft_convolve_has_array(x, kernel, overwrite_x: bool = False):
+    x._array = fft2(x._array, overwrite_x=overwrite_x)
+    if overwrite_x:
+        x._array *= kernel
+    else:
+        x._array = x._array * kernel
+    x._array = ifft2(x._array, overwrite_x=overwrite_x)
+    return x
+
+
 class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
     def __init__(
-        self,
-        cutoff: float = 2.0 / 3.0,
-        taper: float = TAPER,
+            self,
     ):
-        self._cutoff = cutoff
-        self._taper = taper
         self._key = None
         self._array = None
 
     def get_array(self, x):
-
         key = (
-            self._cutoff,
-            self._taper,
             x.gpts,
             x.sampling,
             x.energy,
@@ -54,8 +53,6 @@ class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
             return self._array
 
         self._array = antialias_aperture(
-            self._cutoff,
-            self._taper,
             x.gpts,
             x.sampling,
             get_array_module(x.device),
@@ -64,24 +61,8 @@ class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
 
         return self._array
 
-    def bandlimit(self, x):
-        array = self.get_array(x)
-
-        x._array = fft2_convolve(x.array, array, overwrite_x=False)
-
-        if hasattr(x, "_antialias_cutoff_gpts"):
-            x._antialias_cutoff_gpts = x.antialias_cutoff_gpts
+    def bandlimit(self, x, overwrite_x: bool = False):
+        kernel = self.get_array(x)
+        kernel = kernel[(None,) * (len(x.shape) - 2)]
+        x = _fft_convolve_has_array(x, kernel, overwrite_x)
         return x
-
-    @property
-    def taper(self) -> float:
-        return self._taper
-
-    @property
-    def cutoff(self) -> float:
-        """Anti-aliasing aperture as a fraction of the Nyquist frequency."""
-        return self._cutoff
-
-    @cutoff.setter
-    def cutoff(self, value):
-        self._cutoff = value

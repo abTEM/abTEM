@@ -18,6 +18,15 @@ def scattering_factor(k, p):
             p[0, 4] * np.exp(-p[1, 4] * k ** 2.))
 
 
+@jit(nopython=True, nogil=True)
+def scattering_factor_k2(k2, p):
+    return (p[0, 0] * np.exp(-p[1, 0] * k2) +
+            p[0, 1] * np.exp(-p[1, 1] * k2) +
+            p[0, 2] * np.exp(-p[1, 2] * k2) +
+            p[0, 3] * np.exp(-p[1, 3] * k2) +
+            p[0, 4] * np.exp(-p[1, 4] * k2))
+
+
 def finite_projected_scattering_factor(r, p, a, b):
     p = np.expand_dims(p, tuple(range(2, 2 + len(r.shape))))
     return (np.abs(erf(p[2] * b) - erf(p[2] * a)) * p[0] * np.exp(-p[1] * r[None, ...] ** 2.)).sum(0) / 2
@@ -27,7 +36,7 @@ class PengParametrization(Parametrization):
     _functions = {'potential': scattering_factor,
                   'scattering_factor': scattering_factor,
                   'projected_potential': scattering_factor,
-                  'projected_scattering_factor': scattering_factor,
+                  'projected_scattering_factor': scattering_factor_k2,
                   'finite_projected_potential': finite_projected_scattering_factor,
                   'finite_projected_scattering_factor': finite_projected_scattering_factor,
                   }

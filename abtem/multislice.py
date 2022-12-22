@@ -2,9 +2,10 @@
 import copy
 from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 
+import mkl_fft
 import numpy as np
 
-from abtem.core.antialias import AntialiasAperture
+from abtem.core.antialias import AntialiasAperture, _fft_convolve_has_array
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
@@ -12,13 +13,14 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2_convolve
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_match
-from abtem.detectors import BaseDetector
+from abtem.detectors import BaseDetector, WavesDetector
 from abtem.measurements import BaseMeasurement
 from abtem.potentials import (
     BasePotential,
     TransmissionFunction,
     PotentialArray,
 )
+from abtem.core.antialias import antialias_aperture
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -26,11 +28,11 @@ if TYPE_CHECKING:
 
 
 def _fresnel_propagator_array(
-    thickness: float,
-    gpts: Tuple[int, int],
-    sampling: Tuple[float, float],
-    energy: float,
-    device: str,
+        thickness: float,
+        gpts: Tuple[int, int],
+        sampling: Tuple[float, float],
+        energy: float,
+        device: str,
 ):
     xp = get_array_module(device)
     wavelength = energy2wavelength(energy)
@@ -38,22 +40,16 @@ def _fresnel_propagator_array(
     kx, ky = kx[:, None], ky[None]
 
     f = complex_exponential(
-        -(kx**2) * np.pi * thickness * wavelength
-    ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
-
-    # if tilt != (0.0, 0.0):
-    #     f *= complex_exponential(
-    #         -kx * xp.tan(tilt[0] / 1e3) * thickness * 2 * np.pi
-    #     ) * complex_exponential(-ky * xp.tan(tilt[1] / 1e3) * thickness * 2 * np.pi)
-
+        -(kx ** 2) * np.pi * thickness * wavelength
+    ) * complex_exponential(-(ky ** 2) * np.pi * thickness * wavelength)
     return f
 
 
 def _apply_tilt_to_fresnel_propagator_array(
-    array: np.ndarray,
-    sampling: Tuple[float, float],
-    thickness: float,
-    tilt: Union[Tuple[float, float], Tuple[Tuple[float, float], ...]],
+        array: np.ndarray,
+        sampling: Tuple[float, float],
+        thickness: float,
+        tilt: Union[Tuple[float, float], Tuple[Tuple[float, float], ...]],
 ):
     xp = get_array_module(array)
     tilt = xp.array(tilt)
@@ -105,9 +101,6 @@ class FresnelPropagator:
         if waves.tilt_axes:
             key += (copy.deepcopy(waves.tilt_axes_metadata),)
 
-        # if self._key:
-        #    print(waves.tilt_axes_metadata[0].values == self._key[-1][0].values)
-
         if key == self._key:
             return self._array
 
@@ -118,15 +111,18 @@ class FresnelPropagator:
 
     def _calculate_array(self, waves: "Waves", thickness: float) -> np.ndarray:
 
-        antialias_aperture = AntialiasAperture()
-        array = antialias_aperture.get_array(waves).astype(np.complex64)
-
-        array *= _fresnel_propagator_array(
+        array = _fresnel_propagator_array(
             thickness=thickness,
             gpts=waves.gpts,
             sampling=waves.sampling,
             energy=waves.energy,
             device=waves.device,
+        )
+
+        array *= antialias_aperture(
+            waves.gpts,
+            waves.sampling,
+            get_array_module(waves.device),
         )
 
         if waves.base_tilt != (0.0, 0.0):
@@ -157,7 +153,7 @@ class FresnelPropagator:
         return array
 
     def propagate(
-        self, waves: "Waves", thickness: float, overwrite_x: bool = False
+            self, waves: "Waves", thickness: float, overwrite_x: bool = False
     ) -> "Waves":
         """
         Propagate wave functions through free space.
@@ -176,21 +172,15 @@ class FresnelPropagator:
         propagated_wave_functions : Waves
             Propagated wave functions.
         """
-        array = self.get_array(waves, thickness)
+        kernel = self.get_array(waves, thickness)
 
-        waves._array = fft2_convolve(waves.array, array, overwrite_x=True)
-
-        # #try:
-        # #    x *= kernel
-        # #except ValueError:
-        # #    x = x * kernel
-        # waves._array = mkl_fft.ifft2(waves._array, overwrite_x=True)
+        waves = _fft_convolve_has_array(waves, kernel, overwrite_x)
 
         return waves
 
 
 def allocate_measurement(
-    waves, detector, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
+        waves, detector, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 ):
     xp = get_array_module(detector.measurement_meta(waves))
 
@@ -230,10 +220,10 @@ def _potential_ensemble_shape_and_metadata(potential):
 
 
 def allocate_multislice_measurements(
-    waves: "BaseWaves",
-    detectors: List[BaseDetector],
-    extra_ensemble_axes_shape,
-    extra_ensemble_axes_metadata,
+        waves: "BaseWaves",
+        detectors: List[BaseDetector],
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
 ) -> Dict[BaseDetector, BaseMeasurement]:
     """
     Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved
@@ -270,12 +260,12 @@ def allocate_multislice_measurements(
 
 
 def multislice_step(
-    waves: "Waves",
-    potential_slice: Union[PotentialArray, TransmissionFunction],
-    propagator: FresnelPropagator,
-    antialias_aperture: AntialiasAperture,
-    conjugate: bool = False,
-    transpose: bool = False,
+        waves: "Waves",
+        potential_slice: Union[PotentialArray, TransmissionFunction],
+        propagator: FresnelPropagator,
+        antialias_aperture: AntialiasAperture,
+        conjugate: bool = False,
+        transpose: bool = False,
 ) -> "Waves":
     """
     Calculate one step of the multislice algorithm for the given batch of wave functions through a given potential slice.
@@ -312,7 +302,7 @@ def multislice_step(
         transmission_function = potential_slice.transmission_function(
             energy=waves.energy
         )
-        transmission_function = antialias_aperture.bandlimit(transmission_function)
+        transmission_function = antialias_aperture.bandlimit(transmission_function, overwrite_x=True)
 
     thickness = transmission_function.slice_thickness[0]
 
@@ -320,22 +310,24 @@ def multislice_step(
         thickness = -thickness
 
     if transpose:
-        waves = propagator.propagate(waves, thickness=thickness)
+        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
         waves = transmission_function.transmit(waves, conjugate=conjugate)
     else:
         waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves, thickness=thickness)
+        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
 
     return waves
 
 
 def _update_measurements(
-    waves,
-    detectors,
-    measurements,
-    measurement_index: Tuple[int, ...],
-    additive: bool = False,
+        waves,
+        detectors,
+        measurements,
+        measurement_index: Tuple[int, ...],
+        additive: bool = False,
 ):
+    if measurements is None:
+        return
 
     for detector in detectors:
         new_measurement = detector.detect(waves)
@@ -352,7 +344,6 @@ def _update_measurements(
 
 
 def _validate_potential_ensemble_indices(potential_index, exit_plane_index, potential):
-
     if not potential.ensemble_shape:
         potential_index = ()
     elif not isinstance(potential_index, tuple):
@@ -369,11 +360,11 @@ def _validate_potential_ensemble_indices(potential_index, exit_plane_index, pote
 
 
 def multislice_and_detect(
-    waves: "Waves",
-    potential: BasePotential,
-    detectors: List[BaseDetector],
-    conjugate: bool = False,
-    transpose: bool = False,
+        waves: "Waves",
+        potential: BasePotential,
+        detectors: List[BaseDetector] = None,
+        conjugate: bool = False,
+        transpose: bool = False,
 ) -> Union[Tuple[Union[BaseMeasurement, "Waves"], ...], BaseMeasurement, "Waves"]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
@@ -398,8 +389,6 @@ def multislice_and_detect(
     measurements : Waves or (list of) BaseMeasurement
         Exit waves or detected measurements or lists of measurements.
     """
-
-
     antialias_aperture = AntialiasAperture()
 
     propagator = FresnelPropagator()
@@ -408,12 +397,15 @@ def multislice_and_detect(
         extra_ensemble_axes_metadata,
     ) = _potential_ensemble_shape_and_metadata(potential)
 
-    measurements = allocate_multislice_measurements(
-        waves,
-        detectors,
-        extra_ensemble_axes_shape,
-        extra_ensemble_axes_metadata,
-    )
+    if detectors is None and (len(potential.exit_planes) == 1):
+        measurements = None
+    else:
+        measurements = allocate_multislice_measurements(
+            waves,
+            detectors,
+            extra_ensemble_axes_shape,
+            extra_ensemble_axes_metadata,
+        )
 
     for potential_index, _, potential_configuration in potential.generate_blocks():
 
@@ -430,7 +422,7 @@ def multislice_and_detect(
 
         for potential_slice in potential_configuration.generate_slices():
 
-            #print(exit_plane_index, potential_slice)
+            # print(exit_plane_index, potential_slice)
 
             waves = multislice_step(
                 waves,
@@ -452,19 +444,22 @@ def multislice_and_detect(
 
                 exit_plane_index += 1
 
-    measurements = tuple(measurements.values())
+    if measurements is None:
+        measurements = [waves]
+    else:
+        measurements = tuple(measurements.values())
 
     return measurements
 
 
 def transition_potential_multislice_and_detect(
-    waves: "Waves",
-    potential: BasePotential,
-    detectors: List[BaseDetector],
-    sites,
-    transition_potentials,
-    conjugate: bool = False,
-    transpose: bool = False,
+        waves: "Waves",
+        potential: BasePotential,
+        detectors: List[BaseDetector],
+        sites,
+        transition_potentials,
+        conjugate: bool = False,
+        transpose: bool = False,
 ) -> Union[Tuple[Union[BaseMeasurement, "Waves"], ...], BaseMeasurement, "Waves"]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
@@ -508,7 +503,7 @@ def transition_potential_multislice_and_detect(
         slice_generator = potential_configuration.generate_slices()
 
         for scatter_index, (scatter_slice, sites_slice) in enumerate(
-            zip(slice_generator, sites)
+                zip(slice_generator, sites)
         ):
 
             waves = multislice_step(
@@ -523,11 +518,11 @@ def transition_potential_multislice_and_detect(
             sites_slice = transition_potentials.validate_sites(sites_slice)
 
             for _, scattered_waves in transition_potentials.generate_scattered_waves(
-                waves, sites_slice
+                    waves, sites_slice
             ):
 
                 for depth, potential_slice in potential_configuration.generate_slices(
-                    first_slice=scatter_index, return_depth=True
+                        first_slice=scatter_index, return_depth=True
                 ):
 
                     scattered_waves = multislice_step(

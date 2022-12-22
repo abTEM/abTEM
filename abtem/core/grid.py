@@ -15,9 +15,9 @@ def validate_gpts(gpts):
 
 
 def adjusted_gpts(
-    target_sampling: Tuple[float, ...],
-    old_sampling: Tuple[float, ...],
-    old_gpts: Tuple[int, ...],
+        target_sampling: Tuple[float, ...],
+        old_sampling: Tuple[float, ...],
+        old_gpts: Tuple[int, ...],
 ) -> Tuple[Tuple[float, ...], Tuple[int, ...]]:
     new_sampling = ()
     new_gpts = ()
@@ -28,11 +28,6 @@ def adjusted_gpts(
         new_gpts += (nn,)
 
     return new_sampling, new_gpts
-
-
-
-
-
 
 
 class GridUndefinedError(Exception):
@@ -65,15 +60,15 @@ class Grid(CopyMixin, EqualityMixin):
     """
 
     def __init__(
-        self,
-        extent: Union[float, Sequence[float]] = None,
-        gpts: Union[int, Sequence[int]] = None,
-        sampling: Union[float, Sequence[float]] = None,
-        dimensions: int = 2,
-        endpoint: Union[bool, Sequence[bool]] = False,
-        lock_extent: bool = False,
-        lock_gpts: bool = False,
-        lock_sampling: bool = False,
+            self,
+            extent: Union[float, Sequence[float]] = None,
+            gpts: Union[int, Sequence[int]] = None,
+            sampling: Union[float, Sequence[float]] = None,
+            dimensions: int = 2,
+            endpoint: Union[bool, Sequence[bool]] = False,
+            lock_extent: bool = False,
+            lock_gpts: bool = False,
+            lock_sampling: bool = False,
     ):
 
         self._dimensions = dimensions
@@ -88,11 +83,11 @@ class Grid(CopyMixin, EqualityMixin):
         sampling = self._validate(sampling, dtype=float)
 
         if (
-            extent is not None
-            and gpts is not None
-            and sampling is not None
-            and config.get("warnings.overspecified-grid")
-            and not np.allclose(np.array(extent) / gpts, sampling)
+                extent is not None
+                and gpts is not None
+                and sampling is not None
+                and config.get("warnings.overspecified-grid")
+                and not np.allclose(np.array(extent) / gpts, sampling)
         ):
             warnings.warn("Overspecified grid, the provided sampling is ignored")
 
@@ -241,19 +236,24 @@ class Grid(CopyMixin, EqualityMixin):
             )
             self._sampling = self._validate(self._sampling, float)
 
-    def check_is_defined(self):
+    def check_is_defined(self, raise_error: bool = True):
         """
         Raise error if the grid is not defined.
         """
-
+        is_defined = True
         if self.extent is None:
-            raise GridUndefinedError("grid extent is not defined")
+            is_defined = False
 
         elif self.gpts is None:
-            raise GridUndefinedError("grid gpts are not defined")
+            is_defined = False
 
         elif self.gpts is None:
-            raise GridUndefinedError("grid sampling is not defined")
+            is_defined = False
+
+        if raise_error and not is_defined:
+            raise GridUndefinedError("grid is not defined")
+
+        return is_defined
 
     def match(self, other: Union["Grid", "HasGridMixin"], check_match: bool = False):
         """
@@ -276,7 +276,7 @@ class Grid(CopyMixin, EqualityMixin):
         if other.extent is None:
             other.extent = self.extent
         elif np.any(
-            np.array(self.extent, np.float32) != np.array(other.extent, np.float32)
+                np.array(self.extent, np.float32) != np.array(other.extent, np.float32)
         ):
             self.extent = other.extent
 
@@ -291,7 +291,7 @@ class Grid(CopyMixin, EqualityMixin):
         if other.sampling is None:
             other.sampling = self.sampling
         elif not np.allclose(
-            np.array(self.sampling, np.float32), np.array(other.sampling, np.float32)
+                np.array(self.sampling, np.float32), np.array(other.sampling, np.float32)
         ):
             self.sampling = other.sampling
 
@@ -333,7 +333,6 @@ class Grid(CopyMixin, EqualityMixin):
         self.gpts = tuple(
             power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts
         )
-
 
 
 class HasGridMixin:
@@ -383,7 +382,7 @@ class HasGridMixin:
 
 
 def spatial_frequencies(
-    gpts: Tuple[int, ...], sampling: Tuple[float, ...], return_grid: bool = False, xp=np
+        gpts: Tuple[int, ...], sampling: Tuple[float, ...], return_grid: bool = False, xp=np
 ):
     """
     Calculate spatial frequencies of a grid.
@@ -425,5 +424,5 @@ def disc_meshgrid(r):
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T
-    inside = (rows**2 + cols**2) <= r**2
+    inside = (rows ** 2 + cols ** 2) <= r ** 2
     return np.array((rows[inside], cols[inside])).T

@@ -9,9 +9,9 @@ from scipy.special import kn
 from abtem.core.parametrizations.base import Parametrization
 from abtem.core.constants import kappa
 
+
 @jit(nopython=True, nogil=True)
-def scattering_factor(k, p):
-    k2 = k ** 2
+def scattering_factor(k2, p):
     return ((p[0, 0] * (2. + p[1, 0] * k2) / (1. + p[1, 0] * k2) ** 2) +
             (p[0, 1] * (2. + p[1, 1] * k2) / (1. + p[1, 1] * k2) ** 2) +
             (p[0, 2] * (2. + p[1, 2] * k2) / (1. + p[1, 2] * k2) ** 2) +
@@ -64,19 +64,22 @@ def projected_potential(r, p):
     return v.astype(np.float32)
 
 
-def projected_scattering_factor(k, p):
-    four_pi2_k2 = 4 * np.pi ** 2 * k ** 2
-    f = 8 * np.pi * ((p[0, 0] / p[1, 0] / (four_pi2_k2 + p[1, 0] ** 2) +
-                      p[0, 0] * p[1, 0] / (four_pi2_k2 + p[1, 0] ** 2) ** 2) +
-                     (p[0, 1] / p[1, 1] / (four_pi2_k2 + p[1, 1] ** 2) +
-                      p[0, 1] * p[1, 1] / (four_pi2_k2 + p[1, 1] ** 2) ** 2) +
-                     (p[0, 2] / p[1, 2] / (four_pi2_k2 + p[1, 2] ** 2) +
-                      p[0, 2] * p[1, 2] / (four_pi2_k2 + p[1, 2] ** 2) ** 2) +
-                     (p[0, 3] / p[1, 3] / (four_pi2_k2 + p[1, 3] ** 2) +
-                      p[0, 3] * p[1, 3] / (four_pi2_k2 + p[1, 3] ** 2) ** 2) +
-                     (p[0, 4] / p[1, 4] / (four_pi2_k2 + p[1, 4] ** 2) +
-                      p[0, 4] * p[1, 4] / (four_pi2_k2 + p[1, 4] ** 2) ** 2)
-                     )
+@jit(nopython=True, nogil=True)
+def projected_scattering_factor(k2, p):
+    pi = np.array(np.pi, dtype=np.float32)
+    pi2 = np.array(np.pi ** 2, dtype=np.float32)
+    k2 = 4 * pi2 * k2
+    f = 8 * pi * ((p[0, 0] / p[1, 0] / (k2 + p[1, 0] ** 2) +
+                   p[0, 0] * p[1, 0] / (k2 + p[1, 0] ** 2) ** 2) +
+                  (p[0, 1] / p[1, 1] / (k2 + p[1, 1] ** 2) +
+                   p[0, 1] * p[1, 1] / (k2 + p[1, 1] ** 2) ** 2) +
+                  (p[0, 2] / p[1, 2] / (k2 + p[1, 2] ** 2) +
+                   p[0, 2] * p[1, 2] / (k2 + p[1, 2] ** 2) ** 2) +
+                  (p[0, 3] / p[1, 3] / (k2 + p[1, 3] ** 2) +
+                   p[0, 3] * p[1, 3] / (k2 + p[1, 3] ** 2) ** 2) +
+                  (p[0, 4] / p[1, 4] / (k2 + p[1, 4] ** 2) +
+                   p[0, 4] * p[1, 4] / (k2 + p[1, 4] ** 2) ** 2)
+                  )
     return f
 
 

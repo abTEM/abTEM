@@ -45,11 +45,11 @@ def validate_tilt(tilt):
 
 
 def precession_tilts(
-    precession_angle: float,
-    num_samples: int,
-    min_azimuth: float = 0.0,
-    max_azimuth: float = 2 * np.pi,
-    endpoint: bool = False,
+        precession_angle: float,
+        num_samples: int,
+        min_azimuth: float = 0.0,
+        max_azimuth: float = 2 * np.pi,
+        endpoint: bool = False,
 ):
     """
     Tilts for electron precession at a given precession angle.
@@ -122,7 +122,7 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
                 )
             ]
 
-    def apply(self, waves: "Waves") -> "Waves":
+    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
         """Apply tilt(s) to (an ensamble of) wave function(s)."""
         xp = get_array_module(waves.device)
 
@@ -137,7 +137,7 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
         kwargs["array"] = array
         kwargs["metadata"] = {**kwargs["metadata"], **self.metadata}
         kwargs["ensemble_axes_metadata"] = (
-            self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+                self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
         )
         return waves.__class__(**kwargs)
 
@@ -155,7 +155,7 @@ class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
     """
 
     def __init__(
-        self, tilt: Union[float, BaseDistribution] = 0.0, direction: str = "x"
+            self, tilt: Union[float, BaseDistribution] = 0.0, direction: str = "x"
     ):
         if not isinstance(tilt, BaseDistribution):
             tilt = float(tilt)
@@ -194,9 +194,12 @@ class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
         else:
             return []
 
-    def apply(self, waves: "Waves") -> "Waves":
+    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
         """Apply tilt(s) to (an ensamble of) wave function(s)."""
         xp = get_array_module(waves.device)
+
+        if self.tilt == 0.:
+            return waves
 
         array = waves.array[(None,) * len(self.ensemble_shape)]
 
@@ -209,6 +212,6 @@ class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
         kwargs["array"] = array
         kwargs["metadata"] = {**kwargs["metadata"], **self.metadata}
         kwargs["ensemble_axes_metadata"] = (
-            self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+                self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
         )
         return waves.__class__(**kwargs)

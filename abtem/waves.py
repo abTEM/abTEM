@@ -63,7 +63,7 @@ def _wrap_measurements(measurements):
 
 
 def _finalize_lazy_measurements(
-    arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
+        arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
     measurements = []
     for i, detector in enumerate(detectors):
@@ -162,7 +162,7 @@ class BaseWaves(
         ]
 
     @property
-    def fourier_space_axes_metadata(self) -> List[AxisMetadata]:
+    def reciprocal_space_axes_metadata(self) -> List[AxisMetadata]:
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
@@ -240,7 +240,7 @@ class BaseWaves(
         return gpts
 
     def _gpts_within_angle(
-        self, angle: Union[None, float, str], parity: str = "same"
+            self, angle: Union[None, float, str], parity: str = "same"
     ) -> Tuple[int, int]:
 
         if angle is None or angle == "full":
@@ -307,8 +307,8 @@ class BaseWaves(
 
 
 class _WaveRenormalization(EmptyEnsemble, WaveTransform):
-    def apply(self, waves):
-        return waves.normalize()
+    def apply(self, waves, overwrite_x: bool = False):
+        return waves.normalize(overwrite_x=overwrite_x)
 
 
 class Waves(HasArray, BaseWaves):
@@ -338,14 +338,14 @@ class Waves(HasArray, BaseWaves):
     _base_dims = 2  # The dimension of waves is assumed to be 2D.
 
     def __init__(
-        self,
-        array: np.ndarray,
-        energy: float,
-        extent: Union[float, Tuple[float, float]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        reciprocal_space: bool = False,
-        ensemble_axes_metadata: List[AxisMetadata] = None,
-        metadata: Dict = None,
+            self,
+            array: np.ndarray,
+            energy: float,
+            extent: Union[float, Tuple[float, float]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            reciprocal_space: bool = False,
+            ensemble_axes_metadata: List[AxisMetadata] = None,
+            metadata: Dict = None,
     ):
 
         if len(array.shape) < 2:
@@ -404,7 +404,7 @@ class Waves(HasArray, BaseWaves):
 
     @classmethod
     def from_array_and_metadata(
-        cls, array: np.ndarray, axes_metadata: List[AxisMetadata], metadata: dict = None
+            cls, array: np.ndarray, axes_metadata: List[AxisMetadata], metadata: dict = None
     ) -> "Waves":
 
         """
@@ -445,10 +445,11 @@ class Waves(HasArray, BaseWaves):
         )
 
     def convolve(
-        self,
-        kernel: np.ndarray,
-        axes_metadata: List[AxisMetadata] = None,
-        out_space: str = "in_space",
+            self,
+            kernel: np.ndarray,
+            axes_metadata: List[AxisMetadata] = None,
+            out_space: str = "in_space",
+            overwrite_x: bool = False,
     ):
         """
         Convolve the wave-function array with a given array.
@@ -481,8 +482,7 @@ class Waves(HasArray, BaseWaves):
         if (len(kernel.shape) - 2) != len(axes_metadata):
             raise ValueError("provide axes metadata for each ensemble axis")
 
-        waves = self.ensure_reciprocal_space(in_place=False)
-
+        waves = self.ensure_reciprocal_space(overwrite_x=overwrite_x)
         waves_dims = tuple(range(len(kernel.shape) - 2))
         kernel_dims = tuple(
             range(
@@ -491,21 +491,26 @@ class Waves(HasArray, BaseWaves):
             )
         )
 
-        array = expand_dims(waves.array, axis=waves_dims) * expand_dims(
+        kernel = expand_dims(
             kernel, axis=kernel_dims
         )
+        array = expand_dims(waves._array, axis=waves_dims)
+
+        if overwrite_x and (array.shape == kernel.shape):
+            array *= kernel
+        else:
+            array = array * kernel
 
         if not fourier_space_out:
-            array = ifft2(array, overwrite_x=False)
+            array = ifft2(array, overwrite_x=overwrite_x)
 
         d = waves._copy_kwargs(exclude=("array",))
         d["reciprocal_space"] = fourier_space_out
         d["array"] = array
         d["ensemble_axes_metadata"] = axes_metadata + d["ensemble_axes_metadata"]
-
         return waves.__class__(**d)
 
-    def normalize(self, space: str = "reciprocal"):
+    def normalize(self, space: str = "reciprocal", overwrite_x: bool = False):
         """
         Normalize the wave functions in real or reciprocal space.
 
@@ -529,11 +534,15 @@ class Waves(HasArray, BaseWaves):
         reciprocal_space = self.reciprocal_space
 
         if space == "reciprocal":
-            waves = self.ensure_reciprocal_space()
+            waves = self.ensure_reciprocal_space(overwrite_x=overwrite_x)
             f = xp.sqrt(abs2(waves.array).sum((-2, -1), keepdims=True))
-            waves = waves / f
+            if overwrite_x:
+                waves._array /= f
+            else:
+                waves._array = waves._array / f
+
             if not reciprocal_space:
-                waves = waves.ensure_real_space()
+                waves = waves.ensure_real_space(overwrite_x=overwrite_x)
 
         elif space == "real":
             raise NotImplementedError
@@ -582,7 +591,7 @@ class Waves(HasArray, BaseWaves):
 
         return self.__class__(**kwargs)
 
-    def ensure_reciprocal_space(self, in_place: bool = False):
+    def ensure_reciprocal_space(self, overwrite_x: bool = False):
         """
         Transform to reciprocal space if the wave functions are represented in real space.
 
@@ -601,11 +610,11 @@ class Waves(HasArray, BaseWaves):
             return self
 
         d = self._copy_kwargs(exclude=("array",))
-        d["array"] = fft2(self.array, overwrite_x=in_place)
+        d["array"] = fft2(self.array, overwrite_x=overwrite_x)
         d["reciprocal_space"] = True
         return self.__class__(**d)
 
-    def ensure_real_space(self, in_place: bool = False):
+    def ensure_real_space(self, overwrite_x: bool = False):
         """
         Transform to real space if the wave functions are represented in reciprocal space.
 
@@ -624,7 +633,7 @@ class Waves(HasArray, BaseWaves):
             return self
 
         d = self._copy_kwargs(exclude=("array",))
-        d["array"] = ifft2(self.array, overwrite_x=in_place)
+        d["array"] = ifft2(self.array, overwrite_x=overwrite_x)
         d["reciprocal_space"] = False
         return self.__class__(**d)
 
@@ -705,10 +714,10 @@ class Waves(HasArray, BaseWaves):
         )
 
     def downsample(
-        self,
-        max_angle: Union[str, float] = "cutoff",
-        gpts: Tuple[int, int] = None,
-        normalization: str = "values",
+            self,
+            max_angle: Union[str, float] = "cutoff",
+            gpts: Tuple[int, int] = None,
+            normalization: str = "values",
     ) -> "Waves":
         """
         Downsample the wave functions to a lower maximum scattering angle.
@@ -773,12 +782,12 @@ class Waves(HasArray, BaseWaves):
         return self.__class__(**kwargs)
 
     def diffraction_patterns(
-        self,
-        max_angle: Union[str, float, None] = "cutoff",
-        block_direct: Union[bool, float] = False,
-        fftshift: bool = True,
-        parity: str = "odd",
-        return_complex: bool = False,
+            self,
+            max_angle: Union[str, float, None] = "cutoff",
+            block_direct: Union[bool, float] = False,
+            fftshift: bool = True,
+            parity: str = "odd",
+            return_complex: bool = False,
     ) -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
@@ -881,7 +890,7 @@ class Waves(HasArray, BaseWaves):
         return waves.array
 
     def apply_transform(
-        self, transform: WaveTransform, max_batch: Union[int, str] = "auto"
+            self, transform: WaveTransform, max_batch: Union[int, str] = "auto"
     ) -> "Waves":
         """
         Transform the wave functions by a given transformation.
@@ -940,14 +949,14 @@ class Waves(HasArray, BaseWaves):
 
             kwargs["array"] = array
             kwargs["ensemble_axes_metadata"] = (
-                transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+                    transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
             )
             return self.__class__(**kwargs)
         else:
             return transform.apply(self)
 
     def apply_ctf(
-        self, ctf: CTF = None, max_batch: Union[int, str] = "auto", **kwargs
+            self, ctf: CTF = None, max_batch: Union[int, str] = "auto", **kwargs
     ) -> "Waves":
         """
         Apply the aberrations and apertures of a contrast transfer function to the wave functions.
@@ -995,11 +1004,11 @@ class Waves(HasArray, BaseWaves):
         return arr
 
     def multislice(
-        self,
-        potential: BasePotential,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        conjugate: bool = False,
-        transpose: bool = False,
+            self,
+            potential: BasePotential,
+            detectors: Union[BaseDetector, List[BaseDetector]] = None,
+            conjugate: bool = False,
+            transpose: bool = False,
     ) -> "Waves":
         """
         Propagate and transmit wave function through the provided potential using the multislice algorithm. When detector(s)
@@ -1049,7 +1058,7 @@ class Waves(HasArray, BaseWaves):
 
             axes_blocks = ()
             for i, (axis, chunks) in enumerate(
-                zip(self.ensemble_axes_metadata, self.array.chunks)
+                    zip(self.ensemble_axes_metadata, self.array.chunks)
             ):
                 axes_blocks += (
                     axis._to_blocks(
@@ -1191,11 +1200,11 @@ class _WavesFactory(BaseWaves):
         return arr
 
     def _lazy_build_multislice_detect(
-        self,
-        detectors: List[BaseDetector],
-        max_batch: int = None,
-        potential: BasePotential = None,
-        multislice_func=multislice_and_detect,
+            self,
+            detectors: List[BaseDetector],
+            max_batch: int = None,
+            potential: BasePotential = None,
+            multislice_func=multislice_and_detect,
     ):
 
         args = ()
@@ -1315,15 +1324,15 @@ class PlaneWave(_WavesFactory):
     """
 
     def __init__(
-        self,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        energy: float = None,
-        normalize: bool = False,
-        tilt: Tuple[float, float] = (0.0, 0.0),
-        device: str = None,
-        transforms: List[WaveTransform] = None,
+            self,
+            extent: Union[float, Tuple[float, float]] = None,
+            gpts: Union[int, Tuple[int, int]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            energy: float = None,
+            normalize: bool = False,
+            tilt: Tuple[float, float] = (0.0, 0.0),
+            device: str = None,
+            transforms: List[WaveTransform] = None,
     ):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -1371,9 +1380,9 @@ class PlaneWave(_WavesFactory):
         )
 
     def build(
-        self,
-        lazy: bool = None,
-        max_batch="auto",
+            self,
+            lazy: bool = None,
+            max_batch="auto",
     ) -> Waves:
         """
         Build plane-wave wave functions.
@@ -1411,13 +1420,13 @@ class PlaneWave(_WavesFactory):
         return waves
 
     def multislice(
-        self,
-        potential: Union[BasePotential, Atoms],
-        detectors: BaseDetector = None,
-        max_batch: Union[int, str] = "auto",
-        lazy: bool = None,
-        ctf: CTF = None,
-        transition_potentials=None,
+            self,
+            potential: Union[BasePotential, Atoms],
+            detectors: BaseDetector = None,
+            max_batch: Union[int, str] = "auto",
+            lazy: bool = None,
+            ctf: CTF = None,
+            transition_potentials=None,
     ) -> Waves:
         """
         Run the multislice algorithm, after building the plane-wave wave function as needed. The grid of the wave
@@ -1521,26 +1530,26 @@ class Probe(_WavesFactory):
     """
 
     def __init__(
-        self,
-        semiangle_cutoff: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        energy: float = None,
-        soft: bool = True,
-        tilt: Union[
-            Tuple[Union[float, BaseDistribution], Union[float, BaseDistribution]],
-            BaseDistribution,
-        ] = (
-            0.0,
-            0.0,
-        ),
-        device: str = None,
-        aperture: Aperture = None,
-        aberrations: Union[Aberrations, dict] = None,
-        transforms: List[WaveTransform] = None,
-        metadata=None,
-        **kwargs
+            self,
+            semiangle_cutoff: float = None,
+            extent: Union[float, Tuple[float, float]] = None,
+            gpts: Union[int, Tuple[int, int]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            energy: float = None,
+            soft: bool = True,
+            tilt: Union[
+                Tuple[Union[float, BaseDistribution], Union[float, BaseDistribution]],
+                BaseDistribution,
+            ] = (
+                    0.0,
+                    0.0,
+            ),
+            device: str = None,
+            aperture: Aperture = None,
+            aberrations: Union[Aberrations, dict] = None,
+            transforms: List[WaveTransform] = None,
+            metadata=None,
+            **kwargs
     ):
 
         self._accelerator = Accelerator(energy=energy)
@@ -1573,7 +1582,7 @@ class Probe(_WavesFactory):
         self._metadata = {} if metadata is None else metadata
 
         transforms = [] if transforms is None else transforms
-        transforms = transforms + [self.tilt + self.aperture + self.aberrations]
+        transforms = transforms + [self.tilt] + [self.aperture] + [self.aberrations]
 
         super().__init__(transforms=transforms)
 
@@ -1642,10 +1651,10 @@ class Probe(_WavesFactory):
         )
 
     def build(
-        self,
-        scan: Union[tuple, BaseScan] = None,
-        max_batch: Union[int, str] = "auto",
-        lazy: bool = None,
+            self,
+            scan: Union[tuple, BaseScan] = None,
+            max_batch: Union[int, str] = "auto",
+            lazy: bool = None,
     ) -> Waves:
         """
         Build probe wave functions at the provided positions.
@@ -1701,22 +1710,22 @@ class Probe(_WavesFactory):
         else:
             waves = probe._base_waves_partial()()
 
-            waves = CompositeWaveTransform(probe.transforms).apply(waves)
+            waves = CompositeWaveTransform(probe.transforms).apply(waves, overwrite_x=True)
 
-            waves = waves.ensure_real_space()
+            waves = waves.ensure_real_space(overwrite_x=True)
 
         waves = waves.squeeze(squeeze)
 
         return waves
 
     def multislice(
-        self,
-        potential: Union[BasePotential, Atoms],
-        scan: Union[tuple, BaseScan] = None,
-        detectors: BaseDetector = None,
-        max_batch: Union[int, str] = "auto",
-        lazy: bool = None,
-        transition_potentials=None,
+            self,
+            potential: Union[BasePotential, Atoms],
+            scan: Union[tuple, BaseScan] = None,
+            detectors: BaseDetector = None,
+            max_batch: Union[int, str] = "auto",
+            lazy: bool = None,
+            transition_potentials=None,
     ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
         """
         Run the multislice algorithm for probe wave functions at the provided positions.
@@ -1802,13 +1811,13 @@ class Probe(_WavesFactory):
         return measurements
 
     def scan(
-        self,
-        potential: Union[Atoms, BasePotential],
-        scan: Union[BaseScan, np.ndarray, Sequence] = None,
-        detectors: Union[BaseDetector, Sequence[BaseDetector]] = None,
-        max_batch: Union[int, str] = "auto",
-        transition_potentials=None,
-        lazy: bool = None,
+            self,
+            potential: Union[Atoms, BasePotential],
+            scan: Union[BaseScan, np.ndarray, Sequence] = None,
+            detectors: Union[BaseDetector, Sequence[BaseDetector]] = None,
+            max_batch: Union[int, str] = "auto",
+            transition_potentials=None,
+            lazy: bool = None,
     ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
         """
         Run the multislice algorithm from probe wave functions over the provided scan.

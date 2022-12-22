@@ -2,6 +2,7 @@ from typing import Tuple
 
 import numpy as np
 
+from abtem.core.antialias import antialias_aperture
 from abtem.core.backend import get_array_module, device_name_from_array_module
 from abtem.core.fft import fft2, ifft2, fft2_convolve
 from abtem.core.grid import spatial_frequencies, polar_spatial_frequencies
@@ -15,10 +16,14 @@ if cp is not None:
 
 
 def sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
+    xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp)
-    k = np.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2)
-    sinc = np.sinc(k)
-    return sinc * (sampling[0] * sampling[1])
+    k = xp.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2)
+    dk2 = sampling[0] * sampling[1]
+    k[0, 0] = 1
+    sinc = xp.sin(k) / k * dk2
+    sinc[0, 0] = dk2
+    return sinc
 
 
 def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index=None, weights=None) -> np.ndarray:
@@ -52,52 +57,6 @@ def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index=None,
     return array
 
 
-def infinite_potential_projections(atoms, shape, sampling, scattering_factors, slice_index=None):
-    xp = get_array_module(list(scattering_factors.values())[0])
-
-    if len(atoms) == 0:
-        return xp.zeros(shape, dtype=xp.float32)
-
-    if slice_index is None:
-        shape = shape[1:]
-
-    positions = (atoms.positions[:, :2] / sampling).astype(xp.float32)
-
-    unique = np.unique(atoms.numbers)
-    if len(unique) > 1:
-        array = xp.zeros(shape, dtype=xp.complex64)
-
-        for i, number in enumerate(unique):
-            temp = xp.zeros_like(array, dtype=np.float32)
-
-            mask = atoms.numbers == number
-
-            if i > 0:
-                temp[:] = 0.
-
-            if not np.any(mask):
-                continue
-
-            if slice_index is not None:
-                masked_slice_index = slice_index[mask]
-            else:
-                masked_slice_index = None
-
-            temp = superpose_deltas(positions[mask], temp, masked_slice_index)
-            array += fft2(temp, overwrite_x=True) * scattering_factors[number]
-
-        array = ifft2(array, overwrite_x=True).real
-    else:
-        array = xp.zeros(shape, dtype=xp.float32)
-        superpose_deltas(positions, array, slice_index=slice_index)
-        array = fft2_convolve(array, scattering_factors[unique[0]], overwrite_x=True).real
-
-    if len(array.shape) == 2:
-        array = array[None]
-
-    return array
-
-
 class ProjectedScatteringFactors(ProjectionIntegrator):
 
     def __init__(self, scattering_factor):
@@ -119,7 +78,6 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
                           sampling: Tuple[float, float],
                           device: str = 'cpu',
                           fourier_space: bool = False, ):
-
         xp = get_array_module(device)
 
         if len(positions) == 0:
@@ -131,12 +89,15 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
 
         array = superpose_deltas(positions, array).astype(xp.complex64)
 
-        array = fft2(array) * self._scattering_factor
+        array = fft2(array, overwrite_x=True)
+
+        array *= self._scattering_factor / sinc(self.gpts, sampling, device)
 
         if fourier_space:
-            return array
+            return array.real
         else:
-            return ifft2(array / sinc(self.gpts, sampling, device)).real
+            array = ifft2(array, overwrite_x=True).real
+            return array
 
 
 class InfinitePotentialProjections(ProjectionIntegratorPlan):
@@ -150,9 +111,11 @@ class InfinitePotentialProjections(ProjectionIntegratorPlan):
 
     def calculate_scattering_factor(self, symbol, gpts, sampling, device):
         xp = get_array_module(device)
-        k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
-        f = self._parametrization.projected_scattering_factor(symbol)(k)
+        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        k2 = kx[:, None] ** 2 + ky[None] ** 2
+        f = self._parametrization.projected_scattering_factor(symbol)(k2)
         return ProjectedScatteringFactors(f)
 
     def build(self, symbol: str, gpts: Tuple[int, int], sampling: Tuple[float, float], device: str = 'cpu'):
-        return self.calculate_scattering_factor(symbol, gpts, sampling, device)
+        scattering_factor = self.calculate_scattering_factor(symbol, gpts, sampling, device)
+        return scattering_factor

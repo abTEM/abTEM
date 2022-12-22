@@ -3,8 +3,9 @@ import itertools
 from abc import abstractmethod
 from functools import partial, reduce
 from typing import TYPE_CHECKING, List, Union, Tuple
-
+import dask
 import numpy as np
+import dask.array as da
 
 from abtem.core.backend import get_array_module
 from abtem.core.device import HasDeviceMixin
@@ -52,7 +53,7 @@ class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
         return CompositeWaveTransform(wave_transforms)
 
     @abstractmethod
-    def apply(self, waves: "Waves") -> "Waves":
+    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
         pass
 
 
@@ -106,11 +107,11 @@ class CompositeWaveTransform(WaveTransform):
         ]
         return tuple(itertools.chain(*ensemble_shape))
 
-    def apply(self, waves: "BaseWaves"):
+    def apply(self, waves: "BaseWaves", overwrite_x: bool = False):
         waves.grid.check_is_defined()
 
         for wave_transform in reversed(self.wave_transforms):
-            waves = wave_transform.apply(waves)
+            waves = wave_transform.apply(waves, overwrite_x=overwrite_x)
 
         return waves
 
@@ -152,13 +153,13 @@ class FourierSpaceConvolution(
     WaveTransform, HasAcceleratorMixin, HasGridMixin, HasDeviceMixin
 ):
     def __init__(
-        self,
-        energy: float,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        device: str = "cpu",
-        **kwargs
+            self,
+            energy: float,
+            extent: Union[float, Tuple[float, float]] = None,
+            gpts: Union[int, Tuple[int, int]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            device: str = "cpu",
+            **kwargs
     ):
         self._accelerator = Accelerator(energy=energy, **kwargs)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -180,15 +181,23 @@ class FourierSpaceConvolution(
         alpha *= self.wavelength
         return alpha, phi
 
-    def evaluate(self, waves: "Waves" = None) -> np.ndarray:
+    def _evaluate(self):
+        alpha, phi = self._angular_grid()
+        return self._evaluate_with_alpha_and_phi(alpha, phi)
+
+    def evaluate(self, waves: "Waves" = None, lazy: bool = False) -> np.ndarray:
         if waves is not None:
             self.accelerator.match(waves)
             self.grid.match(waves)
 
-        alpha, phi = self._angular_grid()
-        return self._evaluate_with_alpha_and_phi(alpha, phi)
+        if lazy:
+            array = dask.delayed(self._evaluate)()
+            array = da.from_delayed(array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts)
+            return array
+        else:
+            return self._evaluate()
 
-    def apply(self, waves: "Waves") -> "Waves":
+    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
         axes_metadata = self.ensemble_axes_metadata
         array = self.evaluate(waves)
-        return waves.convolve(array, axes_metadata)
+        return waves.convolve(array, axes_metadata, overwrite_x=overwrite_x)

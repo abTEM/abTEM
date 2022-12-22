@@ -129,7 +129,7 @@ class GaussianProjectionIntegrals(ProjectionIntegratorPlan):
         if self.correction_parametrization:
             infinite_gaussian = self.gaussian_parametrization.projected_scattering_factor(symbol)
             infinite_correction = self.correction_parametrization.projected_scattering_factor(symbol)
-            correction_scattering_factors = infinite_correction(k) - infinite_gaussian(k)
+            correction_scattering_factors = infinite_correction(k ** 2) - infinite_gaussian(k ** 2)
         else:
             correction_scattering_factors = None
 

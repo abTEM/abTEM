@@ -2,9 +2,10 @@
 import copy
 import re
 from collections import defaultdict
-from typing import Dict, Tuple
-from typing import Union, List
+from typing import Dict, Tuple, TYPE_CHECKING, Union, List
 
+import dask
+import dask.array as da
 import numpy as np
 
 from abtem import stack
@@ -13,6 +14,7 @@ from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, energy2wavelength
+from abtem.core.fft import fft_crop
 from abtem.core.grid import HasGridMixin, GridUndefinedError
 from abtem.core.transform import FourierSpaceConvolution
 from abtem.core.utils import expand_dims_to_match
@@ -23,6 +25,9 @@ from abtem.distributions import (
     _validate_distribution,
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
+
+if TYPE_CHECKING:
+    from abtem.waves import Waves
 
 
 class BaseAperture(FourierSpaceConvolution, HasGridMixin):
@@ -55,13 +60,46 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
         return []
 
     @property
-    def nyquist_sampling(self) -> float:
+    def _max_semiangle_cutoff(self):
         if isinstance(self._semiangle_cutoff, BaseDistribution):
-            semiangle_cutoff = max(self._semiangle_cutoff.values)
+            return max(self._semiangle_cutoff.values)
         else:
-            semiangle_cutoff = self._semiangle_cutoff
+            return self._semiangle_cutoff
 
-        return 1 / (4 * semiangle_cutoff / self.wavelength * 1e-3)
+    @property
+    def nyquist_sampling(self) -> float:
+        return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
+
+    def _cropped_aperture(self):
+        if self._max_semiangle_cutoff == np.inf:
+            return self
+
+        gpts = (
+            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[0])) + 3,
+            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[1])) + 3,
+        )
+
+        cropped_aperture = self.copy()
+        cropped_aperture.gpts = gpts
+        return cropped_aperture
+
+    def _evaluate_from_cropped(self, gpts):
+        cropped = self._cropped_aperture()
+        array = cropped._evaluate()
+        array = fft_crop(array, gpts)
+        return array
+
+    def evaluate(self, waves: "Waves" = None, lazy: bool = False) -> np.ndarray:
+        if waves is not None:
+            self.accelerator.match(waves)
+            self.grid.match(waves)
+
+        if lazy:
+            array = dask.delayed(self._evaluate_from_cropped)(gpts=self.gpts)
+            array = da.from_delayed(array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts)
+            return array
+        else:
+            return self._evaluate_from_cropped(gpts=self.gpts)
 
 
 class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
@@ -144,34 +182,30 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         (semiangle_cutoff,) = unpacked
         semiangle_cutoff = semiangle_cutoff * 1e-3
 
-        alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
-        phi = xp.expand_dims(phi, axis=tuple(range(0, self._num_ensemble_axes)))
 
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
-        if not self.soft:
-            return xp.array(alpha < semiangle_cutoff).astype(xp.float32)
+        if not self.soft or not self.grid.check_is_defined(raise_error=False):
+            return xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
 
-        numerator = semiangle_cutoff * alpha - alpha ** 2
+        angular_sampling = xp.array(self.angular_sampling, dtype=xp.float32) * 1e-3
 
-        alpha_vector = xp.stack([alpha * xp.cos(phi), alpha * xp.sin(phi)], axis=-1)
+        phi = xp.expand_dims(phi, axis=tuple(range(0, self._num_ensemble_axes)))
 
-        try:
-            angular_sampling = xp.array(self.angular_sampling, dtype=xp.float32) * 1e-3
-        except GridUndefinedError:
-            angular_sampling = alpha[..., 1] - alpha[..., 0]
-
-        denominator = xp.linalg.norm(
-            alpha_vector * angular_sampling[(None,) * (len(alpha_vector.shape) - 1)],
-            axis=-1,
+        denominator = xp.sqrt(
+            (xp.cos(phi) * angular_sampling[0]) ** 2 +
+            (xp.sin(phi) * angular_sampling[1]) ** 2
         )
 
-        zeros = (slice(None),) * len(self.ensemble_shape) + (0,) * (len(numerator.shape) - len(self.ensemble_shape))
+        zeros = (slice(None),) * len(self.ensemble_shape) + (0,) * (
+                len(denominator.shape) - len(self.ensemble_shape)
+        )
+
         denominator[zeros] = 1.0
 
-        array = xp.clip(numerator / denominator + 0.5, a_min=0., a_max=1.)
+        array = xp.clip((semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0)
         array[zeros] = 1.0
 
         return array
@@ -586,6 +620,13 @@ class _HasAberrations:
         """The parameters."""
         return copy.deepcopy(self._aberration_coefficients)
 
+    @property
+    def has_aberrations(self):
+        if np.all(np.array(list(self._aberration_coefficients.values())) == 0.):
+            return False
+        else:
+            return True
+
     def set_aberrations(self, parameters: Dict[str, Union[float, BaseDistribution]]):
         """
         Set the phase of the phase aberration.
@@ -654,10 +695,11 @@ class SpatialEnvelope(
             **kwargs,
     ):
         super().__init__(
-            distributions=polar_symbols + ("angular_spread",), energy=energy,
+            distributions=polar_symbols + ("angular_spread",),
+            energy=energy,
             extent=extent,
             gpts=gpts,
-            sampling=sampling
+            sampling=sampling,
         )
 
         self._angular_spread = _validate_distribution(angular_spread)
@@ -873,6 +915,9 @@ class Aberrations(
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
+        if not self.has_aberrations:
+            return xp.ones(self.ensemble_shape + alpha.shape, dtype=xp.complex64)
+
         parameters, weights = _unpack_distributions(
             *tuple(self.aberration_coefficients.values()), shape=alpha.shape, xp=xp
         )
@@ -968,6 +1013,12 @@ class Aberrations(
             array = xp.asarray(weights, dtype=xp.float32) * array
 
         return array
+
+    def apply(self, waves, overwrite_x: bool = False):
+        if self.has_aberrations:
+            return super().apply(waves, overwrite_x=overwrite_x)
+        else:
+            return waves
 
 
 class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
