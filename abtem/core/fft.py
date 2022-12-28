@@ -14,6 +14,7 @@ from abtem.core.backend import get_array_module, check_cupy_is_installed
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
 from threading import local
+from threadpoolctl import threadpool_limits
 
 try:
     import mkl_fft
@@ -33,45 +34,79 @@ def raise_fft_lib_not_present(lib_name):
     )
 
 
-class CacheDict(OrderedDict):
-    """Dict with a limited length, ejecting LRUs as needed."""
-
-    def __init__(self, *args, cache_len: int = 10, **kwargs):
-        assert cache_len > 0
-        self.cache_len = cache_len
-
-        super().__init__(*args, **kwargs)
-
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        super().move_to_end(key)
-
-        while len(self) > self.cache_len:
-            oldkey = next(iter(self))
-            super().__delitem__(oldkey)
-
-    def __getitem__(self, key):
-        val = super().__getitem__(key)
-        super().move_to_end(key)
-
-        return val
+def _fft_name_to_fftw_direction(name: str):
+    if name[0] == "i":
+        direction = "FFTW_BACKWARD"
+    else:
+        direction = "FFTW_FORWARD"
+    return direction
 
 
-threadsafe = local()
+def _new_fftw_wisdom(array: np.ndarray, name: str, flags=()):
+    dummy = pyfftw.byte_align(np.zeros_like(array))
+
+    direction = _fft_name_to_fftw_direction(name)
+
+    fftw_object = pyfftw.FFTW(
+        dummy,
+        dummy,
+        axes=(-2, -1),
+        direction=direction,
+        threads=config.get("fftw.threads"),  # noqa
+        flags=(config.get("fftw.planning_effort"),) + flags,  # noqa
+        planning_timelimit=config.get("fftw.planning_timelimit"),  # noqa
+    )
+
+    fftw_object.update_arrays(array, array)
+
+    return fftw_object
 
 
-def get_fftw_obj(name, shape, dtype, threads):
-    key = (name, shape, dtype, threads)
 
-    if not hasattr(threadsafe, "cache"):
-        threadsafe.cache = CacheDict(cache_len=config.get("fftw.cache_size"))
+def get_fftw_object(array: np.ndarray, name: str, allow_new_wisdom: bool = True, overwrite_x=False):
+    direction = _fft_name_to_fftw_direction(name)
 
-    if not key in threadsafe.cache.keys():
-        dummy_in = np.zeros(shape, dtype=dtype)
-        func = getattr(pyfftw.builders, name)(dummy_in, threads=threads)
-        threadsafe.cache[key] = func
+    flags = (config.get("fftw.planning_effort"),)
+    if overwrite_x:
+        flags += ("FFTW_DESTROY_INPUT",)
 
-    return threadsafe.cache[key]
+    try:
+        fftw = pyfftw.FFTW(
+            array,
+            array,
+            axes=(-2, -1),
+            direction=direction,
+            threads=config.get("fftw.threads"),  # noqa
+            flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
+        )
+    except RuntimeError as e:
+        if not str(e) == "No FFTW wisdom is known for this plan.":
+            raise
+
+        if not allow_new_wisdom:
+            raise
+
+        return _new_fftw_wisdom(array, name, flags=flags)
+
+    return fftw
+
+
+def _mkl_fft_dispatch(x: np.ndarray, func_name: str, overwrite_x: bool, **kwargs):
+    if mkl_fft is None:
+        raise_fft_lib_not_present("mkl_fft")
+
+    with threadpool_limits(limits=config.get("mkl.threads")):
+        return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
+
+
+def _fftw_dispatch(x: np.ndarray, func_name: str, overwrite_x: bool, **kwargs):
+    if pyfftw is None:
+        raise_fft_lib_not_present("pyfftw")
+
+    if not overwrite_x:
+        x = x.copy()
+
+    return get_fftw_object(x, func_name, overwrite_x=overwrite_x, **kwargs)()
 
 
 def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
@@ -79,34 +114,9 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
 
     if isinstance(x, np.ndarray):
         if config.get("fft") == "mkl":
-            if mkl_fft is None:
-                raise_fft_lib_not_present("mkl_fft")
-
-            return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
+            return _mkl_fft_dispatch(x, func_name, overwrite_x, **kwargs)
         elif config.get("fft") == "fftw":
-            # pyfftw.config.NUM_THREADS = config.get("fftw.threads")
-            # pyfftw.config.PLANNER_EFFORT = 'FFTW_MEASURE'
-            # pyfftw.interfaces.cache.enable()
-
-            if pyfftw is None:
-                raise_fft_lib_not_present("pyfftw")
-
-            fftw_obj = get_fftw_obj(func_name, x.shape, x.dtype.str, 1)
-            fftw_obj.update_arrays(x.copy(), x.copy())
-            # fftw_obj.output_array[:] = x
-            return fftw_obj()
-
-            # fftw_obj = getattr(pyfftw.builders, func_name)(
-            #     x,
-            #     overwrite_input=overwrite_x,
-            #     planner_effort=config.get("fftw.planning_effort"),
-            #     threads=config.get("fftw.threads"),
-            #     avoid_copy=False,
-            #     **kwargs,
-            # )
-            # return getattr(np.fft, func_name)(x, **kwargs)
-
-            # return getattr(pyfftw.interfaces.numpy_fft, func_name)(x) #fftw_obj()
+            return _fftw_dispatch(x, func_name, overwrite_x, **kwargs)
         elif config.get("fft") == "numpy":
             return getattr(np.fft, func_name)(x, **kwargs)
         else:
@@ -304,7 +314,9 @@ def fft_interpolate(
     array = array.astype(xp.complex64)
 
     if len(new_shape) == 2:
-        array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
+        array = fft2(array, overwrite_x=overwrite_x)
+        array = fft_crop(array, new_shape)
+        array = ifft2(array, overwrite_x=overwrite_x)
     else:
         if len(new_shape) != len(array.shape):
             axes = tuple(range(len(array.shape) - len(new_shape), len(array.shape)))

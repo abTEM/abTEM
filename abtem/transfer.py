@@ -70,6 +70,10 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
     def nyquist_sampling(self) -> float:
         return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
 
+    @property
+    def semiangle_cutoff(self):
+        return self._semiangle_cutoff
+
     def _cropped_aperture(self):
         if self._max_semiangle_cutoff == np.inf:
             return self
@@ -576,6 +580,14 @@ class _HasAberrations:
             var for var in dir(_HasAberrations) if re.fullmatch("phi[0-9][0-9]", var)
         )
 
+    def _nonzero_coefficients(self, symbols):
+        return any(
+            np.all(self._aberration_coefficients[symbol] == 0.0) and
+            np.isscalar(self._aberration_coefficients[symbol])
+
+            for symbol in
+            symbols)
+
     @classmethod
     def _symbols(cls):
         return cls._coefficient_symbols() + cls._angular_symbols()
@@ -849,7 +861,7 @@ class SpatialEnvelope(
 
 
 class Aberrations(
-    _EnsembleFromDistributionsMixin, FourierSpaceConvolution, _HasAberrations
+    _EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
 ):
     """
     Phase aberrations.
@@ -878,6 +890,7 @@ class Aberrations(
             extent: Union[float, Tuple[float, float]] = None,
             gpts: Union[int, Tuple[int, int]] = None,
             sampling: Union[float, Tuple[float, float]] = None,
+            semiangle_cutoff: float = np.inf,
             **kwargs,
     ):
 
@@ -887,6 +900,7 @@ class Aberrations(
             extent=extent,
             gpts=gpts,
             sampling=sampling,
+            semiangle_cutoff=semiangle_cutoff,
         )
 
         aberration_coefficients = (
@@ -925,47 +939,38 @@ class Aberrations(
         parameters = dict(zip(polar_symbols, parameters))
 
         axis = tuple(range(0, len(self.ensemble_shape)))
-        alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=axis)
         phi = xp.expand_dims(phi, axis=axis)
-        alpha2 = alpha ** 2
 
         array = xp.zeros(alpha.shape, dtype=np.float32)
 
-        if any(np.any(parameters[symbol] != 0.0) for symbol in ("C10", "C12", "phi12")):
+        if self._nonzero_coefficients(("C10", "C12", "phi12")):
             array = array + (
                     1
                     / 2
-                    * alpha2
+                    * alpha ** 2
                     * (
                             parameters["C10"]
                             + parameters["C12"] * xp.cos(2 * (phi - parameters["phi12"]))
                     )
             )
 
-        if any(
-                np.any(parameters[symbol] != 0.0)
-                for symbol in ("C21", "phi21", "C23", "phi23")
-        ):
+        if self._nonzero_coefficients(("C21", "phi21", "C23", "phi23")):
             array = array + (
                     1
                     / 3
-                    * alpha2
-                    * alpha
+                    * alpha ** 3
                     * (
                             parameters["C21"] * xp.cos(phi - parameters["phi21"])
                             + parameters["C23"] * xp.cos(3 * (phi - parameters["phi23"]))
                     )
             )
 
-        if any(
-                np.any(parameters[symbol] != 0.0)
-                for symbol in ("C30", "C32", "phi32", "C34", "phi34")
-        ):
+        if self._nonzero_coefficients(("C30", "C32", "phi32", "C34", "phi34")):
             array = array + (
                     1
                     / 4
-                    * alpha2 ** 2
+                    * alpha ** 4
                     * (
                             parameters["C30"]
                             + parameters["C32"] * xp.cos(2 * (phi - parameters["phi32"]))
@@ -973,15 +978,11 @@ class Aberrations(
                     )
             )
 
-        if any(
-                np.any(parameters[symbol] != 0.0)
-                for symbol in ("C41", "phi41", "C43", "phi43", "C45", "phi41")
-        ):
+        if self._nonzero_coefficients(("C41", "phi41", "C43", "phi43", "C45", "phi41")):
             array = array + (
                     1
                     / 5
-                    * alpha2 ** 2
-                    * alpha
+                    * alpha ** 5
                     * (
                             parameters["C41"] * xp.cos((phi - parameters["phi41"]))
                             + parameters["C43"] * xp.cos(3 * (phi - parameters["phi43"]))
@@ -989,14 +990,11 @@ class Aberrations(
                     )
             )
 
-        if any(
-                np.any(parameters[symbol] != 0.0)
-                for symbol in ("C50", "C52", "phi52", "C54", "phi54", "C56", "phi56")
-        ):
+        if self._nonzero_coefficients(("C50", "C52", "phi52", "C54", "phi54", "C56", "phi56")):
             array = array + (
                     1
                     / 6
-                    * alpha2 ** 3
+                    * alpha ** 6
                     * (
                             parameters["C50"]
                             + parameters["C52"] * xp.cos(2 * (phi - parameters["phi52"]))
@@ -1005,11 +1003,10 @@ class Aberrations(
                     )
             )
 
-        array = np.float32(2 * xp.pi / self.wavelength) * array
-
+        array *= np.float32(2 * xp.pi / self.wavelength)
         array = complex_exponential(-array)
 
-        if weights is not None:
+        if weights is not None and not np.all(weights == 1.):
             array = xp.asarray(weights, dtype=xp.float32) * array
 
         return array

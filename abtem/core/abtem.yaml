@@ -12,11 +12,11 @@ dask:
 cupy:
   fft-cache-size: 0 MB
 mkl:
-  threads: 1
+  threads: 2
 fftw:
   threads: 1
-  cache_size: 2
   planning_effort: FFTW_MEASURE
+  planning_timelimit: 60
 warnings:
   prism-interpolation-gpts: true
   dask-blockwise-performance: false

@@ -151,9 +151,6 @@ def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float
 #
 
 
-
-
-
 def plane_waves(wave_vectors: np.ndarray,
                 extent: Tuple[float, float],
                 gpts: Tuple[int, int],
@@ -171,12 +168,11 @@ def plane_waves(wave_vectors: np.ndarray,
 
 
 def _planewave_shift_coefficients(positions, wave_vectors):
-
     xp = get_array_module(positions)
-    #wave_vectors = xp.asarray(wave_vectors)
+    # wave_vectors = xp.asarray(wave_vectors)
 
     coefficients = complex_exponential(-2. * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None])
-    #print(coefficients.shape, coefficients.dtype)
+    # print(coefficients.shape, coefficients.dtype)
     coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
 
     return coefficients

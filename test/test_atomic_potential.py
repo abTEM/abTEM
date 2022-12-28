@@ -64,7 +64,7 @@ def test_gaussian_projection_integrals(parameters):
         fourier_space=True)
 
     k = np.abs(np.fft.fftfreq(gpts[0], sampling[0])).astype(np.float32)
-    analytical = parametrization.projected_scattering_factor(symbol)(k)
+    analytical = parametrization.projected_scattering_factor(symbol)(k ** 2)
     assert np.allclose(analytical, projections[0].real, rtol=1e-6)
 
 

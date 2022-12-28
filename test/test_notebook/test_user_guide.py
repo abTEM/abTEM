@@ -166,7 +166,7 @@ def test_prism():
     _test_notebook("prism.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 
 
-@pytest.mark.slow
+#@pytest.mark.slow
 def test_charge_density():
     _test_notebook("charge_density.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 

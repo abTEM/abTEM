@@ -2,25 +2,23 @@
 import copy
 from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 
-import mkl_fft
 import numpy as np
 
 from abtem.core.antialias import AntialiasAperture, _fft_convolve_has_array
+from abtem.core.antialias import antialias_aperture
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
-from abtem.core.fft import fft2_convolve
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_match
-from abtem.detectors import BaseDetector, WavesDetector
+from abtem.detectors import BaseDetector
 from abtem.measurements import BaseMeasurement
 from abtem.potentials import (
     BasePotential,
     TransmissionFunction,
     PotentialArray,
 )
-from abtem.core.antialias import antialias_aperture
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -222,8 +220,8 @@ def _potential_ensemble_shape_and_metadata(potential):
 def allocate_multislice_measurements(
         waves: "BaseWaves",
         detectors: List[BaseDetector],
-        extra_ensemble_axes_shape,
-        extra_ensemble_axes_metadata,
+        extra_ensemble_axes_shape: tuple,
+        extra_ensemble_axes_metadata: List[AxisMetadata]
 ) -> Dict[BaseDetector, BaseMeasurement]:
     """
     Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved
@@ -302,7 +300,7 @@ def multislice_step(
         transmission_function = potential_slice.transmission_function(
             energy=waves.energy
         )
-        transmission_function = antialias_aperture.bandlimit(transmission_function, overwrite_x=True)
+        transmission_function = antialias_aperture.bandlimit(transmission_function, overwrite_x=False)
 
     thickness = transmission_function.slice_thickness[0]
 
@@ -310,11 +308,11 @@ def multislice_step(
         thickness = -thickness
 
     if transpose:
-        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
+        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=False)
         waves = transmission_function.transmit(waves, conjugate=conjugate)
     else:
         waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
+        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=False)
 
     return waves
 
@@ -397,7 +395,7 @@ def multislice_and_detect(
         extra_ensemble_axes_metadata,
     ) = _potential_ensemble_shape_and_metadata(potential)
 
-    if detectors is None and (len(potential.exit_planes) == 1):
+    if len(potential.exit_planes) == 1:
         measurements = None
     else:
         measurements = allocate_multislice_measurements(
@@ -421,9 +419,6 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         for potential_slice in potential_configuration.generate_slices():
-
-            # print(exit_plane_index, potential_slice)
-
             waves = multislice_step(
                 waves,
                 potential_slice,
@@ -438,16 +433,17 @@ def multislice_and_detect(
                     potential_index, exit_plane_index, potential_configuration
                 )
 
-                measurements = _update_measurements(
-                    waves, detectors, measurements, measurement_index
-                )
+                if measurements is None:
+                    measurements = {detector: detector.detect(waves)[(None,) * len(potential.ensemble_shape)] for
+                                    detector in detectors}
+                else:
+                    measurements = _update_measurements(
+                        waves, detectors, measurements, measurement_index
+                    )
 
                 exit_plane_index += 1
 
-    if measurements is None:
-        measurements = [waves]
-    else:
-        measurements = tuple(measurements.values())
+    measurements = tuple(measurements.values())
 
     return measurements
 
@@ -487,16 +483,11 @@ def transition_potential_multislice_and_detect(
 
     antialias_aperture = AntialiasAperture()
     propagator = FresnelPropagator()
-    (
-        extra_ensemble_axes_shape,
-        extra_ensemble_axes_metadata,
-    ) = _potential_ensemble_shape_and_metadata(potential)
 
     measurements = allocate_multislice_measurements(
         waves,
         detectors,
-        extra_ensemble_axes_shape,
-        extra_ensemble_axes_metadata,
+        potential,
     )
 
     for potential_index, _, potential_configuration in potential.generate_blocks():

@@ -19,6 +19,7 @@ from abtem.core.transform import WaveTransform
 from abtem.core.utils import safe_floor_int
 from abtem.distributions import _AxisAlignedDistributionND, BaseDistribution
 from abtem.potentials import BasePotential, _validate_potential
+from abtem.transfer import nyquist_sampling
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -40,8 +41,10 @@ def _validate_scan(scan, probe=None):
 
 def _validate_scan_sampling(scan, probe):
     if scan.sampling is None:
-        if hasattr(probe, "aperture"):
-            scan.sampling = 0.9 * probe.aperture.nyquist_sampling
+        if not hasattr(probe, "semiangle_cutoff"):
+            raise ValueError()
+
+        scan.sampling = 0.99 * nyquist_sampling(probe.semiangle_cutoff, probe.energy)
 
 
 class BaseScan(WaveTransform, metaclass=ABCMeta):

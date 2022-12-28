@@ -122,6 +122,33 @@ def _ensure_parity(n, even, v=1):
     return n
 
 
+def _ensure_parity_of_gpts(new_gpts, old_gpts, parity):
+    if parity == "same":
+        return (
+            _ensure_parity(new_gpts[0], old_gpts[0] % 2 == 0),
+            _ensure_parity(new_gpts[1], old_gpts[1] % 2 == 0),
+        )
+    elif parity == "odd":
+        return (
+            _ensure_parity(new_gpts[0], even=False),
+            _ensure_parity(new_gpts[1], even=False),
+        )
+    elif parity == "even":
+        return (
+            _ensure_parity(new_gpts[0], even=True),
+            _ensure_parity(new_gpts[1], even=True),
+        )
+    elif parity != "none":
+        raise ValueError()
+
+
+def _antialias_cutoff_gpts(gpts, sampling):
+    kcut = 2.0 / 3.0 / max(sampling)
+    extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+    new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
+    return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+
+
 class BaseWaves(
     HasGridMixin, HasAcceleratorMixin, HasAxes, HasDevice, CopyMixin, EqualityMixin
 ):
@@ -179,25 +206,6 @@ class BaseWaves(
             ),
         ]
 
-    def _ensure_parity_of_gpts(self, gpts, parity):
-        if parity == "same":
-            return (
-                _ensure_parity(gpts[0], self.gpts[0] % 2 == 0),
-                _ensure_parity(gpts[1], self.gpts[1] % 2 == 0),
-            )
-        elif parity == "odd":
-            return (
-                _ensure_parity(gpts[0], even=False),
-                _ensure_parity(gpts[1], even=False),
-            )
-        elif parity == "even":
-            return (
-                _ensure_parity(gpts[0], even=True),
-                _ensure_parity(gpts[1], even=True),
-            )
-        elif parity != "none":
-            raise ValueError()
-
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
         """
@@ -213,10 +221,7 @@ class BaseWaves(
             )
 
         self.grid.check_is_defined()
-        kcut = 2.0 / 3.0 / max(self.sampling)
-        extent = self.gpts[0] * self.sampling[0], self.gpts[1] * self.sampling[1]
-        gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
-        return self._ensure_parity_of_gpts(gpts, parity="same")
+        return _antialias_cutoff_gpts(self.gpts, self.sampling)
 
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
@@ -225,19 +230,21 @@ class BaseWaves(
         within antialiasing cutoff scattering angle.
         """
         cutoff_gpts = self.antialias_cutoff_gpts
-        gpts = (
+        valid_gpts = (
             safe_floor_int(cutoff_gpts[0] / np.sqrt(2)),
-            safe_floor_int(cutoff_gpts[0] / np.sqrt(2)),
+            safe_floor_int(cutoff_gpts[1] / np.sqrt(2)),
         )
-        gpts = self._ensure_parity_of_gpts(gpts, parity="same")
+        # print(cutoff_gpts[1] / np.sqrt(2), safe_floor_int(cutoff_gpts[1] / np.sqrt(2)))
+
+        valid_gpts = _ensure_parity_of_gpts(valid_gpts, self.gpts, parity="same")
 
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
             return tuple(
                 min(n, m)
-                for n, m in zip(self.metadata["adjusted_antialias_cutoff_gpts"], gpts)
+                for n, m in zip(self.metadata["adjusted_antialias_cutoff_gpts"], valid_gpts)
             )
 
-        return gpts
+        return valid_gpts
 
     def _gpts_within_angle(
             self, angle: Union[None, float, str], parity: str = "same"
@@ -263,7 +270,7 @@ class BaseWaves(
                 "Angle must be a number or one of 'cutoff', 'valid' or 'full'"
             )
 
-        return self._ensure_parity_of_gpts(gpts, parity=parity)
+        return _ensure_parity_of_gpts(gpts, self.gpts, parity=parity)
 
     @property
     def cutoff_angles(self) -> Tuple[float, float]:
@@ -499,6 +506,7 @@ class Waves(HasArray, BaseWaves):
         if overwrite_x and (array.shape == kernel.shape):
             array *= kernel
         else:
+
             array = array * kernel
 
         if not fourier_space_out:
@@ -718,6 +726,7 @@ class Waves(HasArray, BaseWaves):
             max_angle: Union[str, float] = "cutoff",
             gpts: Tuple[int, int] = None,
             normalization: str = "values",
+            overwrite_x: bool = False,
     ) -> "Waves":
         """
         Downsample the wave functions to a lower maximum scattering angle.
@@ -842,6 +851,7 @@ class Waves(HasArray, BaseWaves):
 
         xp = get_array_module(self.array)
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
+
         validate_gpts(new_gpts)
 
         if self.is_lazy:
@@ -1185,7 +1195,7 @@ class _WavesFactory(BaseWaves):
 
         waves = transform.apply(waves)
 
-        waves = waves.ensure_real_space()
+        waves = waves.ensure_real_space(overwrite_x=True)
 
         if potential is not None:
             measurements = multislice_func(
@@ -1458,10 +1468,6 @@ class PlaneWave(_WavesFactory):
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
-
-        if detectors is None:
-            detectors = [WavesDetector()]
-
         potential = _validate_potential(potential)
         lazy = validate_lazy(lazy)
         detectors = _validate_detectors(detectors)
@@ -1568,7 +1574,7 @@ class Probe(_WavesFactory):
             aberrations = {}
 
         if isinstance(aberrations, dict):
-            aberrations = Aberrations(**aberrations, **kwargs)
+            aberrations = Aberrations(semiangle_cutoff=semiangle_cutoff, **aberrations, **kwargs)
 
         aberrations._accelerator = self._accelerator
 
@@ -1596,6 +1602,10 @@ class Probe(_WavesFactory):
             aberrations=ctf.aberration_coefficients,
             **kwargs
         )
+
+    @property
+    def semiangle_cutoff(self):
+        return self.aperture.semiangle_cutoff
 
     @property
     def aperture(self) -> Aperture:

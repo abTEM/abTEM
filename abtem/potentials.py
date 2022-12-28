@@ -787,7 +787,8 @@ class Potential(_PotentialBuilder):
         return self.frozen_phonons.ensemble_shape
 
     @staticmethod
-    def potential(*args, frozen_phonons_partial, **kwargs):
+    def _potential(*args, frozen_phonons_partial, **kwargs):
+
         frozen_phonons = frozen_phonons_partial(*args)
         return Potential(frozen_phonons, **kwargs)
 
@@ -795,7 +796,7 @@ class Potential(_PotentialBuilder):
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
         kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
         return partial(
-            self.potential, frozen_phonons_partial=frozen_phonons_partial, **kwargs
+            self._potential, frozen_phonons_partial=frozen_phonons_partial, **kwargs
         )
 
     def _partition_args(self, chunks=(1,), lazy: bool = True):

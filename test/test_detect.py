@@ -78,7 +78,7 @@ def test_annular_detector(data, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("lazy", [False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
 def test_integrate_consistent(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))

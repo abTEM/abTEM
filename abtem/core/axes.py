@@ -47,6 +47,8 @@ class AxisMetadata:
         arr = da.from_array(arr, chunks=1)
         return arr
 
+    def copy(self):
+        return copy(self)
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class UnknownAxis(AxisMetadata):
