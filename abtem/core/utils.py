@@ -97,6 +97,9 @@ def safe_floor_int(n: float, tol: int = 7):
 def safe_ceiling_int(n: float, tol: int = 7):
     return int(np.ceil(np.round(n, decimals=tol)))
 
+def ensure_list(x):
+    return [x] if not isinstance(x, list) else x
+
 
 def insert_empty_axis(match_axis1, match_axis2):
     for i, (a1, a2) in enumerate(zip(reversed(match_axis1), reversed(match_axis2))):

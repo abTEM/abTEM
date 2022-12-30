@@ -18,7 +18,7 @@ from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble
 from abtem.core.grid import Grid, GridUndefinedError
-from abtem.core.utils import safe_ceiling_int, expand_dims_to_match
+from abtem.core.utils import safe_ceiling_int, expand_dims_to_match, ensure_list
 from abtem.detectors import (
     BaseDetector,
     _validate_detectors,
@@ -89,7 +89,21 @@ class BaseSMatrix(BaseWaves):
     def base_shape(self):
         return (len(self),) + super().base_shape
 
-    def dummy_probes(self, scan: BaseScan = None, ctf: CTF = None):
+    def dummy_probes(self, scan: BaseScan = None, ctf: CTF = None) -> Probe:
+        """
+        A probe or an ensemble of probes equivalent reducing the SMatrix at a single positions, assuming an empty
+        potential.
+
+        Parameters
+        ----------
+        scan : BaseScan
+        ctf : CTF
+        plane : str
+
+        Returns
+        -------
+        dummy_probes : Probes
+        """
 
         if ctf is None:
             ctf = CTF(energy=self.energy, semiangle_cutoff=self.semiangle_cutoff)
@@ -137,9 +151,12 @@ class SMatrixArray(HasArray, BaseSMatrix):
     Parameters
     ----------
     array : np.ndarray
-        Array defining the scattering matrix.
+        Array defining the scattering matrix. Must be 3D or higher, dimensions before the last three dimensions should
+        represent ensemble dimensions, the next dimension dimension indexes the plane waves and the last two dimensions
+        represent the spatial extent of the plane waves.
     wave_vectors : np.ndarray
-        Array defining the wave vectors corresponding to each probe plane wave.
+        Array defining the wave vectors corresponding to each plane wave. Must have shape Nx2, where N is equal to the
+        number of plane waves.
     semiangle_cutoff : float
         The radial cutoff of the plane-wave expansion [mrad].
     energy : float
@@ -155,7 +172,8 @@ class SMatrixArray(HasArray, BaseSMatrix):
     window_gpts : tuple of int
         The number of grid points describing the cropping window of the wave functions.
     window_offset : tuple of int
-        The number of grid points from the origin the cropping windows of the wave functions should be displaced.
+        The number of grid points from the origin the cropping windows of the wave functions is displaced.
+    periodic: tuple of bool
     device : str, optional
         The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is determined by the user configuration.
     ensemble_axes_metadata : list of AxesMetadata
@@ -176,7 +194,6 @@ class SMatrixArray(HasArray, BaseSMatrix):
             interpolation: Union[int, Tuple[int, int]] = (1, 1),
             sampling: Union[float, Tuple[float, float]] = None,
             extent: Union[float, Tuple[float, float]] = None,
-            # tilt: Tuple[float, float] = (0.0, 0.0),
             window_gpts: Tuple[int, int] = (0, 0),
             window_offset: Tuple[int, int] = (0, 0),
             periodic: Tuple[bool, bool] = (True, True),
@@ -234,25 +251,24 @@ class SMatrixArray(HasArray, BaseSMatrix):
         return _pack_wave_vectors(wave_vectors)
 
     @property
-    def tilt(self):
-        return 0.0, 0.0
-
-    @property
     def device(self):
+        """The device on which the SMatrixArray is reduced."""
         return self._device
 
     @property
     def storage_device(self):
+        """The device on which the SMatrixArray is stored."""
         return super().device
 
     @classmethod
-    def from_waves(cls, waves, **kwargs):
+    def from_waves(cls, waves: Waves, **kwargs):
         kwargs.update({key: getattr(waves, key) for key in _common_kwargs(cls, Waves)})
         kwargs["ensemble_axes_metadata"] = kwargs["ensemble_axes_metadata"][:-1]
         return cls(**kwargs)
 
     @property
-    def waves(self):
+    def waves(self) -> Waves:
+        """The wave vectors describing each plane wave."""
         kwargs = {
             key: getattr(self, key) for key in _common_kwargs(self.__class__, Waves)
         }
@@ -269,7 +285,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         return self.from_waves(waves, **kwargs)
 
     @property
-    def periodic(self):
+    def periodic(self) -> Tuple[bool, bool]:
         return self._periodic
 
     @property
@@ -279,11 +295,8 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+        """Axis metadata for each ensemble axis."""
         return self._ensemble_axes_metadata
-
-    @property
-    def window_offset(self) -> Tuple[float, float]:
-        return self._window_offset
 
     @property
     def ensemble_shape(self) -> Tuple[int, int]:
@@ -306,6 +319,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
     @property
     def semiangle_cutoff(self) -> float:
+        """The cutoff semiangle of the plane wave expansion."""
         return self._semiangle_cutoff
 
     @property
@@ -314,26 +328,34 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
     @property
     def window_gpts(self) -> Tuple[int, int]:
+        """The number of grid points describing the cropping window of the wave functions."""
         return self._window_gpts
 
     @property
-    def window_extent(self):
+    def window_extent(self) -> Tuple[float, float]:
+        """The cropping window extent of the wave functions."""
         return (
             self.window_gpts[0] * self.sampling[0],
             self.window_gpts[1] * self.sampling[1],
         )
 
     @property
-    def interpolated_antialias_cutoff_gpts(self):
-        if self.antialias_cutoff_gpts is None:
-            return None
+    def window_offset(self) -> Tuple[float, float]:
+        """The number of grid points from the origin the cropping windows of the wave functions is displaced."""
+        return self._window_offset
 
-        return (
-            self.antialias_cutoff_gpts[0] // self.interpolation[0],
-            self.antialias_cutoff_gpts[1] // self.interpolation[1],
-        )
+    def multislice(self, potential: BasePotential = None) -> "SMatrixArray":
+        """
 
-    def multislice(self, potential: BasePotential = None):
+
+        Parameters
+        ----------
+        potential :
+
+        Returns
+        -------
+
+        """
         waves = self.waves.multislice(potential)
         return self._copy_with_new_waves(waves)
 
@@ -416,19 +438,13 @@ class SMatrixArray(HasArray, BaseSMatrix):
     ) -> Tuple[Union[BaseMeasurement, Waves], ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
-        #print(dummy_probes.metadata)
 
-        #print("sss", dummy_probes.metadata, dummy_probes.antialias_cutoff_gpts)
-        #print(dummy_probes.metadata)
-        #sss
         measurements = allocate_multislice_measurements(
             dummy_probes,
             detectors,
             extra_ensemble_axes_shape=self.waves.ensemble_shape[:-1],
             extra_ensemble_axes_metadata=self.waves.ensemble_axes_metadata[:-1],
         )
-        #print(measurements[detectors[0]].shape)
-        #sss
 
         xp = get_array_module(self._device)
 
@@ -822,7 +838,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
             parallelization, but requires more memory and floating point operations. If 'auto' (default), the batch size
             is automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
-        rechunk : str or tuple of int
+        rechunk : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from chunking along the expansion axis
             to chunking over the spatial axes. If given as a tuple of int of length the SMatrix is rechunked to have
             those chunks. If 'auto' (default) the chunks are taken to be identical to the interpolation factor.
@@ -984,10 +1000,12 @@ class SMatrix(BaseSMatrix, Ensemble):
 
     @property
     def shape(self) -> Tuple[int, ...]:
+        """Shape of the SMatrix."""
         return self.ensemble_shape + (len(self),) + self.gpts
 
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
+        """Shape of the SMatrix ensemble axes."""
         if self.potential is None:
             return ()
         else:
@@ -995,6 +1013,7 @@ class SMatrix(BaseSMatrix, Ensemble):
 
     @property
     def ensemble_axes_metadata(self):
+        """Axis metadata for each ensemble axis."""
         if self.potential is None:
             return []
         else:
@@ -1174,7 +1193,7 @@ class SMatrix(BaseSMatrix, Ensemble):
             array[0] = None
             if lazy:
                 array = da.from_array(array, chunks=1)
-            return array,
+            return (array,)
 
     @staticmethod
     def _s_matrix(*args, potential_partial, **kwargs):
@@ -1331,10 +1350,10 @@ class SMatrix(BaseSMatrix, Ensemble):
         )
 
         if self.downsampled_gpts != self.gpts:
-            waves.metadata[
-                "adjusted_antialias_cutoff_gpts"
-            ] = _antialias_cutoff_gpts(self.interpolated_gpts, self.sampling)
-            #print(waves.metadata)
+            waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
+                self.interpolated_gpts, self.sampling
+            )
+            # print(waves.metadata)
 
         s_matrix_array = SMatrixArray.from_waves(
             waves,
@@ -1355,6 +1374,7 @@ class SMatrix(BaseSMatrix, Ensemble):
             max_batch_multislice: Union[str, int] = "auto",
             max_batch_reduction: Union[str, int] = "auto",
             rechunk: Union[Tuple[int, int], str] = "auto",
+            disable_s_matrix_chunks: bool = False,
             lazy: bool = None,
     ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
 
@@ -1381,10 +1401,13 @@ class SMatrix(BaseSMatrix, Ensemble):
             parallelization, but requires more memory and floating point operations. If 'auto' (default), the batch size
             is automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
-        rechunk : str or tuple of int
+        rechunk : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from chunking along the expansion axis
             to chunking over the spatial axes. If given as a tuple of int of length the SMatrix is rechunked to have
             those chunks. If 'auto' (default) the chunks are taken to be identical to the interpolation factor.
+        disable_s_matrix_chunks : bool, optional
+            If True, each S-Matrix is kept as a single chunk, thus lowering the communication overhead, but providing
+            fewer opportunities for parallelization.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
             set in the configuration file.
@@ -1414,6 +1437,7 @@ class SMatrix(BaseSMatrix, Ensemble):
             max_batch_multislice=max_batch_multislice,
             ctf=ctf,
             rechunk=rechunk,
+            disable_s_matrix_chunks=disable_s_matrix_chunks,
             lazy=lazy,
         )
 
@@ -1457,12 +1481,14 @@ class SMatrix(BaseSMatrix, Ensemble):
                 scan=scan, detectors=detectors, ctf=ctf
             )
 
-            new_measurements = [new_measurements] if not isinstance(new_measurements, list) else new_measurements
+            new_measurements = ensure_list(new_measurements)
 
             if measurements is None:
                 measurements = dict(zip(detectors, new_measurements))
             else:
-                for measurement, new_measurement in zip(measurements.values(), new_measurements):
+                for measurement, new_measurement in zip(
+                        measurements.values(), new_measurements
+                ):
                     if measurement.axes_metadata[0]._ensemble_mean:
                         measurement.array[:] += new_measurement.array
                     else:
@@ -1471,7 +1497,10 @@ class SMatrix(BaseSMatrix, Ensemble):
         measurements = list(measurements.values())
 
         for i, measurement in enumerate(measurements):
-            if hasattr(measurement.axes_metadata[0], "_ensemble_mean") and measurement.axes_metadata[0]._ensemble_mean:
+            if (
+                    hasattr(measurement.axes_metadata[0], "_ensemble_mean")
+                    and measurement.axes_metadata[0]._ensemble_mean
+            ):
                 measurements[i] = measurement.squeeze((0,))
 
         return measurements
@@ -1480,10 +1509,7 @@ class SMatrix(BaseSMatrix, Ensemble):
     def _lazy_build_s_matrix_detect(s_matrix, scan, detectors):
         s_matrix = s_matrix.item()
         measurements = s_matrix.reduce(lazy=False, scan=scan, detectors=detectors)
-
-        if not isinstance(measurements, list):
-            measurements = [measurements]
-
+        measurements = ensure_list(measurements)
         array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
         array.itemset(0, measurements)
         return array
@@ -1496,7 +1522,7 @@ class SMatrix(BaseSMatrix, Ensemble):
             rechunk: str = "auto",
             max_batch_multislice: Union[str, int] = "auto",
             max_batch_reduction: Union[str, int] = "auto",
-            parallel_scheme: str = "all",
+            disable_s_matrix_chunks: bool = False,
             lazy: bool = None,
     ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
 
@@ -1523,12 +1549,13 @@ class SMatrix(BaseSMatrix, Ensemble):
             parallelization, but requires more memory and floating point operations. If 'auto' (default), the batch size
             is automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
-        rechunk : str or tuple of int
+        rechunk : str or tuple of int, optional
             Parallel reduction of the SMatrix requires rechunking the Dask array from chunking along the expansion axis
             to chunking over the spatial axes. If given as a tuple of int of length the SMatrix is rechunked to have
             those chunks. If 'auto' (default) the chunks are taken to be identical to the interpolation factor.
-        parallel_scheme : str
-
+        disable_s_matrix_chunks : bool, optional
+            If True, each S-Matrix is kept as a single chunk, thus lowering the communication overhead, but providing
+            fewer opportunities for parallelization.
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
             set in the configuration file.
@@ -1552,29 +1579,35 @@ class SMatrix(BaseSMatrix, Ensemble):
             measurements = self._eager_build_s_matrix_detect(scan, ctf, detectors)
             return _wrap_measurements(measurements)
 
-        if parallel_scheme == "s_matrices_only":
+        if disable_s_matrix_chunks:
             blocks = self.ensemble_blocks(1)
 
             blocks = blocks[(slice(None),) + (None,) * len(scan.shape)]
-            chunks = blocks.chunks[:-len(scan.shape)] + scan.shape
+            chunks = blocks.chunks[: -len(scan.shape)] + scan.shape
 
             drop_axis = ()
             if not self.potential.ensemble_shape:
                 drop_axis = (0,)
                 chunks = chunks[1:]
 
-            arrays = blocks.map_blocks(self._lazy_build_s_matrix_detect,
-                                       drop_axis=drop_axis,
-                                       chunks=chunks,
-                                       scan=scan,
-                                       detectors=detectors,
-                                       meta=np.array((), dtype=object))
+            arrays = blocks.map_blocks(
+                self._lazy_build_s_matrix_detect,
+                drop_axis=drop_axis,
+                chunks=chunks,
+                scan=scan,
+                detectors=detectors,
+                meta=np.array((), dtype=object),
+            )
 
             waves = self.dummy_probes()
 
-            extra_axes_metadata = self.potential.ensemble_axes_metadata + scan.ensemble_axes_metadata
+            extra_axes_metadata = (
+                    self.potential.ensemble_axes_metadata + scan.ensemble_axes_metadata
+            )
 
-            measurements = _finalize_lazy_measurements(arrays, waves, detectors, extra_axes_metadata)
+            measurements = _finalize_lazy_measurements(
+                arrays, waves, detectors, extra_axes_metadata
+            )
 
             return _wrap_measurements(measurements)
 
