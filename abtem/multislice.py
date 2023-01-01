@@ -300,7 +300,7 @@ def multislice_step(
         transmission_function = potential_slice.transmission_function(
             energy=waves.energy
         )
-        transmission_function = antialias_aperture.bandlimit(transmission_function, overwrite_x=False)
+        transmission_function = antialias_aperture.bandlimit(transmission_function, overwrite_x=True)
 
     thickness = transmission_function.slice_thickness[0]
 
@@ -308,11 +308,11 @@ def multislice_step(
         thickness = -thickness
 
     if transpose:
-        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=False)
+        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
         waves = transmission_function.transmit(waves, conjugate=conjugate)
     else:
         waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=False)
+        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
 
     return waves
 
@@ -419,6 +419,7 @@ def multislice_and_detect(
             exit_plane_index += 1
 
         for potential_slice in potential_configuration.generate_slices():
+
             waves = multislice_step(
                 waves,
                 potential_slice,
@@ -427,24 +428,25 @@ def multislice_and_detect(
                 conjugate=conjugate,
                 transpose=transpose,
             )
+    #
+    #         if potential_slice.exit_planes:
+    #             measurement_index = _validate_potential_ensemble_indices(
+    #                 potential_index, exit_plane_index, potential_configuration
+    #             )
+    #
+    #             if measurements is None:
+    #                 measurements = {detector: detector.detect(waves)[(None,) * len(potential.ensemble_shape)] for
+    #                                 detector in detectors}
+    #             else:
+    #                 measurements = _update_measurements(
+    #                     waves, detectors, measurements, measurement_index
+    #                 )
+    #
+    #             exit_plane_index += 1
+    #
+    # measurements = tuple(measurements.values())
 
-            if potential_slice.exit_planes:
-                measurement_index = _validate_potential_ensemble_indices(
-                    potential_index, exit_plane_index, potential_configuration
-                )
-
-                if measurements is None:
-                    measurements = {detector: detector.detect(waves)[(None,) * len(potential.ensemble_shape)] for
-                                    detector in detectors}
-                else:
-                    measurements = _update_measurements(
-                        waves, detectors, measurements, measurement_index
-                    )
-
-                exit_plane_index += 1
-
-    measurements = tuple(measurements.values())
-
+    return waves[None],
     return measurements
 
 

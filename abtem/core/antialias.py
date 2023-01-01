@@ -1,4 +1,3 @@
-import mkl_fft
 import numpy as np
 
 from abtem.core import config
@@ -26,7 +25,7 @@ def antialias_aperture(gpts, sampling, xp):
 
 
 def _fft_convolve_has_array(x, kernel, overwrite_x: bool = False):
-    x._array = mkl_fft.fft2(x._array, overwrite_x=overwrite_x)
+    x._array = fft2(x._array, overwrite_x=overwrite_x)
     if overwrite_x:
         x._array *= kernel
     else:

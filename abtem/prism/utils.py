@@ -14,7 +14,7 @@ def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, 
     if len(array.shape) > 3:
         old_shape = array.shape
 
-        batch_shape = array.shape[:-len(corners.shape) - 1]
+        batch_shape = array.shape[: -len(corners.shape) - 1]
         array = array.reshape((-1,) + array.shape[-2:])
         corners = corners.reshape((-1, 2))
 
@@ -50,8 +50,10 @@ def minimum_crop(positions: np.ndarray, shape):
 
     crop_corner = (xp.min(corners[..., 0]).item(), xp.min(corners[..., 1]).item())
 
-    size = (xp.max(upper_corners[..., 0]).item() - crop_corner[0],
-            xp.max(upper_corners[..., 1]).item() - crop_corner[1])
+    size = (
+        xp.max(upper_corners[..., 0]).item() - crop_corner[0],
+        xp.max(upper_corners[..., 1]).item() - crop_corner[1],
+    )
 
     corners -= xp.asarray(crop_corner)
     return crop_corner, size, corners
@@ -60,14 +62,14 @@ def minimum_crop(positions: np.ndarray, shape):
 def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
     if start < 0:
         if stop > n:
-            raise RuntimeError(f'start = {start} stop = {stop}, n = {n}')
+            raise RuntimeError(f"start = {start} stop = {stop}, n = {n}")
 
         a = slice(start % n, None)
         b = slice(0, stop)
 
     elif stop > n:
         if start < 0:
-            raise RuntimeError(f'start = {start} stop = {stop}, n = {n}')
+            raise RuntimeError(f"start = {start} stop = {stop}, n = {n}")
 
         a = slice(start, None)
         b = slice(0, stop - n)
@@ -78,7 +80,9 @@ def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
     return a, b
 
 
-def wrapped_crop_2d(array: np.ndarray, corner: Tuple[int, int], size: Tuple[int, int]) -> np.ndarray:
+def wrapped_crop_2d(
+    array: np.ndarray, corner: Tuple[int, int], size: Tuple[int, int]
+) -> np.ndarray:
     upper_corner = (corner[0] + size[0], corner[1] + size[1])
 
     xp = get_array_module(array)
@@ -87,11 +91,16 @@ def wrapped_crop_2d(array: np.ndarray, corner: Tuple[int, int], size: Tuple[int,
         a, c = wrapped_slices(corner[0], upper_corner[0], array.shape[-2])
         b, d = wrapped_slices(corner[1], upper_corner[1], array.shape[-1])
     except RuntimeError:
-        padding = tuple((abs(min(c, 0)), max(c + k - l, 0)) for c, l, k in zip(corner, array.shape[-2:], size))
-        slices = tuple(slice(c + p[0], c + p[0] + l) for c, l, p in zip(corner, size, padding))
+        padding = tuple(
+            (abs(min(c, 0)), max(c + k - l, 0))
+            for c, l, k in zip(corner, array.shape[-2:], size)
+        )
+        slices = tuple(
+            slice(c + p[0], c + p[0] + l) for c, l, p in zip(corner, size, padding)
+        )
         padding = ((0, 0),) * (len(array.shape) - 2) + padding
         slices = (slice(None),) * (len(array.shape) - 2) + slices
-        array = xp.pad(array, padding, mode='wrap')[slices]
+        array = xp.pad(array, padding, mode="wrap")[slices]
         return array
 
     A = array[..., a, b]
@@ -122,12 +131,17 @@ def wrapped_crop_2d(array: np.ndarray, corner: Tuple[int, int], size: Tuple[int,
     return xp.concatenate([AB, CD], axis=-1)
 
 
-def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float,
-                       interpolation: Tuple[int, int], xp=np) -> np.ndarray:
+def prism_wave_vectors(
+    cutoff: float,
+    extent: Tuple[float, float],
+    energy: float,
+    interpolation: Tuple[int, int],
+    xp=np,
+) -> np.ndarray:
     wavelength = energy2wavelength(energy)
 
-    n_max = int(np.ceil(cutoff / 1.e3 / (wavelength / extent[0] * interpolation[0])))
-    m_max = int(np.ceil(cutoff / 1.e3 / (wavelength / extent[1] * interpolation[1])))
+    n_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[0] * interpolation[0])))
+    m_max = int(np.ceil(cutoff / 1.0e3 / (wavelength / extent[1] * interpolation[1])))
 
     n = np.arange(-n_max, n_max + 1, dtype=np.float32)
     w = np.asarray(extent[0], dtype=np.float32)
@@ -137,32 +151,31 @@ def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float
     kx = n / w * np.float32(interpolation[0])
     ky = m / h * np.float32(interpolation[1])
 
-    mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.e3 / wavelength) ** 2
+    mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.0e3 / wavelength) ** 2
 
-    kx, ky = np.meshgrid(kx, ky, indexing='ij')
+    kx, ky = np.meshgrid(kx, ky, indexing="ij")
     kx = kx[mask]
     ky = ky[mask]
     return xp.asarray([kx, ky]).T
 
 
-# def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float,
-#                        interpolation: Tuple[int, int], xp=np) -> np.ndarray:
-#     wavelength = energy2wavelength(energy)
-#
-
-
-def plane_waves(wave_vectors: np.ndarray,
-                extent: Tuple[float, float],
-                gpts: Tuple[int, int],
-                reverse: bool = False) -> np.ndarray:
+def plane_waves(
+    wave_vectors: np.ndarray,
+    extent: Tuple[float, float],
+    gpts: Tuple[int, int],
+    reverse: bool = False,
+) -> np.ndarray:
     xp = get_array_module(wave_vectors)
     x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
     y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
 
-    sign = -1. if reverse else 1.
+    sign = -1.0 if reverse else 1.0
 
-    array = (complex_exponential(sign * 2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]) *
-             complex_exponential(sign * 2 * np.pi * wave_vectors[:, 1, None, None] * y[None, :]))
+    array = complex_exponential(
+        sign * 2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]
+    ) * complex_exponential(
+        sign * 2 * np.pi * wave_vectors[:, 1, None, None] * y[None, :]
+    )
 
     return array
 
@@ -171,9 +184,13 @@ def _planewave_shift_coefficients(positions, wave_vectors):
     xp = get_array_module(positions)
     # wave_vectors = xp.asarray(wave_vectors)
 
-    coefficients = complex_exponential(-2. * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None])
+    coefficients = complex_exponential(
+        -2.0 * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None]
+    )
     # print(coefficients.shape, coefficients.dtype)
-    coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
+    coefficients *= complex_exponential(
+        -2.0 * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None]
+    )
 
     return coefficients
 
@@ -184,7 +201,9 @@ def prism_coefficients(positions, wave_vectors, xp, ctf=None):
     coefficients = _planewave_shift_coefficients(positions, wave_vectors)
 
     if ctf is not None:
-        alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
+        alpha = (
+            xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
+        )
         phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
 
         basis = ctf._evaluate_with_alpha_and_phi(alpha, phi)
