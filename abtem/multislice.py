@@ -428,25 +428,24 @@ def multislice_and_detect(
                 conjugate=conjugate,
                 transpose=transpose,
             )
-    #
-    #         if potential_slice.exit_planes:
-    #             measurement_index = _validate_potential_ensemble_indices(
-    #                 potential_index, exit_plane_index, potential_configuration
-    #             )
-    #
-    #             if measurements is None:
-    #                 measurements = {detector: detector.detect(waves)[(None,) * len(potential.ensemble_shape)] for
-    #                                 detector in detectors}
-    #             else:
-    #                 measurements = _update_measurements(
-    #                     waves, detectors, measurements, measurement_index
-    #                 )
-    #
-    #             exit_plane_index += 1
-    #
-    # measurements = tuple(measurements.values())
 
-    return waves[None],
+            if potential_slice.exit_planes:
+                measurement_index = _validate_potential_ensemble_indices(
+                    potential_index, exit_plane_index, potential_configuration
+                )
+
+                if measurements is None:
+                    measurements = {detector: detector.detect(waves)[(None,) * len(potential.ensemble_shape)] for
+                                    detector in detectors}
+                else:
+                    measurements = _update_measurements(
+                        waves, detectors, measurements, measurement_index
+                    )
+
+                exit_plane_index += 1
+
+    measurements = tuple(measurements.values())
+
     return measurements
 
 
