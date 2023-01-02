@@ -111,9 +111,10 @@ class InfinitePotentialProjections(ProjectionIntegratorPlan):
 
     def calculate_scattering_factor(self, symbol, gpts, sampling, device):
         xp = get_array_module(device)
-        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        kx, ky = spatial_frequencies(gpts, sampling, xp=np)
         k2 = kx[:, None] ** 2 + ky[None] ** 2
         f = self._parametrization.projected_scattering_factor(symbol)(k2)
+        f = xp.asarray(f, dtype=xp.float32)
         return ProjectedScatteringFactors(f)
 
     def build(self, symbol: str, gpts: Tuple[int, int], sampling: Tuple[float, float], device: str = 'cpu'):
