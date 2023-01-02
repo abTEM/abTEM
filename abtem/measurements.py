@@ -1965,7 +1965,7 @@ class DiffractionPatterns(BaseMeasurement):
         """
 
         diffraction_patterns = self.block_direct()
-
+        diffraction_patterns = diffraction_patterns.to_cpu()
         return IndexedDiffractionPatterns.index_diffraction_patterns(diffraction_patterns, cell)
 
     @property
