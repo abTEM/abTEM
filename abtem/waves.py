@@ -503,10 +503,13 @@ class Waves(HasArray, BaseWaves):
         )
         array = expand_dims(waves._array, axis=waves_dims)
 
+        xp = get_array_module(self.device)
+
+        kernel = xp.array(kernel)
+
         if overwrite_x and (array.shape == kernel.shape):
             array *= kernel
         else:
-
             array = array * kernel
 
         if not fourier_space_out:
