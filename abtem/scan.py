@@ -227,7 +227,7 @@ class CustomScan(BaseScan):
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            positions.itemset(i, self._positions[start_chunk: start_chunk + chunk])
+            positions.itemset(i, self._positions[start_chunk : start_chunk + chunk])
 
         if lazy:
             positions = da.from_array(positions, chunks=1)
@@ -240,10 +240,10 @@ class CustomScan(BaseScan):
         start = 0
         for x_extents, y_extents in itertools.product(*extents):
             mask = (
-                    (self.positions[:, 0] >= x_extents[0])
-                    * (self.positions[:, 0] < x_extents[1])
-                    * (self.positions[:, 1] >= y_extents[0])
-                    * (self.positions[:, 1] < y_extents[1])
+                (self.positions[:, 0] >= x_extents[0])
+                * (self.positions[:, 0] < x_extents[1])
+                * (self.positions[:, 1] >= y_extents[0])
+                * (self.positions[:, 1] < y_extents[1])
             )
 
             n = np.sum(mask)
@@ -287,7 +287,10 @@ def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
 
         potential = _validate_potential(potential)
 
-        coordinate = (potential.extent[0] * coordinate[0], potential.extent[1] * coordinate[1])
+        coordinate = (
+            potential.extent[0] * coordinate[0],
+            potential.extent[1] * coordinate[1],
+        )
 
     coordinate = coordinate if coordinate is None else tuple(coordinate)
 
@@ -325,21 +328,23 @@ class LineScan(BaseScan):
     """
 
     def __init__(
-            self,
-            start: Union[Tuple[float, float], None] = (0.0, 0.0),
-            end: Union[Tuple[float, float], None] = None,
-            gpts: int = None,
-            sampling: float = None,
-            endpoint: bool = True,
-            fractional: bool = False,
-            potential: BasePotential = None,
+        self,
+        start: Union[Tuple[float, float], None] = (0.0, 0.0),
+        end: Union[Tuple[float, float], None] = None,
+        gpts: int = None,
+        sampling: float = None,
+        endpoint: bool = True,
+        fractional: bool = False,
+        potential: BasePotential = None,
     ):
 
         super().__init__()
         self._gpts = gpts
         self._sampling = sampling
 
-        self._start, self._end = _validate_coordinates(start, end, potential, fractional)
+        self._start, self._end = _validate_coordinates(
+            start, end, potential, fractional
+        )
 
         self._endpoint = endpoint
         self._adjust_gpts()
@@ -347,12 +352,12 @@ class LineScan(BaseScan):
 
     @classmethod
     def from_fractional_coordinates(
-            cls,
-            potential: BasePotential,
-            start: Tuple[float, float] = (0.0, 0.0),
-            end: Tuple[float, float] = (1.0, 1.0),
-            sampling: Union[float, Tuple[float, float]] = None,
-            endpoint: Union[bool, Tuple[bool, bool]] = False,
+        cls,
+        potential: BasePotential,
+        start: Tuple[float, float] = (0.0, 0.0),
+        end: Tuple[float, float] = (1.0, 1.0),
+        sampling: Union[float, Tuple[float, float]] = None,
+        endpoint: Union[bool, Tuple[bool, bool]] = False,
     ) -> "LineScan":
         """
         Create grid scan using fractional coordinates.
@@ -375,7 +380,14 @@ class LineScan(BaseScan):
         grid_scan : GridScan
         """
 
-        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint, potential=potential, fractional=True)
+        return cls(
+            start=start,
+            end=end,
+            sampling=sampling,
+            endpoint=endpoint,
+            potential=potential,
+            fractional=True,
+        )
 
     def add_margin(self, margin: Union[float, Tuple[float, float]]):
         if isinstance(margin, Number):
@@ -389,13 +401,13 @@ class LineScan(BaseScan):
 
     @classmethod
     def at_position(
-            cls,
-            position: Union[Tuple[float, float], Atom],
-            extent: float = 1.0,
-            angle: float = 0.0,
-            gpts: int = None,
-            sampling: float = None,
-            endpoint: bool = True,
+        cls,
+        position: Union[Tuple[float, float], Atom],
+        extent: float = 1.0,
+        angle: float = 0.0,
+        gpts: int = None,
+        sampling: float = None,
+        endpoint: bool = True,
     ):
 
         if isinstance(position, Atom):
@@ -630,14 +642,14 @@ class GridScan(HasGridMixin, BaseScan):
     """
 
     def __init__(
-            self,
-            start: Tuple[float, float] = (0.0, 0.0),
-            end: Tuple[float, float] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            endpoint: Union[bool, Tuple[bool, bool]] = False,
-            fractional: bool = False,
-            potential: BasePotential = None,
+        self,
+        start: Tuple[float, float] = (0.0, 0.0),
+        end: Tuple[float, float] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        endpoint: Union[bool, Tuple[bool, bool]] = False,
+        fractional: bool = False,
+        potential: BasePotential = None,
     ):
 
         super().__init__()
@@ -675,12 +687,12 @@ class GridScan(HasGridMixin, BaseScan):
 
     @classmethod
     def from_fractional_coordinates(
-            cls,
-            potential: BasePotential,
-            start: Tuple[float, float] = (0.0, 0.0),
-            end: Tuple[float, float] = (1.0, 1.0),
-            sampling: Union[float, Tuple[float, float]] = None,
-            endpoint: Union[bool, Tuple[bool, bool]] = False,
+        cls,
+        potential: BasePotential,
+        start: Tuple[float, float] = (0.0, 0.0),
+        end: Tuple[float, float] = (1.0, 1.0),
+        sampling: Union[float, Tuple[float, float]] = None,
+        endpoint: Union[bool, Tuple[bool, bool]] = False,
     ) -> "GridScan":
         """
         Create grid scan using fractional coordinates.
@@ -702,7 +714,14 @@ class GridScan(HasGridMixin, BaseScan):
         grid_scan : GridScan
         """
 
-        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint, potential=potential, fractional=True)
+        return cls(
+            start=start,
+            end=end,
+            sampling=sampling,
+            endpoint=endpoint,
+            potential=potential,
+            fractional=True,
+        )
 
     @property
     def dimensions(self):
@@ -776,7 +795,7 @@ class GridScan(HasGridMixin, BaseScan):
     def get_positions(self) -> np.ndarray:
         xi = []
         for start, end, gpts, endpoint in zip(
-                self.start, self.end, self.gpts, self.endpoint
+            self.start, self.end, self.gpts, self.endpoint
         ):
             xi.append(
                 np.linspace(start, end, gpts, endpoint=endpoint, dtype=np.float32)
@@ -788,45 +807,64 @@ class GridScan(HasGridMixin, BaseScan):
         return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
 
     def sort_into_extents(self, extents):
-        x_chunks = ()
-        for start, end in extents[0]:
-            end_with_endpoint = self.end[0]
 
-            if self.endpoint:
-                end_with_endpoint = end_with_endpoint + self.sampling[0]
+        x = np.linspace(
+            self.start[0], self.end[0], self.gpts[0], endpoint=self.endpoint[0]
+        )
 
-            start_gpt = safe_floor_int(max(start, self.start[0]) / self.sampling[0])
-            end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[0])
 
-            start_gpt = max(0, start_gpt)
-            end_gpt = min(self.gpts[0], end_gpt)
+        _, x_chunks = np.unique(np.digitize(x, [l for _, l in extents[0]]), return_counts=True)
 
-            x_chunks += (max(end_gpt - start_gpt, 0),)
+        y = np.linspace(
+            self.start[1], self.end[1], self.gpts[1], endpoint=self.endpoint[1]
+        )
 
-        assert sum(x_chunks) == self.gpts[0]
+        _, y_chunks = np.unique(np.digitize(y, [l for _, l in extents[1]]), return_counts=True)
 
-        y_chunks = ()
-        for start, end in extents[1]:
-            end_with_endpoint = self.end[1]
-            if self.endpoint:
-                end_with_endpoint = end_with_endpoint + self.sampling[1]
-            start_gpt = safe_floor_int(max(start, self.start[1]) / self.sampling[1])
-            end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[1])
+        return self, (tuple(x_chunks), tuple(y_chunks))
 
-            start_gpt = max(0, start_gpt)
-            end_gpt = min(self.gpts[1], end_gpt)
+        #print(bins, counts)
+        #sss
 
-            y_chunks += (max(end_gpt - start_gpt, 0),)
+        # x_chunks = ()
+        # for start, end in extents[0]:
+        #     end_with_endpoint = self.end[0]
+        #
+        #     if self.endpoint:
+        #         end_with_endpoint = end_with_endpoint + self.sampling[0]
+        #
+        #     start_gpt = safe_floor_int(max(start, self.start[0]) / self.sampling[0])
+        #     end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[0])
+        #
+        #     start_gpt = max(0, start_gpt)
+        #     end_gpt = min(self.gpts[0], end_gpt)
+        #
+        #     x_chunks += (max(end_gpt - start_gpt, 0),)
+        #
+        # assert sum(x_chunks) == self.gpts[0]
 
-        assert sum(y_chunks) == self.gpts[1]
-        return self, (x_chunks, y_chunks)
+        # y_chunks = ()
+        # for start, end in extents[1]:
+        #     end_with_endpoint = self.end[1]
+        #     if self.endpoint:
+        #         end_with_endpoint = end_with_endpoint + self.sampling[1]
+        #     start_gpt = safe_floor_int(max(start, self.start[1]) / self.sampling[1])
+        #     end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[1])
+        #
+        #     start_gpt = max(0, start_gpt)
+        #     end_gpt = min(self.gpts[1], end_gpt)
+        #
+        #     y_chunks += (max(end_gpt - start_gpt, 0),)
+        #
+        # assert sum(y_chunks) == self.gpts[1]
+        # return self, (x_chunks, y_chunks)
 
     @property
     def ensemble_axes_metadata(self):
         axes_metadata = []
         labels = ("x", "y", "z")
         for label, sampling, offset, endpoint in zip(
-                labels, self.sampling, self.start, self.endpoint
+            labels, self.sampling, self.start, self.endpoint
         ):
             axes_metadata.append(
                 ScanAxis(
@@ -885,12 +923,12 @@ class GridScan(HasGridMixin, BaseScan):
         return blocks
 
     def add_to_plot(
-            self,
-            ax,
-            alpha: float = 0.33,
-            facecolor: str = "r",
-            edgecolor: str = "r",
-            **kwargs
+        self,
+        ax,
+        alpha: float = 0.33,
+        facecolor: str = "r",
+        edgecolor: str = "r",
+        **kwargs
     ):
         """
         Add a visualization of the scan area to a matplotlib plot.
