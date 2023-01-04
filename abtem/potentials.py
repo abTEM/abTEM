@@ -1179,6 +1179,7 @@ class PotentialArray(BasePotential, HasArray):
         """
         metadata = {"label": "potential", "units": "eV / e"}
         array = self.array.sum(-3)
+        array -= array.min()
 
         return Images(
             array=array,

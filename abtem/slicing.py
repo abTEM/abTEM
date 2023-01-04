@@ -180,7 +180,7 @@ class SlicedAtoms(BaseSlicedAtoms):
             last_slice = first_slice
 
         a = self.slice_limits[first_slice][0]
-        b = self.slice_limits[last_slice][0]
+        b = self.slice_limits[last_slice][1]
 
         in_slice = (self.atoms.positions[:, 2] >= (a - self._z_padding)) * (
             self.atoms.positions[:, 2] < (b + self._z_padding)
