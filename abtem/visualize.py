@@ -322,6 +322,9 @@ def show_measurement_2d(
             image_grid_kwargs["cbar_mode"] = "each"
             image_grid_kwargs["cbar_pad"] = 0.05
 
+    if cbar and np.iscomplexobj(measurements.array) and measurements.ensemble_shape:
+        raise NotImplementedError("colorbar not implemented for exploded plot with domain coloring")
+
     measurements = measurements[(0,) * max(len(measurements.ensemble_shape) - 2, 0)]
 
     if common_color_scale and np.iscomplexobj(measurements.array):
@@ -431,10 +434,10 @@ def show_measurement_2d(
 
                 _add_colorbar_arg(cax1, complex_coloring_kwargs["saturation"])
 
-                vmin = np.abs(measurement.array).min() if vmin is None else vmin
-                vmax = np.abs(measurement.array).max() if vmax is None else vmax
+                cbar_vmin = np.abs(measurement.array).min() if vmin is None else vmin
+                cbar_vmax = np.abs(measurement.array).max() if vmax is None else vmax
 
-                _add_colorbar_abs(cax2, vmin, vmax)
+                _add_colorbar_abs(cax2, cbar_vmin, cbar_vmax)
             else:
                 try:
                     ax.cax.colorbar(im, label=cbar_label)
