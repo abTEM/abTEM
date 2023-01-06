@@ -812,52 +812,34 @@ class GridScan(HasGridMixin, BaseScan):
             self.start[0], self.end[0], self.gpts[0], endpoint=self.endpoint[0]
         )
 
+        separators = [l for _, l in extents[0]]
 
-        _, x_chunks = np.unique(np.digitize(x, [l for _, l in extents[0]]), return_counts=True)
+        unique, x_chunks = np.unique(np.digitize(x, separators), return_counts=True)
+        unique = list(unique)
+
+        x_chunks_new = []
+        for i in range(len(separators)):
+            if i in unique:
+                x_chunks_new.append(x_chunks[unique.index(i)])
+            else:
+                x_chunks_new.append(0)
 
         y = np.linspace(
             self.start[1], self.end[1], self.gpts[1], endpoint=self.endpoint[1]
         )
 
-        _, y_chunks = np.unique(np.digitize(y, [l for _, l in extents[1]]), return_counts=True)
+        separators = [l for _, l in extents[1]]
+        unique, y_chunks = np.unique(np.digitize(y, [l for _, l in extents[1]]), return_counts=True)
+        unique = list(unique)
 
-        return self, (tuple(x_chunks), tuple(y_chunks))
+        y_chunks_new = []
+        for i in range(len(separators)):
+            if i in unique:
+                y_chunks_new.append(y_chunks[unique.index(i)])
+            else:
+                y_chunks_new.append(0)
 
-        #print(bins, counts)
-        #sss
-
-        # x_chunks = ()
-        # for start, end in extents[0]:
-        #     end_with_endpoint = self.end[0]
-        #
-        #     if self.endpoint:
-        #         end_with_endpoint = end_with_endpoint + self.sampling[0]
-        #
-        #     start_gpt = safe_floor_int(max(start, self.start[0]) / self.sampling[0])
-        #     end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[0])
-        #
-        #     start_gpt = max(0, start_gpt)
-        #     end_gpt = min(self.gpts[0], end_gpt)
-        #
-        #     x_chunks += (max(end_gpt - start_gpt, 0),)
-        #
-        # assert sum(x_chunks) == self.gpts[0]
-
-        # y_chunks = ()
-        # for start, end in extents[1]:
-        #     end_with_endpoint = self.end[1]
-        #     if self.endpoint:
-        #         end_with_endpoint = end_with_endpoint + self.sampling[1]
-        #     start_gpt = safe_floor_int(max(start, self.start[1]) / self.sampling[1])
-        #     end_gpt = safe_floor_int(min(end, end_with_endpoint) / self.sampling[1])
-        #
-        #     start_gpt = max(0, start_gpt)
-        #     end_gpt = min(self.gpts[1], end_gpt)
-        #
-        #     y_chunks += (max(end_gpt - start_gpt, 0),)
-        #
-        # assert sum(y_chunks) == self.gpts[1]
-        # return self, (x_chunks, y_chunks)
+        return self, (tuple(x_chunks_new), tuple(y_chunks_new))
 
     @property
     def ensemble_axes_metadata(self):
