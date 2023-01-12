@@ -1207,7 +1207,7 @@ class Images(BaseMeasurement):
         xp = get_array_module(self.array)
 
         def diffractograms(array):
-            array = fft2(array)
+            array = xp.fft.fft2(array)
             return xp.fft.fftshift(xp.abs(array), axes=(-2, -1))
 
         if self.is_lazy:
