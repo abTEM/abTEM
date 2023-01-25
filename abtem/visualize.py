@@ -6,7 +6,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
-from ase.cell import Cell
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from cplot._colors import get_srgb1
@@ -22,23 +21,15 @@ from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from abtem.core.backend import copy_to_device
-from abtem.core.indexing import map_all_bin_indices_to_miller_indices
-from abtem.core.indexing import (
-    miller_to_miller_bravais,
-    find_equivalent_spots,
-    validate_cell_edges,
-)
 from abtem.core.utils import label_to_index
 from abtem.atoms import pad_atoms, plane_to_axes
 
 if TYPE_CHECKING:
     from abtem.measurements import (
-        DiffractionPatterns,
         BaseMeasurement,
         RealSpaceLineProfiles,
         ReciprocalSpaceLineProfiles,
     )
-    from abtem.core.indexing import IndexedDiffractionPatterns
 
 
 def _align_yaxis(ax1: Axes, ax2: Axes):
