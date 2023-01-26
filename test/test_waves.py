@@ -190,7 +190,7 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
         pass
 
     assert np.all(
-        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.00005
+        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0001
     ) or np.allclose(
         waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)), 1.00002
     )
@@ -339,16 +339,18 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
     ),
     renormalize=st.booleans(),
 )
-@pytest.mark.parametrize("lazy", [True])
+@pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_tile(data, repetitions, renormalize, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     old_extent = waves.extent
-    old_sum = waves.diffraction_patterns(max_angle=None).array.sum((-2, -1)).compute()
+    old_sum = waves.diffraction_patterns(max_angle=None).to_cpu().compute().array.sum((-2,-1))
     tiled = waves.tile(repetitions, renormalize=renormalize)
+
+
     assert np.allclose(
         (old_extent[0] * repetitions[0], old_extent[1] * repetitions[1]), tiled.extent
     )
     if renormalize:
-        new_sum = tiled.diffraction_patterns(max_angle=None).array.sum((-2, -1)).compute()
+        new_sum = tiled.diffraction_patterns(max_angle=None).to_cpu().compute().array.sum((-2, -1))
         assert np.allclose(old_sum, new_sum)

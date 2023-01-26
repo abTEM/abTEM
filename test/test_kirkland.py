@@ -1,7 +1,7 @@
 import numpy as np
 from ase import Atoms
 
-from abtem.potentials import Potential
+from abtem.potentials.iam import Potential
 from abtem.waves import PlaneWave
 import pytest
 

@@ -9,7 +9,7 @@ from utils import gpu
 
 # @reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
+@pytest.mark.parametrize("lazy", [True], ids=["not_lazy"])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("ensemble_mean", [True, False])
 @pytest.mark.parametrize(

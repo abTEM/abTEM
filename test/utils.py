@@ -6,7 +6,7 @@ import pytest
 from hypothesis import assume
 
 from abtem.core.backend import get_array_module, cp
-from abtem.potentials import Potential
+from abtem.potentials.iam import Potential
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.waves import Waves
 

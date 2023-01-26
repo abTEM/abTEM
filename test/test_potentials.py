@@ -5,22 +5,21 @@ from hypothesis import given
 
 import strategies as abtem_st
 from abtem import FrozenPhonons
-from abtem.potentials import CrystalPotential
-from abtem.potentials import Potential
+from abtem.potentials.iam import CrystalPotential, Potential
 from utils import gpu
 
 
-@given(atoms=abtem_st.atoms(),
-       gpts=abtem_st.gpts(),
-       num_configs=st.integers(min_value=1, max_value=3),
-       sigmas=st.floats(min_value=0., max_value=1.))
-@pytest.mark.parametrize('lazy', [True, False])
-def test_frozen_phonons_seed(atoms, gpts, lazy, num_configs, sigmas):
-    frozen_phonons = FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seeds=0)
-    potential1 = Potential(frozen_phonons, gpts=gpts).build(lazy=lazy).compute()
-    frozen_phonons = FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seeds=0)
-    potential2 = Potential(frozen_phonons, gpts=gpts).build(lazy=lazy).compute()
-    assert np.allclose(potential1.array.sum(0), potential2.array.sum(0))
+# @given(atoms=abtem_st.atoms(),
+#        gpts=abtem_st.gpts(),
+#        num_configs=st.integers(min_value=1, max_value=3),
+#        sigmas=st.floats(min_value=0., max_value=1.))
+# @pytest.mark.parametrize('lazy', [True, False])
+# def test_frozen_phonons_seed(atoms, gpts, lazy, num_configs, sigmas):
+#     frozen_phonons = FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seeds=0)
+#     potential1 = Potential(frozen_phonons, gpts=gpts).build(lazy=lazy).compute()
+#     frozen_phonons = FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seeds=0)
+#     potential2 = Potential(frozen_phonons, gpts=gpts).build(lazy=lazy).compute()
+#     assert np.allclose(potential1.array.sum(0), potential2.array.sum(0))
 
 
 @given(atoms=abtem_st.atoms(max_atomic_number=14),

@@ -18,8 +18,8 @@ exclude_regex_paths = {
 }
 
 
-ROOT_DIR = "/Users/jacobmadsen/PycharmProjects/abtem-doc/docs/user_guide/"
-#ROOT_DIR = "C:\\Users\\jacob\\PycharmProjects\\abtem-docs\\docs\\user_guide"
+#ROOT_DIR = "/Users/jacobmadsen/PycharmProjects/abtem-doc/docs/user_guide/"
+ROOT_DIR = "C:\\Users\\jacob\\PycharmProjects\\abtem-docs\\docs\\user_guide"
 KERNEL_NAME = "abtem-dask"
 
 
@@ -166,7 +166,7 @@ def test_prism():
     _test_notebook("prism.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 
 
-#@pytest.mark.slow
+@pytest.mark.slow
 def test_charge_density():
     _test_notebook("charge_density.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 
