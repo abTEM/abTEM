@@ -1,6 +1,5 @@
 """Module for handling measurements."""
 import copy
-import warnings
 from abc import ABCMeta, abstractmethod
 from typing import Union, Tuple, TypeVar, Dict, List, Sequence, Type, TYPE_CHECKING
 
@@ -26,9 +25,9 @@ from abtem.core.axes import (
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
-from abtem.core.fft import fft2, fft_interpolate, fft_crop
+from abtem.core.fft import fft_interpolate, fft_crop
 from abtem.core.grid import adjusted_gpts, polar_spatial_frequencies, spatial_frequencies
-from abtem.core.indexing import IndexedDiffractionPatterns
+from abtem.indexing import IndexedDiffractionPatterns
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.inelastic.phonons import _validate_seeds
@@ -1207,7 +1206,7 @@ class Images(BaseMeasurement):
         xp = get_array_module(self.array)
 
         def diffractograms(array):
-            array = fft2(array)
+            array = xp.fft.fft2(array)
             return xp.fft.fftshift(xp.abs(array), axes=(-2, -1))
 
         if self.is_lazy:
