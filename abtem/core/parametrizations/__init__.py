@@ -1,6 +1,7 @@
 from abtem.core.parametrizations.lobato import LobatoParametrization
 from abtem.core.parametrizations.kirkland import KirklandParametrization
 from abtem.core.parametrizations.peng import PengParametrization
+from abtem.core.parametrizations.waasmaier_kirfel import WaasmaierKirfelParametrization
 from abtem.core.parametrizations.ewald import EwaldParametrization
 
 named_parametrizations = {

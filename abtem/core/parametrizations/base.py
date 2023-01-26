@@ -53,18 +53,27 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
 
-        if charge > 0.0:
-            raise RuntimeError(
-                f"charge not implemented for parametrization {self.__class__.__name__}"
-            )
+        # if charge > 0.0:
+        #     raise RuntimeError(
+        #         f"charge not implemented for parametrization {self.__class__.__name__}"
+        #     )
+
+        if charge == 0.0:
+            charge_symbol = ""
+        elif charge > 0.0:
+            charge_symbol = "+" * int(abs(charge))
+        else:
+            charge_symbol = "-" * int(abs(charge))
 
         try:
             func = self._functions[name]
-            parameters = np.array(self.scaled_parameters(symbol)[name], dtype=np.float32)
+            parameters = np.array(
+                self.scaled_parameters(symbol + charge_symbol)[name], dtype=np.float32
+            )
             return lambda r, *args, **kwargs: func(r, parameters, *args, **kwargs)
         except KeyError:
             raise RuntimeError(
-                f'parametrized function "{name}" does not exist for element {symbol}'
+                f'parametrized function "{name}" does not exist for element {symbol} with charge {charge}'
             )
 
     def line_profiles(

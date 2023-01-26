@@ -34,7 +34,7 @@ def finite_projected_scattering_factor(r, p, a, b):
 
 class PengParametrization(Parametrization):
     _functions = {'potential': scattering_factor,
-                  'scattering_factor': scattering_factor,
+                  'scattering_factor': scattering_factor_k2,
                   'projected_potential': scattering_factor,
                   'projected_scattering_factor': scattering_factor_k2,
                   'finite_projected_potential': finite_projected_scattering_factor,
@@ -44,6 +44,9 @@ class PengParametrization(Parametrization):
     def __init__(self):
         with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng.json'), 'r') as f:
             parameters = json.load(f)
+
+        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng_ionic.json'), 'r') as f:
+            parameters.update(json.load(f))
 
         super().__init__(parameters)
 
