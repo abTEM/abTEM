@@ -1,5 +1,5 @@
 from numbers import Number
-from typing import Union
+from typing import Union, TYPE_CHECKING, Tuple
 
 import numpy as np
 from ase.cell import Cell
@@ -12,6 +12,8 @@ from abtem.atoms import (
     is_cell_orthogonal,
 )
 
+if TYPE_CHECKING:
+    from abtem.measurements import DiffractionPatterns
 
 
 def _frequency_bin_indices(shape):
@@ -36,7 +38,7 @@ def _find_linearly_independent_row(array, row, tol: float = 1e-6):
 def _find_independent_spots(array):
     spots = array > array.max() * 1e-2
     half = array.shape[0] // 2, array.shape[1] // 2
-    spots = spots[half[0] :, half[1] :]
+    spots = spots[half[0]:, half[1]:]
 
     spots = np.array(np.where(spots)).T
     spot_0 = spots[0]
@@ -57,9 +59,9 @@ def _planar_angle_from_bin_indices(index1, index2, sampling):
 
 def _orthorhombic_spacings(indices, d):
     g = (
-        indices[:, None, None] ** 2 / d[0] ** 2
-        + indices[None, :, None] ** 2 / d[1] ** 2
-        + indices[None, None] ** 2 / d[2] ** 2
+            indices[:, None, None] ** 2 / d[0] ** 2
+            + indices[None, :, None] ** 2 / d[1] ** 2
+            + indices[None, None] ** 2 / d[2] ** 2
     )
 
     planes = np.zeros_like(g)
@@ -84,9 +86,9 @@ def _planar_angle(hkl1, hkl2, cell_edges):
     h1, k1, l1 = hkl1
     h2, k2, l2 = hkl2
     a, b, c = cell_edges
-    d1 = 1 / a**2 * h1**2 + 1 / b**2 * k1**2 + 1 / c**2 * l1**2
-    d2 = 1 / a**2 * h2**2 + 1 / b**2 * k2**2 + 1 / c**2 * l2**2
-    d3 = 1 / a**2 * h1 * h2 + 1 / b**2 * k1 * k2 + 1 / c**2 * l1 * l2
+    d1 = 1 / a ** 2 * h1 ** 2 + 1 / b ** 2 * k1 ** 2 + 1 / c ** 2 * l1 ** 2
+    d2 = 1 / a ** 2 * h2 ** 2 + 1 / b ** 2 * k2 ** 2 + 1 / c ** 2 * l2 ** 2
+    d3 = 1 / a ** 2 * h1 * h2 + 1 / b ** 2 * k1 * k2 + 1 / c ** 2 * l1 * l2
     return np.arccos(d3 / np.sqrt(d1 * d2))
 
 
@@ -199,7 +201,7 @@ def _split_at_threshold(values, threshold):
     max_value = values.max()
 
     split = (np.diff(values[order]) > (max_value * threshold)) * (
-        np.diff(values[order]) > 1e-6
+            np.diff(values[order]) > 1e-6
     )
 
     split = np.insert(split, 0, False)
@@ -249,12 +251,12 @@ def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = 1e-6):
 
 
 def tabulate_diffraction_pattern(
-    diffraction_pattern,
-    cell,
-    return_data_frame: bool = False,
-    normalize: bool = True,
-    spot_threshold: float = 0.01,
-    intensity_split: float = 1.0,
+        diffraction_pattern,
+        cell,
+        return_data_frame: bool = False,
+        normalize: bool = True,
+        spot_threshold: float = 0.01,
+        intensity_split: float = 1.0,
 ):
     # if len(diffraction_pattern.ensemble_shape) > 0:
     # raise NotImplementedError("tabulating not implemented for ensembles, select a single pattern by indexing")
@@ -310,22 +312,41 @@ def tabulate_diffraction_pattern(
 
 class IndexedDiffractionPatterns:
     def __init__(self, spots: dict, vectors: np.ndarray):
+        """
+        Diffraction patterns indexed by their Miller indices.
+
+        Parameters
+        ----------
+        spots : dict
+            Dictionary mapping Miller (or Miller-Bravais) indices to diffraction spot intensities.
+        vectors : np.ndarray
+            The reciprocal space coordinates of the diffraction spots [1/Å].
+        """
+
         self._spots = spots
         self._vectors = vectors
 
     @property
-    def intensities(self):
+    def intensities(self) -> np.ndarray:
         return self._dict_to_arrays(self._spots)[1]
 
     @property
-    def miller_indices(self):
+    def miller_indices(self) -> np.ndarray:
         return self._dict_to_arrays(self._spots)[0]
 
     @property
-    def vectors(self):
+    def vectors(self) -> np.ndarray:
         return self._vectors
 
-    def remove_equivalent(self, divide_threshold: float = 1.0):
+    def remove_equivalent(self, divide_threshold: float = 1.0) -> "IndexedDiffractionPatterns":
+        """
+        Remove symmetry equivalent diffraction spots.
+
+        Parameters
+        ----------
+        divide_threshold : float
+            Keep symmetry equivalent spots with a relative intensity difference larger than this.
+        """
         miller_indices, intensities = self._dict_to_arrays(self._spots)
 
         if len(intensities.shape) > 1:
@@ -345,9 +366,8 @@ class IndexedDiffractionPatterns:
         return self.__class__(spots, vectors)
 
     @property
-    def ensemble_shape(self):
-        intensity = list(self._spots.values())[0]
-        return intensity.shape
+    def ensemble_shape(self) -> tuple:
+        return self.intensities.shape[:-1]
 
     def __getitem__(self, item):
         if not self.ensemble_shape:
@@ -360,6 +380,16 @@ class IndexedDiffractionPatterns:
         return self.__class__(new_spots, self._vectors.copy())
 
     def remove_low_intensity(self, threshold: float = 1e-3):
+        """
+        Remove diffraction spots with intensity below a threshold.
+
+        Parameters
+        ----------
+        threshold : float
+            Relative intensity of threshold for removing diffraction spots.
+
+        """
+
         miller_indices, intensities = self._dict_to_arrays(self._spots)
 
         if len(intensities.shape) > 1:
@@ -385,19 +415,31 @@ class IndexedDiffractionPatterns:
         return dict(zip([tuple(hkl) for hkl in miller_indices], tuple(intensities)))
 
     @classmethod
-    def index_diffraction_patterns(cls, diffraction_patterns, cell, tol: float = 1e-6):
+    def index_diffraction_patterns(
+            cls,
+            diffraction_patterns: "DiffractionPatterns",
+            cell: Union[Cell, float, Tuple[float, float, float]],
+            tol: float = 1e-6,
+    ) -> "IndexedDiffractionPatterns":
+
         bins, spots = _index_diffraction_patterns(diffraction_patterns, cell, tol=tol)
 
-        # bins, miller_indices = map_all_bin_indices_to_miller_indices(
-        #     diffraction_patterns.array, diffraction_patterns.sampling, cell
-        # )
-        # intensities = diffraction_patterns._select_frequency_bin(bins)
-        # spots = cls._arrays_to_dict(miller_indices, intensities)
         vectors = bins * diffraction_patterns.sampling
-
         return cls(spots, vectors)
 
-    def normalize_intensity(self, spot=None):
+    def normalize_intensity(self, spot: tuple = None):
+        """
+        Normalize the intensity of the diffraction spots.
+
+        Parameters
+        ----------
+        spot :
+
+        Returns
+        -------
+
+        """
+
         if spot is None:
             c = self.intensities.max()
         else:
@@ -408,12 +450,26 @@ class IndexedDiffractionPatterns:
         return self.__class__(spots, self._vectors)
 
     def to_dataframe(
-        self,
-        intensity_threshold: float = 1e-2,
-        divide_threshold: float = 1.0,
-        normalize: bool = False,
-        index: Union[str, int] = 0,
+            self,
+            intensity_threshold: float = 1e-2,
+            divide_threshold: float = 1.0,
+            normalize: bool = False,
+            index: Union[str, int] = 0,
     ):
+        """
+        Convert the indexed diffraction to pandas dataframe.
+
+        Parameters
+        ----------
+        intensity_threshold :
+        divide_threshold :
+        normalize :
+        index :
+
+        Returns
+        -------
+
+        """
 
         import pandas as pd
 
@@ -444,6 +500,6 @@ class IndexedDiffractionPatterns:
         if self.ensemble_shape:
             indexed_diffraction_patterns = indexed_diffraction_patterns[
                 (0,) * len(self.ensemble_shape)
-            ]
+                ]
 
         return plot_diffraction_pattern(indexed_diffraction_patterns, **kwargs)
