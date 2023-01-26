@@ -2050,7 +2050,10 @@ class DiffractionPatterns(BaseMeasurement):
         alpha_y = xp.linspace(
             limits[1][0], limits[1][1], self.shape[-1], dtype=xp.float32
         )
-        return alpha_x, alpha_y
+        if self.fftshift:
+            return alpha_x, alpha_y
+        else:
+            return np.fft.fftshift(alpha_x), np.fft.fftshift(alpha_y)
 
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
