@@ -548,7 +548,7 @@ from abtem.core.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module, copy_to_device
 from abtem.core.complex import complex_exponential
 from abtem.measurements import Images
-from abtem.potentials import _validate_potential
+from abtem.potentials.iam import _validate_potential
 from abtem.slicing import SliceIndexedAtoms
 from abtem.multislice import (
     FresnelPropagator,
