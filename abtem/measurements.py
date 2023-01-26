@@ -26,7 +26,11 @@ from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_interpolate, fft_crop
-from abtem.core.grid import adjusted_gpts, polar_spatial_frequencies, spatial_frequencies
+from abtem.core.grid import (
+    adjusted_gpts,
+    polar_spatial_frequencies,
+    spatial_frequencies,
+)
 from abtem.indexing import IndexedDiffractionPatterns
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
@@ -208,11 +212,13 @@ def _annular_detector_mask(
     xp=np,
 ) -> Union[np.ndarray, List[np.ndarray]]:
 
-    kx, ky = spatial_frequencies(gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp)
+    kx, ky = spatial_frequencies(
+        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+    )
 
     k2 = kx[:, None] ** 2 + ky[None] ** 2
 
-    bins = (k2 >= inner ** 2) & (k2 < outer ** 2)
+    bins = (k2 >= inner**2) & (k2 < outer**2)
 
     if np.any(np.array(offset) != 0.0):
         offset = (
@@ -1965,7 +1971,9 @@ class DiffractionPatterns(BaseMeasurement):
 
         diffraction_patterns = self.block_direct()
         diffraction_patterns = diffraction_patterns.to_cpu()
-        return IndexedDiffractionPatterns.index_diffraction_patterns(diffraction_patterns, cell)
+        return IndexedDiffractionPatterns.index_diffraction_patterns(
+            diffraction_patterns, cell
+        )
 
     @property
     def fftshift(self):
@@ -2267,51 +2275,49 @@ class DiffractionPatterns(BaseMeasurement):
 
         return _gaussian_source_size(self, sigma)
 
-        # if len(_scan_axes(self)) < 2:
-        #     raise RuntimeError(
-        #         "Gaussian source size not implemented for diffraction patterns with less than two scan axes."
-        #     )
-        #
-        # if np.isscalar(sigma):
-        #     sigma = (sigma,) * 2
-        #
-        # xp = get_array_module(self.array)
-        # gaussian_filter = get_ndimage_module(self._array).gaussian_filter
-        #
-        # padded_sigma = ()
-        # depth = ()
-        # i = 0
-        # for axis, n in zip(self.ensemble_axes, self.ensemble_shape):
-        #     if axis in _scan_axes(self):
-        #         scan_sampling = _scan_sampling(self)[i]
-        #         padded_sigma += (sigma[i] / scan_sampling,)
-        #         depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
-        #         i += 1
-        #     else:
-        #         padded_sigma += (0.0,)
-        #         depth += (0,)
-        #
-        # padded_sigma += (0.0,) * 2
-        # depth += (0,) * 2
-        #
-        # if self.is_lazy:
-        #     array = self.array.map_overlap(
-        #         gaussian_filter,
-        #         sigma=padded_sigma,
-        #         mode="wrap",
-        #         depth=depth,
-        #         meta=xp.array((), dtype=xp.float32),
-        #     )
-        # else:
-        #     array = gaussian_filter(self.array, sigma=padded_sigma, mode="wrap")
-        #
-        # return self.__class__(
-        #     array,
-        #     sampling=self.sampling,
-        #     ensemble_axes_metadata=self.ensemble_axes_metadata,
-        #     metadata=self.metadata,
-        #     fftshift=self.fftshift,
-        # )
+    def poisson_noise(
+        self,
+        dose_per_area: float = None,
+        total_dose: float = None,
+        samples: int = 1,
+        seed: int = None,
+    ):
+        """
+        Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided 'total_dose' (per measurement
+        if applied to an ensemble) or 'dose_per_area' (not applicable for single measurements).
+
+        Parameters
+        ----------
+        dose_per_area : float, optional
+            The irradiation dose per unit of scan area [electrons per Å:sup:`2`]. This is only valid if the diffraction
+            patterns has two scan axes.
+        total_dose : float, optional
+            The irradiation dose per diffraction pattern.
+        samples : int, optional
+            The number of samples to draw from a Poisson distribution. If this is greater than 1, an additional
+            ensemble axis will be added to the measurement.
+        seed : int, optional
+            Seed the random number generator.
+
+        Returns
+        -------
+        noisy_measurement : BaseMeasurement
+            The noisy measurement.
+        """
+
+        if len(_scan_shape(self)) < 2 and dose_per_area is not None:
+            raise ValueError(
+                "diffraction patterns has less than two scan axes, provide 'total_dose' not 'dose_per_area' "
+            )
+
+        # TODO: normalization
+
+        return super().poisson_noise(
+            dose_per_area=dose_per_area,
+            total_dose=total_dose,
+            samples=samples,
+            seed=seed,
+        )
 
     def polar_binning(
         self,
@@ -2514,8 +2520,7 @@ class DiffractionPatterns(BaseMeasurement):
             # plt.imshow(xp.asnumpy(bins))
             # plt.show()
 
-
-            #bins = xp.ones_like(array)
+            # bins = xp.ones_like(array)
 
             return xp.sum(array * bins, axis=(-2, -1))
 

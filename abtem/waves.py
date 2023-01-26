@@ -701,7 +701,7 @@ class Waves(HasArray, BaseWaves):
             metadata=metadata,
         )
 
-    def images(self):
+    def complex_images(self):
         """
         The complex array of the wave functions at the image plane.
 
@@ -727,7 +727,6 @@ class Waves(HasArray, BaseWaves):
         max_angle: Union[str, float] = "cutoff",
         gpts: Tuple[int, int] = None,
         normalization: str = "values",
-        overwrite_x: bool = False,
     ) -> "Waves":
         """
         Downsample the wave functions to a lower maximum scattering angle.
@@ -798,6 +797,7 @@ class Waves(HasArray, BaseWaves):
         fftshift: bool = True,
         parity: str = "odd",
         return_complex: bool = False,
+        ensure_reciprocal_space_normalization: bool = True,
     ) -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
@@ -827,6 +827,9 @@ class Waves(HasArray, BaseWaves):
         parity : {'same', 'even', 'odd', 'none'}
             The parity of the shape of the diffraction patterns. Default is 'odd', so that the shape of the diffraction
             pattern is odd with the zero at the middle.
+        return_complex : bool
+            If True, return complex-valued diffraction patterns (i.e. the wave function in reciprocal space)
+            (default is False).
 
         Returns
         -------
@@ -834,8 +837,11 @@ class Waves(HasArray, BaseWaves):
             The diffraction pattern(s).
         """
 
-        def _diffraction_pattern(array, new_gpts, return_complex, fftshift):
+        def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
             xp = get_array_module(array)
+
+            if normalize:
+                array = array / np.prod(array.shape[-2:])
 
             array = fft2(array, overwrite_x=False)
 
@@ -853,6 +859,20 @@ class Waves(HasArray, BaseWaves):
         xp = get_array_module(self.array)
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
 
+        metadata = copy(self.metadata)
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+
+        if (
+            ensure_reciprocal_space_normalization
+            and "normalization" in metadata
+            and metadata["normalization"] == "values"
+        ):
+            metadata["normalization"] = "reciprocal_space"
+            normalize = True
+        else:
+            normalize = False
+
         validate_gpts(new_gpts)
 
         if self.is_lazy:
@@ -863,6 +883,7 @@ class Waves(HasArray, BaseWaves):
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
+                normalize=normalize,
                 chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
                 meta=xp.array((), dtype=dtype),
             )
@@ -872,11 +893,8 @@ class Waves(HasArray, BaseWaves):
                 new_gpts=new_gpts,
                 return_complex=return_complex,
                 fftshift=fftshift,
+                normalize=normalize,
             )
-
-        metadata = copy(self.metadata)
-        metadata["label"] = "intensity"
-        metadata["units"] = "arb. unit"
 
         diffraction_patterns = DiffractionPatterns(
             pattern,
@@ -1360,7 +1378,12 @@ class PlaneWave(_WavesFactory):
 
     @property
     def metadata(self):
-        return {"energy": self.energy, **self._tilt.metadata}
+        metadata = {
+            "energy": self.energy,
+            **self._tilt.metadata,
+            "normalization": ("reciprocal_space" if self._normalize else "values"),
+        }
+        return metadata
 
     @property
     def normalize(self):

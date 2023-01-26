@@ -222,7 +222,7 @@ class BasePotential(
         return validate_chunks(self.ensemble_shape, (1,))
 
     def images(self):
-        return self.build().images()
+        return self.build().complex_images()
 
     def show(self, project: bool = True, **kwargs):
         """

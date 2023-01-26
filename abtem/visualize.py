@@ -536,7 +536,7 @@ def show_measurements_1d(
     return fig, ax
 
 
-def plot_diffraction_pattern(
+def _show_indexed_diffraction_pattern(
     indexed_diffraction_pattern,
     spot_scale: float = 1.0,
     ax: Axes = None,

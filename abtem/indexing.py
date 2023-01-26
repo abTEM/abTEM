@@ -338,14 +338,15 @@ class IndexedDiffractionPatterns:
     def vectors(self) -> np.ndarray:
         return self._vectors
 
-    def remove_equivalent(self, divide_threshold: float = 1.0) -> "IndexedDiffractionPatterns":
+    def remove_equivalent(self, inequivalency_threshold: float = 1.0) -> "IndexedDiffractionPatterns":
         """
         Remove symmetry equivalent diffraction spots.
 
         Parameters
         ----------
-        divide_threshold : float
-            Keep symmetry equivalent spots with a relative intensity difference larger than this.
+        inequivalency_threshold : float
+            Relative intensity difference to determine whether two symmetry-equivalent diffraction spots should be
+            independently labeled (e.g. due to a unit cell with a basis of more than one element).
         """
         miller_indices, intensities = self._dict_to_arrays(self._spots)
 
@@ -357,7 +358,7 @@ class IndexedDiffractionPatterns:
         include = _find_equivalent_spots(
             miller_indices,
             intensities=summed_intensities,
-            intensity_split=divide_threshold,
+            intensity_split=inequivalency_threshold,
         )
 
         miller_indices, intensities = miller_indices[include], intensities[include]
@@ -386,7 +387,7 @@ class IndexedDiffractionPatterns:
         Parameters
         ----------
         threshold : float
-            Relative intensity of threshold for removing diffraction spots.
+            Relative intensity threshold for removing diffraction spots.
 
         """
 
@@ -451,29 +452,32 @@ class IndexedDiffractionPatterns:
 
     def to_dataframe(
             self,
-            intensity_threshold: float = 1e-2,
-            divide_threshold: float = 1.0,
+            intensity_threshold: float = 1e-3,
+            inequivalency_threshold: float = 1.0,
             normalize: bool = False,
-            index: Union[str, int] = 0,
     ):
         """
         Convert the indexed diffraction to pandas dataframe.
 
         Parameters
         ----------
-        intensity_threshold :
-        divide_threshold :
-        normalize :
-        index :
+        intensity_threshold : float
+            Relative intensity threshold for removing diffraction spots from the dataframe.
+        inequivalency_threshold : float
+            Relative intensity difference to determine whether two symmetry-equivalent diffraction spots should be
+            independently labeled (e.g. due to a unit cell with a basis of more than one element).
+        normalize : bool
+            If True, normalize
 
         Returns
         -------
+        dataframe_with_spots : pd.DataFrame
 
         """
 
         import pandas as pd
 
-        indexed = self.remove_equivalent(divide_threshold=divide_threshold)
+        indexed = self.remove_equivalent(inequivalency_threshold=inequivalency_threshold)
 
         indexed = indexed.remove_low_intensity(intensity_threshold)
 
@@ -491,10 +495,22 @@ class IndexedDiffractionPatterns:
         try:
             return pd.DataFrame(spots)
         except ValueError:
-            return pd.DataFrame(spots, index=[index])
+            return pd.DataFrame(spots, index=[0])
 
     def show(self, **kwargs):
-        from abtem.visualize import plot_diffraction_pattern
+        """
+
+
+        Parameters
+        ----------
+        kwargs
+
+        Returns
+        -------
+
+        """
+
+        from abtem.visualize import _show_indexed_diffraction_pattern
 
         indexed_diffraction_patterns = self
         if self.ensemble_shape:
@@ -502,4 +518,4 @@ class IndexedDiffractionPatterns:
                 (0,) * len(self.ensemble_shape)
                 ]
 
-        return plot_diffraction_pattern(indexed_diffraction_patterns, **kwargs)
+        return _show_indexed_diffraction_pattern(indexed_diffraction_patterns, **kwargs)
