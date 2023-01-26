@@ -23,7 +23,7 @@ from abtem.core.axes import (
 )
 from abtem.core.axes import ThicknessAxis, FrozenPhononsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
-from abtem.core.chunks import chunk_shape, Chunks, generate_chunks
+from abtem.core.chunks import chunk_shape, generate_chunks
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.complex import complex_exponential
 from abtem.core.device import HasDeviceMixin

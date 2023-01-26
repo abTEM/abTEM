@@ -2,7 +2,7 @@ from numbers import Number
 
 import numpy as np
 from ase import units
-from gpaw.utilities import unpack2
+from abtem.potentials.gpaw import unpack2
 from scipy.special import sph_harm
 
 

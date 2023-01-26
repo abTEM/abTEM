@@ -1,7 +1,5 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
-import contextlib
 import copy
-import os
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -20,7 +18,7 @@ from ase.io.trajectory import read_atoms
 from ase.units import Bohr
 from scipy.interpolate import interp1d
 
-from abtem.charge_density import _generate_slices
+from abtem.potentials.charge_density import _generate_slices
 from abtem.core.axes import AxisMetadata
 from abtem.core.constants import eps0
 from abtem.core.electron_configurations import (
@@ -33,7 +31,7 @@ from abtem.inelastic.phonons import (
     FrozenPhonons,
     BaseFrozenPhonons, _safe_read_atoms,
 )
-from abtem.potentials import _PotentialBuilder, Potential
+from abtem.potentials.iam import _PotentialBuilder, Potential
 
 try:
     from gpaw import GPAW
@@ -715,7 +713,7 @@ class GPAWParametrization:
         if not charge:
             return []
 
-        charge = np.sign(charge) * np.ceil(np.abs(charge))
+        charge = int(np.sign(charge) * np.ceil(np.abs(charge)))
 
         number = atomic_numbers[symbol]
         config = config_str_to_config_tuples(
@@ -724,11 +722,16 @@ class GPAWParametrization:
         ionic_config = config_str_to_config_tuples(
             electron_configurations[chemical_symbols[number - charge]]
         )
+        #print(electron_configurations[chemical_symbols[number]])
+        #print(electron_configurations[chemical_symbols[number - charge]])
 
         config = defaultdict(lambda: 0, {shell[:2]: shell[2] for shell in config})
+
         ionic_config = defaultdict(
             lambda: 0, {shell[:2]: shell[2] for shell in ionic_config}
         )
+
+        #sss
 
         electrons = []
         for key in set(config.keys()).union(set(ionic_config.keys())):
@@ -736,21 +739,24 @@ class GPAWParametrization:
             difference = config[key] - ionic_config[key]
 
             for i in range(np.abs(difference)):
-                electrons.append(key + (np.sign(difference),))
+                electrons.append(key + (-np.sign(difference),))
+
         return electrons
 
     def _get_all_electron_atom(self, symbol, charge=0.0):
 
-        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-            ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
+        #with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+        ae = AllElectronAtom(symbol, spinpol=False, xc="PBE")
 
-            added_electrons = self._get_added_electrons(symbol, charge)
-            #     for added_electron in added_electrons:
-            #         ae.add(*added_electron[:2], added_electron[-1])
-            # # ae.run()
-            # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-            ae.run()
-            ae.refine()
+        added_electrons = self._get_added_electrons(symbol, charge)
+
+        for added_electron in added_electrons:
+            ae.add(*added_electron[:2], added_electron[-1])
+
+        # # ae.run()
+        # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+        ae.run(maxiter=5000, mix=0.005, dnmax=1e-5)
+        #ae.refine()
 
         return ae
 
@@ -794,6 +800,7 @@ class GPAWParametrization:
         potential : callable
             Function of the radial electrostatic potential with parameter 'r' corresponding to the radial distance from the core.
         """
+
         ae = self._get_all_electron_atom(symbol, charge)
         r = ae.rgd.r_g * units.Bohr
 

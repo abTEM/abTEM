@@ -12,7 +12,7 @@ from scipy.ndimage import map_coordinates
 from abtem.core.backend import copy_to_device
 from abtem.core.fft import fft_crop, fft_interpolate, ifftn, fftn
 from abtem.core.parametrizations import EwaldParametrization
-from abtem.potentials import Potential, _PotentialBuilder
+from abtem.potentials.iam import Potential, _PotentialBuilder
 from abtem.inelastic.phonons import MDFrozenPhonons, DummyFrozenPhonons
 from abtem.atoms import plane_to_axes
 from abtem.core.constants import eps0
