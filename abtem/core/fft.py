@@ -42,8 +42,9 @@ def _fft_name_to_fftw_direction(name: str):
     return direction
 
 
-def _new_fftw_wisdom(array: np.ndarray, name: str, flags=()):
-    dummy = pyfftw.byte_align(np.zeros_like(array))
+def _new_fftw_object(array: np.ndarray, name: str, flags=()):
+
+    dummy = np.zeros_like(array)
 
     direction = _fft_name_to_fftw_direction(name)
 
@@ -62,8 +63,34 @@ def _new_fftw_wisdom(array: np.ndarray, name: str, flags=()):
     return fftw_object
 
 
+class CachedFFTWConvolution:
 
-def get_fftw_object(array: np.ndarray, name: str, allow_new_wisdom: bool = True, overwrite_x=False):
+    def __init__(self):
+        self._fftw_forward = None
+        self._fftw_backward = None
+
+    def __call__(self, array, kernel, overwrite_x):
+
+        if self._fftw_backward is None:
+            self._fftw_backward = _new_fftw_object(array, "ifft2")
+
+        if self._fftw_forward is None:
+            self._fftw_forward = _new_fftw_object(array, "fft2")
+
+        if not overwrite_x:
+            array = array.copy()
+            self._fftw_forward.update_arrays(array, array)
+            self._fftw_backward.update_arrays(array, array)
+
+        array = self._fftw_forward()
+        array *= kernel
+        array = self._fftw_backward()
+        return array
+
+
+def get_fftw_object(
+    array: np.ndarray, name: str, allow_new_wisdom: bool = True, overwrite_x=False
+):
     direction = _fft_name_to_fftw_direction(name)
 
     flags = (config.get("fftw.planning_effort"),)
@@ -80,13 +107,21 @@ def get_fftw_object(array: np.ndarray, name: str, allow_new_wisdom: bool = True,
             flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
         )
     except RuntimeError as e:
+
         if not str(e) == "No FFTW wisdom is known for this plan.":
             raise
 
-        if not allow_new_wisdom:
+        if not allow_new_wisdom and config.get("fftw.allow_fallback"):
+            return getattr(pyfftw.builders, name)(array)
+
+        elif not allow_new_wisdom:
             raise
 
-        return _new_fftw_wisdom(array, name, flags=flags)
+        _new_fftw_object(array, name, flags=flags)
+
+        return get_fftw_object(
+            array, name, allow_new_wisdom=False, overwrite_x=overwrite_x
+        )
 
     return fftw
 
@@ -240,19 +275,19 @@ def _fft_interpolation_masks_1d(n1, n2):
             mask2[0] = True
         elif n1 % 2 == 0:
             mask2[: n1 // 2] = True
-            mask2[-n1 // 2:] = True
+            mask2[-n1 // 2 :] = True
         else:
             mask2[: n1 // 2 + 1] = True
-            mask2[-n1 // 2 + 1:] = True
+            mask2[-n1 // 2 + 1 :] = True
     else:
         if n2 == 1:
             mask1[0] = True
         elif n2 % 2 == 0:
             mask1[: n2 // 2] = True
-            mask1[-n2 // 2:] = True
+            mask1[-n2 // 2 :] = True
         else:
             mask1[: n2 // 2 + 1] = True
-            mask1[-n2 // 2 + 1:] = True
+            mask1[-n2 // 2 + 1 :] = True
 
         mask2[:] = True
 
@@ -302,13 +337,13 @@ def fft_crop(array, new_shape, normalize: bool = False):
 
 
 def fft_interpolate(
-        array: np.ndarray,
-        new_shape: Tuple[int, ...],
-        normalization: str = "values",
-        overwrite_x: bool = False,
+    array: np.ndarray,
+    new_shape: Tuple[int, ...],
+    normalization: str = "values",
+    overwrite_x: bool = False,
 ):
     xp = get_array_module(array)
-    old_size = np.prod(array.shape[-len(new_shape):])
+    old_size = np.prod(array.shape[-len(new_shape) :])
 
     is_complex = np.iscomplexobj(array)
     array = array.astype(xp.complex64)
@@ -333,7 +368,7 @@ def fft_interpolate(
         array = array.real
 
     if normalization == "values":
-        array *= np.prod(array.shape[-len(new_shape):]) / old_size
+        array *= np.prod(array.shape[-len(new_shape) :]) / old_size
 
     elif normalization != "intensity":
         raise ValueError()
