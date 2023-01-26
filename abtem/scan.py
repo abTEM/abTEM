@@ -16,9 +16,8 @@ from abtem.core.chunks import validate_chunks
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.transform import WaveTransform
-from abtem.core.utils import safe_floor_int
 from abtem.distributions import _AxisAlignedDistributionND, BaseDistribution
-from abtem.potentials import BasePotential, _validate_potential
+from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 
 if TYPE_CHECKING:
@@ -829,7 +828,9 @@ class GridScan(HasGridMixin, BaseScan):
         )
 
         separators = [l for _, l in extents[1]]
-        unique, y_chunks = np.unique(np.digitize(y, [l for _, l in extents[1]]), return_counts=True)
+        unique, y_chunks = np.unique(
+            np.digitize(y, [l for _, l in extents[1]]), return_counts=True
+        )
         unique = list(unique)
 
         y_chunks_new = []
