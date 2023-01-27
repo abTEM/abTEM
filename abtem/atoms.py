@@ -181,6 +181,10 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if np.all(np.sum(np.abs(atoms.cell) < 1e-6, axis=0) == 2):
         new_order = np.argmax(np.abs(cell), axis=0)
         atoms.set_cell(np.diag(np.abs(cell[new_order])))
+
+        atoms.pbc = True
+        atoms.wrap()
+
         return atoms
 
     xy = np.delete(cell, vertical_vector[0], axis=0)
@@ -205,6 +209,9 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
             atoms.positions[:, i] = -atoms.positions[:, i]
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
+
+    atoms.pbc = True
+    atoms.wrap()
 
     if not is_cell_valid(atoms, tol):
         raise RuntimeError(
