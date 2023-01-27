@@ -316,10 +316,10 @@ def gaussian(
 
 
 def _validate_distribution(distribution):
-    if isinstance(distribution, (BaseDistribution, Number)):
+    if isinstance(distribution, (BaseDistribution, Number, str)):
         return distribution
 
-    if isinstance(distribution, Iterable):
+    if isinstance(distribution, (tuple, list, np.ndarray)):
         distribution = np.array(distribution)
         return _DistributionFromValues(
             distribution, np.ones_like(distribution, dtype=np.float32)

@@ -468,6 +468,8 @@ def _aberration_property(name, key):
 
 class _HasAberrations:
     _aberration_coefficients: dict
+    energy: float
+
     C10: Union[float, BaseDistribution] = _aberration_property(
         "_aberration_coefficients", "C10"
     )
@@ -655,14 +657,23 @@ class _HasAberrations:
             if symbol in self._symbols():
                 self._aberration_coefficients[symbol] = value
 
-            elif symbol == "defocus":
-                self._aberration_coefficients[self._aliases()[symbol]] = -value
-
             elif symbol in self._aliases().keys():
                 self._aberration_coefficients[self._aliases()[symbol]] = value
 
             else:
                 raise ValueError("{} not a recognized parameter".format(symbol))
+
+        for symbol, value in parameters.items():
+            if symbol in ("defocus", "C10"):
+
+                if isinstance(value, str) and value.lower() == "scherzer":
+                    value = scherzer_defocus(self._aberration_coefficients["C30"], self.energy)
+
+                if symbol == "defocus":
+                    value = -value
+
+                self._aberration_coefficients["C10"] = value
+
 
 
 polar_symbols = _HasAberrations._symbols()
