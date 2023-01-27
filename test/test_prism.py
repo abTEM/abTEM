@@ -135,7 +135,6 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
     ],
 )
 def test_prism_scan(data, interpolation, detector, downsample, lazy, device):
-    device = "gpu"
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
 
     max_interpolation = 3 if interpolation else 1

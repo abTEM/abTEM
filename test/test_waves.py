@@ -263,7 +263,7 @@ def test_intensity(data, lazy, device):
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_images(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
-    images = waves.images()
+    images = waves.complex_images()
     assert images.shape == waves.shape
     assert images.array.dtype == np.complex64
 
