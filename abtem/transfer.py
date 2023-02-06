@@ -583,12 +583,14 @@ class _HasAberrations:
         )
 
     def _nonzero_coefficients(self, symbols):
-        return any(
-            np.all(self._aberration_coefficients[symbol] == 0.0) and
-            np.isscalar(self._aberration_coefficients[symbol])
+        for symbol in symbols:
+            if not np.isscalar(self._aberration_coefficients[symbol]):
+                return True
 
-            for symbol in
-            symbols)
+            if not np.all(self._aberration_coefficients[symbol] != 0.0):
+                return True
+
+        return False
 
     @classmethod
     def _symbols(cls):
