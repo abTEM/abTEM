@@ -1,4 +1,6 @@
 import copy
+import json
+import warnings
 from abc import abstractmethod
 from contextlib import nullcontext, contextmanager
 from functools import reduce
@@ -35,6 +37,7 @@ from abtem.core.backend import (
 )
 from abtem.core.chunks import Chunks
 from abtem.core.utils import normalize_axes, CopyMixin
+from abtem._version import __version__
 
 
 class ComputableList(list):
@@ -585,7 +588,7 @@ class HasArray(HasAxes, CopyMixin):
         self, url: str, compute: bool = True, overwrite: bool = False, **kwargs
     ):
         """
-        Write wave functions to a zarr file.
+        Write data to a zarr file.
 
         Parameters
         ----------
@@ -629,6 +632,35 @@ class HasArray(HasAxes, CopyMixin):
                 attrs[key] = [axis_to_dict(axis) for axis in value]
             else:
                 attrs[key] = value
+
+    def _metadata_to_json(self):
+        metadata = copy.copy(self.metadata)
+        metadata["axes"] = {
+            f"axis_{i}": axis_to_dict(axis) for i, axis in enumerate(self.axes_metadata)
+        }
+        metadata["data_origin"] = f"abTEM_v{__version__}"
+        metadata["type"] = self.__class__.__name__
+        return json.dumps(metadata)
+
+    def to_tiff(self, filename: str, **kwargs):
+        """
+        Write data to a tiff file.
+
+        Parameters
+        ----------
+        filename : str
+            The filename of the file to write.
+        kwargs :
+            Keyword arguments passed to tifffile.imwrite.
+        """
+        import tifffile
+
+        array = self.array
+        if self.is_lazy:
+            warnings.warn("lazy arrays are computed in memory before writing to tiff")
+            array = array.compute()
+
+        return tifffile.imwrite(filename, array, description=self._metadata_to_json(), **kwargs)
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
