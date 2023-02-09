@@ -667,6 +667,9 @@ class _HasAberrations:
             if symbol in ("defocus", "C10"):
 
                 if isinstance(value, str) and value.lower() == "scherzer":
+                    if self.energy is None:
+                        raise RuntimeError("energy undefined, Scherzer defocus cannot be evaluated")
+
                     value = scherzer_defocus(self._aberration_coefficients["C30"], self.energy)
 
                 if symbol == "defocus":

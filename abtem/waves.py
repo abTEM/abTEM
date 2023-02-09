@@ -1578,7 +1578,7 @@ class Probe(_WavesFactory):
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
         transforms: List[WaveTransform] = None,
-        metadata=None,
+        metadata:dict=None,
         **kwargs
     ):
 
@@ -1599,7 +1599,7 @@ class Probe(_WavesFactory):
 
         if isinstance(aberrations, dict):
             aberrations = Aberrations(
-                semiangle_cutoff=semiangle_cutoff, **aberrations, **kwargs
+                semiangle_cutoff=semiangle_cutoff, energy=energy, **aberrations, **kwargs
             )
 
         aberrations._accelerator = self._accelerator
