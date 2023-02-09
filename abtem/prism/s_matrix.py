@@ -89,7 +89,9 @@ class BaseSMatrix(BaseWaves):
     def base_shape(self):
         return (len(self),) + super().base_shape
 
-    def dummy_probes(self, scan: BaseScan = None, ctf: CTF = None) -> Probe:
+    def dummy_probes(
+        self, scan: BaseScan = None, ctf: CTF = None, plane: str = "entrance"
+    ) -> Probe:
         """
         A probe or an ensemble of probes equivalent reducing the SMatrix at a single positions, assuming an empty
         potential.
@@ -107,6 +109,21 @@ class BaseSMatrix(BaseWaves):
 
         if ctf is None:
             ctf = CTF(energy=self.energy, semiangle_cutoff=self.semiangle_cutoff)
+        else:
+            ctf = ctf.copy()
+
+        if plane == "exit":
+            defocus = 0.
+            if hasattr(self, "potential"):
+                if self.potential is not None:
+                    defocus = self.potential.thickness
+
+            elif "accumulated_defocus" in self.metadata:
+                defocus = self.metadata["accumulated_defocus"]
+
+            ctf.defocus = ctf.defocus - defocus
+
+        ctf.semiangle_cutoff = min(ctf.semiangle_cutoff, self.semiangle_cutoff)
 
         probes = Probe._from_ctf(
             extent=self.window_extent,
@@ -1282,6 +1299,13 @@ class SMatrix(BaseSMatrix, Ensemble):
     def tilt(self):
         return 0.0, 0.0
 
+    @property
+    def thickness(self):
+        if self.potential is not None:
+            return self.potential.thickness
+        else:
+            return 0.
+
     def round_gpts_to_interpolation(self) -> "SMatrix":
         """
         Round the gpts of the SMatrix to the closest multiple of the interpolation factor.
@@ -1578,7 +1602,6 @@ class SMatrix(BaseSMatrix, Ensemble):
             waves = waves.downsample(
                 gpts=s_matrix.downsampled_gpts,
                 normalization="intensity",
-                overwrite_x=True,
             )
 
         if s_matrix.store_on_host and s_matrix.device == "gpu":

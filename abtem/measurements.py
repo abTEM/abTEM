@@ -606,6 +606,10 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         kwargs["ensemble_axes_metadata"] = (
             axes_metadata + kwargs["ensemble_axes_metadata"]
         )
+
+        kwargs["metadata"]["label"] = "electron count"
+        kwargs["metadata"].pop("units", None)
+
         return self.__class__(**kwargs)
 
     def to_hyperspy(self):
@@ -1012,6 +1016,7 @@ class Images(BaseMeasurement):
         margin: float = 0.0,
         order: int = 3,
         endpoint: bool = False,
+        fractional: bool = False,
     ) -> "RealSpaceLineProfiles":
         """
         Interpolate image(s) along a given line. Either 'sampling' or 'gpts' must be provided.
@@ -1054,11 +1059,24 @@ class Images(BaseMeasurement):
         if start is None:
             start = (0.0, 0.0)
 
-        if end is None:
+        if end is None and fractional:
+            end = (0.0, 1.0)
+        elif end is None:
             end = (0.0, self.extent[0])
 
+        if fractional:
+            extent = self.extent
+        else:
+            extent = None
+
         scan = LineScan(
-            start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
+            start=start,
+            end=end,
+            gpts=gpts,
+            sampling=sampling,
+            endpoint=endpoint,
+            potential=extent,
+            fractional=fractional,
         )
 
         if margin != 0.0:

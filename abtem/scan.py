@@ -281,14 +281,18 @@ def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
         coordinate = coordinate.x, coordinate.y
 
     if fractional:
-        if potential is None:
-            raise ValueError("provide potential for fractional coordinates")
+        if isinstance(potential, BasePotential):
+            if potential is None:
+                raise ValueError("provide potential for fractional coordinates")
 
-        potential = _validate_potential(potential)
+            potential = _validate_potential(potential)
+            extent = potential.extent
+        else:
+            extent = potential
 
         coordinate = (
-            potential.extent[0] * coordinate[0],
-            potential.extent[1] * coordinate[1],
+            extent[0] * coordinate[0],
+            extent[1] * coordinate[1],
         )
 
     coordinate = coordinate if coordinate is None else tuple(coordinate)
