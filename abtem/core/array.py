@@ -17,7 +17,6 @@ from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
 from dask.utils import format_bytes
 from distributed import get_client
 from tabulate import tabulate
-from tifffile import tifffile
 
 from abtem.core import config
 from abtem.core.axes import (
@@ -645,6 +644,8 @@ class HasArray(HasAxes, CopyMixin):
         kwargs :
             Keyword arguments passed to tifffile.imwrite.
         """
+        import tifffile
+
         array = self.array
         if self.is_lazy:
             warnings.warn("lazy arrays are computed in memory before writing to tiff")
