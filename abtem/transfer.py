@@ -667,6 +667,7 @@ class _HasAberrations:
 
         for symbol, value in parameters.items():
             if symbol in ("defocus", "C10"):
+                value = _validate_distribution(value)
 
                 if isinstance(value, str) and value.lower() == "scherzer":
                     value = scherzer_defocus(self._aberration_coefficients["C30"], self.energy)
