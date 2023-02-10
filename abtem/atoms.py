@@ -513,8 +513,9 @@ def rotate_atoms_to_plane(
 
     atoms.positions[:] = atoms.positions[:][:, list(axes)]
     atoms.cell[:] = atoms.cell[:][:, list(axes)]
-    #atoms.positions[:] = np.dot(atoms.positions[:], R.T)
-    #atoms.cell[:] = np.dot(atoms.cell[:], R.T)
+
+    atoms = standardize_cell(atoms)
+
     return atoms
 
 

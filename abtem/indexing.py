@@ -41,6 +41,9 @@ def _find_independent_spots(array):
     spots = spots[half[0]:, half[1]:]
 
     spots = np.array(np.where(spots)).T
+    intensities = array[half[0] + spots[:,0], half[1] + spots[:,1]]
+
+    spots = spots[np.argsort(-intensities)]
     spot_0 = spots[0]
     spot_1 = _find_linearly_independent_row(spots[1:], spot_0)
     return spot_0, spot_1
@@ -95,12 +98,16 @@ def _planar_angle(hkl1, hkl2, cell_edges):
 def _find_consistent_miller_index_pair(spacing_1, spacing_2, angle, cell_edges):
     hkl1 = _spacing_consistent_miller_indices(spacing_1, cell_edges)[0]
     hkl2 = _spacing_consistent_miller_indices(spacing_2, cell_edges)
+
     angles = np.array([_planar_angle(hkl1, x, cell_edges) for x in hkl2])
-    return hkl1, hkl2[np.argmin(np.abs(angles - angle))]
+    hkl2 = hkl2[np.argmin(np.abs(angles - angle))]
+    return hkl1, hkl2
 
 
 def _bin_index_to_orthorhombic_miller(array, sampling, cell_edges):
+
     bin1, bin2 = _find_independent_spots(array)
+
     spacing1 = _planar_spacing_from_bin_index(bin1, sampling)
     spacing2 = _planar_spacing_from_bin_index(bin2, sampling)
     angle = _planar_angle_from_bin_indices(bin1, bin2, sampling)
@@ -108,6 +115,7 @@ def _bin_index_to_orthorhombic_miller(array, sampling, cell_edges):
     hkl1, hkl2 = _find_consistent_miller_index_pair(
         spacing1, spacing2, angle, cell_edges
     )
+
     return (bin1, bin2), (hkl1, hkl2)
 
 
@@ -156,7 +164,7 @@ def _remap_vector_space(vector_space1, vector_space2, vectors):
     return np.dot(bins_v, vector_space2)
 
 
-def _map_all_bin_indices_to_miller_indices(array, sampling, cell, tolerance=1e-6):
+def _map_all_bin_indices_to_miller_indices(array, sampling, cell):
     cell_edges, hexagonal = _validate_cell_edges(cell)
 
     (v1, v2), (u1, u2) = _bin_index_to_orthorhombic_miller(array, sampling, cell_edges)
@@ -164,10 +172,30 @@ def _map_all_bin_indices_to_miller_indices(array, sampling, cell, tolerance=1e-6
     bins = _frequency_bin_indices(array.shape)
     hkl = _remap_vector_space((v1, v2), (u1, u2), bins)
 
+    # im = diffraction_patterns[-1].block_direct().to_cpu().array
+    #
+    # s = im > im.max() * .1
+    #
+    # s = np.array(np.where(s)).T - np.array(im.shape) // 2
+    #
+    # ss = s * diffraction_patterns.sampling
+    #
+    # d = np.linalg.norm(ss, axis=1)
+
+    # k = np.arange(15) * atoms.cell.reciprocal()[0, 0]
+    #
+    # D = np.sqrt(k[:, None, None] ** 2 + k[None, :, None] ** 2 + k[None, None, :] ** 2)
+    #
+    # diff = np.abs(D - d[7])
+    # np.where(diff < diff.min() * 1.000000001)
+
     # remove fractional planes
-    mask = np.all(np.abs(hkl - np.round(hkl)) < tolerance, axis=1)
-    hkl = hkl[mask].astype(int)
-    bins = bins[mask]
+
+    hkl = np.round(hkl).astype(int)
+    #mask = np.all(np.abs(hkl - np.round(hkl)) < 1e-3, axis=1)
+    #print((hkl == 4).sum())
+    #hkl = hkl[mask].astype(int)
+    #bins = bins[mask]
 
     if hexagonal:
         hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
@@ -221,23 +249,34 @@ def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
     return spots
 
 
-def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = 1e-6):
+def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = .01):
     if len(diffraction_patterns.shape) > 3:
         raise NotImplementedError
     elif len(diffraction_patterns.shape) == 3:
         array = diffraction_patterns.array.sum(-3)
-        ensemble_shape = diffraction_patterns.array.shape[-3]
+        #ensemble_shape = diffraction_patterns.array.shape[-3]
     else:
         array = diffraction_patterns.array
-        ensemble_shape = 1
+        #ensemble_shape = 1
 
     bins, miller_indices = _map_all_bin_indices_to_miller_indices(
-        array, diffraction_patterns.sampling, cell, tolerance=tol * ensemble_shape
+        array, diffraction_patterns.sampling, cell
     )
 
+    intensities = diffraction_patterns._select_frequency_bin(bins).sum(0)
+
+    #print()
+
+    mask = intensities > intensities.max() * tol
+    bins = bins[mask]
+    miller_indices = miller_indices[mask]
+
     unique, indices = np.unique(miller_indices, axis=0, return_index=True)
+
     miller_indices = miller_indices[indices]
     bins = bins[indices]
+
+    #print(miller_indices.shape)
 
     all_intensities = diffraction_patterns._select_frequency_bin(bins)
 
@@ -420,7 +459,7 @@ class IndexedDiffractionPatterns:
             cls,
             diffraction_patterns: "DiffractionPatterns",
             cell: Union[Cell, float, Tuple[float, float, float]],
-            tol: float = 1e-6,
+            tol: float = .01,
     ) -> "IndexedDiffractionPatterns":
 
         bins, spots = _index_diffraction_patterns(diffraction_patterns, cell, tol=tol)
@@ -487,7 +526,7 @@ class IndexedDiffractionPatterns:
             indexed = indexed.normalize_intensity(spot=normalize)
 
         spots = {
-            "".join(map(str, list(hkl))): intensity
+            " ".join(map(str, list(hkl))): intensity
             for hkl, intensity in indexed._spots.items()
         }
         spots = dict(sorted(spots.items()))

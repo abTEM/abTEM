@@ -15,7 +15,7 @@ import zarr
 from dask.array.utils import validate_axis
 from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
 from dask.utils import format_bytes
-from distributed import get_client
+from dask.distributed import get_client
 from tabulate import tabulate
 
 from abtem.core import config
@@ -31,7 +31,9 @@ from abtem.core.axes import (
 from abtem.core.backend import (
     get_array_module,
     copy_to_device,
+    cp,
     device_name_from_array_module,
+    check_cupy_is_installed,
 )
 from abtem.core.chunks import Chunks
 from abtem.core.utils import normalize_axes, CopyMixin
@@ -110,14 +112,12 @@ def _compute_context(
 
     try:
         client = get_client()
-        client.run(config.set, config.config)
+        client.run(config.set, *config.config)
+        worker_saturation = config.get("dask.worker-saturation")
         client.run(
-            dask.config.set,
-            {
-                "distributed.scheduler.worker-saturation": config.get(
-                    "dask.worker-saturation"
-                )
-            },
+            dask.config.set(
+                {"distributed.scheduler.worker-saturation": worker_saturation}
+            )
         )
 
     except ValueError:
@@ -144,6 +144,15 @@ def _compute(
     #     cache = cp.fft.config.get_plan_cache()
     #     cache_size = parse_bytes(config.get('cupy.fft-cache-size'))
     #     cache.set_size(cache_size)
+
+    if config.get("device") == "gpu":
+        check_cupy_is_installed()
+
+        if not "num_workers" in kwargs:
+            kwargs["num_workers"] = cp.cuda.runtime.getDeviceCount()
+
+        if not "threads_per_worker" in kwargs:
+            kwargs["threads_per_worker"] = cp.cuda.runtime.getDeviceCount()
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler

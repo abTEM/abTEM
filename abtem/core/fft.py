@@ -1,5 +1,4 @@
-import functools
-from typing import Tuple, OrderedDict
+from typing import Tuple
 
 try:
     import pyfftw
@@ -13,7 +12,6 @@ from abtem.core import config
 from abtem.core.backend import get_array_module, check_cupy_is_installed
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
-from threading import local
 from threadpoolctl import threadpool_limits
 
 try:

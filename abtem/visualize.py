@@ -613,7 +613,7 @@ def _show_indexed_diffraction_pattern(
 
     if overlay_indices:
         indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent(
-            divide_threshold=inequivalency_threshold
+            inequivalency_threshold=inequivalency_threshold
         )
         coordinates = indexed_diffraction_pattern._vectors
         coordinates = coordinates / normalize_coordinates
@@ -622,7 +622,7 @@ def _show_indexed_diffraction_pattern(
 
         for hkl, coordinate in zip(miller_indices, coordinates):
             t = ax.annotate(
-                "".join(map(str, list(hkl))),
+                " ".join(map(str, list(hkl))),
                 coordinate,
                 ha="center",
                 va="center",
@@ -677,7 +677,7 @@ def _merge_positions(positions, plane, tol: float = 1e-7) -> np.ndarray:
 
     new_positions = np.zeros((len(unique), 3))
     for i, label in enumerate(label_to_index(labels)):
-        top_atom = np.argmax(positions[label][:, axes[2]])
+        top_atom = np.argmax(-positions[label][:, axes[2]])
         new_positions[i] = positions[label][top_atom]
         # new_positions[i, axes[2]] = np.max(positions[label][top_atom, axes[2]])
 
@@ -733,7 +733,8 @@ def show_atoms(
         atoms = atoms.copy()
         atoms = pad_atoms(atoms, margins=1e-3)
 
-    atoms = _merge_columns(atoms, plane, merge)
+    if merge > 0.:
+        atoms = _merge_columns(atoms, plane, merge)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -753,7 +754,7 @@ def show_atoms(
 
     if len(atoms) > 0:
         positions = atoms.positions[:, axes[:2]]
-        order = np.argsort(atoms.positions[:, axes[2]])
+        order = np.argsort(-atoms.positions[:, axes[2]])
         positions = positions[order]
 
         colors = jmol_colors[atoms.numbers[order]]
@@ -773,6 +774,9 @@ def show_atoms(
         ax.set_title(title)
 
         if numbering:
+            if merge:
+                raise ValueError("atom numbering requires 'merge' to be False")
+
             for i, (position, size) in enumerate(zip(positions, sizes)):
                 ax.annotate(
                     "{}".format(order[i]), xy=position, ha="center", va="center"
