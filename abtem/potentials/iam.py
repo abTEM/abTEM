@@ -55,7 +55,7 @@ from abtem.atoms import (
     best_orthogonal_cell,
     cut_cell,
     rotation_matrix_from_plane,
-    pad_atoms, plane_to_axes, standardize_cell,
+    pad_atoms, plane_to_axes, standardize_cell, rotate_atoms_to_plane,
 )
 
 if TYPE_CHECKING:
@@ -627,7 +627,10 @@ class Potential(_PotentialBuilder):
 
         cutoffs = self._cutoffs()
 
-        if tuple(np.diag(atoms.cell)) != self.box:
+        if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
+            atoms = rotate_atoms_to_plane(atoms, self.plane)
+
+        elif tuple(np.diag(atoms.cell)) != self.box:
             if self.periodic:
                 atoms = orthogonalize_cell(
                     atoms,
