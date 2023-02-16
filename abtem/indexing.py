@@ -38,10 +38,10 @@ def _find_linearly_independent_row(array, row, tol: float = 1e-6):
 def _find_independent_spots(array):
     spots = array > array.max() * 1e-2
     half = array.shape[0] // 2, array.shape[1] // 2
-    spots = spots[half[0]:, half[1]:]
+    spots = spots[half[0] :, half[1] :]
 
     spots = np.array(np.where(spots)).T
-    intensities = array[half[0] + spots[:,0], half[1] + spots[:,1]]
+    intensities = array[half[0] + spots[:, 0], half[1] + spots[:, 1]]
 
     spots = spots[np.argsort(-intensities)]
     spot_0 = spots[0]
@@ -62,9 +62,9 @@ def _planar_angle_from_bin_indices(index1, index2, sampling):
 
 def _orthorhombic_spacings(indices, d):
     g = (
-            indices[:, None, None] ** 2 / d[0] ** 2
-            + indices[None, :, None] ** 2 / d[1] ** 2
-            + indices[None, None] ** 2 / d[2] ** 2
+        indices[:, None, None] ** 2 / d[0] ** 2
+        + indices[None, :, None] ** 2 / d[1] ** 2
+        + indices[None, None] ** 2 / d[2] ** 2
     )
 
     planes = np.zeros_like(g)
@@ -89,9 +89,9 @@ def _planar_angle(hkl1, hkl2, cell_edges):
     h1, k1, l1 = hkl1
     h2, k2, l2 = hkl2
     a, b, c = cell_edges
-    d1 = 1 / a ** 2 * h1 ** 2 + 1 / b ** 2 * k1 ** 2 + 1 / c ** 2 * l1 ** 2
-    d2 = 1 / a ** 2 * h2 ** 2 + 1 / b ** 2 * k2 ** 2 + 1 / c ** 2 * l2 ** 2
-    d3 = 1 / a ** 2 * h1 * h2 + 1 / b ** 2 * k1 * k2 + 1 / c ** 2 * l1 * l2
+    d1 = 1 / a**2 * h1**2 + 1 / b**2 * k1**2 + 1 / c**2 * l1**2
+    d2 = 1 / a**2 * h2**2 + 1 / b**2 * k2**2 + 1 / c**2 * l2**2
+    d3 = 1 / a**2 * h1 * h2 + 1 / b**2 * k1 * k2 + 1 / c**2 * l1 * l2
     return np.arccos(d3 / np.sqrt(d1 * d2))
 
 
@@ -192,16 +192,48 @@ def _map_all_bin_indices_to_miller_indices(array, sampling, cell):
     # remove fractional planes
 
     hkl = np.round(hkl).astype(int)
-    #mask = np.all(np.abs(hkl - np.round(hkl)) < 1e-3, axis=1)
-    #print((hkl == 4).sum())
-    #hkl = hkl[mask].astype(int)
-    #bins = bins[mask]
+    # mask = np.all(np.abs(hkl - np.round(hkl)) < 1e-3, axis=1)
+    # print((hkl == 4).sum())
+    # hkl = hkl[mask].astype(int)
+    # bins = bins[mask]
 
     if hexagonal:
         hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
         hkl = _miller_to_miller_bravais(hkl)
 
     return bins, hkl
+
+
+# r_indices(hkl):
+#     is_negation = np.zeros((len(hkl), len(hkl)), dtype=bool)
+#
+#     for i in range(hkl.shape[1]):
+#         negated = hkl.copy()
+#         negated[:, i] = -negated[:, i]
+#         is_negation += np.all(hkl[:, None] == negated[None], axis=2)
+#
+#     is_negation += np.all(hkl[:, None] == -hkl[None], axis=2)
+#
+#     sorted = np.sort(hkl, axis=1)
+#     is_permutation = np.all(sorted[:, None] == sorted[None], axis=-1)
+#
+#     is_connected = is_negation + is_permutation
+#
+#     n, labels = connected_components(csr_matrix(is_connected))
+#
+#     return labels
+
+
+def _split_at_threshold(values, threshold):
+    order = np.argsort(values)
+    max_value = values.max()
+
+    split = (np.diff(values[order]) > (max_value * threshold)) * (
+        np.diff(values[order]) > 1e-6
+    )
+
+    split = np.insert(split, 0, False)
+    return np.cumsum(split)[np.argsort(order)]
 
 
 def _equivalent_miller_indices(hkl):
@@ -224,16 +256,24 @@ def _equivalent_miller_indices(hkl):
     return labels
 
 
-def _split_at_threshold(values, threshold):
-    order = np.argsort(values)
-    max_value = values.max()
-
-    split = (np.diff(values[order]) > (max_value * threshold)) * (
-            np.diff(values[order]) > 1e-6
-    )
-
-    split = np.insert(split, 0, False)
-    return np.cumsum(split)[np.argsort(order)]
+# r_indices(hkl):
+#     is_negation = np.zeros((len(hkl), len(hkl)), dtype=bool)
+#
+#     for i in range(hkl.shape[1]):
+#         negated = hkl.copy()
+#         negated[:, i] = -negated[:, i]
+#         is_negation += np.all(hkl[:, None] == negated[None], axis=2)
+#
+#     is_negation += np.all(hkl[:, None] == -hkl[None], axis=2)
+#
+#     sorted = np.sort(hkl, axis=1)
+#     is_permutation = np.all(sorted[:, None] == sorted[None], axis=-1)
+#
+#     is_connected = is_negation + is_permutation
+#
+#     n, labels = connected_components(csr_matrix(is_connected))
+#
+#     return labels
 
 
 def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
@@ -249,15 +289,13 @@ def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
     return spots
 
 
-def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = .01):
+def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = 0.000001):
     if len(diffraction_patterns.shape) > 3:
         raise NotImplementedError
     elif len(diffraction_patterns.shape) == 3:
         array = diffraction_patterns.array.sum(-3)
-        #ensemble_shape = diffraction_patterns.array.shape[-3]
     else:
         array = diffraction_patterns.array
-        #ensemble_shape = 1
 
     bins, miller_indices = _map_all_bin_indices_to_miller_indices(
         array, diffraction_patterns.sampling, cell
@@ -265,9 +303,8 @@ def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = .01):
 
     intensities = diffraction_patterns._select_frequency_bin(bins).sum(0)
 
-    #print()
-
     mask = intensities > intensities.max() * tol
+
     bins = bins[mask]
     miller_indices = miller_indices[mask]
 
@@ -276,9 +313,11 @@ def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = .01):
     miller_indices = miller_indices[indices]
     bins = bins[indices]
 
-    #print(miller_indices.shape)
+    bins = np.squeeze(bins)
 
     all_intensities = diffraction_patterns._select_frequency_bin(bins)
+
+    miller_indices = np.squeeze(miller_indices)
 
     spots = {
         tuple(hkl): intensities
@@ -290,12 +329,12 @@ def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = .01):
 
 
 def tabulate_diffraction_pattern(
-        diffraction_pattern,
-        cell,
-        return_data_frame: bool = False,
-        normalize: bool = True,
-        spot_threshold: float = 0.01,
-        intensity_split: float = 1.0,
+    diffraction_pattern,
+    cell,
+    return_data_frame: bool = False,
+    normalize: bool = True,
+    spot_threshold: float = 0.01,
+    intensity_split: float = 1.0,
 ):
     # if len(diffraction_pattern.ensemble_shape) > 0:
     # raise NotImplementedError("tabulating not implemented for ensembles, select a single pattern by indexing")
@@ -377,7 +416,9 @@ class IndexedDiffractionPatterns:
     def vectors(self) -> np.ndarray:
         return self._vectors
 
-    def remove_equivalent(self, inequivalency_threshold: float = 1.0) -> "IndexedDiffractionPatterns":
+    def remove_equivalent(
+        self, inequivalency_threshold: float = 1.0
+    ) -> "IndexedDiffractionPatterns":
         """
         Remove symmetry equivalent diffraction spots.
 
@@ -456,10 +497,10 @@ class IndexedDiffractionPatterns:
 
     @classmethod
     def index_diffraction_patterns(
-            cls,
-            diffraction_patterns: "DiffractionPatterns",
-            cell: Union[Cell, float, Tuple[float, float, float]],
-            tol: float = .01,
+        cls,
+        diffraction_patterns: "DiffractionPatterns",
+        cell: Union[Cell, float, Tuple[float, float, float]],
+        tol: float = 0.01,
     ) -> "IndexedDiffractionPatterns":
 
         bins, spots = _index_diffraction_patterns(diffraction_patterns, cell, tol=tol)
@@ -490,10 +531,10 @@ class IndexedDiffractionPatterns:
         return self.__class__(spots, self._vectors)
 
     def to_dataframe(
-            self,
-            intensity_threshold: float = 1e-3,
-            inequivalency_threshold: float = 1.0,
-            normalize: bool = False,
+        self,
+        intensity_threshold: float = 1e-3,
+        inequivalency_threshold: float = 1.0,
+        normalize: bool = False,
     ):
         """
         Convert the indexed diffraction to pandas dataframe.
@@ -516,7 +557,9 @@ class IndexedDiffractionPatterns:
 
         import pandas as pd
 
-        indexed = self.remove_equivalent(inequivalency_threshold=inequivalency_threshold)
+        indexed = self.remove_equivalent(
+            inequivalency_threshold=inequivalency_threshold
+        )
 
         indexed = indexed.remove_low_intensity(intensity_threshold)
 
@@ -555,6 +598,6 @@ class IndexedDiffractionPatterns:
         if self.ensemble_shape:
             indexed_diffraction_patterns = indexed_diffraction_patterns[
                 (0,) * len(self.ensemble_shape)
-                ]
+            ]
 
         return _show_indexed_diffraction_pattern(indexed_diffraction_patterns, **kwargs)
