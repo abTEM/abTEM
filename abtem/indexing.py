@@ -289,28 +289,32 @@ def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
     return spots
 
 
-def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = 0.000001):
+def _index_diffraction_patterns(diffraction_patterns, cell, tol: float = 0.0001):
     if len(diffraction_patterns.shape) > 3:
         raise NotImplementedError
     elif len(diffraction_patterns.shape) == 3:
+        is_series =True
         array = diffraction_patterns.array.sum(-3)
     else:
+        is_series = False
         array = diffraction_patterns.array
 
     bins, miller_indices = _map_all_bin_indices_to_miller_indices(
         array, diffraction_patterns.sampling, cell
     )
+    intensities = diffraction_patterns._select_frequency_bin(bins)#.sum(0)
 
-    intensities = diffraction_patterns._select_frequency_bin(bins).sum(0)
+    if is_series:
+        intensities = intensities.sum(0)
 
     mask = intensities > intensities.max() * tol
 
     bins = bins[mask]
     miller_indices = miller_indices[mask]
 
-    unique, indices = np.unique(miller_indices, axis=0, return_index=True)
+    unique, indices = np.unique(miller_indices, axis=-2, return_index=True)
 
-    miller_indices = miller_indices[indices]
+    miller_indices = miller_indices[..., indices, :]
     bins = bins[indices]
 
     bins = np.squeeze(bins)
