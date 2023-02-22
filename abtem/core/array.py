@@ -71,8 +71,15 @@ class ComputableList(list):
 
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
-        ) as (a, b, c, d, e):
-            output, profilers = dask.compute(computables, **kwargs)[0]
+        ) as (_, profiler, resource_profiler, _):
+            output = dask.compute(computables, **kwargs)[0]
+
+        profilers = ()
+        if profiler is not None:
+            profilers += (profiler,)
+
+        if resource_profiler is not None:
+            profilers += (resource_profiler,)
 
         if profilers:
             return output, profilers
@@ -127,10 +134,13 @@ def _compute_context(
         "optimization.fuse.active": config.get("dask.fuse"),
     }
 
-    with progress_bar as a, profiler as c, resource_profiler as d, dask.config.set(
-        dask_configuration
-    ) as e:
-        yield a, c, d, e
+    with (
+        progress_bar as progress_bar,
+        profiler as profiler,
+        resource_profiler as resource_profiler,
+        dask.config.set(dask_configuration) as dask_configuration,
+    ):
+        yield progress_bar, profiler, resource_profiler, dask_configuration
 
 
 def _compute(
