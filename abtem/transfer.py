@@ -587,7 +587,7 @@ class _HasAberrations:
             if not np.isscalar(self._aberration_coefficients[symbol]):
                 return True
 
-            if not np.all(self._aberration_coefficients[symbol] != 0.0):
+            if not self._aberration_coefficients[symbol] == 0.0:
                 return True
 
         return False
@@ -960,7 +960,6 @@ class Aberrations(
         phi = xp.expand_dims(phi, axis=axis)
 
         array = xp.zeros(alpha.shape, dtype=np.float32)
-
         if self._nonzero_coefficients(("C10", "C12", "phi12")):
             array = array + (
                     1
