@@ -120,6 +120,7 @@ def _add_imshow(
     vmin,
     vmax,
     complex_coloring_kwargs=None,
+    interpolation="none",
     **kwargs,
 ):
     if power != 1:
@@ -137,7 +138,15 @@ def _add_imshow(
             array, vmin=vmin, vmax=vmax, **complex_coloring_kwargs
         )
 
-    im = ax.imshow(array, extent=extent, origin="lower", vmin=vmin, vmax=vmax, **kwargs)
+    im = ax.imshow(
+        array,
+        extent=extent,
+        origin="lower",
+        vmin=vmin,
+        vmax=vmax,
+        interpolation=interpolation,
+        **kwargs,
+    )
 
     if title:
         ax.set_title(title)
@@ -314,7 +323,9 @@ def show_measurement_2d(
             image_grid_kwargs["cbar_pad"] = 0.05
 
     if cbar and np.iscomplexobj(measurements.array) and measurements.ensemble_shape:
-        raise NotImplementedError("colorbar not implemented for exploded plot with domain coloring")
+        raise NotImplementedError(
+            "colorbar not implemented for exploded plot with domain coloring"
+        )
 
     measurements = measurements[(0,) * max(len(measurements.ensemble_shape) - 2, 0)]
 
@@ -695,7 +706,8 @@ def show_atoms(
     figsize: Tuple[float, float] = None,
     legend: bool = False,
     merge: float = 1e-2,
-    **kwargs
+    show_cell: bool = True,
+    **kwargs,
 ):
     """
     Display 2D projection of atoms as a matplotlib plot.
@@ -733,7 +745,7 @@ def show_atoms(
         atoms = atoms.copy()
         atoms = pad_atoms(atoms, margins=1e-3)
 
-    if merge > 0.:
+    if merge > 0.0:
         atoms = _merge_columns(atoms, plane, merge)
 
     if ax is None:
@@ -749,8 +761,9 @@ def show_atoms(
     )
     cell_lines_x, cell_lines_y = cell_lines[..., axes[0]], cell_lines[..., axes[1]]
 
-    for cell_line_x, cell_line_y in zip(cell_lines_x, cell_lines_y):
-        ax.plot(cell_line_x, cell_line_y, "k-")
+    if show_cell:
+        for cell_line_x, cell_line_y in zip(cell_lines_x, cell_lines_y):
+            ax.plot(cell_line_x, cell_line_y, "k-")
 
     if len(atoms) > 0:
         positions = atoms.positions[:, axes[:2]]
