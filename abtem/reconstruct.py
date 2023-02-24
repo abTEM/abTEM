@@ -19,8 +19,9 @@ from abtem.core.backend import (
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2_convolve, fft_shift
 from abtem.measurements import DiffractionPatterns, Images, _scan_sampling
-from abtem.transfer import CTF, polar_symbols, polar_aliases
-from abtem.waves import Probe, FresnelPropagator
+from abtem.transfer import polar_symbols, polar_aliases
+from abtem.waves import Probe
+from abtem.multislice import FresnelPropagator
 
 experimental_symbols = (
     "rotation_angle",
@@ -354,22 +355,6 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         angular_sampling = measurement.angular_sampling
         diffraction_patterns = measurement.array
         step_sizes = _scan_sampling(measurement)
-
-        #
-        # if any(unit != "mrad" and unit != "1/Å" for unit in calibration_units[-2:]):
-        #     raise ValueError()
-
-        # angular_sampling = []
-        # for cal, cal_unit in zip(calibrations[-2:], calibration_units[-2:]):
-        #     scale_factor = (
-        #         1.0 if cal_unit == "mrad" else energy2wavelength(energy) * 1e3
-        #     )
-        #     angular_sampling.append(cal.sampling * scale_factor)
-        # angular_sampling = tuple(angular_sampling)
-        #
-        # step_sizes = None
-        # if len(diffraction_patterns.shape) == 4:
-        #     step_sizes = tuple(cal.sampling for cal in calibrations[:2])
 
         return diffraction_patterns, angular_sampling, step_sizes
 
