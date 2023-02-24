@@ -34,14 +34,14 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
     """Base class for apertures. Documented in the subclasses."""
 
     def __init__(
-            self,
-            semiangle_cutoff: float = None,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            *args,
-            **kwargs,
+        self,
+        semiangle_cutoff: float = None,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        *args,
+        **kwargs,
     ):
         self._semiangle_cutoff = semiangle_cutoff
         super().__init__(
@@ -100,7 +100,9 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
 
         if lazy:
             array = dask.delayed(self._evaluate_from_cropped)(gpts=self.gpts)
-            array = da.from_delayed(array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts)
+            array = da.from_delayed(
+                array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts
+            )
             return array
         else:
             return self._evaluate_from_cropped(gpts=self.gpts)
@@ -128,13 +130,13 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
     """
 
     def __init__(
-            self,
-            semiangle_cutoff: Union[float, BaseDistribution],
-            soft: bool = True,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
+        self,
+        semiangle_cutoff: Union[float, BaseDistribution],
+        soft: bool = True,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
     ):
         semiangle_cutoff = _validate_distribution(semiangle_cutoff)
         self._soft = soft
@@ -175,7 +177,7 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         return self._soft
 
     def _evaluate_with_alpha_and_phi(
-            self, alpha: Union[float, np.ndarray], phi
+        self, alpha: Union[float, np.ndarray], phi
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
@@ -199,17 +201,19 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         phi = xp.expand_dims(phi, axis=tuple(range(0, self._num_ensemble_axes)))
 
         denominator = xp.sqrt(
-            (xp.cos(phi) * angular_sampling[0]) ** 2 +
-            (xp.sin(phi) * angular_sampling[1]) ** 2
+            (xp.cos(phi) * angular_sampling[0]) ** 2
+            + (xp.sin(phi) * angular_sampling[1]) ** 2
         )
 
         zeros = (slice(None),) * len(self.ensemble_shape) + (0,) * (
-                len(denominator.shape) - len(self.ensemble_shape)
+            len(denominator.shape) - len(self.ensemble_shape)
         )
 
         denominator[zeros] = 1.0
 
-        array = xp.clip((semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0)
+        array = xp.clip(
+            (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
+        )
         array[zeros] = 1.0
 
         return array
@@ -242,16 +246,16 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
     """
 
     def __init__(
-            self,
-            num_spokes: int,
-            spoke_width: float,
-            num_rings: int,
-            ring_width: float,
-            semiangle_cutoff: float,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
+        self,
+        num_spokes: int,
+        spoke_width: float,
+        num_rings: int,
+        ring_width: float,
+        semiangle_cutoff: float,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
     ):
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
@@ -286,7 +290,7 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
         return self._semiangle_cutoff
 
     def _evaluate_with_alpha_and_phi(
-            self, alpha: Union[float, np.ndarray], phi
+        self, alpha: Union[float, np.ndarray], phi
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
@@ -297,9 +301,9 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
 
         # add crossbars
         array = array * (
-                ((phi + np.pi * self.spoke_width / (180 * 2)) * self.num_spokes)
-                % (2 * np.pi)
-                > (np.pi * self.spoke_width / 180 * self.num_spokes)
+            ((phi + np.pi * self.spoke_width / (180 * 2)) * self.num_spokes)
+            % (2 * np.pi)
+            > (np.pi * self.spoke_width / 180 * self.num_spokes)
         )
 
         # add ring bars
@@ -335,13 +339,13 @@ class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
     """
 
     def __init__(
-            self,
-            quantum_number: int,
-            semiangle_cutoff: float,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
+        self,
+        quantum_number: int,
+        semiangle_cutoff: float,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
     ):
         self._quantum_number = quantum_number
         super().__init__(
@@ -361,7 +365,7 @@ class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
         return self._semiangle_cutoff
 
     def _evaluate_with_alpha_and_phi(
-            self, alpha: Union[float, np.ndarray], phi
+        self, alpha: Union[float, np.ndarray], phi
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
@@ -394,12 +398,12 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
     """
 
     def __init__(
-            self,
-            focal_spread: Union[float, BaseDistribution],
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
+        self,
+        focal_spread: Union[float, BaseDistribution],
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
     ):
 
         self._accelerator = Accelerator(energy=energy)
@@ -435,7 +439,7 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
             return []
 
     def _evaluate_with_alpha_and_phi(
-            self, alpha: Union[float, np.ndarray], phi
+        self, alpha: Union[float, np.ndarray], phi
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
@@ -446,7 +450,7 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
 
         array = xp.exp(
-            -((0.5 * xp.pi / self.wavelength * focal_spread * alpha ** 2) ** 2)
+            -((0.5 * xp.pi / self.wavelength * focal_spread * alpha**2) ** 2)
         ).astype(xp.float32)
 
         return array
@@ -638,7 +642,7 @@ class _HasAberrations:
 
     @property
     def has_aberrations(self):
-        if np.all(np.array(list(self._aberration_coefficients.values())) == 0.):
+        if np.all(np.array(list(self._aberration_coefficients.values())) == 0.0):
             return False
         else:
             return True
@@ -671,15 +675,18 @@ class _HasAberrations:
 
                 if isinstance(value, str) and value.lower() == "scherzer":
                     if self.energy is None:
-                        raise RuntimeError("energy undefined, Scherzer defocus cannot be evaluated")
+                        raise RuntimeError(
+                            "energy undefined, Scherzer defocus cannot be evaluated"
+                        )
 
-                    value = scherzer_defocus(self._aberration_coefficients["C30"], self.energy)
+                    value = scherzer_defocus(
+                        self._aberration_coefficients["C30"], self.energy
+                    )
 
                 if symbol == "defocus":
                     value = -value
 
                 self._aberration_coefficients["C10"] = value
-
 
 
 polar_symbols = _HasAberrations._symbols()
@@ -714,14 +721,14 @@ class SpatialEnvelope(
     """
 
     def __init__(
-            self,
-            angular_spread: Union[float, BaseDistribution],
-            aberration_coefficients: dict = None,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            **kwargs,
+        self,
+        angular_spread: Union[float, BaseDistribution],
+        aberration_coefficients: dict = None,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        **kwargs,
     ):
         super().__init__(
             distributions=polar_symbols + ("angular_spread",),
@@ -763,7 +770,7 @@ class SpatialEnvelope(
         self._angular_spread = value
 
     def _evaluate_with_alpha_and_phi(
-            self, alpha: Union[float, np.ndarray], phi
+        self, alpha: Union[float, np.ndarray], phi
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
@@ -779,107 +786,105 @@ class SpatialEnvelope(
         xp = get_array_module(alpha)
 
         dchi_dk = (
-                2
-                * xp.pi
-                / self.wavelength
-                * (
-                        (
-                                parameters["C12"] * xp.cos(2.0 * (phi - parameters["phi12"]))
-                                + parameters["C10"]
-                        )
-                        * alpha
-                        + (
-                                parameters["C23"] * xp.cos(3.0 * (phi - parameters["phi23"]))
-                                + parameters["C21"] * xp.cos(1.0 * (phi - parameters["phi21"]))
-                        )
-                        * alpha ** 2
-                        + (
-                                parameters["C34"] * xp.cos(4.0 * (phi - parameters["phi34"]))
-                                + parameters["C32"] * xp.cos(2.0 * (phi - parameters["phi32"]))
-                                + parameters["C30"]
-                        )
-                        * alpha ** 3
-                        + (
-                                parameters["C45"] * xp.cos(5.0 * (phi - parameters["phi45"]))
-                                + parameters["C43"] * xp.cos(3.0 * (phi - parameters["phi43"]))
-                                + parameters["C41"] * xp.cos(1.0 * (phi - parameters["phi41"]))
-                        )
-                        * alpha ** 4
-                        + (
-                                parameters["C56"] * xp.cos(6.0 * (phi - parameters["phi56"]))
-                                + parameters["C54"] * xp.cos(4.0 * (phi - parameters["phi54"]))
-                                + parameters["C52"] * xp.cos(2.0 * (phi - parameters["phi52"]))
-                                + parameters["C50"]
-                        )
-                        * alpha ** 5
+            2
+            * xp.pi
+            / self.wavelength
+            * (
+                (
+                    parameters["C12"] * xp.cos(2.0 * (phi - parameters["phi12"]))
+                    + parameters["C10"]
                 )
+                * alpha
+                + (
+                    parameters["C23"] * xp.cos(3.0 * (phi - parameters["phi23"]))
+                    + parameters["C21"] * xp.cos(1.0 * (phi - parameters["phi21"]))
+                )
+                * alpha**2
+                + (
+                    parameters["C34"] * xp.cos(4.0 * (phi - parameters["phi34"]))
+                    + parameters["C32"] * xp.cos(2.0 * (phi - parameters["phi32"]))
+                    + parameters["C30"]
+                )
+                * alpha**3
+                + (
+                    parameters["C45"] * xp.cos(5.0 * (phi - parameters["phi45"]))
+                    + parameters["C43"] * xp.cos(3.0 * (phi - parameters["phi43"]))
+                    + parameters["C41"] * xp.cos(1.0 * (phi - parameters["phi41"]))
+                )
+                * alpha**4
+                + (
+                    parameters["C56"] * xp.cos(6.0 * (phi - parameters["phi56"]))
+                    + parameters["C54"] * xp.cos(4.0 * (phi - parameters["phi54"]))
+                    + parameters["C52"] * xp.cos(2.0 * (phi - parameters["phi52"]))
+                    + parameters["C50"]
+                )
+                * alpha**5
+            )
         )
 
         dchi_dphi = (
-                -2
-                * xp.pi
-                / self.wavelength
+            -2
+            * xp.pi
+            / self.wavelength
+            * (
+                1
+                / 2.0
+                * (2.0 * parameters["C12"] * xp.sin(2.0 * (phi - parameters["phi12"])))
+                * alpha
+                + 1
+                / 3.0
                 * (
-                        1
-                        / 2.0
-                        * (2.0 * parameters["C12"] * xp.sin(2.0 * (phi - parameters["phi12"])))
-                        * alpha
-                        + 1
-                        / 3.0
-                        * (
-                                3.0 * parameters["C23"] * xp.sin(3.0 * (phi - parameters["phi23"]))
-                                + 1.0
-                                * parameters["C21"]
-                                * xp.sin(1.0 * (phi - parameters["phi21"]))
-                        )
-                        * alpha ** 2
-                        + 1
-                        / 4.0
-                        * (
-                                4.0 * parameters["C34"] * xp.sin(4.0 * (phi - parameters["phi34"]))
-                                + 2.0
-                                * parameters["C32"]
-                                * xp.sin(2.0 * (phi - parameters["phi32"]))
-                        )
-                        * alpha ** 3
-                        + 1
-                        / 5.0
-                        * (
-                                5.0 * parameters["C45"] * xp.sin(5.0 * (phi - parameters["phi45"]))
-                                + 3.0
-                                * parameters["C43"]
-                                * xp.sin(3.0 * (phi - parameters["phi43"]))
-                                + 1.0
-                                * parameters["C41"]
-                                * xp.sin(1.0 * (phi - parameters["phi41"]))
-                        )
-                        * alpha ** 4
-                        + (1 / 6.0)
-                        * (
-                                6.0 * parameters["C56"] * xp.sin(6.0 * (phi - parameters["phi56"]))
-                                + 4.0
-                                * parameters["C54"]
-                                * xp.sin(4.0 * (phi - parameters["phi54"]))
-                                + 2.0
-                                * parameters["C52"]
-                                * xp.sin(2.0 * (phi - parameters["phi52"]))
-                        )
-                        * alpha ** 5
+                    3.0 * parameters["C23"] * xp.sin(3.0 * (phi - parameters["phi23"]))
+                    + 1.0
+                    * parameters["C21"]
+                    * xp.sin(1.0 * (phi - parameters["phi21"]))
                 )
+                * alpha**2
+                + 1
+                / 4.0
+                * (
+                    4.0 * parameters["C34"] * xp.sin(4.0 * (phi - parameters["phi34"]))
+                    + 2.0
+                    * parameters["C32"]
+                    * xp.sin(2.0 * (phi - parameters["phi32"]))
+                )
+                * alpha**3
+                + 1
+                / 5.0
+                * (
+                    5.0 * parameters["C45"] * xp.sin(5.0 * (phi - parameters["phi45"]))
+                    + 3.0
+                    * parameters["C43"]
+                    * xp.sin(3.0 * (phi - parameters["phi43"]))
+                    + 1.0
+                    * parameters["C41"]
+                    * xp.sin(1.0 * (phi - parameters["phi41"]))
+                )
+                * alpha**4
+                + (1 / 6.0)
+                * (
+                    6.0 * parameters["C56"] * xp.sin(6.0 * (phi - parameters["phi56"]))
+                    + 4.0
+                    * parameters["C54"]
+                    * xp.sin(4.0 * (phi - parameters["phi54"]))
+                    + 2.0
+                    * parameters["C52"]
+                    * xp.sin(2.0 * (phi - parameters["phi52"]))
+                )
+                * alpha**5
+            )
         )
 
         array = xp.exp(
             -xp.sign(angular_spread)
             * (angular_spread / 2) ** 2
-            * (dchi_dk ** 2 + dchi_dphi ** 2)
+            * (dchi_dk**2 + dchi_dphi**2)
         )
 
         return array
 
 
-class Aberrations(
-    _EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
-):
+class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations):
     """
     Phase aberrations.
 
@@ -901,14 +906,14 @@ class Aberrations(
     """
 
     def __init__(
-            self,
-            aberration_coefficients: Dict[str, Union[float, BaseDistribution]] = None,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            semiangle_cutoff: float = np.inf,
-            **kwargs,
+        self,
+        aberration_coefficients: Dict[str, Union[float, BaseDistribution]] = None,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        semiangle_cutoff: float = np.inf,
+        **kwargs,
     ):
 
         super().__init__(
@@ -942,7 +947,7 @@ class Aberrations(
         self.C10 = -value
 
     def _evaluate_with_alpha_and_phi(
-            self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]
+        self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
@@ -962,67 +967,69 @@ class Aberrations(
         array = xp.zeros(alpha.shape, dtype=np.float32)
         if self._nonzero_coefficients(("C10", "C12", "phi12")):
             array = array + (
-                    1
-                    / 2
-                    * alpha ** 2
-                    * (
-                            parameters["C10"]
-                            + parameters["C12"] * xp.cos(2 * (phi - parameters["phi12"]))
-                    )
+                1
+                / 2
+                * alpha**2
+                * (
+                    parameters["C10"]
+                    + parameters["C12"] * xp.cos(2 * (phi - parameters["phi12"]))
+                )
             )
 
         if self._nonzero_coefficients(("C21", "phi21", "C23", "phi23")):
             array = array + (
-                    1
-                    / 3
-                    * alpha ** 3
-                    * (
-                            parameters["C21"] * xp.cos(phi - parameters["phi21"])
-                            + parameters["C23"] * xp.cos(3 * (phi - parameters["phi23"]))
-                    )
+                1
+                / 3
+                * alpha**3
+                * (
+                    parameters["C21"] * xp.cos(phi - parameters["phi21"])
+                    + parameters["C23"] * xp.cos(3 * (phi - parameters["phi23"]))
+                )
             )
 
         if self._nonzero_coefficients(("C30", "C32", "phi32", "C34", "phi34")):
             array = array + (
-                    1
-                    / 4
-                    * alpha ** 4
-                    * (
-                            parameters["C30"]
-                            + parameters["C32"] * xp.cos(2 * (phi - parameters["phi32"]))
-                            + parameters["C34"] * xp.cos(4 * (phi - parameters["phi34"]))
-                    )
+                1
+                / 4
+                * alpha**4
+                * (
+                    parameters["C30"]
+                    + parameters["C32"] * xp.cos(2 * (phi - parameters["phi32"]))
+                    + parameters["C34"] * xp.cos(4 * (phi - parameters["phi34"]))
+                )
             )
 
         if self._nonzero_coefficients(("C41", "phi41", "C43", "phi43", "C45", "phi41")):
             array = array + (
-                    1
-                    / 5
-                    * alpha ** 5
-                    * (
-                            parameters["C41"] * xp.cos((phi - parameters["phi41"]))
-                            + parameters["C43"] * xp.cos(3 * (phi - parameters["phi43"]))
-                            + parameters["C45"] * xp.cos(5 * (phi - parameters["phi45"]))
-                    )
+                1
+                / 5
+                * alpha**5
+                * (
+                    parameters["C41"] * xp.cos((phi - parameters["phi41"]))
+                    + parameters["C43"] * xp.cos(3 * (phi - parameters["phi43"]))
+                    + parameters["C45"] * xp.cos(5 * (phi - parameters["phi45"]))
+                )
             )
 
-        if self._nonzero_coefficients(("C50", "C52", "phi52", "C54", "phi54", "C56", "phi56")):
+        if self._nonzero_coefficients(
+            ("C50", "C52", "phi52", "C54", "phi54", "C56", "phi56")
+        ):
             array = array + (
-                    1
-                    / 6
-                    * alpha ** 6
-                    * (
-                            parameters["C50"]
-                            + parameters["C52"] * xp.cos(2 * (phi - parameters["phi52"]))
-                            + parameters["C54"] * xp.cos(4 * (phi - parameters["phi54"]))
-                            + parameters["C56"] * xp.cos(6 * (phi - parameters["phi56"]))
-                    )
+                1
+                / 6
+                * alpha**6
+                * (
+                    parameters["C50"]
+                    + parameters["C52"] * xp.cos(2 * (phi - parameters["phi52"]))
+                    + parameters["C54"] * xp.cos(4 * (phi - parameters["phi54"]))
+                    + parameters["C56"] * xp.cos(6 * (phi - parameters["phi56"]))
+                )
             )
 
         array *= np.float32(2 * xp.pi / self.wavelength)
         array = complex_exponential(-array)
 
-        if weights is not None and not np.all(weights == 1.):
+        if weights is not None and not np.all(weights == 1.0):
             array = xp.asarray(weights, dtype=xp.float32) * array
 
         return array
@@ -1080,26 +1087,26 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     """
 
     def __init__(
-            self,
-            semiangle_cutoff: float = np.inf,
-            soft: bool = True,
-            focal_spread: float = 0.0,
-            angular_spread: float = 0.0,
-            aberration_coefficients: dict = None,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            **kwargs,
+        self,
+        semiangle_cutoff: float = np.inf,
+        soft: bool = True,
+        focal_spread: float = 0.0,
+        angular_spread: float = 0.0,
+        aberration_coefficients: dict = None,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        **kwargs,
     ):
 
         super().__init__(
             distributions=polar_symbols
-                          + (
-                              "angular_spread",
-                              "focal_spread",
-                              "semiangle_cutoff",
-                          ),
+            + (
+                "angular_spread",
+                "focal_spread",
+                "semiangle_cutoff",
+            ),
             energy=energy,
             semiangle_cutoff=semiangle_cutoff,
             extent=extent,
@@ -1178,9 +1185,9 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     @property
     def ensemble_axes_metadata(self):
         return (
-                self._spatial_envelope.ensemble_axes_metadata
-                + self._temporal_envelope.ensemble_axes_metadata
-                + self._aperture.ensemble_axes_metadata
+            self._spatial_envelope.ensemble_axes_metadata
+            + self._temporal_envelope.ensemble_axes_metadata
+            + self._aperture.ensemble_axes_metadata
         )
 
     @property
@@ -1291,8 +1298,8 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             axis_metadata += ["aperture"]
 
         if (
-                self._temporal_envelope.focal_spread > 0.0
-                and self._spatial_envelope.angular_spread > 0.0
+            self._temporal_envelope.focal_spread > 0.0
+            and self._spatial_envelope.angular_spread > 0.0
         ):
             profiles += [
                 ReciprocalSpaceLineProfiles(
@@ -1312,12 +1319,20 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         if self._spatial_envelope.angular_spread > 0.0:
             profiles += [
                 ReciprocalSpaceLineProfiles(
-                    spatial_envelope, sampling=sampling, metadata=metadata
+                    spatial_envelope,
+                    sampling=sampling,
+                    metadata=metadata,
+                    ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,
                 )
             ]
             axis_metadata += ["spatial"]
 
-        return stack(profiles, axis_metadata=OrdinalAxis(values=tuple(axis_metadata)))
+        if len(profiles) > 1:
+            return stack(
+                profiles, axis_metadata=OrdinalAxis(values=tuple(axis_metadata))
+            )
+        else:
+            return profiles[0]
 
 
 def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
@@ -1394,12 +1409,12 @@ def polar2cartesian(polar):
     cartesian["C34a"] = polar["C34"] * np.cos(-4 * polar["phi34"])
     K = np.sqrt(3 + np.sqrt(8.0))
     cartesian["C34b"] = (
-            1
-            / 4.0
-            * (1 + K ** 2) ** 2
-            / (K ** 3 - K)
-            * polar["C34"]
-            * np.cos(4 * np.arctan(1 / K) - 4 * polar["phi34"])
+        1
+        / 4.0
+        * (1 + K**2) ** 2
+        / (K**3 - K)
+        * polar["C34"]
+        * np.cos(4 * np.arctan(1 / K) - 4 * polar["phi34"])
     )
 
     return cartesian
