@@ -623,7 +623,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
     ----------
     array : np.ndarray
         Array defining the scattering matrix. Must be 3D or higher, dimensions before the last three dimensions should
-        represent ensemble dimensions, the next dimension dimension indexes the plane waves and the last two dimensions
+        represent ensemble dimensions, the next dimension indexes the plane waves and the last two dimensions
         represent the spatial extent of the plane waves.
     wave_vectors : np.ndarray
         Array defining the wave vectors corresponding to each plane wave. Must have shape Nx2, where N is equal to the
@@ -698,10 +698,14 @@ class SMatrixArray(HasArray, BaseSMatrix):
         self._periodic = periodic
         self._check_axes_metadata()
 
-    @classmethod
-    def _pack_kwargs(cls, attrs, kwargs):
-        kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
-        super()._pack_kwargs(attrs, kwargs)
+    def _metadata_to_dict(self):
+        metadata = super()._metadata_to_dict()
+        print(metadata)
+
+    # @classmethod
+    # def _pack_kwargs(cls, attrs, kwargs):
+    #     kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
+    #     super()._pack_kwargs(attrs, kwargs)
 
     @classmethod
     def _unpack_kwargs(cls, attrs):

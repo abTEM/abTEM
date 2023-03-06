@@ -50,6 +50,21 @@ class AxisMetadata:
     def copy(self):
         return copy(self)
 
+    def to_dict(self):
+        d = dataclasses.asdict(self)
+        for key, value in d.items():
+            if isinstance(value, np.ndarray):
+                d[key] = tuple(value.tolist())
+
+        d["type"] = self.__class__.__name__
+        return d
+
+    @staticmethod
+    def from_dict(d):
+        cls = globals()[d["type"]]
+        return cls(**{key: value for key, value in d.items() if key != "type"})
+
+
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class UnknownAxis(AxisMetadata):
     label: str = "unknown"
@@ -252,19 +267,10 @@ class PrismPlaneWavesAxis(AxisMetadata):
     pass
 
 
-def axis_to_dict(axis: AxisMetadata):
-    d = dataclasses.asdict(axis)
-    for key, value in d.items():
-        if isinstance(value, np.ndarray):
-            d[key] = tuple(value.tolist())
-
-    d["type"] = axis.__class__.__name__
-    return d
+def axis_from_dict():
+    pass
 
 
-def axis_from_dict(d):
-    cls = globals()[d["type"]]
-    return cls(**{key: value for key, value in d.items() if key != "type"})
 
 
 def format_axes_metadata(axes_metadata, shape):

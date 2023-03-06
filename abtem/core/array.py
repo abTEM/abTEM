@@ -45,32 +45,53 @@ except ImportError:
     tifffile = None
 
 
+# with zarr.open(url, mode="w") as root:
+#     has_array = self.ensure_lazy()
+#
+#     array = has_array.copy_to_device("cpu").array
+#
+#     stored = array.to_zarr(
+#         url, compute=False, component="array", overwrite=overwrite, **kwargs
+#     )
+#
+#     #kwargs = has_array._copy_kwargs(exclude=("array",))
+#
+#     #self._pack_kwargs(root.attrs, kwargs)
+#
+#     root.attrs["metadata"] = self.__class__.__name__
+#
+# if compute:
+#     with _compute_context():
+#         stored = stored.compute()
+#
+# return stored
+
+
 class ComputableList(list):
     def to_zarr(
-        self,
-        urls: str,
-        compute: bool = True,
-        overwrite: bool = False,
-        progress_bar: bool = None,
-        **kwargs,
+            self,
+            url: str,
+            compute: bool = True,
+            overwrite: bool = False,
+            progress_bar: bool = None,
+            **kwargs,
     ):
 
-        if isinstance(urls, str):
-            urls = [urls]
+        computables = []
+        with zarr.open(url, mode="w") as root:
+            for i, has_array in enumerate(self):
+                has_array = has_array.ensure_lazy()
 
-        if not len(urls) == len(self):
-            raise RuntimeError("Provide a file name for each measurement.")
+                array = has_array.copy_to_device("cpu").array
 
-        computables = [
-            m.to_zarr(url, compute=False, overwrite=overwrite)
-            for m, url in zip(self, urls)
-        ]
+                computables.append(array.to_zarr(url, compute=compute, component=f"array{i}", overwrite=overwrite))
+                root.attrs[f"metadata{i}"] = has_array._metadata_to_json_string()
 
         if not compute:
             return computables
 
         with _compute_context(
-            progress_bar, profiler=False, resource_profiler=False
+                progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler, _):
             output = dask.compute(computables, **kwargs)[0]
 
@@ -97,7 +118,7 @@ class ComputableList(list):
 
 @contextmanager
 def _compute_context(
-    progress_bar: bool = None, profiler=False, resource_profiler=False
+        progress_bar: bool = None, profiler=False, resource_profiler=False
 ):
     if progress_bar is None:
         progress_bar = config.get("local_diagnostics.progress_bar")
@@ -144,11 +165,11 @@ def _compute_context(
 
 
 def _compute(
-    dask_array_wrappers,
-    progress_bar: bool = None,
-    profiler: bool = False,
-    resource_profiler: bool = False,
-    **kwargs,
+        dask_array_wrappers,
+        progress_bar: bool = None,
+        profiler: bool = False,
+        resource_profiler: bool = False,
+        **kwargs,
 ):
     # if cp is not None:
     #     cache = cp.fft.config.get_plan_cache()
@@ -165,7 +186,7 @@ def _compute(
             kwargs["threads_per_worker"] = cp.cuda.runtime.getDeviceCount()
 
     with _compute_context(
-        progress_bar, profiler=profiler, resource_profiler=resource_profiler
+            progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler, _):
         arrays = dask.compute(
             [wrapper.array for wrapper in dask_array_wrappers], **kwargs
@@ -268,7 +289,7 @@ class HasArray(HasAxes, CopyMixin):
 
     @property
     def base_shape(self) -> Tuple[int, ...]:
-        return self.array.shape[-self._base_dims :]
+        return self.array.shape[-self._base_dims:]
 
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
@@ -307,7 +328,7 @@ class HasArray(HasAxes, CopyMixin):
         return cls(**kwargs)
 
     @property
-    def is_complex(self) -> str:
+    def is_complex(self) -> bool:
         return np.iscomplexobj(self.array)
 
     def check_is_compatible(self, other: "HasArray"):
@@ -320,8 +341,8 @@ class HasArray(HasAxes, CopyMixin):
             raise RuntimeError(f"incompatible shapes ({self.shape} != {other.shape})")
 
         for (key, value), (other_key, other_value) in zip(
-            self._copy_kwargs(exclude=("array", "metadata")).items(),
-            other._copy_kwargs(exclude=("array", "metadata")).items(),
+                self._copy_kwargs(exclude=("array", "metadata")).items(),
+                other._copy_kwargs(exclude=("array", "metadata")).items(),
         ):
             if np.any(value != other_value):
                 raise RuntimeError(
@@ -455,7 +476,7 @@ class HasArray(HasAxes, CopyMixin):
             raise NotImplementedError
 
         if len(tuple(item for item in items if item is not None)) > len(
-            self.ensemble_shape
+                self.ensemble_shape
         ):
             raise RuntimeError("base axes cannot be indexed")
 
@@ -494,7 +515,7 @@ class HasArray(HasAxes, CopyMixin):
         )
 
     def expand_dims(
-        self, axis: Tuple[int, ...] = None, axis_metadata: List[AxisMetadata] = None
+            self, axis: Tuple[int, ...] = None, axis_metadata: List[AxisMetadata] = None
     ) -> "T":
         if axis is None:
             axis = (0,)
@@ -561,11 +582,11 @@ class HasArray(HasAxes, CopyMixin):
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
 
     def compute(
-        self,
-        progress_bar: bool = None,
-        profiler: bool = False,
-        resource_profiler=False,
-        **kwargs,
+            self,
+            progress_bar: bool = None,
+            profiler: bool = False,
+            resource_profiler=False,
+            **kwargs,
     ):
         """
         This turns a lazy abTEM object into its in-memory equivalent.
@@ -617,7 +638,7 @@ class HasArray(HasAxes, CopyMixin):
         return self.copy_to_device("gpu")
 
     def to_zarr(
-        self, url: str, compute: bool = True, overwrite: bool = False, **kwargs
+            self, url: str, compute: bool = True, overwrite: bool = False, **kwargs
     ):
         """
         Write data to a zarr file.
@@ -636,26 +657,28 @@ class HasArray(HasAxes, CopyMixin):
             Keyword arguments passed to dask.array.to_zarr.
         """
 
-        with zarr.open(url, mode="w") as root:
-            has_array = self.ensure_lazy()
+        return ComputableList([self]).to_zarr(url=url, compute=compute, overwrite=overwrite, **kwargs)
 
-            array = has_array.copy_to_device("cpu").array
-
-            stored = array.to_zarr(
-                url, compute=False, component="array", overwrite=overwrite, **kwargs
-            )
-
-            kwargs = has_array._copy_kwargs(exclude=("array",))
-
-            self._pack_kwargs(root.attrs, kwargs)
-
-            root.attrs["type"] = self.__class__.__name__
-
-        if compute:
-            with _compute_context():
-                stored = stored.compute()
-
-        return stored
+        # with zarr.open(url, mode="w") as root:
+        #     has_array = self.ensure_lazy()
+        #
+        #     array = has_array.copy_to_device("cpu").array
+        #
+        #     stored = array.to_zarr(
+        #         url, compute=False, component="array", overwrite=overwrite, **kwargs
+        #     )
+        #
+        #     #kwargs = has_array._copy_kwargs(exclude=("array",))
+        #
+        #     #self._pack_kwargs(root.attrs, kwargs)
+        #
+        #     root.attrs["metadata"] = self.__class__.__name__
+        #
+        # if compute:
+        #     with _compute_context():
+        #         stored = stored.compute()
+        #
+        # return stored
 
     @classmethod
     def _pack_kwargs(cls, attrs, kwargs):
@@ -665,14 +688,32 @@ class HasArray(HasAxes, CopyMixin):
             else:
                 attrs[key] = value
 
-    def _metadata_to_json(self):
+    def _metadata_to_dict(self):
         metadata = copy.copy(self.metadata)
         metadata["axes"] = {
             f"axis_{i}": axis_to_dict(axis) for i, axis in enumerate(self.axes_metadata)
         }
         metadata["data_origin"] = f"abTEM_v{__version__}"
         metadata["type"] = self.__class__.__name__
-        return json.dumps(metadata)
+        return metadata
+
+    def _metadata_to_json_string(self):
+        return json.dumps(self._metadata_to_dict())
+
+    @classmethod
+    def _metadata_from_json_string(self, json_string):
+        import abtem
+
+        metadata = json.loads(json_string)
+        cls = getattr(abtem, metadata["type"])
+        del metadata["type"]
+
+        axes_metadata = []
+        for key, axis_metadata in metadata["axes"].items():
+            axes_metadata.append(axis_from_dict(axis_metadata))
+
+        del metadata["axes"]
+        return cls, axes_metadata, metadata
 
     def to_tiff(self, filename: str, **kwargs):
         """
@@ -696,46 +737,8 @@ class HasArray(HasAxes, CopyMixin):
             array = array.compute()
 
         return tifffile.imwrite(
-            filename, array, description=self._metadata_to_json(), **kwargs
+            filename, array, description=self._metadata_to_json_string(), **kwargs
         )
-
-    @classmethod
-    def _unpack_kwargs(cls, attrs):
-        kwargs = {}
-        kwargs["ensemble_axes_metadata"] = []
-        for key, value in attrs.items():
-            if key == "ensemble_axes_metadata":
-                kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
-            elif key == "type":
-                pass
-            else:
-                kwargs[key] = value
-
-        return kwargs
-
-    @classmethod
-    def from_zarr(cls, url, chunks: int = "auto") -> "T":
-        """
-        Read wave functions from a hdf5 file.
-
-        url : str
-            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
-            s3:// for remote data.
-        chunks : int, optional
-            aaaa
-        """
-        with zarr.open(url, mode="r") as f:
-            kwargs = cls._unpack_kwargs(f.attrs)
-
-        num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
-
-        if chunks == "auto":
-            chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
-
-        array = da.from_zarr(url, component="array", chunks=chunks)
-
-        with config.set({"warnings.overspecified-grid": False}):
-            return cls(array, **kwargs)
 
 
 def expand_dims(a, axis):
@@ -752,17 +755,41 @@ def expand_dims(a, axis):
 
 
 def from_zarr(url: str, chunks: Chunks = None):
-    import abtem
+    """
+    Read abTEM data from zarr.
 
+    Parameters
+    ----------
+    url : str
+        Location of the data. A URL can include a protocol specifier like s3:// for remote data.
+    chunks :  tuple of ints or tuples of ints
+        Passed to dask.array.from_array(), allows setting the chunks on initialisation, if the chunking scheme in the
+        on-disc dataset is not optimal for the calculations to follow.
+
+    """
+    has_arrays = []
     with zarr.open(url, mode="r") as f:
-        name = f.attrs["type"]
+        for (key, json_string), component in zip(f.attrs.items(), f.array_keys()):
+            cls, axes_metadata, metadata = HasArray._metadata_from_json_string(json_string)
 
-    cls = getattr(abtem, name)
-    return cls.from_zarr(url, chunks)
+            num_ensemble_axes = len(axes_metadata) - cls._base_dims
+            if chunks == "auto":
+                chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+
+            array = da.from_zarr(url, component=component, chunks=chunks)
+            has_array = cls.from_array_and_metadata(
+                array=array, axes_metadata=axes_metadata, metadata=metadata
+            )
+            has_arrays.append(has_array)
+
+    if len(has_arrays) == 1:
+        return has_arrays[0]
+    else:
+        return ComputableList(has_arrays)
 
 
 def stack(
-    has_arrays: Sequence[HasArray], axis_metadata: AxisMetadata = None, axis: int = 0
+        has_arrays: Sequence[HasArray], axis_metadata: AxisMetadata = None, axis: int = 0
 ) -> "T":
     if axis_metadata is None:
         axis_metadata = UnknownAxis()
