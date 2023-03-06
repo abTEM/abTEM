@@ -7,7 +7,10 @@ from tabulate import tabulate
 import numpy as np
 import dask.array as da
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
+from abtem.core import config
 from abtem.core.utils import safe_equality
+
+from abtem.core.units import _get_conversion_factor, _format_units, _validate_units
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -15,6 +18,7 @@ class AxisMetadata:
     _concatenate: bool = True
     _events: bool = False
     label: str = "unknown"
+    _tex_label = None
 
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
@@ -24,6 +28,9 @@ class AxisMetadata:
 
     def __eq__(self, other):
         return safe_equality(self, other)
+
+    def coordinates(self, n):
+        return np.arange(n)
 
     def format_type(self):
         return self.__class__.__name__
@@ -50,6 +57,7 @@ class AxisMetadata:
     def copy(self):
         return copy(self)
 
+
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class UnknownAxis(AxisMetadata):
     label: str = "unknown"
@@ -60,14 +68,40 @@ class SampleAxis(AxisMetadata):
     pass
 
 
+def format_label_with_units(label, units=None, old_units=None) -> str:
+    units = _validate_units(units, old_units)
+
+    if config.get("visualize.use_tex", False):
+        return f"${label} \ [{_format_units(units)}]$"
+    else:
+        return f"{label} [{units}]"
+
+
+def latex_float(f, formatting):
+    float_str = f"{f:>{formatting}}"
+    if "e" in float_str:
+        base, exponent = float_str.split("e")
+        return f"{base} \\times 10^{{{int(exponent)}}}"
+    else:
+        return float_str
+
+
+def format_value(value, formatting):
+    if isinstance(value, float):
+        if config.get("visualize.use_tex", False):
+            return latex_float(value, formatting)
+        else:
+            return f"{value:>{formatting}}"
+
+
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class LinearAxis(AxisMetadata):
     sampling: float = 1.0
-    units: str = "pixels"
+    units: str = ""
     offset: float = 0.0
     _ensemble_mean: bool = False
 
-    def format_coordinates(self, n: int = None):
+    def format_coordinates(self, n: int = None) -> str:
         coordinates = self.coordinates(n)
         if n > 3:
             coordinates = [f"{coord:.2f}" for coord in coordinates[[0, 1, -1]]]
@@ -80,10 +114,10 @@ class LinearAxis(AxisMetadata):
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )
 
-    def format_label(self):
-        return f"{self.label} [{self.units}]"
+    def format_label(self, units=None) -> str:
+        return format_label_with_units(self.label, units, self.units)
 
-    def concatenate(self, other):
+    def concatenate(self, other: AxisMetadata) -> "LinearAxis":
         if not self._concatenate:
             raise RuntimeError()
 
@@ -158,6 +192,9 @@ class OrdinalAxis(AxisMetadata):
 
         return self.__class__(**kwargs)  # noqa
 
+    def coordinates(self, n):
+        return self.values
+
     def _to_blocks(self, chunks):
         chunks = validate_chunks(shape=(len(self),), chunks=chunks)
 
@@ -174,8 +211,8 @@ class OrdinalAxis(AxisMetadata):
 class NonLinearAxis(OrdinalAxis):
     units: str = "unknown"
 
-    def format_label(self):
-        return f"{self.label} [{self.units}]"
+    def format_label(self, units=None):
+        return format_label_with_units(self.label, units, self.units)
 
     def format_coordinates(self, n: int = None):
         if len(self.values) > 3:
@@ -184,8 +221,21 @@ class NonLinearAxis(OrdinalAxis):
         else:
             return " ".join([f"{value:.2f}" for value in self.values])
 
-    def format_title(self, formatting):
-        return f"{self.label} = {self.values[0]:>{formatting}} {self.units}"
+    def format_title(self, formatting, units=None, include_label=True):
+
+        value = self.values[0] * _get_conversion_factor(units, self.units)
+
+        units = _validate_units(units,self.units)
+
+        if include_label:
+            label = f"{self.label} = "
+        else:
+            label = ""
+
+        if config.get("visualize.use_tex", False):
+            return f"${label}{format_value(value, formatting)} \ {_format_units(units)}$"
+        else:
+            return f"{label}{value:>{formatting}} {units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

@@ -50,7 +50,7 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
 class _DistributionFromValues(BaseDistribution):
     def __init__(
-        self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = True
+        self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = False
     ):
         self._values = values
         self._weights = weights

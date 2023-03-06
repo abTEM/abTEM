@@ -281,6 +281,8 @@ def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
         coordinate = coordinate.x, coordinate.y
 
     if fractional:
+        potential = _validate_potential(potential)
+
         if isinstance(potential, BasePotential):
             if potential is None:
                 raise ValueError("provide potential for fractional coordinates")

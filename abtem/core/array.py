@@ -358,7 +358,6 @@ class HasArray(HasAxes, CopyMixin):
                 self.array, axes, split_every=split_every
             )
         else:
-
             kwargs["array"] = getattr(xp, reduction_func)(self.array, axes)
 
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata

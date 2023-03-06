@@ -58,7 +58,7 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
         except (KeyError, TypeError):
             return False
 
-        #print(equal)
+        # print(equal)
         # if (not isinstance(value, Iterable)) or (not isinstance(b.__dict__[key], Iterable)):
         #    return False
 
@@ -97,6 +97,7 @@ def safe_floor_int(n: float, tol: int = 7):
 def safe_ceiling_int(n: float, tol: int = 7):
     return int(np.ceil(np.round(n, decimals=tol)))
 
+
 def ensure_list(x):
     return [x] if not isinstance(x, list) else x
 
@@ -121,7 +122,7 @@ def normalize_axes(dims, shape):
     return tuple(dim if dim >= 0 else num_dims + dim for dim in dims)
 
 
-def expand_dims_to_match(arr1, arr2, match_dims=None):
+def _get_dims_to_broadcast(arr1, arr2, match_dims=None):
     if match_dims is None:
         match_dims = [(), ()]
 
@@ -151,8 +152,20 @@ def expand_dims_to_match(arr1, arr2, match_dims=None):
     axis1 = tuple(i for i, a in enumerate(match_axis1) if a is None)
     axis2 = tuple(i for i, a in enumerate(match_axis2) if a is None)
 
+    return axis1, axis2
+
+
+def expand_dims_to_match(arr1, arr2, match_dims=None, broadcast=False):
+
+    axis1, axis2 = _get_dims_to_broadcast(arr1, arr2, match_dims)
+
     arr1 = np.expand_dims(arr1, axis=axis1)
     arr2 = np.expand_dims(arr2, axis=axis2)
+
+    if broadcast:
+        s = np.broadcast_shapes(arr1.shape, arr2.shape)
+        arr1 = np.broadcast_to(arr1, s)
+        arr2 = np.broadcast_to(arr2, s)
 
     return arr1, arr2
 

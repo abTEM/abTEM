@@ -407,7 +407,8 @@ class Waves(HasArray, BaseWaves):
 
     def from_partitioned_args(self):
         d = self._copy_kwargs(exclude=("array", "extent", "ensemble_axes_metadata"))
-        return partial(lambda *args, **kwargs: self.__class__(args[0], **kwargs), **d)
+        cls = self.__class__
+        return partial(lambda *args, **kwargs: cls(args[0], **kwargs), **d)
 
     @classmethod
     def from_array_and_metadata(
@@ -912,9 +913,19 @@ class Waves(HasArray, BaseWaves):
         return diffraction_patterns
 
     @staticmethod
-    def _apply_wave_transform(*args, waves_partial, transform_partial):
-        waves = waves_partial(*args[-1:])
-        transform = transform_partial(*(arg.item() for arg in args[:-1]))
+    def _apply_wave_transform(
+        *args, waves_partial, transform_partial, transform_ensemble_shape
+    ):
+        transform = transform_partial(
+            *(arg.item() for arg in args[: len(transform_ensemble_shape)])
+        )
+        ensemble_axes_metadata = [
+            axis.item() for axis in args[len(transform_ensemble_shape) : -1]
+        ]
+        array = args[-1]
+
+        waves = waves_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
+
         waves = transform.apply(waves)
         return waves.array
 
@@ -951,31 +962,55 @@ class Waves(HasArray, BaseWaves):
                 dtype=np.dtype("complex64"),
             )
 
-            args = tuple(
+            transform_blocks = tuple(
                 (arg, (i,))
                 for i, arg in enumerate(
                     transform._partition_args(chunks[: -len(self.shape)])
                 )
             )
+            transform_blocks = tuple(itertools.chain(*transform_blocks))
 
+            axes_blocks = ()
+            for i, (axis, c) in enumerate(
+                zip(self.ensemble_axes_metadata, self.array.chunks)
+            ):
+                axes_blocks += (
+                    axis._to_blocks(
+                        (c,),
+                    ),
+                    (len(transform.ensemble_shape) + i,),
+                )
+
+            symbols = tuple(range(len(transform.ensemble_shape) + len(self.shape)))
+
+            array_blocks = (
+                self.array,
+                tuple(
+                    range(
+                        len(transform.ensemble_shape),
+                        len(transform.ensemble_shape) + len(self.shape),
+                    )
+                ),
+            )
             xp = get_array_module(self.device)
-
-            kwargs = self._copy_kwargs(exclude=("array",))
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Increasing number of chunks")
                 array = da.blockwise(
                     self._apply_wave_transform,
-                    tuple(range(len(args) + len(self.shape))),
-                    *tuple(itertools.chain(*args)),
-                    self.array,
-                    tuple(range(len(args), len(args) + len(self.shape))),
+                    symbols,
+                    *transform_blocks,
+                    *axes_blocks,
+                    *array_blocks,
                     adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                     transform_partial=transform._from_partitioned_args(),
+                    transform_ensemble_shape=transform.ensemble_shape,
                     waves_partial=self.from_partitioned_args(),  # noqa
-                    meta=xp.array((), dtype=np.complex64)
+                    meta=xp.array((), dtype=np.complex64),
+                    align_arrays=False
                 )
 
+            kwargs = self._copy_kwargs(exclude=("array",))
             kwargs["array"] = array
             kwargs["ensemble_axes_metadata"] = (
                 transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
@@ -1144,6 +1179,9 @@ class Waves(HasArray, BaseWaves):
             Keyword arguments for `abtem.measurements.Images.show`.
         """
         return self.intensity().show(**kwargs)
+
+    def interact(self, **kwargs):
+        return self.complex_images().interact(**kwargs)
 
 
 class _WavesFactory(BaseWaves):
@@ -1577,10 +1615,15 @@ class Probe(_WavesFactory):
         device: str = None,
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
+        ctf=None,
         transforms: List[WaveTransform] = None,
-        metadata:dict=None,
+        metadata: dict = None,
         **kwargs
     ):
+        if ctf is not None:
+            aperture = ctf._aperture
+            aberrations = ctf._aberrations
+            energy = ctf.energy
 
         self._accelerator = Accelerator(energy=energy)
 
@@ -1599,7 +1642,10 @@ class Probe(_WavesFactory):
 
         if isinstance(aberrations, dict):
             aberrations = Aberrations(
-                semiangle_cutoff=semiangle_cutoff, energy=energy, **aberrations, **kwargs
+                semiangle_cutoff=semiangle_cutoff,
+                energy=energy,
+                **aberrations,
+                **kwargs
             )
 
         aberrations._accelerator = self._accelerator
@@ -1628,6 +1674,12 @@ class Probe(_WavesFactory):
             aberrations=ctf.aberration_coefficients,
             **kwargs
         )
+
+    @property
+    def ctf(self):
+        return CTF(aberration_coefficients=self.aberrations.aberration_coefficients,
+                   semiangle_cutoff=self.semiangle_cutoff,
+                   energy=self.energy)
 
     @property
     def semiangle_cutoff(self):
@@ -1900,7 +1952,7 @@ class Probe(_WavesFactory):
             transition_potentials=transition_potentials,
         )
 
-    def profile(self, angle: float = 0.0) -> RealSpaceLineProfiles:
+    def profiles(self, angle: float = 0.0) -> RealSpaceLineProfiles:
         """
         Create a line profile through the center of the probe.
 

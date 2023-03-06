@@ -26,3 +26,9 @@ extended_repr: false
 antialias:
   taper: 0.
   cutoff: 0.6666666
+visualize:
+  real_space_units: "Angstrom"
+  reciprocal_space_units: "Angstrom"
+  cmap: "viridis"
+  phase_cmap: "hsluv"
+  use_tex: true

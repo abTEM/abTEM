@@ -11,6 +11,7 @@ from ase.cell import Cell
 from matplotlib.axes import Axes
 from numba import prange, jit
 
+from abtem import visualize, interact
 from abtem.core.array import HasArray
 from abtem.core.axes import (
     HasAxes,
@@ -24,6 +25,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
+from abtem.core import config
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_interpolate, fft_crop
 from abtem.core.grid import (
@@ -31,11 +33,18 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
+from abtem.core.units import _get_conversion_factor
 from abtem.indexing import IndexedDiffractionPatterns
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.inelastic.phonons import _validate_seeds
-from abtem.visualize import show_measurement_2d, show_measurements_1d, _make_cbar_label
+from abtem.interact import interact_ensemble_indices_2d, interact_ensemble_indices_1d
+from abtem.visualize import (
+    show_measurements_2d,
+    show_measurements_1d,
+    _make_cbar_label,
+    _iterate_axes,
+)
 
 # Enables CuPy-accelerated functions if it is available.
 if cp is not None:
@@ -45,17 +54,19 @@ else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None
 
-# Avoids circular imports.
+try:
+    import ipywidgets as widgets
+except ImportError:
+    widgets = None
+
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
 
 # Ensures that `Measurement` objects created by `Measurement` objects retain their type (e.g. `Images`).
 T = TypeVar("T", bound="BaseMeasurement")
 
-# Options for displaying alternative units.
-angular_units = ("angular", "mrad")
-bins = ("bins",)
-reciprocal_units = ("reciprocal", "1/Å")
+
+
 
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
@@ -483,6 +494,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
     def reduce_ensemble(self) -> "T":
         """Takes the mean of an ensemble measurement (e.g. of frozen phonon configurations)."""
+
         axes = tuple(
             i
             for i, axis in enumerate(self.axes_metadata)
@@ -649,8 +661,107 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         return s
 
+    @abstractmethod
+    def show(self):
+        pass
 
-class Images(BaseMeasurement):
+    def interact(
+        self,
+        **kwargs,
+    ):
+
+        return interact.interact(self, **kwargs)
+
+
+class BaseMeasurement2D(BaseMeasurement):
+    @abstractmethod
+    def _plot_extent(self, units):
+        pass
+
+    @abstractmethod
+    def _plot_x_label(self, units):
+        pass
+
+    @abstractmethod
+    def _plot_y_label(self, units):
+        pass
+
+    def show(
+        self,
+        explode: bool = False,
+        ax: Axes = None,
+        figsize: Tuple[int, int] = None,
+        title: Union[bool, str] = True,
+        power: float = 1.0,
+        cmap: str = None,
+        vmin: float = None,
+        vmax: float = None,
+        common_color_scale: bool = False,
+        cbar: bool = False,
+        units: str = None,
+        axes_pad=None,
+    ) -> Axes:
+        """
+        Show the image(s) using matplotlib.
+
+        Parameters
+        ----------
+        cmap : str, optional
+            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
+        explode : bool, optional
+            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
+            ensemble item is shown.
+        ax : matplotlib.axes.Axes, optional
+            If given the plots are added to the axis. This is not available for image grids.
+        figsize : two int, optional
+            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+        title : bool or str, optional
+            Add a title to the figure. If True is given instead of a string the title will be given by the value
+            corresponding to the "name" key of the metadata dictionary, if this item exists.
+        power : float
+            Show image on a power scale.
+        vmin : float, optional
+            Minimum of the intensity color scale. Default is the minimum of the array values.
+        vmax : float, optional
+            Maximum of the intensity color scale. Default is the maximum of the array values.
+        common_color_scale : bool, optional
+            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
+            it is requested). Default is False.
+        cbar : bool, optional
+            Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
+            keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
+
+        Returns
+        -------
+        Figure, matplotlib.axes.Axes
+        """
+
+        if not explode:
+            measurements = self[(0,) * len(self.ensemble_shape)]
+        else:
+            measurements = self
+        # else:
+        #     if ax is not None:
+        #         raise NotImplementedError("`ax` not implemented with `explode = True`.")
+        #     measurements = self
+
+        return show_measurements_2d(
+            measurements=measurements,
+            cmap=cmap,
+            figsize=figsize,
+            power=power,
+            vmin=vmin,
+            vmax=vmax,
+            common_color_scale=common_color_scale,
+            cbar=cbar,
+            axes=ax,
+            title=title,
+            units=units,
+            axes_pad=axes_pad,
+        )
+
+
+class Images(BaseMeasurement2D):
     """
     A collection of 2D measurements such as HRTEM or STEM-ADF images. May be used to represent a reconstructed phase.
 
@@ -1251,138 +1362,15 @@ class Images(BaseMeasurement):
             metadata=self.metadata,
         )
 
-    def show(
-        self,
-        cmap: str = "viridis",
-        explode: bool = False,
-        ax: Axes = None,
-        figsize: Tuple[int, int] = None,
-        title: Union[bool, str] = True,
-        panel_titles: Union[bool, List[str]] = True,
-        x_ticks: bool = True,
-        y_ticks: bool = True,
-        x_label: Union[bool, str] = True,
-        y_label: Union[bool, str] = True,
-        row_super_label: Union[bool, str] = False,
-        col_super_label: Union[bool, str] = False,
-        power: float = 1.0,
-        vmin: float = None,
-        vmax: float = None,
-        common_color_scale=False,
-        cbar: bool = False,
-        cbar_labels: str = None,
-        sizebar: bool = False,
-        float_formatting: str = ".2f",
-        panel_labels: dict = None,
-        image_grid_kwargs: dict = None,
-        imshow_kwargs: dict = None,
-        anchored_text_kwargs: dict = None,
-        complex_coloring_kwargs: dict = None,
-    ) -> Axes:
-        """
-        Show the image(s) using matplotlib.
+    def _plot_extent(self, units=None):
+        scale = _get_conversion_factor("Å", units)
+        return [0, self.extent[0] * scale, 0, self.extent[1] * scale]
 
-        Parameters
-        ----------
-        cmap : str, optional
-            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
-        explode : bool, optional
-            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
-            ensemble item is shown.
-        ax : matplotlib.axes.Axes, optional
-            If given the plots are added to the axis. This is not available for image grids.
-        figsize : two int, optional
-            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
-        title : bool or str, optional
-            Add a title to the figure. If True is given instead of a string the title will be given by the value
-            corresponding to the "name" key of the metadata dictionary, if this item exists.
-        panel_titles : bool or list of str, optional
-            Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
-            strings an item must exist for each panel.
-        x_ticks : bool or list, optional
-            If False, the ticks on the `x`-axis will be removed.
-        y_ticks : bool or list, optional
-            If False, the ticks on the `y`-axis will be removed.
-        x_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        y_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will created from the corresponding axis
-            metadata. A string may be given to override this.
-        row_super_label : bool or str, optional
-            Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
-            metadata. A string may be given to override this. The default is no super label.
-        col_super_label : bool or str, optional
-            Add super label to the columns of an image grid. If True the label will be created from the corresponding
-            axis metadata. A string may be given to override this. The default is no super label.
-        power : float
-            Show image on a power scale.
-        vmin : float, optional
-            Minimum of the intensity color scale. Default is the minimum of the array values.
-        vmax : float, optional
-            Maximum of the intensity color scale. Default is the maximum of the array values.
-        common_color_scale : bool, optional
-            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
-            it is requested). Default is False.
-        cbar : bool, optional
-            Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
-            keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
-        cbar_labels : str or list of str
-            Label(s) for the colorbar(s).
-        sizebar : bool, optional,
-            Add a size bar to the image(s).
-        float_formatting : str, optional
-            A formatting string used for formatting the floats of the panel titles.
-        panel_labels : list of str
-            A list of labels for each panel of a grid of images.
-        image_grid_kwargs : dict
-            Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.
-        imshow_kwargs : dict
-            Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.
-        anchored_text_kwargs : dict
-            Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel
-            labels.
+    def _plot_x_label(self, units=None):
+        return self.axes_metadata[-2].format_label(units)
 
-        Returns
-        -------
-        Figure, matplotlib.axes.Axes
-        """
-        if not explode:
-            measurements = self[(0,) * len(self.ensemble_shape)]
-        else:
-            if ax is not None:
-                raise NotImplementedError(
-                    "`ax` not implemented for with `explode = True`."
-                )
-            measurements = self
-
-        return show_measurement_2d(
-            measurements=measurements,
-            cmap=cmap,
-            figsize=figsize,
-            super_title=title,
-            sub_title=panel_titles,
-            x_ticks=x_ticks,
-            y_ticks=y_ticks,
-            x_label=x_label,
-            y_label=y_label,
-            row_super_label=row_super_label,
-            col_super_label=col_super_label,
-            power=power,
-            vmin=vmin,
-            vmax=vmax,
-            common_color_scale=common_color_scale,
-            cbar=cbar,
-            cbar_labels=cbar_labels,
-            sizebar=sizebar,
-            float_formatting=float_formatting,
-            panel_labels=panel_labels,
-            image_grid_kwargs=image_grid_kwargs,
-            imshow_kwargs=imshow_kwargs,
-            anchored_text_kwargs=anchored_text_kwargs,
-            complex_coloring_kwargs=complex_coloring_kwargs,
-            axes=ax,
-        )
+    def _plot_y_label(self, units=None):
+        return self.axes_metadata[-1].format_label(units)
 
 
 class _SinglePointMeasurement(BaseMeasurement):
@@ -1392,7 +1380,7 @@ class _SinglePointMeasurement(BaseMeasurement):
         super().__init__(array, ensemble_axes_metadata, metadata)
 
 
-class _AbstractMeasurement1d(BaseMeasurement):
+class _BaseMeasurement1d(BaseMeasurement):
     _base_dims = 1
 
     def __init__(
@@ -1444,6 +1432,18 @@ class _AbstractMeasurement1d(BaseMeasurement):
             ensemble_axes_metadata=axes_metadata,
             metadata=metadata,
         )
+
+    @abstractmethod
+    def _plot_extent(self, units):
+        pass
+
+    @abstractmethod
+    def _plot_x_label(self, units):
+        pass
+
+    @abstractmethod
+    def _plot_y_label(self, units):
+        pass
 
     @property
     def extent(self) -> float:
@@ -1566,8 +1566,53 @@ class _AbstractMeasurement1d(BaseMeasurement):
         kwargs["sampling"] = sampling
         return self.__class__(**kwargs)
 
+    def show(
+        self,
+        ax: Axes = None,
+        figsize: Tuple[int, int] = None,
+        title: str = None,
+        units: str = None,
+        **kwargs,
+    ):
+        """
+        Show the reciprocal-space line profile(s) using matplotlib.
 
-class RealSpaceLineProfiles(_AbstractMeasurement1d):
+        Parameters
+        ----------
+        ax : matplotlib Axes, optional
+            If given the plots are added to the Axes. This is not available for image grids.
+        figsize : two int, optional
+            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
+        title : bool or str, optional
+            Add a title to the figure. If True is given instead of a string the title will be given by the value
+            corresponding to the "name" key of the metadata dictionary, if this item exists.
+        x_label : bool or str, optional
+            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
+            metadata. A string may be given to override this.
+        y_label : bool or str, optional
+            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
+            metadata. A string may be given to override this.
+        units : str, optional
+            The units of the reciprocal line profile can be either 'reciprocal' (resulting in [1 / Å]), or 'mrad'.
+        float_formatting : str, optional
+            A formatting string used for formatting the floats of the panel titles.
+
+        Returns
+        -------
+        matplotlib Axes
+        """
+
+        return show_measurements_1d(
+            self,
+            ax=ax,
+            figsize=figsize,
+            title=title,
+            units=units,
+            **kwargs,
+        )
+
+
+class RealSpaceLineProfiles(_BaseMeasurement1d):
     """
     A collection of real-space line profile(s).
 
@@ -1625,55 +1670,18 @@ class RealSpaceLineProfiles(_AbstractMeasurement1d):
 
         return LineScan(start=start, end=end).add_to_plot(*args, **kwargs)
 
-    def show(
-        self,
-        ax: Axes = None,
-        figsize: Tuple[int, int] = None,
-        title: str = None,
-        x_label: str = None,
-        y_label=None,  # TODO: needs to be implemented!
-        float_formatting: str = ".2f",
-        **kwargs,
-    ):
-        """
-        Show the line profile(s) using matplotlib.
+    def _plot_extent(self, units=None):
+        scale = {"Å": 1, "nm": 0.1}[_validate_real_space_units(units)]
+        return [0, self.extent * scale]
 
-        Parameters
-        ----------
-        ax : matplotlib Axes, optional
-            If given the plots are added to the Axes. This is not available for image grids.
-        figsize : two int, optional
-            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
-        title : bool or str, optional
-            Add a title to the figure. If True is given instead of a string the title will be given by the value
-            corresponding to the "name" key of the metadata dictionary, if this item exists.
-        x_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        y_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        float_formatting : str, optional
-            A formatting string used for formatting the floats of the panel titles.
+    def _plot_x_label(self, units=None):
+        return f"x [{_validate_real_space_units(units)}]"
 
-        Returns
-        -------
-        matplotlib Axes
-        """
-        extent = [0, self.extent]
-        return show_measurements_1d(
-            self,
-            ax=ax,
-            figsize=figsize,
-            title=title,
-            x_label=x_label,
-            extent=extent,
-            float_formatting=float_formatting,
-            **kwargs,
-        )
+    def _plot_y_label(self, units=None):
+        return f"y [{_validate_real_space_units(units)}]"
 
 
-class ReciprocalSpaceLineProfiles(_AbstractMeasurement1d):
+class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
     """
     A collection of reciprocal-space line profile(s).
 
@@ -1711,64 +1719,34 @@ class ReciprocalSpaceLineProfiles(_AbstractMeasurement1d):
     def angular_extent(self):
         return self.extent * self.wavelength * 1e3
 
-    def show(
-        self,
-        ax: Axes = None,
-        figsize: Tuple[int, int] = None,
-        title: str = None,
-        x_label: str = None,
-        y_label=None,  # TODO: needs to be implemented
-        units: str = "reciprocal",
-        float_formatting: str = ".2f",
-        **kwargs,
-    ):
-        """
-        Show the reciprocal-space line profile(s) using matplotlib.
-
-        Parameters
-        ----------
-        ax : matplotlib Axes, optional
-            If given the plots are added to the Axes. This is not available for image grids.
-        figsize : two int, optional
-            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
-        title : bool or str, optional
-            Add a title to the figure. If True is given instead of a string the title will be given by the value
-            corresponding to the "name" key of the metadata dictionary, if this item exists.
-        x_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        y_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        units : str, optional
-            The units of the reciprocal line profile can be either 'reciprocal' (resulting in [1 / Å]), or 'mrad'.
-        float_formatting : str, optional
-            A formatting string used for formatting the floats of the panel titles.
-
-        Returns
-        -------
-        matplotlib Axes
-        """
-        if units in angular_units:
-            extent = [0, self.angular_extent]
-
-            if x_label is None:
-                x_label = "Scattering angle [mrad]"
-        elif units in reciprocal_units:
-            extent = [0, self.extent]
+    def _plot_x_label(self, units=None):
+        units = _validate_reciprocal_space_units(units)
+        if units == "mrad":
+            return "scattering angle x [mrad]"
+        elif units == "1/Å":
+            return "k_x [1/Å]"
+        elif units == "bins":
+            return "frequency bin n"
         else:
-            raise RuntimeError()
+            return ""
 
-        return show_measurements_1d(
-            self,
-            ax=ax,
-            figsize=figsize,
-            title=title,
-            x_label=x_label,
-            float_formatting=float_formatting,
-            extent=extent,
-            **kwargs,
-        )
+    def _plot_y_label(self, units=None):
+        units = _validate_reciprocal_space_units(units)
+        if units == "mrad":
+            return "scattering angle y [mrad]"
+        elif units == "1/Å":
+            return "k_y [1/Å]"
+        elif units == "bins":
+            return "frequency bin m"
+        else:
+            return ""
+
+    def _plot_extent(self, units=None):
+        units = _validate_reciprocal_space_units(units)
+        if units == "mrad":
+            return [0, self.angular_extent]
+        elif units == "1/Å":
+            return [0, self.extent]
 
 
 def _integrate_gradient_2d(gradient, sampling):
@@ -1865,7 +1843,7 @@ def _gaussian_source_size(measurements, sigma: Union[float, Tuple[float, float]]
     return measurements.__class__(array, **kwargs)
 
 
-class DiffractionPatterns(BaseMeasurement):
+class DiffractionPatterns(BaseMeasurement2D):
     """
     One or more diffraction patterns.
 
@@ -1970,7 +1948,9 @@ class DiffractionPatterns(BaseMeasurement):
         ]
 
     def index_diffraction_spots(
-        self, cell: Union[Cell, float, Tuple[float, float, float]]
+        self,
+        cell: Union[Cell, float, Tuple[float, float, float]],
+        threshold: float = 0.001,
     ):
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
@@ -1986,11 +1966,10 @@ class DiffractionPatterns(BaseMeasurement):
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
         """
+        diffraction_patterns = self.to_cpu()
 
-        diffraction_patterns = self.block_direct()
-        diffraction_patterns = diffraction_patterns.to_cpu()
         return IndexedDiffractionPatterns.index_diffraction_patterns(
-            diffraction_patterns, cell
+            diffraction_patterns, cell, threshold=threshold, metadata=self.metadata
         )
 
     @property
@@ -2584,7 +2563,7 @@ class DiffractionPatterns(BaseMeasurement):
         return com
 
     def center_of_mass(
-        self, units: str = "reciprocal"
+        self, units: str = "1/Å"
     ) -> Union[Images, RealSpaceLineProfiles]:
         """
         Calculate center-of-mass images or line profiles from diffraction patterns. The results are of type `complex`
@@ -2598,9 +2577,11 @@ class DiffractionPatterns(BaseMeasurement):
             Center-of-mass line profiles (returned if there is only one scan axis).
         """
 
-        if units in angular_units:
+        units = _validate_reciprocal_space_units(units)
+
+        if units == "mrad":
             x, y = self.angular_coordinates
-        elif units in reciprocal_units:
+        elif units == "1/Å":
             x, y = self.coordinates
         else:
             raise ValueError()
@@ -2687,10 +2668,20 @@ class DiffractionPatterns(BaseMeasurement):
             The band-limited diffraction pattern(s).
         """
 
+        from abtem.transfer import soft_aperture
+
         def bandlimit(array, inner, outer):
             alpha_x, alpha_y = self.angular_coordinates
-            alpha = alpha_x[:, None] ** 2 + alpha_y[None] ** 2
-            block = (alpha >= inner**2) * (alpha < outer**2)
+            alpha = np.sqrt(alpha_x[:, None] ** 2 + alpha_y[None] ** 2)  # / 1000.
+            phi = np.arctan2(alpha_x[:, None], alpha_y[None])
+            block = soft_aperture(
+                alpha,
+                phi,
+                semiangle_cutoff=inner,
+                angular_sampling=np.array(self.angular_sampling) * 1000.0,
+            )
+
+            block = block == 0.0
             return array * block
 
         xp = get_array_module(self.array)
@@ -2760,118 +2751,56 @@ class DiffractionPatterns(BaseMeasurement):
 
         return array
 
-    def show(
-        self,
-        units: str = "reciprocal",
-        cmap: str = "viridis",
-        explode: bool = False,
-        ax: Axes = None,
-        figsize: Tuple[int, int] = None,
-        title: Union[bool, str] = True,
-        panel_titles: Union[bool, List[str]] = True,
-        x_ticks: bool = True,
-        y_ticks: bool = True,
-        x_label: Union[bool, str] = True,
-        y_label: Union[bool, str] = True,
-        row_super_label: Union[bool, str] = False,
-        col_super_label: Union[bool, str] = False,
-        power: float = 1.0,
-        vmin: float = None,
-        vmax: float = None,
-        common_color_scale=False,
-        cbar: bool = False,
-        cbar_labels: str = None,
-        sizebar: bool = False,
-        float_formatting: str = ".2f",
-        panel_labels: dict = None,
-        image_grid_kwargs: dict = None,
-        imshow_kwargs: dict = None,
-        anchored_text_kwargs: dict = None,
-        complex_coloring_kwargs: dict = None,
-    ) -> Axes:
-        """
-        Show the diffraction pattern(s) using matplotlib.
-
-        Parameters
-        ----------
-        units : bool, optional
-            The units of the diffraction pattern(s) can be either 'reciprocal' (resulting in [1 / Å]), or 'mrad'.
-        cmap : str, optional
-            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
-        explode : bool, optional
-            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
-            ensemble item is shown.
-        ax : matplotlib Axes, optional
-            If given the plots are added to the Axes. This is not available for image grids.
-        figsize : two int, optional
-            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
-        title : bool or str, optional
-            Add a title to the figure. If True is given instead of a string the title will be given by the value
-            corresponding to the "name" key of the metadata dictionary, if this item exists.
-        panel_titles : bool or list of str, optional
-            Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
-            strings an item must exist for each panel.
-        x_ticks : bool or list, optional
-            If False, the ticks on the `x`-axis will be removed.
-        y_ticks : bool or list, optional
-            If False, the ticks on the `y`-axis will be removed.
-        x_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        y_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        row_super_label : bool or str, optional
-            Add super label to the rows of an image grid. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this. The default is no super label.
-        col_super_label : bool or str, optional
-            Add super label to the columns of an image grid. If True (default) the label will be created from the corresponding
-            axis metadata. A string may be given to override this. The default is no super label.
-        power : float, optional
-            Show image on a power scale (default is a power of 1.0, ie. linear scale).
-        vmin : float, optional
-            Minimum of the intensity color scale. Default is the minimum of the array values.
-        vmax : float, optional
-            Maximum of the intensity color scale. Default is the maximum of the array values.
-        common_color_scale : bool, optional
-            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
-            it is requested). Default is False.
-        cbar : bool, optional
-            Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
-            keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through 'image_grid_kwargs'.
-        sizebar : bool, optional,
-            Add a size bar to the image(s).
-        float_formatting : str, optional
-            A formatting string used for formatting the floats of the panel titles.
-        panel_labels : list of str
-            A list of labels for each panel of a grid of images.
-        image_grid_kwargs : dict
-            Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.
-        imshow_kwargs : dict
-            Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.
-        anchored_text_kwargs : dict
-            Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel
-            labels.
-
-        Returns
-        -------
-        matplotlib Axes
-        """
-
-        if not explode:
-            measurements = self[(0,) * len(self.ensemble_shape)]
+    def _plot_x_label(self, units=None):
+        units = _validate_reciprocal_space_units(units)
+        if units == "mrad":
+            if config.get("visualize.use_tex"):
+                return "$\\alpha_x$ [mrad]"
+            else:
+                return "scattering angle x [mrad]"
+        elif units == "1/Å":
+            if config.get("visualize.use_tex"):
+                return "$k_x$ [$Å^{-1}$]"
+            else:
+                return "k_x [1/Å]"
+        elif units == "bins":
+            return "frequency bin n"
         else:
-            if ax is not None:
-                raise NotImplementedError(
-                    "`ax` not implemented for with `explode = True`."
-                )
-            measurements = self
+            return ""
 
-        if units.lower() in angular_units:
-            x_label = "scattering angle x [mrad]"
-            y_label = "scattering angle y [mrad]"
-            extent = list(self.angular_limits[0] + self.angular_limits[1])
-        elif units in bins:
+    def _plot_y_label(self, units=None):
+        units = _validate_reciprocal_space_units(units)
+        if units == "mrad":
+            if config.get("visualize.use_tex"):
+                return "$\\alpha_y$ [mrad]"
+            else:
+                return "scattering angle y [mrad]"
+        elif units == "1/Å":
+            if config.get("visualize.use_tex"):
+                return "$k_y$ [$Å^{-1}$]"
+            else:
+                return "k_y [1/Å]"
+        elif units == "bins":
+            return "frequency bin m"
+        else:
+            return ""
+
+    def _plot_extent(self, units=None):
+        units = _validate_reciprocal_space_units(units)
+        if units == "mrad":
+            return list(self.angular_limits[0] + self.angular_limits[1])
+        elif units == "1/Å":
+            x_limits = (
+                self.limits[0][0] - self.sampling[0] / 2,
+                self.limits[0][1] + self.sampling[0] / 2,
+            )
+            y_limits = (
+                self.limits[1][0] - self.sampling[1] / 2,
+                self.limits[1][1] + self.sampling[1] / 2,
+            )
+            return list(x_limits + y_limits)
+
+        elif units == "bins":
 
             def bin_extent(n):
                 if n % 2 == 0:
@@ -2879,42 +2808,9 @@ class DiffractionPatterns(BaseMeasurement):
                 else:
                     return -n // 2 + 0.5, n // 2 + 0.5
 
-            x_label = "frequency bin n"
-            y_label = "frequency bin m"
-            extent = bin_extent(self.base_shape[0]) + bin_extent(self.base_shape[1])
-        elif units.lower().strip() in reciprocal_units:
-            extent = list(self.limits[0] + self.limits[1])
+            return bin_extent(self.base_shape[0]) + bin_extent(self.base_shape[1])
         else:
-            raise ValueError()
-
-        return show_measurement_2d(
-            measurements=measurements,
-            figsize=figsize,
-            super_title=title,
-            sub_title=panel_titles,
-            x_ticks=x_ticks,
-            y_ticks=y_ticks,
-            x_label=x_label,
-            y_label=y_label,
-            extent=extent,
-            cmap=cmap,
-            row_super_label=row_super_label,
-            col_super_label=col_super_label,
-            power=power,
-            vmin=vmin,
-            vmax=vmax,
-            common_color_scale=common_color_scale,
-            cbar=cbar,
-            cbar_labels=cbar_labels,
-            sizebar=sizebar,
-            float_formatting=float_formatting,
-            panel_labels=panel_labels,
-            image_grid_kwargs=image_grid_kwargs,
-            imshow_kwargs=imshow_kwargs,
-            anchored_text_kwargs=anchored_text_kwargs,
-            complex_coloring_kwargs=complex_coloring_kwargs,
-            axes=ax,
-        )
+            raise RuntimeError()
 
 
 class PolarMeasurements(BaseMeasurement):
@@ -3173,6 +3069,27 @@ class PolarMeasurements(BaseMeasurement):
 
         return differential_1.__class__(
             array, **differential_1._copy_kwargs(exclude=("array",))
+        )
+
+    def to_images(self):
+
+        image_axes = _scan_axes(self)
+        xp = get_array_module(self.array)
+
+        array = xp.moveaxis(self.array, image_axes, (-2, -1))
+
+        ensemble_axes_metadata = [
+            axis.copy()
+            for i, axis in enumerate(self.axes_metadata)
+            if not i in image_axes
+        ]
+        sampling = _scan_sampling(self)
+
+        return Images(
+            array,
+            sampling=sampling,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=self.metadata,
         )
 
     # TODO: to be documented.
