@@ -40,6 +40,139 @@ if TYPE_CHECKING:
     )
 
 
+def _iterate_axes(axes: Union[ImageGrid, Axes]):
+    try:
+        for ax in axes:
+            yield ax
+    except TypeError:
+        yield axes
+
+
+class MeasurementVisualizationAxes:
+
+    def __init__(self, axes, measurements):
+        self._axes = axes
+        self._measurements = measurements
+
+    @property
+    def measurements(self):
+        return self._measurements
+
+    @property
+    def axes(self):
+        return self._axes
+
+    @property
+    def fig(self):
+        return self._axes[0].get_figure()
+
+    def iterate_axes(self):
+        try:
+            for ax in self.axes:
+                yield ax
+        except TypeError:
+            yield self.axes
+
+    def add_panel_labels(self, labels: str = None, **kwargs):
+        if "loc" not in kwargs:
+            kwargs["loc"] = 2
+
+        if isinstance(self.axes, Axes):
+            axes = [self.axes]
+        else:
+            axes = self.axes
+
+        if labels is None:
+            labels = string.ascii_lowercase
+            labels = [f"({label})" for label in labels]
+            if config.get("visualize.use_tex", False):
+                labels = [f"${label}$" for label in labels]
+
+        for ax, l in zip(_iterate_axes(axes), labels):
+            at = AnchoredText(l, pad=0.0, borderpad=0.5, frameon=False, **kwargs)
+            ax.add_artist(at)
+            at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=5)])
+
+
+class Measurement2DVisualizationAxes(MeasurementVisualizationAxes):
+
+    def __init__(self, axes, measurements):
+        super().__init__(axes, measurements)
+
+    def set_column_titles(
+            self, pad=10.0, format: str = ".3g", units=None, fontsize=12, **kwargs
+    ):
+        include_label = True
+        for ax, axis_metadata in zip(
+                np.array(self.axes.axes_column)[:, 0], self.measurements.ensemble_axes_metadata[0]
+        ):
+
+            for child in ax.get_children():
+                if hasattr(child, "is_column_title"):
+                    child.remove()
+
+            annotation = ax.annotate(
+                axis_metadata.format_title(
+                    format, units=units, include_label=include_label
+                ),
+                xy=(0.5, 1),
+                xytext=(0, pad),
+                xycoords="axes fraction",
+                textcoords="offset points",
+                ha="center",
+                va="baseline",
+                fontsize=fontsize,
+                **kwargs,
+            )
+            annotation.is_column_title = True
+
+            include_label = False
+
+    def iterate_image_grid(self, flip_vertical=True):
+        axes = np.array(self.axes.axes_column, dtype=object)
+
+        if flip_vertical:
+            axes = np.fliplr(axes)
+
+        for i in np.ndindex(axes.shape):
+            yield axes[i]
+
+    def iterate_measurements(self):
+        for _, measurement in self.measurements.iterate_ensemble(keep_dims=True):
+            yield measurement
+
+    def iterate_images(self):
+        for ax in self.iterate_image_grid():
+            for im in ax.get_images():
+                yield im
+
+    def set_x_extent(self, extent):
+        for im in self.iterate_images():
+            old_extent = im.get_extent()
+            y_extent = old_extent[2:]
+            new_extent = extent + y_extent
+            im.set_extent(new_extent)
+
+    def set_y_extent(self, extent):
+        for im in self.iterate_images():
+            old_extent = im.get_extent()
+            x_extent = old_extent[:2]
+            new_extent = x_extent + extent
+            im.set_extent(new_extent)
+
+    def set_x_axes(
+            self,
+            units: str = None,
+            label: str = None,
+    ):
+        if label is None:
+            label = self.measurements.axes_metadata[-2].format_label(units)
+
+        for ax, measurement in zip(self.iterate_image_grid(), self.iterate_measurements()):
+            ax.set_xlabel(label)
+            print(measurement._plot_extent())
+
+
 def _make_cbar_label(measurement):
     cbar_label = (
         measurement.metadata["label"] if "label" in measurement.metadata else ""
@@ -50,45 +183,24 @@ def _make_cbar_label(measurement):
     return cbar_label
 
 
-def add_panel_labels(ax, labels: str = None, **kwargs):
-    if "loc" not in kwargs:
-        kwargs["loc"] = 2
-
-    if isinstance(ax, Axes):
-        ax = [ax]
-
-    if labels is None:
-        labels = string.ascii_lowercase
-        labels = [f"({label})" for label in labels]
-        if config.get("visualize.use_tex", False):
-            labels = [f"${label}$" for label in labels]
-
-    for ax, l in zip(_iterate_axes(ax), labels):
-        at = AnchoredText(l, pad=0.0, borderpad=0.5, frameon=False, **kwargs)
-        ax.add_artist(at)
-        at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=5)])
-
-    return at
-
-
 def add_sizebar(
-    ax,
-    measurements,
-    size=None,
-    loc="lower right",
-    borderpad=0.5,
-    formatting: str = ".3f",
-    units=None,
-    **kwargs,
+        ax,
+        measurements,
+        size=None,
+        loc="lower right",
+        borderpad=0.5,
+        formatting: str = ".3f",
+        units=None,
+        **kwargs,
 ):
     if units is None:
         units = measurements.base_axes_metadata[-2].units
 
     if size is None:
         size = (
-            measurements.base_axes_metadata[-2].sampling
-            * measurements.base_shape[-2]
-            / 3
+                measurements.base_axes_metadata[-2].sampling
+                * measurements.base_shape[-2]
+                / 3
         )
 
         num = size * _get_conversion_factor(units, units)
@@ -105,22 +217,13 @@ def add_sizebar(
     return anchored_size_bar
 
 
-def _iterate_axes(axes: Union[ImageGrid, Axes]):
-    try:
-        for ax in axes:
-            yield ax
-    except TypeError:
-        yield axes
-
-
 def add_imshow(
-    ax: Axes,
-    measurements: "BaseMeasurement",
-    cmap: str = None,
-    vmin: float = None,
-    vmax: float = None,
+        ax: Axes,
+        measurements: "BaseMeasurement",
+        cmap: str = None,
+        vmin: float = None,
+        vmax: float = None,
 ):
-
     if not measurements.is_complex and cmap is None:
         cmap = config.get("cmap", "viridis")
     elif cmap is None:
@@ -169,9 +272,8 @@ def add_imshow(
 
 
 def set_image_data(
-    axes, measurements, complex_representation="intensity", recreate=False
+        axes, measurements, complex_representation="intensity", recreate=False
 ):
-
     measurements = measurements.compute().to_cpu()
 
     if measurements.is_complex and complex_representation != "domain_coloring":
@@ -202,7 +304,7 @@ def set_image_data(
 
 def set_colorbars(axes, measurements, label=None, fontsize=12, **kwargs):
     for ax, (_, measurement) in zip(
-        _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
+            _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
     ):
 
         ims = ax.get_images()
@@ -233,14 +335,14 @@ def set_colorbars(axes, measurements, label=None, fontsize=12, **kwargs):
 
 
 def set_normalization(
-    axes: Axes,
-    measurements: "BaseMeasurement2D",
-    power: float = 1.0,
-    vmin: float = None,
-    vmax: float = None,
+        axes: Axes,
+        measurements: "BaseMeasurement2D",
+        power: float = 1.0,
+        vmin: float = None,
+        vmax: float = None,
 ):
     for ax, (_, measurement) in zip(
-        _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
+            _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
     ):
 
         if measurement.is_complex:
@@ -288,18 +390,17 @@ def set_sub_titles(axes, measurements):
 
 
 def set_row_titles(
-    axes,
-    measurements,
-    pad: float = 0.0,
-    format: str = ".2g",
-    units: str = None,
-    fontsize: int = 12,
-    **kwargs,
+        axes,
+        measurements,
+        pad: float = 0.0,
+        format: str = ".2g",
+        units: str = None,
+        fontsize: int = 12,
+        **kwargs,
 ):
-
     include_label = True
     for ax, axis_metadata in zip(
-        np.array(axes.axes_column)[0, ::-1], measurements.axes_metadata[1]
+            np.array(axes.axes_column)[0, ::-1], measurements.axes_metadata[1]
     ):
 
         for child in ax.get_children():
@@ -325,39 +426,7 @@ def set_row_titles(
         include_label = False
 
 
-def set_column_titles(
-    axes, measurements, pad=10.0, format: str = ".2g", units=None, fontsize=12, **kwargs
-):
-
-    include_label = True
-    for ax, axis_metadata in zip(
-        np.array(axes.axes_column)[:, 0], measurements.ensemble_axes_metadata[0]
-    ):
-
-        for child in ax.get_children():
-            if hasattr(child, "is_column_title"):
-                child.remove()
-
-        annotation = ax.annotate(
-            axis_metadata.format_title(
-                format, units=units, include_label=include_label
-            ),
-            xy=(0.5, 1),
-            xytext=(0, pad),
-            xycoords="axes fraction",
-            textcoords="offset points",
-            ha="center",
-            va="baseline",
-            fontsize=fontsize,
-            **kwargs,
-        )
-        annotation.is_column_title = True
-
-        include_label = False
-
-
-def set_titles(axes, measurements, format: str = ".3f", title=None, units=None):
-
+def set_titles(axes, measurements, format: str = ".3g", title=None, units=None):
     if not measurements.ensemble_shape:
         return
 
@@ -374,44 +443,31 @@ def set_extent(axes, measurements, units=None, extent=None):
         extent = measurements._plot_extent(units)
 
     for ax, (_, measurement) in zip(
-        _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
+            _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
     ):
         for im in ax.get_images():
             im.set_extent(extent)
 
 
-def set_xlabels(
-    axes: Axes,
-    measurements: "BaseMeasurement",
-    units: str = None,
-    label: str = None,
-):
-    if label is None:
-        label = measurements.axes_metadata[-2].format_label(units)
 
-    for ax, (_, measurement) in zip(
-        _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
-    ):
-        ax.set_xlabel(label)
 
 
 def set_ylabels(
-    axes: Axes,
-    measurements: "BaseMeasurement",
-    units: str = None,
-    label: str = None,
+        axes: Axes,
+        measurements: "BaseMeasurement",
+        units: str = None,
+        label: str = None,
 ):
     if label is None:
         label = measurements.axes_metadata[-1].format_label(units)
 
     for ax, (_, measurement) in zip(
-        _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
+            _iterate_axes(axes), measurements.iterate_ensemble(keep_dims=True)
     ):
         ax.set_ylabel(label)
 
 
 def _iterate_image_grid(axes, flip_vertical=True):
-
     axes = np.array(axes.axes_column, dtype=object)
 
     if flip_vertical:
@@ -422,19 +478,19 @@ def _iterate_image_grid(axes, flip_vertical=True):
 
 
 def show_measurements_2d(
-    measurements: "BaseMeasurement",
-    axes: Axes = None,
-    figsize: Tuple[int, int] = None,
-    title: str = None,
-    power: float = 1.0,
-    vmin: float = None,
-    vmax: float = None,
-    common_color_scale: bool = False,
-    cbar: bool = False,
-    cmap: str = None,
-    units: str = None,
-    axes_pad=None,
-    axis_off=False,
+        measurements: "BaseMeasurement",
+        axes: Axes = None,
+        figsize: Tuple[int, int] = None,
+        title: str = None,
+        power: float = 1.0,
+        vmin: float = None,
+        vmax: float = None,
+        common_color_scale: bool = False,
+        cbar: bool = False,
+        cmap: str = None,
+        units: str = None,
+        axes_pad=None,
+        axis_off=False,
 ):
     """
     Show the image(s) using matplotlib.
@@ -492,10 +548,10 @@ def show_measurements_2d(
             set_colorbars(axes, measurements)
 
         # set_extent(axes, measurements, units=units)
-        set_titles(axes, measurements, title=title)
-        set_xlabels(axes, measurements, units=units)
-        set_ylabels(axes, measurements, units=units)
-        set_normalization(axes, measurements, vmin=vmin, vmax=vmax, power=power)
+        # set_titles(axes, measurements, title=title)
+        #set_xlabels(axes, measurements, units=units)
+        #set_ylabels(axes, measurements, units=units)
+        #set_normalization(axes, measurements, vmin=vmin, vmax=vmax, power=power)
         return fig, axes
 
     measurements = measurements[(0,) * max(len(measurements.ensemble_shape) - 2, 0)]
@@ -541,7 +597,7 @@ def show_measurements_2d(
         vmax = measurements.array.max()
 
     for ax, (_, measurement) in zip(
-        _iterate_image_grid(axes), measurements.iterate_ensemble(keep_dims=False)
+            _iterate_image_grid(axes), measurements.iterate_ensemble(keep_dims=False)
     ):
         add_imshow(ax=ax, measurements=measurement, cmap=cmap, vmin=vmin, vmax=vmax)
 
@@ -552,16 +608,17 @@ def show_measurements_2d(
         for ax in _iterate_axes(axes):
             ax.set_xticks([])
             ax.set_yticks([])
+    #
+    # else:
+    #     set_xlabels(axes, measurements, units=units)
+    #     set_ylabels(axes, measurements, units=units)
 
-    else:
-        set_xlabels(axes, measurements, units=units)
-        set_ylabels(axes, measurements, units=units)
-
-    if title:
-        set_titles(axes, measurements, title=title)
+    # if title:
+    #    set_titles(axes, measurements, title=title)
 
     set_normalization(axes, measurements, vmin=vmin, vmax=vmax, power=power)
-    return fig, axes
+
+    return Measurement2DVisualizationAxes(axes, measurements)
 
 
 def _add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwargs):
@@ -582,17 +639,16 @@ def _add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwarg
 
 
 def show_measurements_1d(
-    measurements: Union["RealSpaceLineProfiles", "ReciprocalSpaceLineProfiles"],
-    extent: Tuple[float, float] = None,
-    ax: Axes = None,
-    x_label: str = None,
-    y_label: str = None,
-    title: str = None,
-    figsize: Tuple[int, int] = None,
-    units=None,
-    **kwargs,
+        measurements: Union["RealSpaceLineProfiles", "ReciprocalSpaceLineProfiles"],
+        extent: Tuple[float, float] = None,
+        ax: Axes = None,
+        x_label: str = None,
+        y_label: str = None,
+        title: str = None,
+        figsize: Tuple[int, int] = None,
+        units=None,
+        **kwargs,
 ):
-
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
     else:
@@ -639,17 +695,17 @@ def show_measurements_1d(
 
 
 def _show_indexed_diffraction_pattern(
-    indexed_diffraction_pattern,
-    scale: float = 1.0,
-    ax: Axes = None,
-    figsize: Tuple[float, float] = (6, 6),
-    title: str = None,
-    overlay_hkl: bool = True,
-    inequivalency_threshold: float = 1.0,
-    power: float = 1.0,
-    cmap: str = "viridis",
-    colors: str = "cmap",
-    background_color: str = "white",
+        indexed_diffraction_pattern,
+        scale: float = 1.0,
+        ax: Axes = None,
+        figsize: Tuple[float, float] = (6, 6),
+        title: str = None,
+        overlay_hkl: bool = True,
+        inequivalency_threshold: float = 1.0,
+        power: float = 1.0,
+        cmap: str = "viridis",
+        colors: str = "cmap",
+        background_color: str = "white",
 ):
     """
     Display a diffraction pattern as indexed Bragg reflections.
@@ -682,7 +738,7 @@ def _show_indexed_diffraction_pattern(
 
     positions = indexed_diffraction_pattern.positions[:, :2]
 
-    intensities = indexed_diffraction_pattern.intensities**power
+    intensities = indexed_diffraction_pattern.intensities ** power
 
     order = np.argsort(-np.linalg.norm(positions, axis=1))
 
@@ -695,7 +751,7 @@ def _show_indexed_diffraction_pattern(
 
     scale_factor = min_distance / scales.max()
 
-    scales = scales**power * scale_factor
+    scales = scales ** power * scale_factor
 
     if colors == "cmap":
         norm = matplotlib.colors.Normalize(vmin=0, vmax=intensities.max())
@@ -739,8 +795,8 @@ def _show_indexed_diffraction_pattern(
 
 def add_miller_index_annotations(ax, indexed_diffraction_patterns):
     for hkl, position in zip(
-        indexed_diffraction_patterns.miller_indices,
-        indexed_diffraction_patterns.positions,
+            indexed_diffraction_patterns.miller_indices,
+            indexed_diffraction_patterns.positions,
     ):
         annotation = ax.annotate(
             "{} {} {}".format(*hkl),
@@ -812,19 +868,19 @@ def _merge_positions(positions, plane, tol: float = 1e-7) -> np.ndarray:
 
 
 def show_atoms(
-    atoms: Atoms,
-    plane: Union[Tuple[float, float], str] = "xy",
-    ax: Axes = None,
-    scale: float = 0.75,
-    title: str = None,
-    numbering: bool = False,
-    show_periodic: bool = False,
-    figsize: Tuple[float, float] = None,
-    legend: bool = False,
-    merge: float = 1e-2,
-    tight_limits=False,
-    show_cell=True,
-    **kwargs,
+        atoms: Atoms,
+        plane: Union[Tuple[float, float], str] = "xy",
+        ax: Axes = None,
+        scale: float = 0.75,
+        title: str = None,
+        numbering: bool = False,
+        show_periodic: bool = False,
+        figsize: Tuple[float, float] = None,
+        legend: bool = False,
+        merge: float = 1e-2,
+        tight_limits=False,
+        show_cell=True,
+        **kwargs,
 ):
     """
     Display 2D projection of atoms as a matplotlib plot.

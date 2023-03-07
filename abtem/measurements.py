@@ -33,7 +33,7 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
-from abtem.core.units import _get_conversion_factor
+from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.indexing import IndexedDiffractionPatterns
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
@@ -675,15 +675,11 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
 class BaseMeasurement2D(BaseMeasurement):
     @abstractmethod
-    def _plot_extent(self, units):
+    def _plot_extent_x(self, units):
         pass
 
     @abstractmethod
-    def _plot_x_label(self, units):
-        pass
-
-    @abstractmethod
-    def _plot_y_label(self, units):
+    def _plot_extent_y(self, units):
         pass
 
     def show(
@@ -1362,15 +1358,13 @@ class Images(BaseMeasurement2D):
             metadata=self.metadata,
         )
 
-    def _plot_extent(self, units=None):
+    def _plot_extent_x(self, units=None):
         scale = _get_conversion_factor("Å", units)
-        return [0, self.extent[0] * scale, 0, self.extent[1] * scale]
+        return [0, self.extent[0] * scale]
 
-    def _plot_x_label(self, units=None):
-        return self.axes_metadata[-2].format_label(units)
-
-    def _plot_y_label(self, units=None):
-        return self.axes_metadata[-1].format_label(units)
+    def _plot_extent_y(self, units=None):
+        scale = _get_conversion_factor("Å", units)
+        return [0, self.extent[1] * scale]
 
 
 class _SinglePointMeasurement(BaseMeasurement):
@@ -1713,33 +1707,17 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [FourierSpaceAxis(label="k", sampling=self.sampling, units="1 / Å")]
+        return [FourierSpaceAxis(label="k", sampling=self.sampling, units="1/Å")]
 
     @property
     def angular_extent(self):
         return self.extent * self.wavelength * 1e3
 
     def _plot_x_label(self, units=None):
-        units = _validate_reciprocal_space_units(units)
-        if units == "mrad":
-            return "scattering angle x [mrad]"
-        elif units == "1/Å":
-            return "k_x [1/Å]"
-        elif units == "bins":
-            return "frequency bin n"
-        else:
-            return ""
+        return f"x [{_validate_units(units, '1/Å')}]"
 
     def _plot_y_label(self, units=None):
-        units = _validate_reciprocal_space_units(units)
-        if units == "mrad":
-            return "scattering angle y [mrad]"
-        elif units == "1/Å":
-            return "k_y [1/Å]"
-        elif units == "bins":
-            return "frequency bin m"
-        else:
-            return ""
+        return f"y [{_validate_units(units, '1/Å')}]"
 
     def _plot_extent(self, units=None):
         units = _validate_reciprocal_space_units(units)
@@ -1935,14 +1913,14 @@ class DiffractionPatterns(BaseMeasurement2D):
                 sampling=self.sampling[0],
                 offset=limits[0][0],
                 label="kx",
-                units="1 / Å",
+                units="1/Å",
                 fftshift=self.fftshift,
             ),
             FourierSpaceAxis(
                 sampling=self.sampling[1],
                 offset=limits[1][0],
                 label="ky",
-                units="1 / Å",
+                units="1/Å",
                 fftshift=self.fftshift,
             ),
         ]
@@ -2751,42 +2729,8 @@ class DiffractionPatterns(BaseMeasurement2D):
 
         return array
 
-    def _plot_x_label(self, units=None):
-        units = _validate_reciprocal_space_units(units)
-        if units == "mrad":
-            if config.get("visualize.use_tex"):
-                return "$\\alpha_x$ [mrad]"
-            else:
-                return "scattering angle x [mrad]"
-        elif units == "1/Å":
-            if config.get("visualize.use_tex"):
-                return "$k_x$ [$Å^{-1}$]"
-            else:
-                return "k_x [1/Å]"
-        elif units == "bins":
-            return "frequency bin n"
-        else:
-            return ""
-
-    def _plot_y_label(self, units=None):
-        units = _validate_reciprocal_space_units(units)
-        if units == "mrad":
-            if config.get("visualize.use_tex"):
-                return "$\\alpha_y$ [mrad]"
-            else:
-                return "scattering angle y [mrad]"
-        elif units == "1/Å":
-            if config.get("visualize.use_tex"):
-                return "$k_y$ [$Å^{-1}$]"
-            else:
-                return "k_y [1/Å]"
-        elif units == "bins":
-            return "frequency bin m"
-        else:
-            return ""
-
     def _plot_extent(self, units=None):
-        units = _validate_reciprocal_space_units(units)
+        units = _validate_units(units, "1/Å")
         if units == "mrad":
             return list(self.angular_limits[0] + self.angular_limits[1])
         elif units == "1/Å":

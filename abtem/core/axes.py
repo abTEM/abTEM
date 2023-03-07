@@ -57,6 +57,9 @@ class AxisMetadata:
     def copy(self):
         return copy(self)
 
+    def plot_extent(self):
+        raise NotImplementedError
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class UnknownAxis(AxisMetadata):

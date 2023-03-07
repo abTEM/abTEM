@@ -1422,7 +1422,6 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             array = ctfs.map_blocks(
                 _make_profile, new_axis=new_axis, chunks=chunks, dtype=np.float32
             )
-            print(array)
 
         else:
             array = self._profiles_array(
