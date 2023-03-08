@@ -261,7 +261,7 @@ def _validate_cell(cell):
         return cell
 
 
-def _index_diffraction_patterns(diffraction_patterns, cell, threshold):
+def _index_diffraction_patterns(diffraction_patterns, cell, threshold, distance_threshold):
 
     cell = _validate_cell(cell)
 
@@ -307,7 +307,7 @@ def _index_diffraction_patterns(diffraction_patterns, cell, threshold):
         if max_intensity < threshold:
             continue
 
-        if np.min(np.abs(d_ewald[indices])) > 0.1:
+        if np.min(np.abs(d_ewald[indices])) > distance_threshold:
             continue
 
         min_index = np.argmin(np.abs(d_ewald[indices]))
@@ -535,11 +535,12 @@ class IndexedDiffractionPatterns(CopyMixin):
         diffraction_patterns: "DiffractionPatterns",
         cell: Union[Cell, float, Tuple[float, float, float]],
         threshold: float = 0.001,
-            metadata=None
+        distance_threshold=0.15,
+        metadata=None
     ) -> "IndexedDiffractionPatterns":
 
         hkl, intensities, positions = _index_diffraction_patterns(
-            diffraction_patterns, cell, threshold=threshold
+            diffraction_patterns, cell, threshold=threshold, distance_threshold=distance_threshold
         )
 
         ensemble_axes_metadata = diffraction_patterns.ensemble_axes_metadata
@@ -653,8 +654,6 @@ class IndexedDiffractionPatterns(CopyMixin):
             indexed_diffraction_patterns = indexed_diffraction_patterns[
                 (0,) * len(self.ensemble_shape)
             ]
-
-        sss
 
         return _show_indexed_diffraction_pattern(
             indexed_diffraction_patterns, power=power, overlay_hkl=overlay_hkl, **kwargs

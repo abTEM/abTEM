@@ -551,7 +551,7 @@ def show_measurements_2d(
         # set_titles(axes, measurements, title=title)
         #set_xlabels(axes, measurements, units=units)
         #set_ylabels(axes, measurements, units=units)
-        #set_normalization(axes, measurements, vmin=vmin, vmax=vmax, power=power)
+        set_normalization(axes, measurements, vmin=vmin, vmax=vmax, power=power)
         return fig, axes
 
     measurements = measurements[(0,) * max(len(measurements.ensemble_shape) - 2, 0)]
@@ -749,7 +749,7 @@ def _show_indexed_diffraction_pattern(
 
     min_distance = squareform(distance_matrix(positions, positions)).min()
 
-    scale_factor = min_distance / scales.max()
+    scale_factor = min_distance / scales.max() * scale
 
     scales = scales ** power * scale_factor
 
@@ -784,8 +784,8 @@ def _show_indexed_diffraction_pattern(
     ax.axis("equal")
     ax.set_xlim(-x_lim * 1.1, x_lim * 1.1)
     ax.set_ylim(-y_lim * 1.1, y_lim * 1.1)
-    fig.patch.set_facecolor(background_color)
-    ax.axis("off")
+    # fig.patch.set_facecolor(background_color)
+    # ax.axis("off")
 
     if overlay_hkl:
         add_miller_index_annotations(ax, indexed_diffraction_pattern)

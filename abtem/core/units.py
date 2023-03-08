@@ -8,7 +8,7 @@ units_type = {
             ("reciprocal_space",) * 6,
         )
     ),
-    **dict(zip(("rad", "mrad",), ("angular",) * 2)),
+    **dict(zip(("rad", "mrad", "deg",), ("angular",) * 3)),
     **dict(
         zip(
             (
@@ -44,6 +44,7 @@ _tex_units = {
     "1/mm": "\mathrm{mm}^{-1}",
     "1/m": "\mathrm{m}^{-1}",
     "mrad": "\mathrm{mrad}",
+    "deg": "\mathrm{deg}",
 }
 
 

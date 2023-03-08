@@ -674,13 +674,13 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
 
 class BaseMeasurement2D(BaseMeasurement):
-    @abstractmethod
-    def _plot_extent_x(self, units):
-        pass
-
-    @abstractmethod
-    def _plot_extent_y(self, units):
-        pass
+    # @abstractmethod
+    # def _plot_extent_x(self, units):
+    #     pass
+    #
+    # @abstractmethod
+    # def _plot_extent_y(self, units):
+    #     pass
 
     def show(
         self,
@@ -1929,6 +1929,7 @@ class DiffractionPatterns(BaseMeasurement2D):
         self,
         cell: Union[Cell, float, Tuple[float, float, float]],
         threshold: float = 0.001,
+        distance_threshold=0.15
     ):
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
@@ -1947,7 +1948,7 @@ class DiffractionPatterns(BaseMeasurement2D):
         diffraction_patterns = self.to_cpu()
 
         return IndexedDiffractionPatterns.index_diffraction_patterns(
-            diffraction_patterns, cell, threshold=threshold, metadata=self.metadata
+            diffraction_patterns, cell, threshold=threshold, distance_threshold=distance_threshold, metadata=self.metadata
         )
 
     @property
