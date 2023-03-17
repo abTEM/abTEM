@@ -303,6 +303,9 @@ def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
 
 
 def _validate_coordinates(start, end, potential, fractional):
+
+    potential = _validate_potential(potential)
+
     start = _validate_coordinate(start, potential, fractional)
     end = _validate_coordinate(end, potential, fractional)
 

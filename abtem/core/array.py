@@ -39,6 +39,11 @@ from abtem.core.chunks import Chunks
 from abtem.core.utils import normalize_axes, CopyMixin
 from abtem._version import __version__
 
+try:
+    import tifffile
+except ImportError:
+    tifffile = None
+
 
 class ComputableList(list):
     def to_zarr(
@@ -66,15 +71,22 @@ class ComputableList(list):
 
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
-        ) as (a, b, c, d, e):
-            output, profilers = dask.compute(computables, **kwargs)[0]
+        ) as (_, profiler, resource_profiler, _):
+            output = dask.compute(computables, **kwargs)[0]
+
+        profilers = ()
+        if profiler is not None:
+            profilers += (profiler,)
+
+        if resource_profiler is not None:
+            profilers += (resource_profiler,)
 
         if profilers:
             return output, profilers
 
         return output
 
-    def compute(self, **kwargs):
+    def compute(self, **kwargs) -> Union[List, Tuple[List, tuple]]:
         output, profilers = _compute(self, **kwargs)
 
         if profilers:
@@ -122,10 +134,13 @@ def _compute_context(
         "optimization.fuse.active": config.get("dask.fuse"),
     }
 
-    with progress_bar as a, profiler as c, resource_profiler as d, dask.config.set(
-        dask_configuration
-    ) as e:
-        yield a, c, d, e
+    with (
+        progress_bar as progress_bar,
+        profiler as profiler,
+        resource_profiler as resource_profiler,
+        dask.config.set(dask_configuration) as dask_configuration,
+    ):
+        yield progress_bar, profiler, resource_profiler, dask_configuration
 
 
 def _compute(
@@ -278,11 +293,11 @@ class HasArray(HasAxes, CopyMixin):
         return self._array.dtype
 
     @property
-    def device(self):
+    def device(self) -> str:
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
-    def is_lazy(self):
+    def is_lazy(self) -> bool:
         return isinstance(self.array, da.core.Array)
 
     @classmethod
@@ -292,7 +307,7 @@ class HasArray(HasAxes, CopyMixin):
         return cls(**kwargs)
 
     @property
-    def is_complex(self):
+    def is_complex(self) -> str:
         return np.iscomplexobj(self.array)
 
     def check_is_compatible(self, other: "HasArray"):
@@ -537,7 +552,8 @@ class HasArray(HasAxes, CopyMixin):
         if self.is_lazy:
             return self
 
-        chunks = ("auto",) * len(self.ensemble_shape) + (-1,) * len(self.base_shape)
+        if chunks == "auto":
+            chunks = ("auto",) * len(self.ensemble_shape) + (-1,) * len(self.base_shape)
 
         array = da.from_array(self.array, chunks=chunks)
 
@@ -550,6 +566,22 @@ class HasArray(HasAxes, CopyMixin):
         resource_profiler=False,
         **kwargs,
     ):
+        """
+        This turns a lazy abTEM object into its in-memory equivalent.
+
+        Parameters
+        ----------
+        progress_bar : bool
+            Display a progress bar in the terminal or notebook during computation. The progress bar is only displayed
+            with a local scheduler.
+        profiler : bool
+            Return Profiler class used to profile Dask’s execution at the task level. Only execution with a local
+            is profiled.
+        resource_profiler : bool
+            Return ResourceProfiler class is used to profile Dask’s execution at the resource level.
+        kwargs :
+            Additional keyword arguments passes to `dask.compute`.
+        """
         if not self.is_lazy:
             return self
 
@@ -652,14 +684,19 @@ class HasArray(HasAxes, CopyMixin):
         kwargs :
             Keyword arguments passed to tifffile.imwrite.
         """
-        import tifffile
+        if tifffile is None:
+            raise RuntimeError(
+                "This functionality of abTEM requires tifffile, see https://github.com/cgohlke/tifffile/"
+            )
 
         array = self.array
         if self.is_lazy:
             warnings.warn("lazy arrays are computed in memory before writing to tiff")
             array = array.compute()
 
-        return tifffile.imwrite(filename, array, description=self._metadata_to_json(), **kwargs)
+        return tifffile.imwrite(
+            filename, array, description=self._metadata_to_json(), **kwargs
+        )
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
@@ -754,6 +791,19 @@ def stack(
 
 
 def concatenate(has_arrays: Sequence[HasArray], axis: bool = 0) -> "T":
+    """
+    Join a sequence of abTEM array classes along an existing axis.
+
+    Parameters
+    ----------
+    has_arrays : list of
+    axis :
+
+    Returns
+    -------
+
+    """
+
     xp = get_array_module(has_arrays[0].array)
 
     if has_arrays[0].is_lazy:

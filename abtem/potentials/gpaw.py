@@ -558,6 +558,30 @@ class GPAWPotential(_PotentialBuilder):
             atoms=random_atoms,
         )
 
+    def _get_ewald_potential(self):
+        ewald_parametrization = EwaldParametrization(width=2)
+
+        atoms = self.frozen_phonons.atoms * self.repetitions
+
+        atoms = self.frozen_phonons.randomize(atoms)
+
+        ewald_potential = Potential(
+            atoms=atoms,
+            gpts=self.gpts,
+            sampling=self.sampling,
+            parametrization=ewald_parametrization,
+            slice_thickness=self.slice_thickness,
+            projection="finite",
+            integral_method="quadrature",
+            plane=self.plane,
+            box=self.box,
+            origin=self.origin,
+            exit_planes=self.exit_planes,
+            device=self.device,
+        )
+
+        return ewald_potential
+
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
         """
         Generate the slices for the potential.
@@ -576,25 +600,7 @@ class GPAWPotential(_PotentialBuilder):
         if last_slice is None:
             last_slice = len(self)
 
-        atoms = self.frozen_phonons.atoms * self.repetitions
-        random_atoms = self.frozen_phonons.randomize(atoms)
-
-        ewald_parametrization = EwaldParametrization(width=1)
-
-        ewald_potential = Potential(
-            atoms=random_atoms,
-            gpts=self.gpts,
-            sampling=self.sampling,
-            parametrization=ewald_parametrization,
-            slice_thickness=self.slice_thickness,
-            projection="finite",
-            integral_method="quadrature",
-            plane=self.plane,
-            box=self.box,
-            origin=self.origin,
-            exit_planes=self.exit_planes,
-            device=self.device,
-        )
+        ewald_potential = self._get_ewald_potential()
 
         array = self._get_all_electron_density()
 

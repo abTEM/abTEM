@@ -1,6 +1,5 @@
 """Module to describe the contrast transfer function (CTF) and the related apertures."""
 import copy
-import itertools
 import re
 from collections import defaultdict
 from typing import Dict, Tuple, TYPE_CHECKING, Union, List
@@ -13,13 +12,12 @@ from abtem import stack
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import get_array_module
-from abtem.core.chunks import validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, energy2wavelength
 from abtem.core.fft import fft_crop
 from abtem.core.grid import HasGridMixin, GridUndefinedError
 from abtem.core.transform import FourierSpaceConvolution
-from abtem.core.utils import expand_dims_to_match, _get_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_match
 from abtem.distributions import (
     _EnsembleFromDistributionsMixin,
     BaseDistribution,
@@ -45,8 +43,6 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
         *args,
         **kwargs,
     ):
-        semiangle_cutoff = _validate_distribution(semiangle_cutoff)
-
         self._semiangle_cutoff = semiangle_cutoff
         super().__init__(
             energy=energy, extent=extent, gpts=gpts, sampling=sampling, **kwargs
@@ -112,38 +108,6 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
             return self._evaluate_from_cropped(gpts=self.gpts)
 
 
-def soft_aperture(alpha, phi, semiangle_cutoff, angular_sampling):
-    xp = get_array_module(alpha)
-
-    if np.isscalar(semiangle_cutoff):
-        num_ensemble_axes = 0
-    else:
-        num_ensemble_axes = len(semiangle_cutoff.shape) - len(alpha.shape)
-
-    angular_sampling = xp.array(angular_sampling, dtype=xp.float32) * 1e-3
-
-    alpha = xp.expand_dims(alpha, axis=tuple(range(0, num_ensemble_axes)))
-    phi = xp.expand_dims(phi, axis=tuple(range(0, num_ensemble_axes)))
-
-    denominator = xp.sqrt(
-        (xp.cos(phi) * angular_sampling[0]) ** 2
-        + (xp.sin(phi) * angular_sampling[1]) ** 2
-    )
-
-    zeros = (slice(None),) * num_ensemble_axes + (0,) * (
-        len(denominator.shape) - num_ensemble_axes
-    )
-
-    denominator[zeros] = 1.0
-
-    array = xp.clip(
-        (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
-    )
-    array[zeros] = 1.0
-
-    return array
-
-
 class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
     """
     A circular aperture cutting off the wave function at a specified angle, employed in both STEM and HRTEM.
@@ -174,6 +138,7 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         gpts: Union[int, Tuple[int, int]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
     ):
+        semiangle_cutoff = _validate_distribution(semiangle_cutoff)
         self._soft = soft
 
         super().__init__(
@@ -223,14 +188,33 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         (semiangle_cutoff,) = unpacked
         semiangle_cutoff = semiangle_cutoff * 1e-3
 
+        alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
+
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
         if not self.soft or not self.grid.check_is_defined(raise_error=False):
-            alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
             return xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
 
-        array = soft_aperture(alpha, phi, semiangle_cutoff, self.angular_sampling)
+        angular_sampling = xp.array(self.angular_sampling, dtype=xp.float32) * 1e-3
+
+        phi = xp.expand_dims(phi, axis=tuple(range(0, self._num_ensemble_axes)))
+
+        denominator = xp.sqrt(
+            (xp.cos(phi) * angular_sampling[0]) ** 2
+            + (xp.sin(phi) * angular_sampling[1]) ** 2
+        )
+
+        zeros = (slice(None),) * len(self.ensemble_shape) + (0,) * (
+            len(denominator.shape) - len(self.ensemble_shape)
+        )
+
+        denominator[zeros] = 1.0
+
+        array = xp.clip(
+            (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
+        )
+        array[zeros] = 1.0
 
         return array
 
@@ -441,13 +425,6 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
         self._focal_spread = _validate_distribution(value)
 
     @property
-    def _max_focal_spread(self):
-        if isinstance(self._focal_spread, BaseDistribution):
-            return max(self._focal_spread.values)
-        else:
-            return self._focal_spread
-
-    @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
         if isinstance(self.focal_spread, BaseDistribution):
             return [
@@ -614,7 +591,7 @@ class _HasAberrations:
             if not np.isscalar(self._aberration_coefficients[symbol]):
                 return True
 
-            if not np.all(self._aberration_coefficients[symbol] != 0.0):
+            if not self._aberration_coefficients[symbol] == 0.0:
                 return True
 
         return False
@@ -787,13 +764,6 @@ class SpatialEnvelope(
     @property
     def angular_spread(self):
         return self._angular_spread
-
-    @property
-    def _max_angular_spread(self):
-        if isinstance(self._angular_spread, BaseDistribution):
-            return max(self._angular_spread.values)
-        else:
-            return self._angular_spread
 
     @angular_spread.setter
     def angular_spread(self, value):
@@ -995,7 +965,6 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
         phi = xp.expand_dims(phi, axis=axis)
 
         array = xp.zeros(alpha.shape, dtype=np.float32)
-
         if self._nonzero_coefficients(("C10", "C12", "phi12")):
             array = array + (
                 1
@@ -1153,8 +1122,9 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         aberration_coefficients = {**aberration_coefficients, **kwargs}
         self.set_aberrations(aberration_coefficients)
 
-        self._angular_spread = _validate_distribution(angular_spread)
-        self._focal_spread = _validate_distribution(focal_spread)
+        self._angular_spread = angular_spread
+        self._focal_spread = focal_spread
+        self._semiangle_cutoff = semiangle_cutoff
         self._soft = soft
 
     @property
@@ -1251,25 +1221,21 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     def angular_spread(self, value: float):
         self._angular_spread = value
 
-    def _spatial_envelope_matching_dims(self, base_dims):
-        new_aberrations_dims = tuple(range(len(self._aberrations.ensemble_shape)))
-        old_match_dims = new_aberrations_dims + tuple(range(-base_dims, 0))
-
-        added_dims = int(hasattr(self._spatial_envelope.angular_spread, "values"))
-
-        new_match_dims = tuple(
-            range(len(self._spatial_envelope.ensemble_shape) - added_dims)
-        ) + tuple(range(-base_dims, 0))
-        return [old_match_dims, new_match_dims]
-
     def _evaluate_with_alpha_and_phi(self, alpha, phi):
         array = self._aberrations._evaluate_with_alpha_and_phi(alpha, phi)
 
         if self._spatial_envelope.angular_spread != 0.0:
-            new_array = self._spatial_envelope._evaluate_with_alpha_and_phi(alpha, phi)
+            new_aberrations_dims = tuple(range(len(self._aberrations.ensemble_shape)))
+            old_match_dims = new_aberrations_dims + (-2, -1)
 
+            added_dims = int(hasattr(self._spatial_envelope.angular_spread, "values"))
+            new_match_dims = tuple(
+                range(len(self._spatial_envelope.ensemble_shape) - added_dims)
+            ) + (-2, -1)
+
+            new_array = self._spatial_envelope._evaluate_with_alpha_and_phi(alpha, phi)
             array, new_array = expand_dims_to_match(
-                array, new_array, match_dims=self._spatial_envelope_matching_dims(2)
+                array, new_array, match_dims=[old_match_dims, new_match_dims]
             )
 
             array = array * new_array
@@ -1290,158 +1256,83 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
         return array
 
-    def _profiles_array(self, max_angle, num_samples, phi=0.0):
+    def profiles(self, max_angle: float = None, phi: float = 0.0):
+        if max_angle is None:
+            if self.semiangle_cutoff == np.inf:
+                max_angle = 50
+            else:
+                max_angle = self.semiangle_cutoff * 1.6
 
-        alpha = np.linspace(0, max_angle, num_samples) / 1000.0
+        sampling = max_angle / 1000.0 / 1000.0
+        alpha = np.arange(0, max_angle / 1000.0, sampling)
 
         aberrations = self._aberrations._evaluate_with_alpha_and_phi(alpha, phi)
         spatial_envelope = self._spatial_envelope._evaluate_with_alpha_and_phi(
             alpha, phi
         )
-
-        aberrations, spatial_envelope = expand_dims_to_match(
-            aberrations,
-            spatial_envelope,
-            self._spatial_envelope_matching_dims(1),
-        )
-
         temporal_envelope = self._temporal_envelope._evaluate_with_alpha_and_phi(
             alpha, phi
         )
-
-        axis1, axis2 = _get_dims_to_broadcast(
-            aberrations, temporal_envelope, [(-1,), (-1,)]
-        )
-
-        aberrations = np.expand_dims(aberrations, axis=axis1)
-        spatial_envelope = np.expand_dims(spatial_envelope, axis=axis1)
-        temporal_envelope = np.expand_dims(temporal_envelope, axis=axis2)
-
         aperture = self._aperture._evaluate_with_alpha_and_phi(alpha, phi)
+        envelope = aperture * temporal_envelope * spatial_envelope
 
-        axis1, axis2 = _get_dims_to_broadcast(aberrations, aperture, [(-1,), (-1,)])
-
-        aberrations = np.expand_dims(aberrations, axis=axis1)
-        spatial_envelope = np.expand_dims(spatial_envelope, axis=axis1)
-        temporal_envelope = np.expand_dims(temporal_envelope, axis=axis1)
-        aperture = np.expand_dims(aperture, axis=axis2)
-
-        shape = np.broadcast_shapes(
-            *[
-                profile.shape
-                for profile in [
-                    aberrations,
-                    spatial_envelope,
-                    temporal_envelope,
-                    aperture,
-                ]
-            ]
-        )
-
-        aberrations = np.broadcast_to(aberrations, shape)
-        spatial_envelope = np.broadcast_to(spatial_envelope, shape)
-        temporal_envelope = np.broadcast_to(temporal_envelope, shape)
-        aperture = np.broadcast_to(aperture, shape)
-
-        envelope = np.prod([spatial_envelope, temporal_envelope, aperture], axis=0)
-
-        profiles = [-aberrations.imag * envelope]
-
-        if self._aperture.semiangle_cutoff != np.inf:
-            profiles += [aperture]
-
-        if (
-            self._temporal_envelope._max_focal_spread > 0.0
-            and self._spatial_envelope._max_angular_spread > 0.0
-        ):
-            profiles += [envelope]
-
-        if self._temporal_envelope._max_focal_spread > 0.0:
-            profiles += [temporal_envelope]
-
-        if self._spatial_envelope._max_angular_spread > 0.0:
-            profiles += [spatial_envelope]
-
-        profiles = np.stack(profiles, axis=-2)
-
-        return profiles
-
-    def profiles(
-        self, max_angle: float = None, phi: float = 0.0, lazy=True, max_batch="auto"
-    ):
-
-        max_semiangle_cutoff = self._max_semiangle_cutoff
-
-        if max_angle is None:
-            if self.semiangle_cutoff == np.inf:
-                max_angle = 50
-            else:
-                max_angle = max_semiangle_cutoff * 1.6
-
-        sampling = 0.1 / 1000.0
-
-        num_samples = int(np.ceil(max_angle / 1000.0 / sampling))
-        sampling = max_angle / num_samples
+        sampling = alpha[1] / energy2wavelength(self.energy)
 
         axis_metadata = ["ctf"]
+        metadata = {"energy": self.energy}
+        profiles = [
+            ReciprocalSpaceLineProfiles(
+                -aberrations.imag * envelope,
+                sampling=sampling,
+                metadata=metadata,
+                ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,
+            )
+        ]
+
         if self._aperture.semiangle_cutoff != np.inf:
+            profiles += [
+                ReciprocalSpaceLineProfiles(
+                    aperture, sampling=sampling, metadata=metadata
+                )
+            ]
             axis_metadata += ["aperture"]
 
         if (
-            self._temporal_envelope._max_focal_spread > 0.0
-            and self._spatial_envelope._max_angular_spread > 0.0
+            self._temporal_envelope.focal_spread > 0.0
+            and self._spatial_envelope.angular_spread > 0.0
         ):
+            profiles += [
+                ReciprocalSpaceLineProfiles(
+                    envelope, sampling=sampling, metadata=metadata
+                )
+            ]
             axis_metadata += ["envelope"]
 
-        if self._temporal_envelope._max_focal_spread > 0.0:
+        if self._temporal_envelope.focal_spread > 0.0:
+            profiles += [
+                ReciprocalSpaceLineProfiles(
+                    temporal_envelope, sampling=sampling, metadata=metadata
+                )
+            ]
             axis_metadata += ["temporal"]
 
-        if self._spatial_envelope._max_angular_spread > 0.0:
+        if self._spatial_envelope.angular_spread > 0.0:
+            profiles += [
+                ReciprocalSpaceLineProfiles(
+                    spatial_envelope,
+                    sampling=sampling,
+                    metadata=metadata,
+                    ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,
+                )
+            ]
             axis_metadata += ["spatial"]
 
-        if lazy:
-            shape = (len(axis_metadata), num_samples)
-            chunks = validate_chunks(
-                self.ensemble_shape + shape,
-                self._default_ensemble_chunks + shape,
-                limit=max_batch,
-                dtype=np.dtype("float32"),
+        if len(profiles) > 1:
+            return stack(
+                profiles, axis_metadata=OrdinalAxis(values=tuple(axis_metadata))
             )
-
-            ctfs = self.ensemble_blocks(chunks=chunks[:-2])
-
-            def _make_profile(ctf):
-                ctf = ctf.item()
-                profiles = ctf._profiles_array(
-                    max_angle=max_angle, num_samples=num_samples, phi=phi
-                )
-                return profiles
-
-            new_axis = tuple(range(len(ctfs.shape), len(ctfs.shape) + 2))
-
-            array = ctfs.map_blocks(
-                _make_profile, new_axis=new_axis, chunks=chunks, dtype=np.float32
-            )
-
         else:
-            array = self._profiles_array(
-                max_angle=max_angle, num_samples=num_samples, phi=phi
-            )
-
-        metadata = {"energy": self.energy}
-        sampling = sampling * energy2wavelength(self.energy)
-        ensemble_axes_metadata = self.ensemble_axes_metadata + [
-            OrdinalAxis(values=tuple(axis_metadata))
-        ]
-
-        profiles = ReciprocalSpaceLineProfiles(
-            array,
-            metadata=metadata,
-            ensemble_axes_metadata=ensemble_axes_metadata,
-            sampling=sampling,
-        )
-
-        return profiles
+            return profiles[0]
 
 
 def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
