@@ -560,6 +560,7 @@ class Potential(_PotentialBuilder):
             atoms.calc = None
 
         if not hasattr(atoms, "randomize"):
+
             if isinstance(atoms, (list, tuple)):
                 self._frozen_phonons = MDFrozenPhonons(atoms)
             elif isinstance(atoms, str):
@@ -567,6 +568,7 @@ class Potential(_PotentialBuilder):
             else:
                 self._frozen_phonons = DummyFrozenPhonons(atoms)
         else:
+
             self._frozen_phonons = atoms
 
         if projection == "infinite" and integral_method is None:
@@ -640,6 +642,7 @@ class Potential(_PotentialBuilder):
                     return_transform=False,
                     allow_transform=True,
                 )
+                return atoms
             else:
                 atoms = cut_cell(
                     atoms,

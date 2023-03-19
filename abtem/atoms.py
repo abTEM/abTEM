@@ -671,6 +671,11 @@ def orthogonalize_cell(
         The applied transform given as Euler angles (by default not returned).
     """
 
+    cell = atoms.cell
+    cell[cell < 1e-6] = 0.
+    atoms.set_cell(cell)
+    atoms.wrap()
+
     if origin != (0.0, 0.0, 0.0):
         atoms.translate(-np.array(origin))
         atoms.wrap()
@@ -680,6 +685,9 @@ def orthogonalize_cell(
 
     if box is None:
         box = best_orthogonal_cell(atoms.cell, max_repetitions=max_repetitions)
+
+    if tuple(np.diag(atoms.cell)) == box:
+        return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")
