@@ -672,7 +672,7 @@ def orthogonalize_cell(
     """
 
     cell = atoms.cell
-    cell[cell < 1e-6] = 0.
+    cell[np.abs(cell) < 1e-6] = 0.
     atoms.set_cell(cell)
     atoms.wrap()
 
@@ -686,7 +686,7 @@ def orthogonalize_cell(
     if box is None:
         box = best_orthogonal_cell(atoms.cell, max_repetitions=max_repetitions)
 
-    if tuple(np.diag(atoms.cell)) == box:
+    if tuple(np.diag(atoms.cell)) == tuple(box):
         return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
