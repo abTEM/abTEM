@@ -1,4 +1,7 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
+import string
+from abc import abstractmethod
+from collections import defaultdict
 from typing import TYPE_CHECKING, List
 from typing import Union, Tuple
 
@@ -8,266 +11,1017 @@ import numpy as np
 from ase import Atoms
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
-from cplot._colors import get_srgb1
 from matplotlib import cm, colors
 from matplotlib.axes import Axes
-from matplotlib.collections import EllipseCollection
-from matplotlib.collections import PatchCollection
+
+import ipywidgets as widgets
+from mpl_toolkits.axes_grid1.axes_divider import AxesDivider
+from scipy.spatial.distance import squareform
+from scipy.spatial import distance_matrix
+
+from abtem.core.colors import hsluv_cmap
+from matplotlib.collections import PatchCollection, CircleCollection, EllipseCollection
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Circle
 from matplotlib.patheffects import withStroke
-from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
+from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable, SubplotDivider
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-
+from mpl_toolkits.axes_grid1.axes_grid import CbarAxes
 from abtem.core.backend import copy_to_device
+from abtem.core import config
 from abtem.core.utils import label_to_index
+from abtem.core.units import _get_conversion_factor, _validate_units, _format_units
 from abtem.atoms import pad_atoms, plane_to_axes
+from mpl_toolkits.axes_grid1 import Size, Divider
 
 if TYPE_CHECKING:
     from abtem.measurements import (
         BaseMeasurement,
         RealSpaceLineProfiles,
         ReciprocalSpaceLineProfiles,
+        BaseMeasurement2D,
     )
 
 
-def _align_yaxis(ax1: Axes, ax2: Axes):
-    """Align zeros of the two axes, zooming them out by same ratio"""
-    axes = (ax1, ax2)
-    extrema = [ax.get_ylim() for ax in axes]
-    tops = [extr[1] / (extr[1] - extr[0]) for extr in extrema]
-    # Ensure that plots (intervals) are ordered bottom to top:
-    if tops[0] > tops[1]:
-        axes, extrema, tops = [list(reversed(l)) for l in (axes, extrema, tops)]
-
-    # How much would the plot overflow if we kept current zoom levels?
-    tot_span = tops[1] + 1 - tops[0]
-
-    b_new_t = extrema[0][0] + tot_span * (extrema[0][1] - extrema[0][0])
-    t_new_b = extrema[1][1] - tot_span * (extrema[1][1] - extrema[1][0])
-    axes[0].set_ylim(extrema[0][0], b_new_t)
-    axes[1].set_ylim(t_new_b, extrema[1][1])
+def _iterate_axes(axes: Union[ImageGrid, Axes]):
+    try:
+        for ax in axes:
+            yield ax
+    except TypeError:
+        yield axes
 
 
-def _get_complex_colors(
-    z: np.ndarray, vmin: float = None, vmax: float = None, saturation: float = 2.0
-):
-    abs_z = np.abs(z)
-    angle_z = np.angle(z)
-
-    if vmin is None:
-        vmin = abs_z.min()
-
-    if vmax is None:
-        vmax = abs_z.max()
-
-    vmin_rel = (vmin - abs_z.min()) / abs_z.ptp()
-    vmax_rel = (vmax - abs_z.max()) / abs_z.ptp()
-
-    abs_scaled = (abs_z - abs_z.min()) / abs_z.ptp() * (
-        1 - vmax_rel - vmin_rel
-    ) + vmin_rel
-
-    abs_scaled = np.clip(abs_scaled, 0, np.inf)
-    z_scaled = abs_scaled * np.exp(1.0j * angle_z)
-
-    return get_srgb1(z_scaled, lambda x: x, saturation)
+def format_options(options):
+    return [
+        f"{option:.3f}" if isinstance(option, float) else option for option in options
+    ]
 
 
-def _add_colorbar_abs(cax, vmin, vmax):
-    norm = colors.Normalize(vmin=vmin, vmax=vmax)
-    cb0 = plt.colorbar(
-        cm.ScalarMappable(norm=norm, cmap=cm.gray),
-        cax=cax,
-    )
-    cb0.set_label("abs", rotation=0, ha="center", va="top")
-    cb0.ax.yaxis.set_label_coords(0.5, -0.03)
+class MeasurementVisualization:
+    def __init__(self, axes, measurements, axes_types=()):
+        self._measurements = measurements
+        self._axes = axes
+        self._axes_types = axes_types
+        self._indices = self._validate_indices(())
+        self._column_titles = []
+        self._row_titles = []
 
+    def iterate_measurements(self, keep_dims=True):
+        indexed_measurements = self._get_indexed_measurements()
 
-def _add_colorbar_arg(cax, saturation_adjustment: float):
-    z = np.exp(1j * np.linspace(-np.pi, np.pi, 256))
-    rgb_vals = get_srgb1(
-        z,
-        abs_scaling=lambda z: np.full_like(z, 0.5),
-        saturation_adjustment=saturation_adjustment,
-    )
-    rgba_vals = np.pad(rgb_vals, ((0, 0), (0, 1)), constant_values=1.0)
-    newcmp = colors.ListedColormap(rgba_vals)
-    #
-    norm = colors.Normalize(vmin=-np.pi, vmax=np.pi)
+        if not indexed_measurements.ensemble_shape:
+            yield (0, 0), indexed_measurements
+        else:
+            for i, measurement in indexed_measurements.iterate_ensemble(
+                keep_dims=keep_dims
+            ):
+                yield i, measurement
 
-    cb1 = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=newcmp), cax=cax)
+    def _iterate_index(self):
+        shape = self._get_indexed_measurements().ensemble_shape
 
-    cb1.set_label("arg", rotation=0, ha="center", va="top")
-    cb1.ax.yaxis.set_label_coords(0.5, -0.03)
-    cb1.set_ticks([-np.pi, -np.pi / 2, 0, +np.pi / 2, np.pi])
-    cb1.set_ticklabels(
-        [r"$-\pi$", r"$-\dfrac{\pi}{2}$", "$0$", r"$\dfrac{\pi}{2}$", r"$\pi$"]
-    )
+        if len(shape) == 0:
+            yield (0, 0)
 
+        else:
+            if len(shape) == 1:
+                if self.ncols == 1:
+                    shape = (1,) + shape
+                elif self.nrows == 1:
+                    shape = shape + (1,)
+                else:
+                    raise RuntimeError()
+            elif len(shape) != 2:
+                raise RuntimeError()
 
-def _add_imshow(
-    ax,
-    array,
-    extent,
-    title,
-    x_label,
-    y_label,
-    x_ticks,
-    y_ticks,
-    power,
-    vmin,
-    vmax,
-    complex_coloring_kwargs=None,
-    interpolation="none",
-    **kwargs,
-):
-    if power != 1:
-        array = array**power
-        vmin = array.min() if vmin is None else vmin ** power
-        vmax = array.max() if vmax is None else vmax ** power
+            for i in np.ndindex(*shape):
+                yield i
 
-    array = array.T
+    def set_axes_padding(self, padding: Tuple[float, float] = (0.0, 0.0)):
+        self._axes.set_axes_padding(padding)
 
-    if np.iscomplexobj(array):
-        if complex_coloring_kwargs is None:
-            complex_coloring_kwargs = {}
+    def _get_indexed_measurements(self):
+        return self.measurements[self._indices]
 
-        array = _get_complex_colors(
-            array, vmin=vmin, vmax=vmax, **complex_coloring_kwargs
+    def set_column_titles(
+        self,
+        titles: Union[str, List[str]] = None,
+        pad: float = 10.0,
+        format: str = ".3g",
+        units: str = None,
+        **kwargs,
+    ):
+        indexed_measurements = self._get_indexed_measurements()
+
+        if titles is None:
+            if not len(indexed_measurements.ensemble_shape):
+                return
+
+            axes_metadata = indexed_measurements.ensemble_axes_metadata[0]
+            titles = []
+            for i, axis_metadata in enumerate(axes_metadata):
+                titles.append(
+                    axis_metadata.format_title(
+                        format, units=units, include_label=i == 0
+                    )
+                )
+        elif isinstance(titles, str):
+            titles = [titles] * max(len(indexed_measurements.ensemble_shape), 1)
+
+        for column_title in self._column_titles:
+            column_title.remove()
+
+        column_titles = []
+        for i, j in enumerate(self._iterate_index()):
+            ax = self.axes[j]
+
+            annotation = ax.annotate(
+                titles[i],
+                xy=(0.5, 1),
+                xytext=(0, pad),
+                xycoords="axes fraction",
+                textcoords="offset points",
+                ha="center",
+                va="baseline",
+                **kwargs,
+            )
+            column_titles.append(annotation)
+
+        self._column_titles = column_titles
+
+    def set_row_titles(
+        self,
+        titles: Union[str, List[str]] = None,
+        pad: float = 0.0,
+        format: str = ".2g",
+        units: str = None,
+        **kwargs,
+    ):
+
+        indexed_measurements = self._get_indexed_measurements()
+
+        if titles is None:
+            if not len(indexed_measurements.ensemble_shape) > 1:
+                return
+
+            axes_metadata = indexed_measurements.ensemble_axes_metadata[0]
+            titles = []
+            for i, axis_metadata in enumerate(axes_metadata):
+                titles.append(
+                    axis_metadata.format_title(
+                        format, units=units, include_label=i == 0
+                    )
+                )
+        elif isinstance(titles, str):
+            titles = [titles] * max(len(indexed_measurements.ensemble_shape), 1)
+
+        for row_title in self._row_titles:
+            row_title.remove()
+
+        row_titles = []
+        for i, j in enumerate(self._iterate_index()):
+            ax = self.axes[j]
+
+            annotation = ax.annotate(
+                titles[i],
+                xy=(0, 0.5),
+                xytext=(-ax.yaxis.labelpad - pad, 0),
+                xycoords=ax.yaxis.label,
+                textcoords="offset points",
+                ha="right",
+                va="center",
+                rotation=90,
+                **kwargs,
+            )
+            row_titles.append(annotation)
+
+        self._row_titles = row_titles
+
+    @property
+    def ncols(self):
+        return self._axes.shape[0]
+
+    @property
+    def nrows(self):
+        return self._axes.shape[1]
+
+    @property
+    def axes_types(self):
+        return self._axes_types
+
+    def _get_axes_from_axes_types(self, axes_type):
+        return tuple(
+            i
+            for i, checked_axes_type in enumerate(self.axes_types)
+            if checked_axes_type == axes_type
         )
 
-    im = ax.imshow(
-        array,
-        extent=extent,
-        origin="lower",
-        vmin=vmin,
-        vmax=vmax,
-        interpolation=interpolation,
+    @property
+    def overlay_axes(self):
+        return self._get_axes_from_axes_types("overlay")
+
+    @property
+    def index_axes(self):
+        return self._get_axes_from_axes_types("index")
+
+    @property
+    def range_axes(self):
+        return self._get_axes_from_axes_types("range")
+
+    @property
+    def explode_axes(self):
+        return self._get_axes_from_axes_types("explode")
+
+    @property
+    def indices(self):
+        return self._indices
+
+    @property
+    def measurements(self):
+        return self._measurements
+
+    @property
+    def axes(self):
+        return self._axes
+
+    def _validate_indices(self, indices=()):
+        num_ensemble_dims = len(self.measurements.ensemble_shape)
+        num_indexing_axes = (
+            num_ensemble_dims - len(self.explode_axes) - len(self.overlay_axes)
+        )
+
+        if len(indices) > num_indexing_axes:
+            raise ValueError
+
+        validated_indices = []
+        j = 0
+        for i, axes_type in enumerate(self.axes_types):
+            if axes_type in ("explode", "overlay"):
+                validated_indices.append(slice(None))
+            elif j < len(indices):
+                validated_indices.append(indices[j])
+                j += 1
+
+        validated_indices = validated_indices + [0] * (
+            num_ensemble_dims - len(validated_indices)
+        )
+        return tuple(validated_indices)
+
+    def set_indices(self, indices=()):
+        self._indices = self._validate_indices(indices)
+        self.update_plots()
+
+    @abstractmethod
+    def update_plots(self):
+        pass
+
+    def make_sliders(
+        self,
+        continuous_update: bool = False,
+        range_axes=(),
+    ):
+
+        sliders = {}
+        for i in range(len(self.measurements.ensemble_shape)):
+            axes_metadata = self.measurements.ensemble_axes_metadata[i]
+            options = format_options(
+                axes_metadata.coordinates(self.measurements.ensemble_shape[i])
+            )
+
+            if i in range_axes:
+                sliders[i] = widgets.SelectionRangeSlider(
+                    description=axes_metadata.format_label(),
+                    options=options,
+                    continuous_update=continuous_update,
+                    index=(0, len(options) - 1),
+                )
+            else:
+                sliders[i] = widgets.SelectionSlider(
+                    description=axes_metadata.format_label(),
+                    options=options,
+                    continuous_update=continuous_update,
+                )
+        return sliders
+
+    def add_panel_labels(self, labels: str = None, **kwargs):
+        if "loc" not in kwargs:
+            kwargs["loc"] = 2
+
+        if isinstance(self.axes, Axes):
+            axes = [self.axes]
+        else:
+            axes = self.axes
+
+        if labels is None:
+            labels = string.ascii_lowercase
+            labels = [f"({label})" for label in labels]
+            if config.get("visualize.use_tex", False):
+                labels = [f"${label}$" for label in labels]
+
+        for ax, l in zip(_iterate_axes(axes), labels):
+            at = AnchoredText(l, pad=0.0, borderpad=0.5, frameon=False, **kwargs)
+            ax.add_artist(at)
+            at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=5)])
+
+
+def format_label(label, units: str = None, italic: bool = False) -> str:
+    if config.get("visualize.use_tex", False):
+        if not italic:
+            label = f"\mathrm{{{label}}}"
+
+        return f"${label} \ [{_format_units(units)}]$"
+    else:
+        return f"{label} [{units}]"
+
+
+def split_axes(axes, pad=0.2):
+    axes.set_visible(False)
+    locator = axes.get_axes_locator()
+
+    spacing = Size.Fixed(pad)
+
+    h = [
+        Size.AxesX(axes),
+        Size.Fixed(pad),
+        Size.AxesX(axes),
+    ]
+
+    v = [Size.AxesY(axes)]
+
+    fig = axes.get_figure()
+    rect = (0.1, 0.1, 0.8, 0.8)
+    divider = Divider(fig, rect, h, v)
+    divider.set_locator(locator)
+    locator1 = divider.new_locator(nx=0, nx1=1, ny=0, ny1=1)
+    locator2 = divider.new_locator(nx=2, nx1=3, ny=0, ny1=1)
+
+    ax1 = fig.add_axes(rect)
+    ax2 = fig.add_axes(rect)
+    ax1.set_axes_locator(locator1)
+    ax2.set_axes_locator(locator2)
+    return ax1, ax2, spacing
+
+
+def set_cbar_axes(axes, n, sizes):
+    fig = axes.get_figure()
+
+    divider = AxesDivider(axes)
+    locator = divider.new_locator(nx=0, ny=0)
+    axes.set_axes_locator(locator)
+
+    divider._horizontal += cbar_layout(n, sizes)
+    rect = (0.1, 0.1, 0.8, 0.8)
+
+    caxes = []
+    for i in range(n):
+        locator = divider.new_locator(nx=(i + 1) * 2, nx1=(i + 1) * 2 + 1, ny=0, ny1=1)
+        cax = fig.add_axes(rect)
+        cax.set_axes_locator(locator)
+        caxes.append(cax)
+
+    axes.cax = caxes
+
+
+def make_default_sizes():
+    image_scale = Size.Scaled(1)
+
+    sizes = {
+        "images": image_scale,
+        "cbar_padding_left": Size.Fixed(0.1),
+        "cbar": Size.Fraction(0.1, image_scale),
+        "cbar_spacing": Size.Fixed(0.5),
+        "cbar_padding_right": Size.Fixed(0.5),
+        "padding": Size.Fixed(0.1),
+    }
+    return sizes
+
+
+def cbar_layout(n, sizes):
+    if n == 0:
+        return []
+
+    layout = [sizes["cbar_padding_left"]]
+    for i in range(n):
+        layout.extend([sizes["cbar"]])
+
+        if i < n - 1:
+            layout.extend([sizes["cbar_spacing"]])
+
+    layout.extend([sizes["cbar_padding_right"]])
+    return layout
+
+
+def make_col_layout(n, n_cbars, sizes, cbar_mode="each"):
+    sizes_layout = []
+    for i in range(n):
+        sizes_layout.append(sizes["images"])
+        if cbar_mode == "each":
+            sizes_layout.extend(cbar_layout(n_cbars, sizes))
+
+        if i < n - 1:
+            sizes_layout.append(sizes["padding"])
+
+    if cbar_mode == "single":
+        sizes_layout.extend(cbar_layout(n_cbars, sizes))
+
+    return sizes_layout
+
+
+class AxesGrid:
+    def __init__(self, fig, ncols, nrows, cbars, cbar_mode="single"):
+        from mpl_toolkits.axes_grid1.mpl_axes import Axes
+
+        self._col_sizes = make_default_sizes()
+        self._row_sizes = make_default_sizes()
+
+        col_layout = make_col_layout(ncols, cbars, self._col_sizes, cbar_mode=cbar_mode)
+        row_layout = make_col_layout(nrows, 0, self._row_sizes)
+
+        rect = (0.1, 0.1, 0.8, 0.8)
+        divider = Divider(
+            fig, rect, horizontal=col_layout, vertical=row_layout, aspect=True
+        )
+
+        bottom_left_ax = None
+
+        axes = []
+        caxes = []
+        for nx, col_size in enumerate(col_layout):
+            add_cb_axes = True
+            for ny, row_size in enumerate(row_layout):
+                if (col_size is self._col_sizes["images"]) and (
+                    row_size is self._row_sizes["images"]
+                ):
+                    ax = Axes(fig, rect, sharex=bottom_left_ax, sharey=bottom_left_ax)
+                    axes.append(ax)
+                    ax.set_axes_locator(divider.new_locator(nx=nx, ny=ny))
+                    if bottom_left_ax is None:
+                        bottom_left_ax = ax
+
+                if (
+                    (col_size is self._col_sizes["cbar"])
+                    and (row_size is self._row_sizes["images"])
+                    and add_cb_axes
+                ):
+                    cb_ax = fig.add_axes(rect)
+                    caxes.append(cb_ax)
+                    if cbar_mode == "each":
+                        cb_ax.set_axes_locator(divider.new_locator(nx=nx, ny=ny))
+                    else:
+                        cb_ax.set_axes_locator(divider.new_locator(nx=nx, ny=0, ny1=-1))
+                        add_cb_axes = False
+
+        for ax in axes:
+            fig.add_axes(ax)
+
+        if cbar_mode == "single":
+            caxes = caxes * len(axes)
+
+        new_caxes = [[] for _ in range(nrows * ncols)]
+        for i in range(nrows * ncols * cbars):
+            col = i // (cbars * nrows)
+            row = i % nrows
+            j = np.ravel_multi_index((col, row), (ncols, nrows))
+            new_caxes[j].append(caxes[i])
+
+        for ax, cax in zip(axes, new_caxes):
+            ax.cax = cax
+
+        axes = np.array(axes, dtype=object).reshape((ncols, nrows))
+
+        for inner_axes in axes[:, 1:]:
+            for ax in inner_axes:
+                ax._axislines["bottom"].toggle(ticklabels=False, label=False)
+
+        for inner_axes in axes[1:]:
+            for ax in inner_axes:
+                ax._axislines["left"].toggle(ticklabels=False, label=False)
+
+        self._axes = axes
+
+    @property
+    def ncols(self):
+        return self._axes.shape[0]
+
+    @property
+    def nrows(self):
+        return self._axes.shape[1]
+
+    @classmethod
+    def from_measurements(
+        cls, fig, measurements, axes_types, cbars=0, cbar_mode="single"
+    ):
+
+        shape = measurements.ensemble_shape
+        assert len(shape) == len(axes_types)
+        shape = tuple(
+            n
+            for n, axes_type in zip(shape, axes_types)
+            if not axes_type in ("index", "range")
+        )
+
+        if len(shape) > 0:
+            ncols = shape[0]
+        else:
+            ncols = 1
+
+        if len(shape) > 1:
+            nrows = shape[1]
+        else:
+            nrows = 1
+
+        return cls(fig, ncols, nrows, cbars, cbar_mode)
+
+    def __getitem__(self, item):
+        return self._axes[item]
+
+    def __len__(self):
+        return len(self._axes)
+
+    @property
+    def shape(self):
+        return self._axes.shape
+
+    def set_cbar_padding(self, padding: tuple = (0.1, 0.1)):
+        self._col_sizes["cbar_padding_left"].fixed_size = padding[0]
+        self._row_sizes["cbar_padding_left"].fixed_size = padding[0]
+        self._col_sizes["cbar_padding_right"].fixed_size = padding[1]
+        self._row_sizes["cbar_padding_right"].fixed_size = padding[1]
+
+    def set_cbar_size(self, fraction: float):
+        self._col_sizes["cbar"]._fraction = fraction
+        self._row_sizes["cbar"]._fraction = fraction
+
+    def set_cbar_spacing(self, spacing: float):
+        self._col_sizes["cbar_spacing"].fixed_size = spacing
+        self._row_sizes["cbar_spacing"].fixed_size = spacing
+
+    def set_axes_padding(self, padding=(0.0, 0.0)):
+        self._col_sizes["padding"].fixed_size = padding[0]
+        self._row_sizes["padding"].fixed_size = padding[1]
+
+    def set_aspect(self, aspect:float=1.):
+        self._row_sizes["images"]._scalable_size = aspect
+
+
+class MeasurementVisualization2D(MeasurementVisualization):
+    def __init__(
+        self,
+        measurements: "BaseMeasurement2D",
+        axes,
+        axes_types: tuple = None,
+        cbar: bool = False,
+        cmap: str = None,
+        phase_cmap: str = None,
+        vmin: float = None,
+        vmax: float = None,
+        power: float = 1.0,
+        common_color_scale: bool = False,
+        units: str = None,
+        convert_complex: str = "domain_coloring",
+        autoscale: bool = True,
+    ):
+        # plt.ioff()
+        # plt.ion()
+
+        super().__init__(axes, measurements, axes_types=axes_types)
+
+        self._x_units = None
+        self._y_units = None
+        self._convert_complex = convert_complex
+        self._scale_units = None
+        self._x_label = None
+        self._y_label = None
+
+        if phase_cmap is None:
+            phase_cmap = config.get("phase_cmap", "hsluv")
+
+        self._phase_cmap = phase_cmap
+
+        if cmap is None:
+            cmap = config.get("cmap", "viridis")
+
+        self._cmap = cmap
+        self._show_cbar = cbar
+        self._common_color_scale = common_color_scale
+        self._cbars = None
+        self._images = None
+        self._column_titles = []
+        self._row_titles = []
+        self._autoscale = autoscale
+
+        self._axes = axes
+        self.set_images()
+        self.set_normalization(vmin=vmin, vmax=vmax, power=power)
+
+        if cbar:
+            self.set_cbars()
+            self.set_scale_units()
+            self.set_cbar_labels()
+
+        self.set_extent()
+        self.set_x_units(units)
+        self.set_y_units(units)
+        self.set_x_labels()
+        self.set_y_labels()
+
+        if self.ncols > 1:
+            self.set_column_titles()
+
+        if self.nrows > 1:
+            self.set_row_titles()
+
+    @property
+    def _images_per_axes(self):
+        if self._convert_complex == "domain_coloring" and self.measurements.is_complex:
+            return 2
+        else:
+            return 1
+
+    @property
+    def _domain_coloring(self):
+        return self.measurements.is_complex
+
+    def set_x_labels(self, label=None):
+        if label is None:
+            self._x_label = self.measurements.axes_metadata[-2].label
+        else:
+            self._x_label = label
+
+        for i in self._iterate_index():
+            self.axes[i].set_xlabel(format_label(self._x_label, self._x_units))
+
+    def set_y_labels(self, label=None):
+        if label is None:
+            self._y_label = self.measurements.axes_metadata[-1].label
+        else:
+            self._y_label = label
+
+        for i in self._iterate_index():
+            self.axes[i].set_ylabel(format_label(self._y_label, self._y_units))
+
+    def set_x_units(self, units=None):
+        self._x_units = _validate_units(
+            units, self.measurements.base_axes_metadata[0].units
+        )
+        self.set_extent()
+
+    def set_y_units(self, units=None):
+        self._y_units = _validate_units(
+            units, self.measurements.base_axes_metadata[1].units
+        )
+        self.set_extent()
+
+    def set_extent(self, extent=None):
+
+        if extent is None:
+            extent = self.measurements._plot_extent_x(
+                self._x_units
+            ) + self.measurements._plot_extent_y(self._y_units)
+
+        for image in self._images.ravel():
+            image.set_extent(extent)
+
+    def set_sizebars(
+        self,
+        axes: Tuple[int, ...] = (-1,),
+        size: float = None,
+        loc: str = "lower right",
+        borderpad: float = 0.5,
+        formatting: str = ".3f",
+        size_vertical: float = None,
+        sep: float = 6,
+        pad: float = 0.3,
         **kwargs,
-    )
+    ):
 
-    if title:
-        ax.set_title(title)
+        if size is None:
+            size = (
+                self.measurements.base_axes_metadata[-2].sampling
+                * self.measurements.base_shape[-2]
+                / 3
+            ) * _get_conversion_factor(self._x_units)
 
-    if x_label:
-        ax.set_xlabel(x_label)
+        if size_vertical is None:
+            size_vertical = (
+                self.measurements.base_axes_metadata[-1].sampling
+                * self.measurements.base_shape[-1]
+                / 20
+            ) * _get_conversion_factor(self._x_units)
 
-    if y_label:
-        ax.set_ylabel(y_label)
+        label = f"{size:>{formatting}} {self._x_units}"
 
-    if not x_ticks:
-        ax.set_xticks([])
+        for size_bar in self._size_bars:
+            size_bar.remove()
 
-    if not y_ticks:
-        ax.set_yticks([])
+        self._size_bars = []
+        for ax in axes:
+            ax = self.axes[ax]
+            anchored_size_bar = AnchoredSizeBar(
+                ax.transData,
+                label=label,
+                size=size,
+                borderpad=borderpad,
+                loc=loc,
+                size_vertical=size_vertical,
+                sep=sep,
+                pad=pad,
+                **kwargs,
+            )
+            ax.add_artist(anchored_size_bar)
+            self._size_bars.append(anchored_size_bar)
 
-    return im
+    def _set_domain_coloring_cbar_labels(self, **kwargs):
+        for i in self._iterate_index():
+            cbar1, cbar2 = self._cbars[i]
+            cbar1.set_label("arg", rotation=0, ha="center", va="top")
+            cbar1.ax.yaxis.set_label_coords(0.5, -0.02)
+            cbar1.set_ticks([-np.pi, -np.pi / 2, 0, +np.pi / 2, np.pi])
+            cbar1.set_ticklabels(
+                [
+                    r"$-\pi$",
+                    r"$-\dfrac{\pi}{2}$",
+                    "$0$",
+                    r"$\dfrac{\pi}{2}$",
+                    r"$\pi$",
+                ]
+            )
+            cbar2.set_label("abs", rotation=0, ha="center", va="top")
+            cbar2.ax.yaxis.set_label_coords(0.5, -0.02)
+            cbar2.formatter.set_powerlimits((0, 0))
+            cbar2.formatter.set_useMathText(True)
+            cbar2.ax.yaxis.set_offset_position("left")
+
+    def set_scale_units(self, units: str = None):
+        if units is None:
+            units = self.measurements.metadata.get("units", "undefined")
+
+        self._scale_units = units
+
+    def _set_cbar_labels(self, label: str = None, **kwargs):
+        if label is None:
+            label = self.measurements.metadata.get("label", "undefined")
+
+        label = format_label(label, self._scale_units)
+
+        for i in self._iterate_index():
+            cbar = self._cbars[i]
+            cbar.set_label(label, **kwargs)
+            cbar.formatter.set_powerlimits((0, 0))
+            cbar.formatter.set_useMathText(True)
+            cbar.ax.yaxis.set_offset_position("left")
+
+    def set_cbar_padding(self, padding: Tuple[float, float] = (0.1, 0.1)):
+        self._axes.set_cbar_padding(padding)
+
+    def set_cbar_size(self, fraction: float):
+        self._axes.set_cbar_size(fraction)
+
+    def set_cbar_spacing(self, spacing: float):
+        self._axes.set_cbar_spacing(self, spacing)
+
+    def set_cbar_labels(self, **kwargs):
+        if self._domain_coloring:
+            self._set_domain_coloring_cbar_labels()
+        else:
+            self._set_cbar_labels(**kwargs)
+
+    def set_cbars(self, **kwargs):
+        cbars = np.zeros(self.axes.shape + (self._images_per_axes,), dtype=object)
+        for i in self._iterate_index():
+            ax = self.axes[i]
+            images = self._images[i]
+
+            if isinstance(images, np.ndarray):
+                for j, image in enumerate(images):
+                    cbars[i + (j,)] = plt.colorbar(image, cax=ax.cax[j], **kwargs)
+            else:
+                cbars[i] = plt.colorbar(images, cax=ax.cax[0], **kwargs)
+
+        if cbars.shape[-1] == 1:
+            cbars = np.squeeze(cbars, -1)
+
+        self._cbars = cbars
+
+    def _get_norm(self, measurements, vmin, vmax, power=1.0):
+        if measurements.is_complex:
+            measurements = measurements.abs()
+
+        if vmin is None:
+            vmin = measurements.array.min()
+
+        if vmax is None:
+            vmax = measurements.array.max()
+
+        if power != 1:
+            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+        else:
+            norm = colors.Normalize(vmin=vmin, vmax=vmax)
+
+        return norm
+
+    def set_normalization(
+        self,
+        power: float = 1.0,
+        vmin: float = None,
+        vmax: float = None,
+    ):
+
+        if self._common_color_scale:
+            norm = self._get_norm(self._get_indexed_measurements(), vmin, vmax, power)
+        else:
+            norm = None
+
+        for i, (_, measurement) in zip(
+            self._iterate_index(), self.iterate_measurements(keep_dims=False)
+        ):
+
+            if norm is None:
+                norm1 = self._get_norm(measurement, vmin, vmax, power)
+            else:
+                norm1 = norm
+
+            images = self._images[i]
+
+            if self._domain_coloring:
+                images[1].norm = norm1
+            else:
+                images.norm = norm1
+
+    def axis_off(self, spines=True):
+        for i in self._iterate_index():
+            ax = self.axes[i]
+            ax.set_xlabel("")
+            ax.set_ylabel("")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if not spines:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+                ax.spines["bottom"].set_visible(False)
+                ax.spines["left"].set_visible(False)
+
+    def _add_domain_coloring_imshow(self, ax, array):
+        abs_array = np.abs(array)
+        alpha = (abs_array - abs_array.min()) / abs_array.ptp()
+        cmap = hsluv_cmap if self._phase_cmap == "hsluv" else self._phase_cmap
+
+        im1 = ax.imshow(
+            np.angle(array).T,
+            origin="lower",
+            interpolation="none",
+            alpha=alpha.T,
+            vmin=-np.pi,
+            vmax=np.pi,
+            cmap=cmap,
+        )
+
+        im2 = ax.imshow(
+            abs_array.T,
+            origin="lower",
+            interpolation="none",
+            cmap="gray",
+            zorder=-1,
+        )
+
+        return im1, im2
+
+    def _add_real_imshow(self, ax, array):
+        im = ax.imshow(
+            array.T,
+            origin="lower",
+            interpolation="none",
+            cmap=self._cmap,
+        )
+        return im
+
+    def set_images(
+        self,
+    ):
+        images = np.zeros(self.axes.shape + (self._images_per_axes,), dtype=object)
+        for i, (_, measurement) in zip(
+            self._iterate_index(), self.iterate_measurements(keep_dims=False)
+        ):
+            ax = self.axes[i]
+
+            if self._domain_coloring:
+                images[i] = self._add_domain_coloring_imshow(ax, measurement.array)
+            else:
+                images[i] = self._add_real_imshow(ax, measurement.array)
+
+        if images.shape[-1] == 1:
+            images = np.squeeze(images, -1)
+
+        self._images = images
+
+    def update_plots(self):
+        for i, measurement in self.iterate_measurements(keep_dims=False):
+            images = self._images[i]
+
+            if self._domain_coloring:
+                array = measurement.array
+                abs_array = np.abs(array)
+                alpha = (abs_array - abs_array.min()) / abs_array.ptp()
+                images[0].set_alpha(alpha)
+                images[0].set_data(np.angle(array))
+                images[1].set_data(abs_array)
+            else:
+                images.set_data(measurement.array.T)
+
+        if self._autoscale:
+            self.set_normalization()
 
 
-def _add_panel_label(ax, title, **kwargs):
-    if "loc" not in kwargs:
-        kwargs["loc"] = 2
+class MeasurementVisualization1D(MeasurementVisualization):
+    def __init__(self,
+                 measurements: "BaseMeasurement2D",
+                 axes,
+                 axes_types: tuple = None,
+                 ):
 
-    at = AnchoredText(
-        title, pad=0.0, borderpad=0.5, frameon=False, **kwargs  # loc=loc, prop=size,
-    )
-    ax.add_artist(at)
-    at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=3)])
-    return at
+        super().__init__(axes, measurements, axes_types=axes_types)
+
+        self._x_units = None
+
+        self.set_plots()
+        if isinstance(axes, AxesGrid):
+            axes.set_aspect(.7)
+    def set_y_labels(self,  label=None):
+        pass
+
+    def set_plots(self):
+        indexed_measurements = self._get_indexed_measurements()
+
+        lines = np.zeros(self.axes.shape )
+        for i, (_, measurement) in zip(
+            self._iterate_index(), self.iterate_measurements(keep_dims=False)
+        ):
+            ax = self.axes[i]
+            extent = measurement.extent
+
+            x = np.linspace(0, extent, measurement.shape[-1], endpoint=False)
+            y = measurement.array
+            line = ax.plot(x, y)
+
+    # def set_extent(self):
+    #
+    #     for i in self._iterate_index():
+    #         ax = self.axes[i]
+    #
+    #         ax.set_
+    #
+    #
+    #     pass
+
+    def set_x_units(self, units=None):
+        self._x_units = _validate_units(
+            units, self.measurements.base_axes_metadata[0].units
+        )
+        #self.set_extent()
+
+    def set_x_labels(self, label=None):
+        if label is None:
+            self._x_label = self.measurements.base_axes_metadata[-1].label
+        else:
+            self._x_label = label
+
+        for i in self._iterate_index():
+            self.axes[i].set_xlabel(format_label(self._x_label, self._x_units))
 
 
-def _add_sizebar(ax, label, **kwargs):
-    """
-    Draw a horizontal bar with length of 0.1 in data coordinates,
-    with a fixed label underneath.
-    """
-    if "loc" not in kwargs:
-        kwargs["loc"] = 3
-
-    if "borderpad" not in kwargs:
-        kwargs["borderpad"] = 0.5
-
-    asb = AnchoredSizeBar(ax.transData, label=label, **kwargs)
-    ax.add_artist(asb)
+    def update_plots(self):
+        pass
 
 
-def _make_cbar_label(measurement):
-    cbar_label = (
-        measurement.metadata["label"] if "label" in measurement.metadata else ""
-    )
-    cbar_label += (
-        f" [{measurement.metadata['units']}]" if "units" in measurement.metadata else ""
-    )
-    return cbar_label
 
-
-def show_measurement_2d(
+def show_measurements_2d(
     measurements: "BaseMeasurement",
-    figsize: Tuple[int, int],
-    super_title: Union[str, bool],
-    sub_title: bool,
-    x_label: bool,
-    y_label: bool,
-    x_ticks: bool,
-    y_ticks: bool,
-    row_super_label: bool,
-    col_super_label: bool,
-    power: float,
-    vmin: float,
-    vmax: float,
-    common_color_scale: bool,
-    cbar: bool,
-    cbar_labels: str,
-    float_formatting: str,
-    cmap: str = "viridis",
-    extent: List[float] = None,
-    panel_labels: list = None,
-    sizebar: bool = False,
-    image_grid_kwargs: dict = None,
-    imshow_kwargs: dict = None,
-    anchored_text_kwargs: dict = None,
-    anchored_size_bar_kwargs: dict = None,
-    complex_coloring_kwargs: dict = None,
     axes: Axes = None,
+    figsize: Tuple[int, int] = None,
+    title: str = None,
+    power: float = 1.0,
+    vmin: float = None,
+    vmax: float = None,
+    common_color_scale: bool = False,
+    cbar: bool = False,
+    cmap: str = None,
 ):
     """
     Show the image(s) using matplotlib.
 
     Parameters
     ----------
-    cmap : str, optional
-        Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
-    explode : bool, optional
-        If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
-        ensemble item is shown.
-    ax : matplotlib.axes.Axes, optional
+    measurements
+    axes : matplotlib.axes.Axes, optional
         If given the plots are added to the axis. This is not available for image grids.
     figsize : two int, optional
         The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
     title : bool or str, optional
         Add a title to the figure. If True is given instead of a string the title will be given by the value
         corresponding to the "name" key of the metadata dictionary, if this item exists.
-    panel_titles : bool or list of str, optional
-        Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
-        strings an item must exist for each panel.
-    x_ticks : bool or list, optional
-        If False, the ticks on the `x`-axis will be removed.
-    y_ticks : bool or list, optional
-        If False, the ticks on the `y`-axis will be removed.
-    x_label : bool or str, optional
-        Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-        metadata. A string may be given to override this.
-    y_label : bool or str, optional
-        Add label to the `x`-axis of every plot. If True (default) the label will created from the corresponding axis
-        metadata. A string may be given to override this.
-    row_super_label : bool or str, optional
-        Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
-        metadata. A string may be given to override this. The default is no super label.
-    col_super_label : bool or str, optional
-        Add super label to the columns of an image grid. If True the label will be created from the corresponding
-        axis metadata. A string may be given to override this. The default is no super label.
+    cmap : str, optional
+        Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
     power : float
         Show image on a power scale.
     vmin : float, optional
@@ -280,197 +1034,64 @@ def show_measurement_2d(
     cbar : bool, optional
         Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
         keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
-    cbar_labels : str or list of str
-        Label(s) for the colorbar(s).
-    sizebar : bool, optional,
-        Add a size bar to the image(s).
-    float_formatting : str, optional
-        A formatting string used for formatting the floats of the panel titles.
-    panel_labels : list of str
-        A list of labels for each panel of a grid of images.
-    image_grid_kwargs : dict
-        Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.
-    imshow_kwargs : dict
-        Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.
-    anchored_text_kwargs : dict
-        Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel
-        labels.
 
     Returns
     -------
     matplotlib.figure.Figure, matplotlib.axes.Axes
     """
-    measurements = measurements.to_cpu().compute()
+    measurements = measurements.compute().to_cpu()
 
-    imshow_kwargs = {} if imshow_kwargs is None else imshow_kwargs
-    image_grid_kwargs = {} if image_grid_kwargs is None else image_grid_kwargs
-    anchored_text_kwargs = {} if anchored_text_kwargs is None else anchored_text_kwargs
-    anchored_size_bar_kwargs = (
-        {} if anchored_size_bar_kwargs is None else anchored_size_bar_kwargs
-    )
+    # if cbar and measurements.is_complex and measurements.ensemble_shape:
+    #     raise NotImplementedError(
+    #         "colorbar not implemented for exploded plot with domain coloring"
+    #     )
 
-    if complex_coloring_kwargs is None:
-        complex_coloring_kwargs = {
-            "saturation": 3,
-        }
+    complex_representation = "domain_coloring"
 
-    if cbar and not np.iscomplexobj(measurements.array):
-        if common_color_scale:
-            image_grid_kwargs["cbar_mode"] = "single"
+    if measurements.is_complex and complex_representation != "domain_coloring":
+        measurements = getattr(measurements, complex_representation)()
 
+    if not measurements.ensemble_shape:
+        if axes is None:
+            fig, axes = plt.subplots(figsize=figsize)
         else:
-            image_grid_kwargs["cbar_mode"] = "each"
-            image_grid_kwargs["cbar_pad"] = 0.05
+            fig = axes.get_figure()
+    else:
+        if axes is None:
+            fig = plt.figure(1, figsize, clear=True)
+            image_grid_kwargs = {}
+            image_grid_kwargs["share_all"] = True
+            if common_color_scale:
+                if cbar:
+                    image_grid_kwargs["cbar_mode"] = "single"
 
-    if cbar and np.iscomplexobj(measurements.array) and measurements.ensemble_shape:
-        raise NotImplementedError(
-            "colorbar not implemented for exploded plot with domain coloring"
-        )
+                image_grid_kwargs["axes_pad"] = [0.1, 0.1]
+            else:
+                if cbar:
+                    image_grid_kwargs["cbar_mode"] = "each"
+                    image_grid_kwargs["cbar_pad"] = 0.05
+                    image_grid_kwargs["axes_pad"] = [0.8, 0.3]
+                else:
+                    image_grid_kwargs["axes_pad"] = [0.1, 0.1]
+
+            axes = ImageGrid(fig, 111, nrows_ncols=(nrows, ncols), **image_grid_kwargs)
+        else:
+            fig = axes.get_figure()
 
     measurements = measurements[(0,) * max(len(measurements.ensemble_shape) - 2, 0)]
 
-    if common_color_scale and np.iscomplexobj(measurements.array):
-        vmin = np.abs(measurements.array).min() if vmin is None else vmin
-        vmax = np.abs(measurements.array).max() if vmax is None else vmax
-    elif common_color_scale:
-        vmin = measurements.array.min() if vmin is None else vmin
-        vmax = measurements.array.max() if vmax is None else vmax
-
-    nrows = (
-        measurements.ensemble_shape[-2] if len(measurements.ensemble_shape) > 1 else 1
-    )
-    ncols = (
-        measurements.ensemble_shape[-1] if len(measurements.ensemble_shape) > 0 else 1
+    visualization = MeasurementVisualization2D(
+        axes, measurements, vmin=vmin, vmax=vmax, common_color_scale=common_color_scale
     )
 
-    if axes is None:
-        fig = plt.figure(1, figsize, clear=True)
+    if title:
+        visualization.set_column_titles()
+        visualization.set_row_titles()
 
-        if "axes_pad" not in image_grid_kwargs:
-            if sub_title:
-                image_grid_kwargs["axes_pad"] = 0.3
+    if cbar:
+        visualization.set_cbars()
 
-            else:
-                image_grid_kwargs["axes_pad"] = 0.1
-
-        axes = ImageGrid(
-            fig,
-            111,
-            nrows_ncols=(nrows, ncols),
-            **image_grid_kwargs,
-        )
-    elif isinstance(axes, Axes):
-        fig = axes.get_figure()
-        axes = [axes]
-
-    if x_label is True:
-        x_label = measurements.base_axes_metadata[-2].format_label()
-
-    if y_label is True:
-        y_label = measurements.base_axes_metadata[-1].format_label()
-
-    for index, measurement in measurements.iterate_ensemble(keep_dims=True):
-
-        title = None
-        if len(measurement.ensemble_shape) == 0:
-            if isinstance(super_title, str):
-                title = super_title
-            super_title = False
-            i = 0
-        elif len(measurement.ensemble_shape) == 1:
-            title = (
-                measurement.axes_metadata[0].format_title(float_formatting)
-                if sub_title
-                else None
-            )
-            i = np.ravel_multi_index((0,) + index, (nrows, ncols))
-        elif len(measurement.ensemble_shape) == 2:
-            if sub_title:
-                titles = tuple(
-                    axis.format_title(float_formatting)
-                    for axis in measurement.ensemble_axes_metadata
-                )
-                title = ", ".join(titles)
-
-            i = np.ravel_multi_index(index, (nrows, ncols))
-        else:
-            raise RuntimeError()
-
-        ax = axes[i]
-
-        if extent is None:
-            extent = [0, measurement.extent[0], 0, measurement.extent[1]]
-
-        array = measurement.array[(0,) * len(measurement.ensemble_shape)]
-
-        im = _add_imshow(
-            ax=ax,
-            array=array,
-            title=title,
-            extent=extent,
-            x_label=x_label,
-            y_label=y_label,
-            x_ticks=x_ticks,
-            y_ticks=y_ticks,
-            power=power,
-            vmin=vmin,
-            vmax=vmax,
-            cmap=cmap,
-            complex_coloring_kwargs=complex_coloring_kwargs,
-            **imshow_kwargs,
-        )
-
-        if panel_labels is not None:
-            _add_panel_label(ax, panel_labels[i], **anchored_text_kwargs)
-
-        if cbar:
-            if cbar_labels is None:
-                cbar_label = _make_cbar_label(measurement)
-            else:
-                cbar_label = cbar_labels
-
-            if np.iscomplexobj(array):
-                divider = make_axes_locatable(ax)
-                cax1 = divider.append_axes("right", size="5%", pad=0.2)
-                cax2 = divider.append_axes("right", size="5%", pad=0.4)
-
-                _add_colorbar_arg(cax1, complex_coloring_kwargs["saturation"])
-
-                cbar_vmin = np.abs(measurement.array).min() if vmin is None else vmin
-                cbar_vmax = np.abs(measurement.array).max() if vmax is None else vmax
-
-                _add_colorbar_abs(cax2, cbar_vmin, cbar_vmax)
-            else:
-                try:
-                    ax.cax.colorbar(im, label=cbar_label)
-                except AttributeError:
-                    plt.colorbar(im, ax=ax, label=cbar_label)
-
-        if sizebar:
-            size = (
-                measurement.base_axes_metadata[-2].sampling
-                * measurement.base_shape[-2]
-                / 3
-            )
-            label = (
-                f"{size:>{float_formatting}} {measurement.base_axes_metadata[-2].units}"
-            )
-            _add_sizebar(ax=ax, label=label, size=size, **anchored_size_bar_kwargs)
-
-    if super_title is True and "name" in measurements.metadata:
-        fig.suptitle(measurements.metadata["name"])
-
-    elif isinstance(super_title, str):
-
-        fig.suptitle(super_title)
-
-    if len(measurements.ensemble_axes_metadata) > 0 and row_super_label:
-        fig.supylabel(f"{measurements.ensemble_axes_metadata[-1].format_label()}")
-
-    if len(measurements.ensemble_axes_metadata) > 1 and col_super_label:
-        fig.supylabel(f"{measurements.ensemble_axes_metadata[-2].format_label()}")
-
-    return fig, ax
+    return visualization
 
 
 def _add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwargs):
@@ -492,16 +1113,15 @@ def _add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwarg
 
 def show_measurements_1d(
     measurements: Union["RealSpaceLineProfiles", "ReciprocalSpaceLineProfiles"],
-    float_formatting: str,
     extent: Tuple[float, float] = None,
     ax: Axes = None,
     x_label: str = None,
     y_label: str = None,
     title: str = None,
     figsize: Tuple[int, int] = None,
+    units=None,
     **kwargs,
 ):
-    # TODO: urgently needs documentation (copy over from measurements.py)!
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
     else:
@@ -549,13 +1169,16 @@ def show_measurements_1d(
 
 def _show_indexed_diffraction_pattern(
     indexed_diffraction_pattern,
-    spot_scale: float = 1.0,
+    scale: float = 1.0,
     ax: Axes = None,
     figsize: Tuple[float, float] = (6, 6),
     title: str = None,
-    overlay_indices: bool = True,
-    annotate_kwargs: dict = None,
+    overlay_hkl: bool = True,
     inequivalency_threshold: float = 1.0,
+    power: float = 1.0,
+    cmap: str = "viridis",
+    colors: str = "cmap",
+    background_color: str = "white",
 ):
     """
     Display a diffraction pattern as indexed Bragg reflections.
@@ -584,23 +1207,29 @@ def _show_indexed_diffraction_pattern(
     -------
     figure, axis_handle : matplotlib.figure.Figure, matplotlib.axis.Axis
     """
-    if annotate_kwargs is None:
-        annotate_kwargs = {}
+    indexed_diffraction_pattern = indexed_diffraction_pattern.block_direct()
 
-    coordinates = indexed_diffraction_pattern._vectors
-    normalize_coordinates = coordinates.max()
+    positions = indexed_diffraction_pattern.positions[:, :2]
 
-    coordinates = coordinates / normalize_coordinates
+    intensities = indexed_diffraction_pattern.intensities**power
 
-    max_step = (
-        max([np.max(np.diff(np.sort(coordinates[:, i]))) for i in (0, 1)]) * spot_scale
-    )
-    intensities = indexed_diffraction_pattern.intensities
+    order = np.argsort(-np.linalg.norm(positions, axis=1))
 
-    scales = intensities / intensities.max() * max_step
+    positions = positions[order]
+    intensities = intensities[order]
 
-    norm = matplotlib.colors.Normalize(vmin=0, vmax=intensities.max())
-    cmap = matplotlib.cm.get_cmap("viridis")
+    scales = intensities / intensities.max()
+
+    min_distance = squareform(distance_matrix(positions, positions)).min()
+
+    scale_factor = min_distance / scales.max() * scale
+
+    scales = scales**power * scale_factor
+
+    if colors == "cmap":
+        norm = matplotlib.colors.Normalize(vmin=0, vmax=intensities.max())
+        cmap = matplotlib.cm.get_cmap(cmap)
+        colors = cmap(norm(intensities))
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -616,38 +1245,54 @@ def _show_indexed_diffraction_pattern(
             heights=scales,
             angles=0.0,
             units="xy",
-            facecolors=cmap(norm(intensities)),
-            offsets=coordinates,
+            facecolors=colors,
+            offsets=positions,
             transOffset=ax.transData,
         )
     )
 
-    if overlay_indices:
-        indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent(
-            inequivalency_threshold=inequivalency_threshold
-        )
-        coordinates = indexed_diffraction_pattern._vectors
-        coordinates = coordinates / normalize_coordinates
-
-        miller_indices = indexed_diffraction_pattern.miller_indices
-
-        for hkl, coordinate in zip(miller_indices, coordinates):
-            t = ax.annotate(
-                " ".join(map(str, list(hkl))),
-                coordinate,
-                ha="center",
-                va="center",
-                size=12,
-                **annotate_kwargs,
-            )
-            t.set_path_effects([withStroke(foreground="w", linewidth=3)])
+    x_lim = np.abs(positions[:, 0]).max() * 1.1
+    y_lim = np.abs(positions[:, 1]).max() * 1.1
 
     ax.axis("equal")
-    ax.set_xlim([-1.0 - max_step / 2.0, 1.0 + max_step / 2.0])
-    ax.set_ylim([-1.0 - max_step / 2.0, 1.0 + max_step / 2.0])
-    ax.axis("off")
+    ax.set_xlim(-x_lim * 1.1, x_lim * 1.1)
+    ax.set_ylim(-y_lim * 1.1, y_lim * 1.1)
+    # fig.patch.set_facecolor(background_color)
+    # ax.axis("off")
+
+    if overlay_hkl:
+        add_miller_index_annotations(ax, indexed_diffraction_pattern)
 
     return fig, ax
+
+
+def add_miller_index_annotations(ax, indexed_diffraction_patterns):
+    for hkl, position in zip(
+        indexed_diffraction_patterns.miller_indices,
+        indexed_diffraction_patterns.positions,
+    ):
+        annotation = ax.annotate(
+            "{} {} {}".format(*hkl),
+            xy=position[:2],
+            ha="center",
+            va="center",
+            size=8,
+        )
+        annotation.set_path_effects([withStroke(foreground="w", linewidth=3)])
+
+
+def get_annotations(ax):
+    return [
+        child
+        for child in ax.get_children()
+        if isinstance(child, matplotlib.text.Annotation)
+    ]
+
+
+def remove_annotations(ax):
+    annotations = get_annotations(ax)
+    for annotation in annotations:
+        annotation.remove()
 
 
 _cube = np.array(
@@ -698,7 +1343,7 @@ def _merge_positions(positions, plane, tol: float = 1e-7) -> np.ndarray:
 def show_atoms(
     atoms: Atoms,
     plane: Union[Tuple[float, float], str] = "xy",
-    ax: Axes = None,
+    ax=None,
     scale: float = 0.75,
     title: str = None,
     numbering: bool = False,
@@ -706,7 +1351,8 @@ def show_atoms(
     figsize: Tuple[float, float] = None,
     legend: bool = False,
     merge: float = 1e-2,
-    show_cell: bool = True,
+    tight_limits=False,
+    show_cell=None,
     **kwargs,
 ):
     """
@@ -747,6 +1393,11 @@ def show_atoms(
 
     if merge > 0.0:
         atoms = _merge_columns(atoms, plane, merge)
+
+    if tight_limits and show_cell is None:
+        show_cell = False
+    elif show_cell is None:
+        show_cell = True
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -811,5 +1462,10 @@ def show_atoms(
         ]
 
         ax.legend(handles=legend_elements, loc="upper right")
+
+    if tight_limits:
+        ax.set_adjustable("box")
+        ax.set_xlim([np.min(cell_lines_x), np.max(cell_lines_x)])
+        ax.set_ylim([np.min(cell_lines_y), np.max(cell_lines_y)])
 
     return fig, ax

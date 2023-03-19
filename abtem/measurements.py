@@ -42,8 +42,9 @@ from abtem.interact import interact_ensemble_indices_2d, interact_ensemble_indic
 from abtem.visualize import (
     show_measurements_2d,
     show_measurements_1d,
-    _make_cbar_label,
     _iterate_axes,
+    MeasurementVisualization2D,
+    AxesGrid,
 )
 
 # Enables CuPy-accelerated functions if it is available.
@@ -64,9 +65,6 @@ if TYPE_CHECKING:
 
 # Ensures that `Measurement` objects created by `Measurement` objects retain their type (e.g. `Images`).
 T = TypeVar("T", bound="BaseMeasurement")
-
-
-
 
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
@@ -684,8 +682,8 @@ class BaseMeasurement2D(BaseMeasurement):
 
     def show(
         self,
-        explode: bool = False,
         ax: Axes = None,
+        explode: bool = False,
         figsize: Tuple[int, int] = None,
         title: Union[bool, str] = True,
         power: float = 1.0,
@@ -696,7 +694,7 @@ class BaseMeasurement2D(BaseMeasurement):
         cbar: bool = False,
         units: str = None,
         axes_pad=None,
-    ) -> Axes:
+    ) -> MeasurementVisualization2D:
         """
         Show the image(s) using matplotlib.
 
@@ -732,29 +730,72 @@ class BaseMeasurement2D(BaseMeasurement):
         Figure, matplotlib.axes.Axes
         """
 
-        if not explode:
-            measurements = self[(0,) * len(self.ensemble_shape)]
-        else:
-            measurements = self
-        # else:
-        #     if ax is not None:
-        #         raise NotImplementedError("`ax` not implemented with `explode = True`.")
-        #     measurements = self
+        num_ensemble_axes = len(self.ensemble_shape)
 
-        return show_measurements_2d(
-            measurements=measurements,
-            cmap=cmap,
-            figsize=figsize,
-            power=power,
-            vmin=vmin,
-            vmax=vmax,
-            common_color_scale=common_color_scale,
+        if explode:
+            num_index_axes = max(num_ensemble_axes - 2, 0)
+            num_explode_axes = min(num_ensemble_axes, 2)
+            axes_types = ("index",) * num_index_axes + ("explode",) * num_explode_axes
+        else:
+            axes_types = ("index",) * num_ensemble_axes
+
+        if cbar:
+            if self.is_complex:
+                cbars = 2
+            else:
+                cbars = 1
+        else:
+            cbars = 0
+
+        if common_color_scale:
+            cbar_mode = "single"
+        else:
+            cbar_mode = "each"
+
+        if ax is None:
+            fig = plt.figure(figsize=figsize)
+            axes = AxesGrid.from_measurements(
+                fig, self, axes_types, cbars, cbar_mode=cbar_mode
+            )
+            measurements = self
+        else:
+            if explode:
+                raise NotImplementedError("`ax` not implemented with `explode = True`.")
+            measurements = self[("index",) * num_ensemble_axes]
+            axes_types = ()
+            axes = np.array([ax])
+
+        visualization = MeasurementVisualization2D(
+            measurements,
+            axes,
+            axes_types=axes_types,
             cbar=cbar,
-            axes=ax,
-            title=title,
-            units=units,
-            axes_pad=axes_pad,
+            common_color_scale=common_color_scale,
         )
+
+        return visualization
+
+        # if not explode:
+        #     measurements = self[(0,) * len(self.ensemble_shape)]
+        # else:
+        #     measurements = self
+        # # else:
+        # #     if ax is not None:
+        # #         raise NotImplementedError("`ax` not implemented with `explode = True`.")
+        # #     measurements = self
+        #
+        # return show_measurements_2d(
+        #     measurements=measurements,
+        #     cmap=cmap,
+        #     figsize=figsize,
+        #     power=power,
+        #     vmin=vmin,
+        #     vmax=vmax,
+        #     common_color_scale=common_color_scale,
+        #     cbar=cbar,
+        #     axes=ax,
+        #     title=title,
+        # )
 
 
 class Images(BaseMeasurement2D):
@@ -1359,11 +1400,11 @@ class Images(BaseMeasurement2D):
         )
 
     def _plot_extent_x(self, units=None):
-        scale = _get_conversion_factor("Å", units)
+        scale = _get_conversion_factor(units, "Å")
         return [0, self.extent[0] * scale]
 
     def _plot_extent_y(self, units=None):
-        scale = _get_conversion_factor("Å", units)
+        scale = _get_conversion_factor(units, "Å")
         return [0, self.extent[1] * scale]
 
 
@@ -1929,7 +1970,7 @@ class DiffractionPatterns(BaseMeasurement2D):
         self,
         cell: Union[Cell, float, Tuple[float, float, float]],
         threshold: float = 0.001,
-        distance_threshold=0.15
+        distance_threshold=0.15,
     ):
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
@@ -1948,7 +1989,11 @@ class DiffractionPatterns(BaseMeasurement2D):
         diffraction_patterns = self.to_cpu()
 
         return IndexedDiffractionPatterns.index_diffraction_patterns(
-            diffraction_patterns, cell, threshold=threshold, distance_threshold=distance_threshold, metadata=self.metadata
+            diffraction_patterns,
+            cell,
+            threshold=threshold,
+            distance_threshold=distance_threshold,
+            metadata=self.metadata,
         )
 
     @property
