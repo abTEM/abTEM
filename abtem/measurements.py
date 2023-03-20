@@ -45,6 +45,7 @@ from abtem.visualize import (
     _iterate_axes,
     MeasurementVisualization2D,
     AxesGrid,
+    MeasurementVisualization1D, format_label,
 )
 
 # Enables CuPy-accelerated functions if it is available.
@@ -693,7 +694,6 @@ class BaseMeasurement2D(BaseMeasurement):
         common_color_scale: bool = False,
         cbar: bool = False,
         units: str = None,
-        axes_pad=None,
     ) -> MeasurementVisualization2D:
         """
         Show the image(s) using matplotlib.
@@ -753,7 +753,10 @@ class BaseMeasurement2D(BaseMeasurement):
             cbar_mode = "each"
 
         if ax is None:
+            # plt.ioff()
             fig = plt.figure(figsize=figsize)
+            # plt.ion()
+
             axes = AxesGrid.from_measurements(
                 fig, self, axes_types, cbars, cbar_mode=cbar_mode
             )
@@ -763,7 +766,7 @@ class BaseMeasurement2D(BaseMeasurement):
                 raise NotImplementedError("`ax` not implemented with `explode = True`.")
             measurements = self[("index",) * num_ensemble_axes]
             axes_types = ()
-            axes = np.array([ax])
+            axes = np.array([[ax]])
 
         visualization = MeasurementVisualization2D(
             measurements,
@@ -771,6 +774,7 @@ class BaseMeasurement2D(BaseMeasurement):
             axes_types=axes_types,
             cbar=cbar,
             common_color_scale=common_color_scale,
+            units=units,
         )
 
         return visualization
@@ -1520,13 +1524,16 @@ class _BaseMeasurement1d(BaseMeasurement):
 
             return widths
 
-        return self.array.map_blocks(
-            calculate_widths,
-            drop_axis=(len(self.array.shape) - 1,),
-            dtype=np.float32,
-            sampling=self.sampling,
-            height=height,
-        )
+        if self.is_lazy:
+            return self.array.map_blocks(
+                calculate_widths,
+                drop_axis=(len(self.array.shape) - 1,),
+                dtype=np.float32,
+                sampling=self.sampling,
+                height=height,
+            )
+        else:
+            return calculate_widths(self.array, self.sampling, height)
 
     def interpolate(
         self,
@@ -1604,9 +1611,12 @@ class _BaseMeasurement1d(BaseMeasurement):
     def show(
         self,
         ax: Axes = None,
+        explode: Union[bool, tuple] = False,
         figsize: Tuple[int, int] = None,
         title: str = None,
         units: str = None,
+        common_scale: bool = True,
+        axes_types=None,
         **kwargs,
     ):
         """
@@ -1637,14 +1647,47 @@ class _BaseMeasurement1d(BaseMeasurement):
         matplotlib Axes
         """
 
-        return show_measurements_1d(
-            self,
-            ax=ax,
-            figsize=figsize,
-            title=title,
-            units=units,
-            **kwargs,
-        )
+        num_ensemble_axes = len(self.ensemble_shape)
+
+        if axes_types is None:
+            if explode:
+                num_index_axes = max(num_ensemble_axes - 2, 0)
+                num_explode_axes = min(num_ensemble_axes, 2)
+                axes_types = ("index",) * num_index_axes + (
+                    "explode",
+                ) * num_explode_axes
+            else:
+                axes_types = ("overlay",) * num_ensemble_axes
+
+        if ax is None:
+            fig = plt.figure(figsize=figsize)
+            axes = AxesGrid.from_measurements(
+                fig,
+                self,
+                axes_types,
+                0,
+                cbar_mode="single",
+                sharey=common_scale,
+                aspect=False,
+            )
+            measurements = self
+        else:
+            if explode:
+                raise NotImplementedError("`ax` not implemented with `explode = True`.")
+            measurements = self[("index",) * num_ensemble_axes]
+            axes_types = ()
+            axes = np.array([ax])
+
+        return MeasurementVisualization1D(measurements, axes, axes_types, units=units)
+
+        # return show_measurements_1d(
+        #     self,
+        #     ax=ax,
+        #     figsize=figsize,
+        #     title=title,
+        #     units=units,
+        #     **kwargs,
+        # )
 
 
 class RealSpaceLineProfiles(_BaseMeasurement1d):
@@ -1706,14 +1749,18 @@ class RealSpaceLineProfiles(_BaseMeasurement1d):
         return LineScan(start=start, end=end).add_to_plot(*args, **kwargs)
 
     def _plot_extent(self, units=None):
-        scale = {"Å": 1, "nm": 0.1}[_validate_real_space_units(units)]
+        scale = _get_conversion_factor(units, "Å")
         return [0, self.extent * scale]
 
+    # def _plot_extent(self, units=None):
+    #     scale = {"Å": 1, "nm": 0.1}[_validate_real_space_units(units)]
+    #     return [0, self.extent * scale]
+
     def _plot_x_label(self, units=None):
-        return f"x [{_validate_real_space_units(units)}]"
+        return f"x [{_validate_units(units, 'Å')}]"
 
     def _plot_y_label(self, units=None):
-        return f"y [{_validate_real_space_units(units)}]"
+        return f"y [{_validate_units(units, 'Å')}]"
 
 
 class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
@@ -1761,7 +1808,9 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
         return f"y [{_validate_units(units, '1/Å')}]"
 
     def _plot_extent(self, units=None):
-        units = _validate_reciprocal_space_units(units)
+        if units is None:
+            units = "1/Å"
+
         if units == "mrad":
             return [0, self.angular_extent]
         elif units == "1/Å":
@@ -2601,7 +2650,7 @@ class DiffractionPatterns(BaseMeasurement2D):
             Center-of-mass line profiles (returned if there is only one scan axis).
         """
 
-        units = _validate_reciprocal_space_units(units)
+        #units = _validate_reciprocal_space_units(units)
 
         if units == "mrad":
             x, y = self.angular_coordinates
@@ -2775,20 +2824,18 @@ class DiffractionPatterns(BaseMeasurement2D):
 
         return array
 
-    def _plot_extent(self, units=None):
-        units = _validate_units(units, "1/Å")
+    def _plot_extent_x(self, units=None):
+        # units = _validate_units(units, "1/Å")
+        if units is None:
+            units = "1/Å"
+
         if units == "mrad":
-            return list(self.angular_limits[0] + self.angular_limits[1])
+            return list(self.angular_limits[0])
         elif units == "1/Å":
-            x_limits = (
+            return [
                 self.limits[0][0] - self.sampling[0] / 2,
                 self.limits[0][1] + self.sampling[0] / 2,
-            )
-            y_limits = (
-                self.limits[1][0] - self.sampling[1] / 2,
-                self.limits[1][1] + self.sampling[1] / 2,
-            )
-            return list(x_limits + y_limits)
+            ]
 
         elif units == "bins":
 
@@ -2798,7 +2845,32 @@ class DiffractionPatterns(BaseMeasurement2D):
                 else:
                     return -n // 2 + 0.5, n // 2 + 0.5
 
-            return bin_extent(self.base_shape[0]) + bin_extent(self.base_shape[1])
+            return bin_extent(self.base_shape[0])
+        else:
+            raise RuntimeError()
+
+    def _plot_extent_y(self, units=None):
+        # units = _validate_units(units, "1/Å")
+        if units is None:
+            units = "1/Å"
+
+        if units == "mrad":
+            return list(self.angular_limits[1])
+        elif units == "1/Å":
+            return [
+                self.limits[1][0] - self.sampling[1] / 2,
+                self.limits[1][1] + self.sampling[1] / 2,
+            ]
+
+        elif units == "bins":
+
+            def bin_extent(n):
+                if n % 2 == 0:
+                    return -n // 2 - 0.5, n // 2 - 0.5
+                else:
+                    return -n // 2 + 0.5, n // 2 + 0.5
+
+            return bin_extent(self.base_shape[1])
         else:
             raise RuntimeError()
 
@@ -3139,7 +3211,7 @@ class PolarMeasurements(BaseMeasurement):
         ax.set_xticks(azimuthal_ticks)
 
         if cbar:
-            fig.colorbar(im, label=_make_cbar_label(self))
+            fig.colorbar(im, label=format_label(self.metadata["label"], self.metadata["units"]))
 
         if grid:
             ax.grid(linewidth=2, color="white")

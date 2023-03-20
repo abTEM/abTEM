@@ -16,6 +16,7 @@ from matplotlib.axes import Axes
 
 import ipywidgets as widgets
 from mpl_toolkits.axes_grid1.axes_divider import AxesDivider
+from mpl_toolkits.axes_grid1.axes_size import AxesX
 from scipy.spatial.distance import squareform
 from scipy.spatial import distance_matrix
 
@@ -27,13 +28,14 @@ from matplotlib.patches import Circle
 from matplotlib.patheffects import withStroke
 from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable, SubplotDivider
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from mpl_toolkits.axes_grid1.axes_grid import CbarAxes
+from mpl_toolkits.axes_grid1.axes_grid import CbarAxes, _cbaraxes_class_factory
 from abtem.core.backend import copy_to_device
 from abtem.core import config
 from abtem.core.utils import label_to_index
 from abtem.core.units import _get_conversion_factor, _validate_units, _format_units
 from abtem.atoms import pad_atoms, plane_to_axes
 from mpl_toolkits.axes_grid1 import Size, Divider
+
 
 if TYPE_CHECKING:
     from abtem.measurements import (
@@ -70,13 +72,31 @@ class MeasurementVisualization:
     def iterate_measurements(self, keep_dims=True):
         indexed_measurements = self._get_indexed_measurements()
 
-        if not indexed_measurements.ensemble_shape:
-            yield (0, 0), indexed_measurements
-        else:
-            for i, measurement in indexed_measurements.iterate_ensemble(
-                keep_dims=keep_dims
-            ):
-                yield i, measurement
+        shape = tuple(
+            n if axes_type != "overlay" else 1
+            for n, axes_type in zip(
+                indexed_measurements.ensemble_shape, self._axes_types
+            )
+        )
+
+        for indices in np.ndindex(*shape):
+
+            axes_index = ()
+            for i, axes_type in zip(indices, self._axes_types):
+                if axes_type == "explode":
+                    axes_index += (i,)
+            axes_index = (axes_index + (0,) * (2 - len(axes_index)))[:2]
+
+            indices = tuple(
+                i if axes_type != "overlay" else slice(None)
+                for i, axes_type in zip(indices, self._axes_types)
+            )
+
+            # print(indices, axes_index, indexed_measurements.shape)
+
+            yield axes_index, indexed_measurements.get_items(
+                indices, keep_dims=keep_dims
+            )
 
     def _iterate_index(self):
         shape = self._get_indexed_measurements().ensemble_shape
@@ -102,7 +122,7 @@ class MeasurementVisualization:
         self._axes.set_axes_padding(padding)
 
     def _get_indexed_measurements(self):
-        return self.measurements[self._indices]
+        return self.measurements.get_items(self._indices, keep_dims=True)
 
     def set_column_titles(
         self,
@@ -110,6 +130,7 @@ class MeasurementVisualization:
         pad: float = 10.0,
         format: str = ".3g",
         units: str = None,
+        fontsize=12,
         **kwargs,
     ):
         indexed_measurements = self._get_indexed_measurements()
@@ -126,6 +147,7 @@ class MeasurementVisualization:
                         format, units=units, include_label=i == 0
                     )
                 )
+
         elif isinstance(titles, str):
             titles = [titles] * max(len(indexed_measurements.ensemble_shape), 1)
 
@@ -133,8 +155,7 @@ class MeasurementVisualization:
             column_title.remove()
 
         column_titles = []
-        for i, j in enumerate(self._iterate_index()):
-            ax = self.axes[j]
+        for i, ax in enumerate(self.axes[:, -1]):
 
             annotation = ax.annotate(
                 titles[i],
@@ -144,6 +165,7 @@ class MeasurementVisualization:
                 textcoords="offset points",
                 ha="center",
                 va="baseline",
+                fontsize=fontsize,
                 **kwargs,
             )
             column_titles.append(annotation)
@@ -156,6 +178,7 @@ class MeasurementVisualization:
         pad: float = 0.0,
         format: str = ".2g",
         units: str = None,
+        fontsize=12,
         **kwargs,
     ):
 
@@ -165,7 +188,7 @@ class MeasurementVisualization:
             if not len(indexed_measurements.ensemble_shape) > 1:
                 return
 
-            axes_metadata = indexed_measurements.ensemble_axes_metadata[0]
+            axes_metadata = indexed_measurements.ensemble_axes_metadata[1]
             titles = []
             for i, axis_metadata in enumerate(axes_metadata):
                 titles.append(
@@ -180,8 +203,7 @@ class MeasurementVisualization:
             row_title.remove()
 
         row_titles = []
-        for i, j in enumerate(self._iterate_index()):
-            ax = self.axes[j]
+        for i, ax in enumerate(self.axes[0, :]):
 
             annotation = ax.annotate(
                 titles[i],
@@ -192,6 +214,7 @@ class MeasurementVisualization:
                 ha="right",
                 va="center",
                 rotation=90,
+                fontsize=fontsize,
                 **kwargs,
             )
             row_titles.append(annotation)
@@ -262,10 +285,14 @@ class MeasurementVisualization:
             elif j < len(indices):
                 validated_indices.append(indices[j])
                 j += 1
+            else:
+                validated_indices.append(0)
 
-        validated_indices = validated_indices + [0] * (
-            num_ensemble_dims - len(validated_indices)
-        )
+        # print(validated_indices)
+
+        # validated_indices = validated_indices + [0] * (
+        #     num_ensemble_dims - len(validated_indices)
+        # )
         return tuple(validated_indices)
 
     def set_indices(self, indices=()):
@@ -384,14 +411,11 @@ def set_cbar_axes(axes, n, sizes):
 
 
 def make_default_sizes():
-    image_scale = Size.Scaled(1)
-
     sizes = {
-        "images": image_scale,
         "cbar_padding_left": Size.Fixed(0.1),
-        "cbar": Size.Fraction(0.1, image_scale),
+        # "cbar": Size.Fixed(0.001),
         "cbar_spacing": Size.Fixed(0.5),
-        "cbar_padding_right": Size.Fixed(0.5),
+        "cbar_padding_right": Size.Fixed(0.7),
         "padding": Size.Fixed(0.1),
     }
     return sizes
@@ -403,6 +427,7 @@ def cbar_layout(n, sizes):
 
     layout = [sizes["cbar_padding_left"]]
     for i in range(n):
+        # layout.extend([size])
         layout.extend([sizes["cbar"]])
 
         if i < n - 1:
@@ -412,68 +437,115 @@ def cbar_layout(n, sizes):
     return layout
 
 
-def make_col_layout(n, n_cbars, sizes, cbar_mode="each"):
+def make_col_layout(axes, n_cbars, sizes, cbar_mode="each", direction="x"):
     sizes_layout = []
-    for i in range(n):
-        sizes_layout.append(sizes["images"])
+
+    for i, ax in enumerate(axes):
+        if direction == "x":
+            sizes_layout.append(Size.AxesX(ax, aspect="axes", ref_ax=axes[0]))
+        else:
+            sizes_layout.append(Size.AxesY(ax, aspect="axes", ref_ax=axes[0]))
+
+        if not "cbar" in sizes:
+            sizes["cbar"] = Size.from_any("5%", sizes_layout[0])
+
         if cbar_mode == "each":
             sizes_layout.extend(cbar_layout(n_cbars, sizes))
 
-        if i < n - 1:
+        if i < len(axes) - 1:
             sizes_layout.append(sizes["padding"])
 
     if cbar_mode == "single":
+        # size = Size.from_any("5%", sizes_layout[0])
         sizes_layout.extend(cbar_layout(n_cbars, sizes))
 
     return sizes_layout
 
 
 class AxesGrid:
-    def __init__(self, fig, ncols, nrows, cbars, cbar_mode="single"):
+    def __init__(
+        self,
+        fig,
+        ncols,
+        nrows,
+        cbars,
+        cbar_mode: str = "single",
+        aspect: bool = True,
+        sharex: bool = True,
+        sharey: bool = True,
+    ):
         from mpl_toolkits.axes_grid1.mpl_axes import Axes
+
+        rect = (0.1, 0.1, 0.8, 0.8)
+        axes = []
+        for nx in range(ncols):
+            for ny in range(nrows):
+                if len(axes) > 0:
+                    if sharex:
+                        sharex = axes[0]
+                    else:
+                        sharex = None
+
+                    if sharey:
+                        sharey = axes[0]
+                    else:
+                        sharey = None
+
+                    ax = Axes(fig, rect, sharex=sharex, sharey=sharey)
+                else:
+                    ax = Axes(fig, rect, sharex=None, sharey=None)
+                axes.append(ax)
+
+        for ax in axes:
+            fig.add_axes(ax)
+
+        cols = np.array(axes, dtype=object).reshape((ncols, nrows))[:, 0]
+        rows = np.array(axes, dtype=object).reshape((ncols, nrows))[0]
 
         self._col_sizes = make_default_sizes()
         self._row_sizes = make_default_sizes()
 
-        col_layout = make_col_layout(ncols, cbars, self._col_sizes, cbar_mode=cbar_mode)
-        row_layout = make_col_layout(nrows, 0, self._row_sizes)
+        col_layout = make_col_layout(
+            cols, cbars, self._col_sizes, cbar_mode=cbar_mode, direction="x"
+        )
+        row_layout = make_col_layout(rows, 0, self._row_sizes, direction="y")
 
-        rect = (0.1, 0.1, 0.8, 0.8)
-        divider = Divider(
-            fig, rect, horizontal=col_layout, vertical=row_layout, aspect=True
+        divider = SubplotDivider(
+            fig, 111, horizontal=col_layout, vertical=row_layout, aspect=aspect
         )
 
-        bottom_left_ax = None
-
-        axes = []
+        i = 0
         caxes = []
         for nx, col_size in enumerate(col_layout):
             add_cb_axes = True
             for ny, row_size in enumerate(row_layout):
-                if (col_size is self._col_sizes["images"]) and (
-                    row_size is self._row_sizes["images"]
+
+                if isinstance(col_size, Size.AxesX) and (
+                    isinstance(row_size, Size.AxesY)
                 ):
-                    ax = Axes(fig, rect, sharex=bottom_left_ax, sharey=bottom_left_ax)
-                    axes.append(ax)
+                    ax = axes[i]
                     ax.set_axes_locator(divider.new_locator(nx=nx, ny=ny))
-                    if bottom_left_ax is None:
-                        bottom_left_ax = ax
+                    i += 1
 
                 if (
                     (col_size is self._col_sizes["cbar"])
-                    and (row_size is self._row_sizes["images"])
+                    # col_size is col_layout[-2]
+                    and (isinstance(row_size, Size.AxesY))
                     and add_cb_axes
                 ):
-                    cb_ax = fig.add_axes(rect)
+
+                    cb_ax = _cbaraxes_class_factory(Axes)(
+                        fig, divider.get_position(), orientation="vertical"
+                    )
+
+                    fig.add_axes(cb_ax)
+
                     caxes.append(cb_ax)
                     if cbar_mode == "each":
                         cb_ax.set_axes_locator(divider.new_locator(nx=nx, ny=ny))
                     else:
-                        cb_ax.set_axes_locator(divider.new_locator(nx=nx, ny=0, ny1=-1))
+                        cb_ax.set_axes_locator(divider.new_locator(nx=-3, ny=0, ny1=-1))
                         add_cb_axes = False
-
-        for ax in axes:
-            fig.add_axes(ax)
 
         if cbar_mode == "single":
             caxes = caxes * len(axes)
@@ -490,13 +562,15 @@ class AxesGrid:
 
         axes = np.array(axes, dtype=object).reshape((ncols, nrows))
 
-        for inner_axes in axes[:, 1:]:
-            for ax in inner_axes:
-                ax._axislines["bottom"].toggle(ticklabels=False, label=False)
+        if sharex:
+            for inner_axes in axes[:, 1:]:
+                for ax in inner_axes:
+                    ax._axislines["bottom"].toggle(ticklabels=False, label=False)
 
-        for inner_axes in axes[1:]:
-            for ax in inner_axes:
-                ax._axislines["left"].toggle(ticklabels=False, label=False)
+        if sharey:
+            for inner_axes in axes[1:]:
+                for ax in inner_axes:
+                    ax._axislines["left"].toggle(ticklabels=False, label=False)
 
         self._axes = axes
 
@@ -510,7 +584,15 @@ class AxesGrid:
 
     @classmethod
     def from_measurements(
-        cls, fig, measurements, axes_types, cbars=0, cbar_mode="single"
+        cls,
+        fig,
+        measurements,
+        axes_types,
+        cbars=0,
+        cbar_mode="single",
+        aspect=True,
+        sharex: bool = True,
+        sharey: bool = True,
     ):
 
         shape = measurements.ensemble_shape
@@ -518,7 +600,7 @@ class AxesGrid:
         shape = tuple(
             n
             for n, axes_type in zip(shape, axes_types)
-            if not axes_type in ("index", "range")
+            if not axes_type in ("index", "range", "overlay")
         )
 
         if len(shape) > 0:
@@ -531,7 +613,16 @@ class AxesGrid:
         else:
             nrows = 1
 
-        return cls(fig, ncols, nrows, cbars, cbar_mode)
+        return cls(
+            fig,
+            ncols,
+            nrows,
+            cbars,
+            cbar_mode,
+            aspect=aspect,
+            sharex=sharex,
+            sharey=sharey,
+        )
 
     def __getitem__(self, item):
         return self._axes[item]
@@ -561,9 +652,6 @@ class AxesGrid:
         self._col_sizes["padding"].fixed_size = padding[0]
         self._row_sizes["padding"].fixed_size = padding[1]
 
-    def set_aspect(self, aspect:float=1.):
-        self._row_sizes["images"]._scalable_size = aspect
-
 
 class MeasurementVisualization2D(MeasurementVisualization):
     def __init__(
@@ -582,8 +670,6 @@ class MeasurementVisualization2D(MeasurementVisualization):
         convert_complex: str = "domain_coloring",
         autoscale: bool = True,
     ):
-        # plt.ioff()
-        # plt.ion()
 
         super().__init__(axes, measurements, axes_types=axes_types)
 
@@ -610,6 +696,7 @@ class MeasurementVisualization2D(MeasurementVisualization):
         self._column_titles = []
         self._row_titles = []
         self._autoscale = autoscale
+        self._size_bars = []
 
         self._axes = axes
         self.set_images()
@@ -649,8 +736,8 @@ class MeasurementVisualization2D(MeasurementVisualization):
         else:
             self._x_label = label
 
-        for i in self._iterate_index():
-            self.axes[i].set_xlabel(format_label(self._x_label, self._x_units))
+        for ax in np.array(self.axes).ravel():
+            ax.set_xlabel(format_label(self._x_label, self._x_units))
 
     def set_y_labels(self, label=None):
         if label is None:
@@ -658,20 +745,25 @@ class MeasurementVisualization2D(MeasurementVisualization):
         else:
             self._y_label = label
 
-        for i in self._iterate_index():
-            self.axes[i].set_ylabel(format_label(self._y_label, self._y_units))
+        for ax in np.array(self.axes).ravel():
+            ax.set_ylabel(format_label(self._y_label, self._y_units))
 
     def set_x_units(self, units=None):
-        self._x_units = _validate_units(
-            units, self.measurements.base_axes_metadata[0].units
-        )
+        if units is None:
+            self._x_units = self.measurements.base_axes_metadata[1].units
+        else:
+            self._x_units = units
+
         self.set_extent()
+        self.set_x_labels()
 
     def set_y_units(self, units=None):
-        self._y_units = _validate_units(
-            units, self.measurements.base_axes_metadata[1].units
-        )
+        if units is None:
+            self._y_units = self.measurements.base_axes_metadata[1].units
+        else:
+            self._y_units = units
         self.set_extent()
+        self.set_y_labels()
 
     def set_extent(self, extent=None):
 
@@ -685,7 +777,8 @@ class MeasurementVisualization2D(MeasurementVisualization):
 
     def set_sizebars(
         self,
-        axes: Tuple[int, ...] = (-1,),
+        axes: Tuple[int, ...] = ((-1, 0),),
+        label="",
         size: float = None,
         loc: str = "lower right",
         borderpad: float = 0.5,
@@ -693,24 +786,33 @@ class MeasurementVisualization2D(MeasurementVisualization):
         size_vertical: float = None,
         sep: float = 6,
         pad: float = 0.3,
+        label_top: bool = True,
         **kwargs,
     ):
+
+        conversion = _get_conversion_factor(
+            self._x_units, self.measurements.axes_metadata[-2].units
+        )
 
         if size is None:
             size = (
                 self.measurements.base_axes_metadata[-2].sampling
                 * self.measurements.base_shape[-2]
                 / 3
-            ) * _get_conversion_factor(self._x_units)
+            )
 
         if size_vertical is None:
             size_vertical = (
                 self.measurements.base_axes_metadata[-1].sampling
                 * self.measurements.base_shape[-1]
                 / 20
-            ) * _get_conversion_factor(self._x_units)
+            )
 
-        label = f"{size:>{formatting}} {self._x_units}"
+        size = conversion * size
+        size_vertical = conversion * size_vertical
+
+        if label is None:
+            label = f"{size:>{formatting}} {self._x_units}"
 
         for size_bar in self._size_bars:
             size_bar.remove()
@@ -721,6 +823,7 @@ class MeasurementVisualization2D(MeasurementVisualization):
             anchored_size_bar = AnchoredSizeBar(
                 ax.transData,
                 label=label,
+                label_top=label_top,
                 size=size,
                 borderpad=borderpad,
                 loc=loc,
@@ -779,7 +882,7 @@ class MeasurementVisualization2D(MeasurementVisualization):
         self._axes.set_cbar_size(fraction)
 
     def set_cbar_spacing(self, spacing: float):
-        self._axes.set_cbar_spacing(self, spacing)
+        self._axes.set_cbar_spacing(spacing)
 
     def set_cbar_labels(self, **kwargs):
         if self._domain_coloring:
@@ -833,10 +936,7 @@ class MeasurementVisualization2D(MeasurementVisualization):
         else:
             norm = None
 
-        for i, (_, measurement) in zip(
-            self._iterate_index(), self.iterate_measurements(keep_dims=False)
-        ):
-
+        for i, measurement in self.iterate_measurements(keep_dims=False):
             if norm is None:
                 norm1 = self._get_norm(measurement, vmin, vmax, power)
             else:
@@ -900,9 +1000,7 @@ class MeasurementVisualization2D(MeasurementVisualization):
         self,
     ):
         images = np.zeros(self.axes.shape + (self._images_per_axes,), dtype=object)
-        for i, (_, measurement) in zip(
-            self._iterate_index(), self.iterate_measurements(keep_dims=False)
-        ):
+        for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
 
             if self._domain_coloring:
@@ -916,6 +1014,7 @@ class MeasurementVisualization2D(MeasurementVisualization):
         self._images = images
 
     def update_plots(self):
+
         for i, measurement in self.iterate_measurements(keep_dims=False):
             images = self._images[i]
 
@@ -929,56 +1028,124 @@ class MeasurementVisualization2D(MeasurementVisualization):
             else:
                 images.set_data(measurement.array.T)
 
+            measurement.show()
+
         if self._autoscale:
             self.set_normalization()
 
 
 class MeasurementVisualization1D(MeasurementVisualization):
-    def __init__(self,
-                 measurements: "BaseMeasurement2D",
-                 axes,
-                 axes_types: tuple = None,
-                 ):
+    def __init__(
+        self,
+        measurements: "BaseMeasurement2D",
+        axes,
+        axes_types: tuple = None,
+        units=None,
+    ):
 
         super().__init__(axes, measurements, axes_types=axes_types)
 
         self._x_units = None
-
+        self._y_units = None
+        self._x_label = None
+        self._y_label = None
+        self._lines = np.array([[]])
         self.set_plots()
-        if isinstance(axes, AxesGrid):
-            axes.set_aspect(.7)
-    def set_y_labels(self,  label=None):
-        pass
+        self.set_x_units(units=units)
+        self.set_y_units()
+        self.set_x_labels()
+        self.set_y_labels()
+        self.set_column_titles()
+        self.set_row_titles()
+
+        if any(axes_type == "overlay" for axes_type in axes_types):
+            self.set_legends()
+
+        for i, _ in self.iterate_measurements():
+            #     #self.axes[i].yaxis.set_label_coords(0.5, -0.02)
+            #     #cbar2.formatter.set_powerlimits((0, 0))
+            #     #self.axes[i].get_yaxis().formatter.set_useMathText(True)
+            #     #self.axes[i].ticklabel_format(style='sci', axis='x', scilimits=(0, 0), useMathText=True)
+            self.axes[i].get_yaxis().get_offset_text().set_horizontalalignment("right")
+        # #
+        #     #self.axes[i].yaxis.set_offset_position("right")
+        #     #self.axes[i].yaxis.set_offset_position("left")
+        #     #self.axes[i].set_ylabel(format_label(self._y_label, self._y_units))
+
+    def set_legends(self):
+        for i, _ in self.iterate_measurements():
+            self.axes[i].legend()
 
     def set_plots(self):
-        indexed_measurements = self._get_indexed_measurements()
+        # indexed_measurements = self._get_indexed_measurements()
 
-        lines = np.zeros(self.axes.shape )
-        for i, (_, measurement) in zip(
-            self._iterate_index(), self.iterate_measurements(keep_dims=False)
-        ):
+        # for line in self._lines:
+        #     line.remove()
+
+        lines = np.zeros(self.axes.shape, dtype=object)
+        for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
-            extent = measurement.extent
 
-            x = np.linspace(0, extent, measurement.shape[-1], endpoint=False)
-            y = measurement.array
-            line = ax.plot(x, y)
+            x = self._get_xdata()
 
-    # def set_extent(self):
-    #
-    #     for i in self._iterate_index():
-    #         ax = self.axes[i]
-    #
-    #         ax.set_
-    #
-    #
-    #     pass
+            new_lines = []
+            for _, line_profile in measurement.iterate_ensemble(keep_dims=True):
+                labels = []
+                for axis in line_profile.ensemble_axes_metadata:
+                    labels += [axis.format_title(".3f")]
+
+                label = "-".join(labels)
+
+                new_lines.append(
+                    ax.plot(
+                        x,
+                        line_profile.array[(0,) * (len(line_profile.shape) - 1)],
+                        label=label,
+                    )[0]
+                )
+            lines.itemset(i, new_lines)
+
+        self._lines = lines
+
+    def _get_xdata(self):
+        extent = self.measurements._plot_extent(self._x_units)
+        return np.linspace(
+            extent[0], extent[1], self.measurements.shape[-1], endpoint=False
+        )
 
     def set_x_units(self, units=None):
-        self._x_units = _validate_units(
-            units, self.measurements.base_axes_metadata[0].units
+        if units is None:
+            units = self.measurements.axes_metadata[-1].units
+        self._x_units = units
+        self.set_x_labels()
+
+        # for i, _ in self.iterate_measurements():
+
+        for lines in self._lines.ravel():
+            for line in lines:
+                line.set_xdata(self._get_xdata())
+
+        for ax in np.array(self.axes).ravel():
+            ax.relim()
+            ax.autoscale()
+
+    def set_y_units(self, units=None):
+        self._y_units = _validate_units(
+            units, self.measurements.metadata.get("units", None)
         )
-        #self.set_extent()
+        self.set_y_labels()
+
+    def set_y_labels(self, label=None):
+        if label is None:
+            self._y_label = self.measurements.metadata.get("label", None)
+        else:
+            self._y_label = label
+
+        if self._y_label is None:
+            return
+
+        for ax in np.array(self.axes).ravel():
+            ax.set_ylabel(format_label(self._y_label, self._y_units))
 
     def set_x_labels(self, label=None):
         if label is None:
@@ -986,13 +1153,11 @@ class MeasurementVisualization1D(MeasurementVisualization):
         else:
             self._x_label = label
 
-        for i in self._iterate_index():
+        for i, _ in self.iterate_measurements():
             self.axes[i].set_xlabel(format_label(self._x_label, self._x_units))
-
 
     def update_plots(self):
         pass
-
 
 
 def show_measurements_2d(

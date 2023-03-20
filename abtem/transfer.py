@@ -108,6 +108,38 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
             return self._evaluate_from_cropped(gpts=self.gpts)
 
 
+def soft_aperture(alpha, phi, semiangle_cutoff, angular_sampling):
+    xp = get_array_module(alpha)
+
+    if np.isscalar(semiangle_cutoff):
+        num_ensemble_axes = 0
+    else:
+        num_ensemble_axes = len(semiangle_cutoff.shape) - len(alpha.shape)
+
+    angular_sampling = xp.array(angular_sampling, dtype=xp.float32) * 1e-3
+
+    alpha = xp.expand_dims(alpha, axis=tuple(range(0, num_ensemble_axes)))
+    phi = xp.expand_dims(phi, axis=tuple(range(0, num_ensemble_axes)))
+
+    denominator = xp.sqrt(
+        (xp.cos(phi) * angular_sampling[0]) ** 2
+        + (xp.sin(phi) * angular_sampling[1]) ** 2
+    )
+
+    zeros = (slice(None),) * num_ensemble_axes + (0,) * (
+        len(denominator.shape) - num_ensemble_axes
+    )
+
+    denominator[zeros] = 1.0
+
+    array = xp.clip(
+        (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
+    )
+    array[zeros] = 1.0
+
+    return array
+
+
 class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
     """
     A circular aperture cutting off the wave function at a specified angle, employed in both STEM and HRTEM.

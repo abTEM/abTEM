@@ -50,7 +50,7 @@ _tex_units = {
 
 def _format_units(units):
     if config.get("visualize.use_tex", False):
-        return _tex_units[units]
+        return _tex_units.get(units, f"\mathrm{{{units}}}")
     else:
         return units
 
@@ -58,12 +58,15 @@ def _format_units(units):
 def _validate_units(units, old_units):
 
     if old_units is None and units is None:
-        raise RuntimeError()
+        return None
     elif units is None:
         units = old_units
     elif units is not None and old_units is not None:
         if units_type[units] != units_type[old_units]:
             raise RuntimeError(f"cannot convert units {old_units} to {units}")
+
+    if not units in units_type:
+        return units
 
     if units_type[units] == "real_space":
         if units is None:

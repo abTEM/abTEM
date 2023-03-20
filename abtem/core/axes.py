@@ -155,7 +155,7 @@ class ScanAxis(RealSpaceAxis):
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
 
-    def format_title(self, formatting):
+    def format_title(self, formatting, **kwargs):
         return f"{self.values[0]}"
 
     def concatenate(self, other):

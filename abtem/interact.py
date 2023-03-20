@@ -6,7 +6,7 @@ import matplotlib.colors as colors
 import numpy as np
 
 
-from abtem.visualize import set_image_data, _iterate_axes
+from abtem.visualize import _iterate_axes
 import matplotlib.pyplot as plt
 
 if TYPE_CHECKING:
