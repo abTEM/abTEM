@@ -225,8 +225,7 @@ class NonLinearAxis(OrdinalAxis):
             return " ".join([f"{value:.2f}" for value in self.values])
 
     def format_title(self, formatting, units=None, include_label=True):
-
-        value = self.values[0] * _get_conversion_factor(units, self.units)
+        value = self.values[0] #* _get_conversion_factor(units, self.units)
 
         units = _validate_units(units,self.units)
 
@@ -236,7 +235,7 @@ class NonLinearAxis(OrdinalAxis):
             label = ""
 
         if config.get("visualize.use_tex", False):
-            return f"${label}{format_value(value, formatting)} \ {_format_units(units)}$"
+            return f"$\mathrm{{{label}}}{format_value(value, formatting)} \ {_format_units(units)}$"
         else:
             return f"{label}{value:>{formatting}} {units}"
 
@@ -287,11 +286,14 @@ class PositionsAxis(OrdinalAxis):
     label: str = "x, y"
     units: str = "Å"
 
-    def format_title(self, formatting):
+    def format_title(self, formatting, units=None,  include_label=True):
         formatted = ", ".join(
             tuple(f"{value:>{formatting}}" for value in self.values[0])
         )
-        return f"{self.label} = {formatted} {self.units}"
+        if include_label:
+            return f"{self.label} = {formatted} {self.units}"
+        else:
+            return f"{formatted} {self.units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

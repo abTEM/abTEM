@@ -1,41 +1,37 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 import string
 from abc import abstractmethod
-from collections import defaultdict
 from typing import TYPE_CHECKING, List
 from typing import Union, Tuple
 
+import ipywidgets as widgets
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
-from matplotlib import cm, colors
+from matplotlib import colors
 from matplotlib.axes import Axes
-
-import ipywidgets as widgets
-from mpl_toolkits.axes_grid1.axes_divider import AxesDivider
-from mpl_toolkits.axes_grid1.axes_size import AxesX
-from scipy.spatial.distance import squareform
-from scipy.spatial import distance_matrix
-
-from abtem.core.colors import hsluv_cmap
-from matplotlib.collections import PatchCollection, CircleCollection, EllipseCollection
+from matplotlib.collections import PatchCollection, EllipseCollection
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Circle
 from matplotlib.patheffects import withStroke
-from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable, SubplotDivider
-from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from mpl_toolkits.axes_grid1.axes_grid import CbarAxes, _cbaraxes_class_factory
-from abtem.core.backend import copy_to_device
-from abtem.core import config
-from abtem.core.utils import label_to_index
-from abtem.core.units import _get_conversion_factor, _validate_units, _format_units
-from abtem.atoms import pad_atoms, plane_to_axes
+from mpl_toolkits.axes_grid1 import ImageGrid, SubplotDivider
 from mpl_toolkits.axes_grid1 import Size, Divider
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+from mpl_toolkits.axes_grid1.axes_divider import AxesDivider
+from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
+from scipy.spatial import distance_matrix
+from scipy.spatial.distance import squareform
 
+from abtem.atoms import pad_atoms, plane_to_axes
+from abtem.core import config
+from abtem.core.backend import copy_to_device
+from abtem.core.colors import hsluv_cmap
+from abtem.core.units import _get_conversion_factor, _validate_units, _format_units
+from abtem.core.utils import label_to_index
 
 if TYPE_CHECKING:
     from abtem.measurements import (
@@ -1055,8 +1051,10 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self.set_y_units()
         self.set_x_labels()
         self.set_y_labels()
-        self.set_column_titles()
-        self.set_row_titles()
+
+        if any(axes_type == "explode" for axes_type in axes_types):
+            self.set_column_titles()
+            self.set_row_titles()
 
         if any(axes_type == "overlay" for axes_type in axes_types):
             self.set_legends()
@@ -1339,7 +1337,6 @@ def _show_indexed_diffraction_pattern(
     figsize: Tuple[float, float] = (6, 6),
     title: str = None,
     overlay_hkl: bool = True,
-    inequivalency_threshold: float = 1.0,
     power: float = 1.0,
     cmap: str = "viridis",
     colors: str = "cmap",
@@ -1422,6 +1419,9 @@ def _show_indexed_diffraction_pattern(
     ax.axis("equal")
     ax.set_xlim(-x_lim * 1.1, x_lim * 1.1)
     ax.set_ylim(-y_lim * 1.1, y_lim * 1.1)
+    ax.set_xlabel("kx [1/Å]")
+    ax.set_ylabel("ky [1/Å]")
+
     # fig.patch.set_facecolor(background_color)
     # ax.axis("off")
 

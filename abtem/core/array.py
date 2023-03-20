@@ -117,18 +117,18 @@ def _compute_context(
     else:
         resource_profiler = nullcontext()
 
-    try:
-        client = get_client()
-        client.run(config.set, *config.config)
-        worker_saturation = config.get("dask.worker-saturation")
-        client.run(
-            dask.config.set(
-                {"distributed.scheduler.worker-saturation": worker_saturation}
-            )
-        )
-
-    except ValueError:
-        pass
+    # try:
+    #     client = get_client()
+    #     client.run(config.set, *config.config)
+    #     worker_saturation = config.get("dask.worker-saturation")
+    #     client.run(
+    #         dask.config.set(
+    #             {"distributed.scheduler.worker-saturation": worker_saturation}
+    #         )
+    #     )
+    #
+    # except ValueError:
+    #     pass
 
     dask_configuration = {
         "optimization.fuse.active": config.get("dask.fuse"),

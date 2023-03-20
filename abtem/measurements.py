@@ -753,9 +753,7 @@ class BaseMeasurement2D(BaseMeasurement):
             cbar_mode = "each"
 
         if ax is None:
-            # plt.ioff()
             fig = plt.figure(figsize=figsize)
-            # plt.ion()
 
             axes = AxesGrid.from_measurements(
                 fig, self, axes_types, cbars, cbar_mode=cbar_mode
@@ -764,7 +762,7 @@ class BaseMeasurement2D(BaseMeasurement):
         else:
             if explode:
                 raise NotImplementedError("`ax` not implemented with `explode = True`.")
-            measurements = self[("index",) * num_ensemble_axes]
+            measurements = self#[("index",) * num_ensemble_axes]
             axes_types = ()
             axes = np.array([[ax]])
 
@@ -775,6 +773,7 @@ class BaseMeasurement2D(BaseMeasurement):
             cbar=cbar,
             common_color_scale=common_color_scale,
             units=units,
+            power=power
         )
 
         return visualization
@@ -1674,9 +1673,12 @@ class _BaseMeasurement1d(BaseMeasurement):
         else:
             if explode:
                 raise NotImplementedError("`ax` not implemented with `explode = True`.")
-            measurements = self[("index",) * num_ensemble_axes]
-            axes_types = ()
-            axes = np.array([ax])
+
+            measurements = self #[("index",) * num_ensemble_axes]
+            axes_types = ("overlay",) * num_ensemble_axes
+            axes = np.array([[ax]])
+
+
 
         return MeasurementVisualization1D(measurements, axes, axes_types, units=units)
 
