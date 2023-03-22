@@ -28,7 +28,6 @@ from scipy.spatial.distance import squareform
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
-from abtem.core.backend import copy_to_device
 from abtem.core.colors import hsluv_cmap
 from abtem.core.units import _get_conversion_factor, _validate_units, _format_units
 from abtem.core.utils import label_to_index
@@ -36,9 +35,8 @@ from abtem.core.utils import label_to_index
 if TYPE_CHECKING:
     from abtem.measurements import (
         BaseMeasurement,
-        RealSpaceLineProfiles,
-        ReciprocalSpaceLineProfiles,
         BaseMeasurement2D,
+        IndexedDiffractionSpots,
     )
 
 
@@ -56,16 +54,83 @@ def format_options(options):
     ]
 
 
+def indexing_sliders(
+    visualization,
+    continuous_update: bool = False,
+    range_axes=(),
+):
+
+    sliders = []
+    for i in range(len(visualization.measurements.ensemble_shape)):
+        axes_metadata = visualization.measurements.ensemble_axes_metadata[i]
+        options = format_options(
+            axes_metadata.coordinates(visualization.measurements.ensemble_shape[i])
+        )
+
+        with config.set({"visualize.use_tex": False}):
+            label = axes_metadata.format_label()
+
+        if i in range_axes:
+            sliders.append(
+                widgets.SelectionRangeSlider(
+                    description=label,
+                    options=options,
+                    continuous_update=continuous_update,
+                    index=(0, len(options) - 1),
+                )
+            )
+        else:
+            sliders.append(
+                widgets.SelectionSlider(
+                    description=label,
+                    options=options,
+                    continuous_update=continuous_update,
+                )
+            )
+    return sliders
+
+
+def make_vmin_vmax_slider(visualization):
+    def vmin_vmax_slider_changed(change):
+        vmin, vmax = change["owner"].value
+        visualization.set_normalization(vmin=vmin, vmax=vmax)
+
+    vmin_vmax_slider = widgets.FloatRangeSlider(
+        value=[0, 1],
+        min=0,
+        max=1,
+        step=0.0,
+        disabled=visualization._autoscale,
+        description="Normalization",
+        continuous_update=True,
+        readout_format=".2e",
+    )
+
+    rescale_vmin_vmax_slider(vmin_vmax_slider, visualization)
+
+    vmin_vmax_slider.observe(vmin_vmax_slider_changed, "value")
+    return vmin_vmax_slider
+
+
+def rescale_vmin_vmax_slider(slider, visualization):
+    vmin, vmax = visualization.get_vmin_vmax()
+    slider.value = [vmin, vmax]
+    slider.min = vmin
+    slider.max = vmax
+
+
 class MeasurementVisualization:
     def __init__(self, axes, measurements, axes_types=()):
         self._measurements = measurements
         self._axes = axes
         self._axes_types = axes_types
-        self._indices = self._validate_indices(())
-        self._column_titles = []
-        self._row_titles = []
+        self._indices = self._validate_indices()
 
-    def iterate_measurements(self, keep_dims=True):
+    @property
+    def fig(self):
+        return self._axes[0, 0].get_figure()
+
+    def iterate_measurements(self, keep_dims: bool = True):
         indexed_measurements = self._get_indexed_measurements()
 
         shape = tuple(
@@ -87,8 +152,6 @@ class MeasurementVisualization:
                 i if axes_type != "overlay" else slice(None)
                 for i, axes_type in zip(indices, self._axes_types)
             )
-
-            # print(indices, axes_index, indexed_measurements.shape)
 
             yield axes_index, indexed_measurements.get_items(
                 indices, keep_dims=keep_dims
@@ -293,39 +356,11 @@ class MeasurementVisualization:
 
     def set_indices(self, indices=()):
         self._indices = self._validate_indices(indices)
-        self.update_plots()
+        self.update_artists()
 
     @abstractmethod
-    def update_plots(self):
+    def update_artists(self):
         pass
-
-    def make_sliders(
-        self,
-        continuous_update: bool = False,
-        range_axes=(),
-    ):
-
-        sliders = {}
-        for i in range(len(self.measurements.ensemble_shape)):
-            axes_metadata = self.measurements.ensemble_axes_metadata[i]
-            options = format_options(
-                axes_metadata.coordinates(self.measurements.ensemble_shape[i])
-            )
-
-            if i in range_axes:
-                sliders[i] = widgets.SelectionRangeSlider(
-                    description=axes_metadata.format_label(),
-                    options=options,
-                    continuous_update=continuous_update,
-                    index=(0, len(options) - 1),
-                )
-            else:
-                sliders[i] = widgets.SelectionSlider(
-                    description=axes_metadata.format_label(),
-                    options=options,
-                    continuous_update=continuous_update,
-                )
-        return sliders
 
     def add_panel_labels(self, labels: str = None, **kwargs):
         if "loc" not in kwargs:
@@ -464,7 +499,7 @@ class AxesGrid:
         fig,
         ncols,
         nrows,
-        cbars,
+        cbars: int = 0,
         cbar_mode: str = "single",
         aspect: bool = True,
         sharex: bool = True,
@@ -649,7 +684,102 @@ class AxesGrid:
         self._row_sizes["padding"].fixed_size = padding[1]
 
 
-class MeasurementVisualization2D(MeasurementVisualization):
+class BaseMeasurementVisualization2D(MeasurementVisualization):
+    def __init__(
+        self,
+        measurements,
+        axes,
+        axes_types: tuple = None,
+    ):
+
+        super().__init__(axes, measurements, axes_types=axes_types)
+
+        self._x_units = None
+        self._y_units = None
+        self._scale_units = None
+        self._x_label = None
+        self._y_label = None
+        self._column_titles = []
+        self._row_titles = []
+        self._artists = None
+
+        if self.ncols > 1:
+            self.set_column_titles()
+
+        if self.nrows > 1:
+            self.set_row_titles()
+
+    @property
+    def artists(self):
+        return self._artists
+
+    @property
+    @abstractmethod
+    def _artists_per_axes(self):
+        pass
+
+    @abstractmethod
+    def set_artists(self):
+        pass
+
+    def set_scale_units(self, units: str = None):
+        if units is None:
+            units = self.measurements.metadata.get("units", "undefined")
+
+        self._scale_units = units
+
+    def set_cbar_labels(self, label: str = None, **kwargs):
+        if label is None:
+            label = self.measurements.metadata.get("label", "undefined")
+
+        label = format_label(label, self._scale_units)
+
+        for cbar in self._cbars.ravel():
+            cbar.set_label(label, **kwargs)
+            cbar.formatter.set_powerlimits((0, 0))
+            cbar.formatter.set_useMathText(True)
+            cbar.ax.yaxis.set_offset_position("left")
+
+    def set_cbar_padding(self, padding: Tuple[float, float] = (0.1, 0.1)):
+        self._axes.set_cbar_padding(padding)
+
+    def set_cbar_size(self, fraction: float):
+        self._axes.set_cbar_size(fraction)
+
+    def set_cbar_spacing(self, spacing: float):
+        self._axes.set_cbar_spacing(spacing)
+
+    def set_cbars(self, **kwargs):
+        cbars = np.zeros(self.axes.shape + (self._artists_per_axes,), dtype=object)
+        for i, _ in self.iterate_measurements():
+            ax = self.axes[i]
+            images = self._artists[i]
+
+            if isinstance(images, np.ndarray):
+                for j, image in enumerate(images):
+                    cbars[i + (j,)] = plt.colorbar(image, cax=ax.cax[j], **kwargs)
+            else:
+                cbars[i] = plt.colorbar(images, cax=ax.cax[0], **kwargs)
+
+        if cbars.shape[-1] == 1:
+            cbars = np.squeeze(cbars, -1)
+
+        self._cbars = cbars
+
+    def axis_off(self, spines=True):
+        for ax in np.array(self.axes).ravel():
+            ax.set_xlabel("")
+            ax.set_ylabel("")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if not spines:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+                ax.spines["bottom"].set_visible(False)
+                ax.spines["left"].set_visible(False)
+
+
+class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     def __init__(
         self,
         measurements: "BaseMeasurement2D",
@@ -667,35 +797,26 @@ class MeasurementVisualization2D(MeasurementVisualization):
         autoscale: bool = True,
     ):
 
-        super().__init__(axes, measurements, axes_types=axes_types)
+        super().__init__(
+            measurements,
+            axes,
+            axes_types=axes_types,
+        )
 
-        self._x_units = None
-        self._y_units = None
-        self._convert_complex = convert_complex
-        self._scale_units = None
-        self._x_label = None
-        self._y_label = None
+        if cmap is None:
+            cmap = config.get("visualize.cmap", "viridis")
 
         if phase_cmap is None:
             phase_cmap = config.get("phase_cmap", "hsluv")
 
-        self._phase_cmap = phase_cmap
-
-        if cmap is None:
-            cmap = config.get("cmap", "viridis")
-
         self._cmap = cmap
-        self._show_cbar = cbar
-        self._common_color_scale = common_color_scale
-        self._cbars = None
-        self._images = None
-        self._column_titles = []
-        self._row_titles = []
-        self._autoscale = autoscale
+        self._phase_cmap = phase_cmap
         self._size_bars = []
+        self._common_color_scale = common_color_scale
+        self._convert_complex = convert_complex
+        self._autoscale = autoscale
 
-        self._axes = axes
-        self.set_images()
+        self.set_artists()
         self.set_normalization(vmin=vmin, vmax=vmax, power=power)
 
         if cbar:
@@ -709,14 +830,8 @@ class MeasurementVisualization2D(MeasurementVisualization):
         self.set_x_labels()
         self.set_y_labels()
 
-        if self.ncols > 1:
-            self.set_column_titles()
-
-        if self.nrows > 1:
-            self.set_row_titles()
-
     @property
-    def _images_per_axes(self):
+    def _artists_per_axes(self):
         if self._convert_complex == "domain_coloring" and self.measurements.is_complex:
             return 2
         else:
@@ -725,51 +840,6 @@ class MeasurementVisualization2D(MeasurementVisualization):
     @property
     def _domain_coloring(self):
         return self.measurements.is_complex
-
-    def set_x_labels(self, label=None):
-        if label is None:
-            self._x_label = self.measurements.axes_metadata[-2].label
-        else:
-            self._x_label = label
-
-        for ax in np.array(self.axes).ravel():
-            ax.set_xlabel(format_label(self._x_label, self._x_units))
-
-    def set_y_labels(self, label=None):
-        if label is None:
-            self._y_label = self.measurements.axes_metadata[-1].label
-        else:
-            self._y_label = label
-
-        for ax in np.array(self.axes).ravel():
-            ax.set_ylabel(format_label(self._y_label, self._y_units))
-
-    def set_x_units(self, units=None):
-        if units is None:
-            self._x_units = self.measurements.base_axes_metadata[1].units
-        else:
-            self._x_units = units
-
-        self.set_extent()
-        self.set_x_labels()
-
-    def set_y_units(self, units=None):
-        if units is None:
-            self._y_units = self.measurements.base_axes_metadata[1].units
-        else:
-            self._y_units = units
-        self.set_extent()
-        self.set_y_labels()
-
-    def set_extent(self, extent=None):
-
-        if extent is None:
-            extent = self.measurements._plot_extent_x(
-                self._x_units
-            ) + self.measurements._plot_extent_y(self._y_units)
-
-        for image in self._images.ravel():
-            image.set_extent(extent)
 
     def set_sizebars(
         self,
@@ -832,8 +902,7 @@ class MeasurementVisualization2D(MeasurementVisualization):
             self._size_bars.append(anchored_size_bar)
 
     def _set_domain_coloring_cbar_labels(self, **kwargs):
-        for i in self._iterate_index():
-            cbar1, cbar2 = self._cbars[i]
+        for cbar1, cbar2 in self._cbars.ravel():
             cbar1.set_label("arg", rotation=0, ha="center", va="top")
             cbar1.ax.yaxis.set_label_coords(0.5, -0.02)
             cbar1.set_ticks([-np.pi, -np.pi / 2, 0, +np.pi / 2, np.pi])
@@ -852,111 +921,74 @@ class MeasurementVisualization2D(MeasurementVisualization):
             cbar2.formatter.set_useMathText(True)
             cbar2.ax.yaxis.set_offset_position("left")
 
-    def set_scale_units(self, units: str = None):
-        if units is None:
-            units = self.measurements.metadata.get("units", "undefined")
-
-        self._scale_units = units
-
-    def _set_cbar_labels(self, label: str = None, **kwargs):
-        if label is None:
-            label = self.measurements.metadata.get("label", "undefined")
-
-        label = format_label(label, self._scale_units)
-
-        for i in self._iterate_index():
-            cbar = self._cbars[i]
-            cbar.set_label(label, **kwargs)
-            cbar.formatter.set_powerlimits((0, 0))
-            cbar.formatter.set_useMathText(True)
-            cbar.ax.yaxis.set_offset_position("left")
-
-    def set_cbar_padding(self, padding: Tuple[float, float] = (0.1, 0.1)):
-        self._axes.set_cbar_padding(padding)
-
-    def set_cbar_size(self, fraction: float):
-        self._axes.set_cbar_size(fraction)
-
-    def set_cbar_spacing(self, spacing: float):
-        self._axes.set_cbar_spacing(spacing)
-
-    def set_cbar_labels(self, **kwargs):
-        if self._domain_coloring:
-            self._set_domain_coloring_cbar_labels()
-        else:
-            self._set_cbar_labels(**kwargs)
-
-    def set_cbars(self, **kwargs):
-        cbars = np.zeros(self.axes.shape + (self._images_per_axes,), dtype=object)
-        for i in self._iterate_index():
-            ax = self.axes[i]
-            images = self._images[i]
-
-            if isinstance(images, np.ndarray):
-                for j, image in enumerate(images):
-                    cbars[i + (j,)] = plt.colorbar(image, cax=ax.cax[j], **kwargs)
-            else:
-                cbars[i] = plt.colorbar(images, cax=ax.cax[0], **kwargs)
-
-        if cbars.shape[-1] == 1:
-            cbars = np.squeeze(cbars, -1)
-
-        self._cbars = cbars
-
-    def _get_norm(self, measurements, vmin, vmax, power=1.0):
-        if measurements.is_complex:
-            measurements = measurements.abs()
-
-        if vmin is None:
-            vmin = measurements.array.min()
-
-        if vmax is None:
-            vmax = measurements.array.max()
-
-        if power != 1:
-            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-        else:
-            norm = colors.Normalize(vmin=vmin, vmax=vmax)
-
-        return norm
-
     def set_normalization(
         self,
-        power: float = 1.0,
+        power: float = None,
         vmin: float = None,
         vmax: float = None,
     ):
 
         if self._common_color_scale:
-            norm = self._get_norm(self._get_indexed_measurements(), vmin, vmax, power)
-        else:
-            norm = None
+            measurements = self._get_indexed_measurements().abs()
+            vmin = float(measurements.array.min())
+            vmax = float(measurements.array.max())
 
         for i, measurement in self.iterate_measurements(keep_dims=False):
-            if norm is None:
-                norm1 = self._get_norm(measurement, vmin, vmax, power)
-            else:
-                norm1 = norm
+            artists = self._artists[i]
 
-            images = self._images[i]
+            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+            norm.autoscale_None(measurement.array)
 
-            if self._domain_coloring:
-                images[1].norm = norm1
-            else:
-                images.norm = norm1
+            # if self._domain_coloring:
+            #    images[1].norm = norm1
+            # else:
+            artists.set_norm(norm)
 
-    def axis_off(self, spines=True):
-        for i in self._iterate_index():
-            ax = self.axes[i]
-            ax.set_xlabel("")
-            ax.set_ylabel("")
-            ax.set_xticks([])
-            ax.set_yticks([])
-            if not spines:
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
-                ax.spines["bottom"].set_visible(False)
-                ax.spines["left"].set_visible(False)
+    def set_x_labels(self, label=None):
+        if label is None:
+            self._x_label = self.measurements.axes_metadata[-2].label
+        else:
+            self._x_label = label
+
+        for ax in np.array(self.axes).ravel():
+            ax.set_xlabel(format_label(self._x_label, self._x_units))
+
+    def set_y_labels(self, label=None):
+        if label is None:
+            self._y_label = self.measurements.axes_metadata[-1].label
+        else:
+            self._y_label = label
+
+        for ax in np.array(self.axes).ravel():
+            ax.set_ylabel(format_label(self._y_label, self._y_units))
+
+    def set_x_units(self, units=None):
+        if units is None:
+            self._x_units = self.measurements.base_axes_metadata[1].units
+        else:
+            self._x_units = units
+
+        self.set_x_labels()
+        self.set_extent()
+
+    def set_y_units(self, units=None):
+        if units is None:
+            self._y_units = self.measurements.base_axes_metadata[1].units
+        else:
+            self._y_units = units
+
+        self.set_y_labels()
+        self.set_extent()
+
+    def set_extent(self, extent=None):
+
+        if extent is None:
+            extent = self.measurements._plot_extent_x(
+                self._x_units
+            ) + self.measurements._plot_extent_y(self._y_units)
+
+        for image in self._artists.ravel():
+            image.set_extent(extent)
 
     def _add_domain_coloring_imshow(self, ax, array):
         abs_array = np.abs(array)
@@ -992,10 +1024,10 @@ class MeasurementVisualization2D(MeasurementVisualization):
         )
         return im
 
-    def set_images(
+    def set_artists(
         self,
     ):
-        images = np.zeros(self.axes.shape + (self._images_per_axes,), dtype=object)
+        images = np.zeros(self.axes.shape + (self._artists_per_axes,), dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
 
@@ -1007,12 +1039,12 @@ class MeasurementVisualization2D(MeasurementVisualization):
         if images.shape[-1] == 1:
             images = np.squeeze(images, -1)
 
-        self._images = images
+        self._artists = images
 
-    def update_plots(self):
+    def update_artists(self):
 
         for i, measurement in self.iterate_measurements(keep_dims=False):
-            images = self._images[i]
+            images = self._artists[i]
 
             if self._domain_coloring:
                 array = measurement.array
@@ -1023,8 +1055,6 @@ class MeasurementVisualization2D(MeasurementVisualization):
                 images[1].set_data(abs_array)
             else:
                 images.set_data(measurement.array.T)
-
-            measurement.show()
 
         if self._autoscale:
             self.set_normalization()
@@ -1154,7 +1184,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         for i, _ in self.iterate_measurements():
             self.axes[i].set_xlabel(format_label(self._x_label, self._x_units))
 
-    def update_plots(self):
+    def update_artists(self):
         pass
 
 
@@ -1257,79 +1287,6 @@ def show_measurements_2d(
     return visualization
 
 
-def _add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwargs):
-    y = copy_to_device(y, np)
-    x, y = np.squeeze(x), np.squeeze(y)
-
-    if np.iscomplexobj(x):
-        if label is None:
-            label = ""
-
-        line1 = ax.plot(x, y.real, label=f"Real {label}", **kwargs)
-        line2 = ax.plot(x, y.imag, label=f"Imag. {label}", **kwargs)
-        line = (line1, line2)
-    else:
-        line = ax.plot(x, y, label=label, **kwargs)
-
-    return line
-
-
-def show_measurements_1d(
-    measurements: Union["RealSpaceLineProfiles", "ReciprocalSpaceLineProfiles"],
-    extent: Tuple[float, float] = None,
-    ax: Axes = None,
-    x_label: str = None,
-    y_label: str = None,
-    title: str = None,
-    figsize: Tuple[int, int] = None,
-    units=None,
-    **kwargs,
-):
-    if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-    else:
-        fig = ax.get_figure()
-
-    if title is None and "name" in measurements.metadata:
-        title = measurements.metadata["name"]
-
-    if title is not None:
-        ax.set_title(title)
-
-    if extent is None:
-        extent = [0, measurements.extent]
-
-    if x_label is None:
-        x_label = f"{measurements.axes_metadata[-1].label} [{measurements.axes_metadata[-1].units}]"
-
-    x = np.linspace(extent[0], extent[1], measurements.shape[-1], endpoint=False)
-
-    for index, line_profile in measurements.iterate_ensemble(keep_dims=True):
-
-        labels = []
-        for axis in line_profile.ensemble_axes_metadata:
-            labels += [axis.format_title(float_formatting)]
-
-        label = "-".join(labels)
-
-        _add_plot(x, line_profile.array, ax, label, **kwargs)
-
-    ax.set_xlabel(x_label)
-
-    if y_label is None and "label" in measurements.metadata:
-        y_label = measurements.metadata["label"]
-        if "units" in measurements.metadata:
-            y_label += f' [{measurements.metadata["units"]}]'
-        ax.set_ylabel(y_label)
-
-    ax.set_ylabel(y_label)
-
-    if len(measurements.ensemble_shape) > 0:
-        ax.legend()
-
-    return fig, ax
-
-
 def _show_indexed_diffraction_pattern(
     indexed_diffraction_pattern,
     scale: float = 1.0,
@@ -1429,6 +1386,233 @@ def _show_indexed_diffraction_pattern(
         add_miller_index_annotations(ax, indexed_diffraction_pattern)
 
     return fig, ax
+
+
+class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
+    def __init__(
+        self,
+        measurements,
+        axes,
+        axes_types: tuple = None,
+        cbar: bool = False,
+        cmap: str = None,
+        phase_cmap: str = None,
+        vmin: float = None,
+        vmax: float = None,
+        power: float = 1.0,
+        scale: float = 1.0,
+        common_color_scale: bool = False,
+        units: str = None,
+        convert_complex: str = "domain_coloring",
+        autoscale: bool = True,
+    ):
+
+        self._scale = scale
+
+        positions = measurements.positions[:, :2]
+        self._scale_factor = np.sqrt(
+            squareform(distance_matrix(positions, positions)).min()
+        )
+        self._scale_normalization = None
+        self._autoscale = autoscale
+
+        super().__init__(
+            measurements,
+            axes,
+            axes_types=axes_types,
+        )
+
+        if cmap is None:
+            cmap = config.get("visualize.cmap", "viridis")
+
+        if phase_cmap is None:
+            phase_cmap = config.get("phase_cmap", "hsluv")
+
+        self._cmap = cmap
+        self._phase_cmap = phase_cmap
+        self._size_bars = []
+        self._common_color_scale = common_color_scale
+        self._convert_complex = convert_complex
+        self._autoscale = autoscale
+
+        self._set_scale_factor_normalization()
+        self.set_artists()
+
+        self._set_normalization(vmin=vmin, vmax=vmax, power=power)
+        #
+        # if cbar:
+        #     self.set_cbars()
+        #     self.set_scale_units()
+        #     self.set_cbar_labels()
+
+        # self.set_extent()
+        # self.set_x_units(units)
+        # self.set_y_units(units)
+        # self.set_x_labels()
+        # self.set_y_labels()
+
+    def get_vmin_vmax(self):
+        vmin = np.inf
+        vmax = -np.inf
+        for i, measurement in self.iterate_measurements():
+            vmin = min(vmin, self.artists[i].norm.vmin)
+            vmax = max(vmax, self.artists[i].norm.vmax)
+
+        vmin = min(vmin, 0.0)
+        return vmin, vmax
+
+    def _set_scale_factor_normalization(
+        self,
+        power: float = None,
+        vmin: float = None,
+        vmax: float = None,
+    ):
+
+        if self._common_color_scale:
+            measurements = self._get_indexed_measurements().abs()
+            vmin = float(measurements.array.min()) ** 0.5
+            vmax = float(measurements.array.max()) ** 0.5
+
+        if power is None:
+            power = 1.0
+
+        self._scale_normalization = np.zeros(self.axes.shape, dtype=object)
+        for i, measurement in self.iterate_measurements(keep_dims=False):
+
+            vmin = vmin**0.5 if vmin is not None else vmin
+            vmax = vmax**0.5 if vmax is not None else vmax
+
+            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+            norm.autoscale_None(measurement.array**0.5)
+
+            self._scale_normalization[i] = norm
+
+    def _set_normalization(
+        self,
+        power: float = None,
+        vmin: float = None,
+        vmax: float = None,
+    ):
+
+        if self._common_color_scale:
+            measurements = self._get_indexed_measurements().abs()
+            vmin = float(measurements.array.min())
+            vmax = float(measurements.array.max())
+
+        for i, measurement in self.iterate_measurements(keep_dims=False):
+            artists = self._artists[i]
+
+            if power is None:
+                power = artists.norm.gamma
+
+            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+            norm.autoscale_None(measurement.array)
+
+            # if self._domain_coloring:
+            #    images[1].norm = norm1
+            # else:
+            artists.set_norm(norm)
+
+    def _get_plot_data(
+        self, indexed_diffraction_spots: "IndexedDiffractionSpots", norm
+    ):
+
+        positions = indexed_diffraction_spots.positions[:, :2]
+
+        intensities = indexed_diffraction_spots.intensities
+
+        order = np.argsort(-np.linalg.norm(positions, axis=1))
+
+        positions = positions[order]
+        intensities = intensities[order]
+
+        sqrt_intensities = intensities**0.5
+
+        scales = norm(sqrt_intensities) * self._scale_factor
+        return intensities, positions, scales
+
+    def set_artists(self):
+
+        self._artists = np.zeros(self.axes.shape, dtype=object)
+        for i, measurement in self.iterate_measurements(keep_dims=False):
+            ax = self.axes[i]
+
+            scale_norm = self._scale_normalization[i]
+
+            intensities, positions, scales = self._get_plot_data(
+                measurement, scale_norm
+            )
+
+            ellipse_collection = EllipseCollection(
+                widths=scales,
+                heights=scales,
+                angles=0.0,
+                units="xy",
+                # facecolors=colors,
+                array=intensities,
+                cmap=self._cmap,
+                offsets=positions,
+                transOffset=ax.transData,
+            )
+
+            ellipse_collection = ax.add_collection(ellipse_collection)
+
+            self._artists[i] = ellipse_collection
+
+            x_lim = np.abs(positions[:, 0]).max() * 1.1
+            y_lim = np.abs(positions[:, 1]).max() * 1.1
+
+            ax.axis("equal")
+            ax.set_xlim(-x_lim * 1.1, x_lim * 1.1)
+            ax.set_ylim(-y_lim * 1.1, y_lim * 1.1)
+            ax.set_xlabel("kx [1/Å]")
+            ax.set_ylabel("ky [1/Å]")
+
+    def update_artists(self):
+        if self._autoscale:
+            self._set_scale_factor_normalization()
+
+        for i, measurement in self.iterate_measurements(keep_dims=False):
+            artists = self._artists[i]
+            norm = self._scale_normalization[i]
+
+            intensities, positions, scales = self._get_plot_data(measurement, norm)
+
+            artists._widths = scales * 0.5
+            artists._heights = scales * 0.5
+
+            artists.set(array=intensities, offsets=positions)
+
+        if self._autoscale:
+            self._set_normalization()
+
+    def set_autoscale(self, autoscale: bool):
+        self._autoscale = autoscale
+        if autoscale is True:
+            self.set_normalization()
+
+    def set_normalization(self, vmin=None, vmax=None, power=None):
+        self._set_scale_factor_normalization(vmin=vmin, vmax=vmax, power=power)
+        self._set_normalization(vmin=vmin, vmax=vmax)
+        self.update_artists()
+
+    def interact(self, continuous_update: bool = False):
+        canvas = self.fig.canvas
+
+        def update(change):
+            idx = change["owner"].index
+            self.set_indices((idx,))
+
+        sliders = indexing_sliders(self, continuous_update=continuous_update)
+
+        for slider in sliders:
+            slider.observe(update, "value")
+
+        sliders = widgets.VBox(sliders)
+
+        app = widgets.HBox([sliders, canvas])
+
+        return app
 
 
 def add_miller_index_annotations(ax, indexed_diffraction_patterns):

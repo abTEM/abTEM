@@ -11,7 +11,7 @@ from ase.cell import Cell
 from matplotlib.axes import Axes
 from numba import prange, jit
 
-from abtem import visualize, interact
+from abtem import interact
 from abtem.core.array import HasArray
 from abtem.core.axes import (
     HasAxes,
@@ -22,10 +22,10 @@ from abtem.core.axes import (
     NonLinearAxis,
     SampleAxis,
     ScanAxis,
+    UnknownAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
-from abtem.core import config
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_interpolate, fft_crop
 from abtem.core.grid import (
@@ -33,19 +33,16 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
-from abtem.core.units import _get_conversion_factor, _validate_units
-from abtem.indexing import IndexedDiffractionPatterns
 from abtem.core.interpolate import interpolate_bilinear
+from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
+from abtem.indexing import _index_diffraction_patterns, format_miller_indices
 from abtem.inelastic.phonons import _validate_seeds
-from abtem.interact import interact_ensemble_indices_2d, interact_ensemble_indices_1d
 from abtem.visualize import (
-    show_measurements_2d,
-    show_measurements_1d,
-    _iterate_axes,
     MeasurementVisualization2D,
     AxesGrid,
-    MeasurementVisualization1D, format_label,
+    MeasurementVisualization1D,
+    format_label,
 )
 
 # Enables CuPy-accelerated functions if it is available.
@@ -753,7 +750,9 @@ class BaseMeasurement2D(BaseMeasurement):
             cbar_mode = "each"
 
         if ax is None:
-            fig = plt.figure(figsize=figsize)
+            with plt.ioff():
+                # fig = plt.figure()
+                fig = plt.figure(figsize=figsize)
 
             axes = AxesGrid.from_measurements(
                 fig, self, axes_types, cbars, cbar_mode=cbar_mode
@@ -762,18 +761,20 @@ class BaseMeasurement2D(BaseMeasurement):
         else:
             if explode:
                 raise NotImplementedError("`ax` not implemented with `explode = True`.")
-            measurements = self#[("index",) * num_ensemble_axes]
+            measurements = self  # [("index",) * num_ensemble_axes]
             axes_types = ()
             axes = np.array([[ax]])
 
         visualization = MeasurementVisualization2D(
             measurements,
             axes,
+            vmin=vmin,
+            vmax=vmax,
             axes_types=axes_types,
             cbar=cbar,
             common_color_scale=common_color_scale,
             units=units,
-            power=power
+            power=power,
         )
 
         return visualization
@@ -1674,11 +1675,9 @@ class _BaseMeasurement1d(BaseMeasurement):
             if explode:
                 raise NotImplementedError("`ax` not implemented with `explode = True`.")
 
-            measurements = self #[("index",) * num_ensemble_axes]
+            measurements = self  # [("index",) * num_ensemble_axes]
             axes_types = ("overlay",) * num_ensemble_axes
             axes = np.array([[ax]])
-
-
 
         return MeasurementVisualization1D(measurements, axes, axes_types, units=units)
 
@@ -2022,7 +2021,8 @@ class DiffractionPatterns(BaseMeasurement2D):
         cell: Union[Cell, float, Tuple[float, float, float]],
         threshold: float = 0.001,
         distance_threshold=0.15,
-    ):
+    ) -> "IndexedDiffractionPatterns":
+
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
 
@@ -2037,15 +2037,29 @@ class DiffractionPatterns(BaseMeasurement2D):
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
         """
-        diffraction_patterns = self.to_cpu()
 
-        return IndexedDiffractionPatterns.index_diffraction_patterns(
-            diffraction_patterns,
+        hkl, intensities, positions = _index_diffraction_patterns(
+            self,
             cell,
             threshold=threshold,
             distance_threshold=distance_threshold,
-            metadata=self.metadata,
         )
+
+        ensemble_axes_metadata = self.ensemble_axes_metadata
+
+        return IndexedDiffractionPatterns(
+            intensities, hkl, positions, ensemble_axes_metadata, metadata=self.metadata
+        )
+        #
+        # diffraction_patterns = self.to_cpu()
+        #
+        # return IndexedDiffractionPatterns.index_diffraction_patterns(
+        #     diffraction_patterns,
+        #     cell,
+        #     threshold=threshold,
+        #     distance_threshold=distance_threshold,
+        #     metadata=self.metadata,
+        # )
 
     @property
     def fftshift(self):
@@ -2652,7 +2666,7 @@ class DiffractionPatterns(BaseMeasurement2D):
             Center-of-mass line profiles (returned if there is only one scan axis).
         """
 
-        #units = _validate_reciprocal_space_units(units)
+        # units = _validate_reciprocal_space_units(units)
 
         if units == "mrad":
             x, y = self.angular_coordinates
@@ -3213,9 +3227,331 @@ class PolarMeasurements(BaseMeasurement):
         ax.set_xticks(azimuthal_ticks)
 
         if cbar:
-            fig.colorbar(im, label=format_label(self.metadata["label"], self.metadata["units"]))
+            fig.colorbar(
+                im, label=format_label(self.metadata["label"], self.metadata["units"])
+            )
 
         if grid:
             ax.grid(linewidth=2, color="white")
 
         return ax, im
+
+
+class IndexedDiffractionPatterns(BaseMeasurement):
+
+    _base_dims = 1
+
+    def __init__(
+        self,
+        array: np.ndarray,
+        miller_indices: np.ndarray,
+        positions: np.ndarray,
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
+        """
+        Diffraction patterns indexed by their Miller indices.
+
+        Parameters
+        ----------
+        intensities : dict
+            Dictionary mapping Miller (or Miller-Bravais) indices to diffraction spot intensities.
+        positions : np.ndarray
+            The reciprocal space coordinates of the diffraction spots [1/Å].
+        """
+
+        assert len(miller_indices) == array.shape[-1]
+        assert len(miller_indices) == len(positions)
+
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+        self._miller_indices = miller_indices
+        self._intensities = array
+        self._positions = positions
+
+    def from_array_and_metadata(
+        self, array: np.ndarray, axes_metadata: List[AxisMetadata], metadata: dict
+    ) -> "T":
+        raise NotImplementedError
+
+    def _area_per_pixel(self):
+        raise NotImplementedError
+
+    @property
+    def base_axes_metadata(self) -> list:
+        return [UnknownAxis()]
+
+    @property
+    def intensities(self) -> np.ndarray:
+        return self._array
+
+    @property
+    def positions(self) -> np.ndarray:
+        return self._positions
+
+    @property
+    def miller_indices(self) -> np.ndarray:
+        return self._miller_indices
+
+    @property
+    def angular_positions(self):
+        energy = self._metadata["energy"]
+        wavelength = energy2wavelength(energy)
+        return self.positions * wavelength * 1e3
+
+    def remove_equivalent(
+        self, inequivalency_threshold: float = 1.0
+    ) -> "IndexedDiffractionPatterns":
+        """
+        Remove symmetry equivalent diffraction spots.
+
+        Parameters
+        ----------
+        inequivalency_threshold : float
+            Relative intensity difference to determine whether two symmetry-equivalent diffraction spots should be
+            independently labeled (e.g. due to a unit cell with a basis of more than one element).
+        """
+        miller_indices, intensities = self._dict_to_arrays(self._spots)
+
+        if len(intensities.shape) > 1:
+            summed_intensities = intensities.sum(-1)
+        else:
+            summed_intensities = intensities
+
+        include = _find_equivalent_spots(
+            miller_indices,
+            intensities=summed_intensities,
+            intensity_split=inequivalency_threshold,
+        )
+
+        miller_indices, intensities = miller_indices[include], intensities[include]
+        spots = self._arrays_to_dict(miller_indices, intensities)
+        vectors = self._vectors[include]
+        return self.__class__(spots, vectors)
+
+    @property
+    def ensemble_shape(self) -> tuple:
+        return self.intensities.shape[:-1]
+
+    @property
+    def ensemble_axes_metadata(self):
+        return self._ensemble_axes_metadata
+
+    # def __getitem__(self, item):
+    #     if not self.ensemble_shape:
+    #         raise IndexError(
+    #             "indexing not available for indexed diffraction pattern without ensemble dimension"
+    #         )
+    #
+    #     return self.__class__(
+    #         self.miller_indices, self.intensities[item], self.positions
+    #     )
+
+    def remove_low_intensity(self, threshold: float = 1e-3):
+        """
+        Remove diffraction spots with intensity below a threshold.
+
+        Parameters
+        ----------
+        threshold : float
+            Relative intensity threshold for removing diffraction spots.
+
+        """
+        mask = self.intensities > threshold
+        miller_indices = self.miller_indices[mask]
+        intensities = self.intensities[mask]
+        positions = self.positions[mask]
+
+        return self.__class__(
+            miller_indices, intensities, positions, metadata=self._metadata
+        )
+
+        # miller_indices, intensities = self._dict_to_arrays(self._spots)
+        #
+        # if len(intensities.shape) > 1:
+        #     summed_intensities = intensities.sum(-1, keepdims=True)
+        # else:
+        #     summed_intensities = intensities
+        #
+        # include = summed_intensities > threshold * summed_intensities.max()
+        # include = np.squeeze(include)
+        #
+        # vectors = self._vectors[include]
+        # miller_indices, intensities = miller_indices[include], intensities[include]
+        # spots = self._arrays_to_dict(miller_indices, intensities)
+        # return self.__class__(spots, vectors)
+
+    def crop(self, max_angle=None):
+        mask = np.linalg.norm(self.angular_positions, axis=1) < max_angle
+
+        miller_indices = self.miller_indices[mask]
+        intensities = self.intensities[mask]
+        positions = self.positions[mask]
+
+        return self.__class__(miller_indices, intensities, positions)
+
+    @staticmethod
+    def _dict_to_arrays(spots):
+        miller_indices, intensities = zip(*spots.items())
+        return np.array(miller_indices), np.array(intensities)
+
+    @staticmethod
+    def _arrays_to_dict(miller_indices, intensities):
+        return dict(zip([tuple(hkl) for hkl in miller_indices], tuple(intensities)))
+
+    def normalize_intensity(self, spot: tuple = None):
+        """
+        Normalize the intensity of the diffraction spots.
+
+        Parameters
+        ----------
+        spot :
+
+        Returns
+        -------
+
+        """
+
+        if spot is None:
+            c = self.intensities.max()
+        else:
+            c = self._spots[spot]
+
+        spots = {hkl: intensity / c for hkl, intensity in self._spots.items()}
+
+        return self.__class__(spots, self._vectors)
+
+    def to_dataframe(self):
+        """
+        Convert the indexed diffraction to pandas dataframe.
+
+        Parameters
+        ----------
+        intensity_threshold : float
+            Relative intensity threshold for removing diffraction spots from the dataframe.
+        inequivalency_threshold : float
+            Relative intensity difference to determine whether two symmetry-equivalent diffraction spots should be
+            independently labeled (e.g. due to a unit cell with a basis of more than one element).
+        normalize : bool
+            If True, normalize
+
+        Returns
+        -------
+        dataframe_with_spots : pd.DataFrame
+
+        """
+
+        import pandas as pd
+
+        # if inequivalency_threshold:
+        #     indexed = self.remove_equivalent(inequivalency_threshold=inequivalency_threshold)
+        # else:
+        #     indexed = self
+        #
+        # indexed = indexed.remove_low_intensity(intensity_threshold)
+        #
+        # if normalize is True:
+        #     indexed = indexed.normalize_intensity(spot=None)
+        # elif normalize is not False:
+        #     indexed = indexed.normalize_intensity(spot=normalize)
+
+        if self.ensemble_shape:
+            intensities = {
+                format_miller_indices(hkl): self.intensities[..., i]
+                for i, hkl in enumerate(self.miller_indices)
+            }
+            return pd.DataFrame(
+                intensities, index=self.ensemble_axes_metadata[0].values
+            )
+        else:
+            intensities = {
+                format_miller_indices(hkl): intensity
+                for hkl, intensity in zip(self.miller_indices, self.intensities)
+            }
+            return pd.DataFrame(intensities, index=[0])
+
+    def block_direct(self):
+        to_delete = np.where(np.all(self.miller_indices == 0, axis=1))[0]
+
+        indexed_diffraction_patterns = self.copy()
+
+        indexed_diffraction_patterns._miller_indices = np.delete(
+            indexed_diffraction_patterns._miller_indices, to_delete, axis=0
+        )
+        indexed_diffraction_patterns._intensities = np.delete(
+            indexed_diffraction_patterns._intensities, to_delete, axis=0
+        )
+        indexed_diffraction_patterns._positions = np.delete(
+            indexed_diffraction_patterns._positions, to_delete, axis=0
+        )
+
+        return indexed_diffraction_patterns
+
+    def show(self, power: float = 1.0, overlay_hkl: bool = False, **kwargs):
+        """
+
+
+        Parameters
+        ----------
+        kwargs
+
+        Returns
+        -------
+
+        """
+
+        indexed_diffraction_patterns = self
+
+        if self.ensemble_shape:
+            indexed_diffraction_patterns = indexed_diffraction_patterns[
+                (0,) * len(self.ensemble_shape)
+            ]
+
+        return _show_indexed_diffraction_pattern(
+            indexed_diffraction_patterns, power=power, overlay_hkl=overlay_hkl, **kwargs
+        )
+
+    def interact(
+        self,
+        power: float = 1.0,
+        overlay_miller_indices: bool = False,
+        ax: Axes = None,
+        figsize: Tuple[int, int] = None,
+        **kwargs,
+    ):
+        if ax is None:
+            plt.ioff()
+            fig, ax = plt.subplots(figsize=figsize)
+            plt.ion()
+
+        fig, ax = self.show(
+            power=power, overlay_indices=overlay_miller_indices, ax=ax, **kwargs
+        )
+
+        toggle_hkl_button = widgets.ToggleButton(
+            description="Toggle hkl", value=overlay_miller_indices
+        )
+
+        def update_toggle_hkl_button(change):
+            if change["new"]:
+                add_miller_index_annotations(ax, self)
+            else:
+                remove_annotations(ax)
+
+        toggle_hkl_button.observe(update_toggle_hkl_button, "value")
+
+        right_sidebar = widgets.VBox([toggle_hkl_button])
+
+        app_layout = widgets.AppLayout(
+            center=fig.canvas,
+            right_sidebar=right_sidebar,
+            pane_heights=[0, 6, 0],
+            justify_items="left",
+            pane_widths=[0, "600px", 1],
+        )
+
+        return fig, ax, app_layout
