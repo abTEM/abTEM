@@ -101,6 +101,7 @@ def rescale_vmin_vmax_slider(slider, visualization):
     slider.value = [vmin, vmax]
     slider.min = vmin
     slider.max = vmax
+    slider.step = (vmax - vmin) / 100.
 
 
 def make_vmin_vmax_slider(visualization):
@@ -115,7 +116,7 @@ def make_vmin_vmax_slider(visualization):
         value=[0, 1],
         min=0,
         max=1,
-        step=0.0,
+        step=0.1,
         disabled=visualization._autoscale,
         description="Normalization",
         continuous_update=True,
@@ -132,7 +133,10 @@ def make_scale_button(visualization, vmin_vmax_slider=None):
     scale_button = widgets.Button(description="Scale once")
 
     def scale_button_clicked(*args):
-        visualization.set_normalization()
+        visualization._update_vmin()
+        visualization._update_vmax()
+
+        visualization.update_artists()
 
         if vmin_vmax_slider is not None:
             rescale_vmin_vmax_slider(vmin_vmax_slider, visualization)
@@ -1454,6 +1458,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         self._scale_factor = np.sqrt(
             squareform(distance_matrix(positions, positions)).min()
         )
+
+        self._normalization = None
         self._scale_normalization = None
         self._autoscale = autoscale
 
@@ -1475,11 +1481,13 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         self._common_color_scale = common_color_scale
         self._convert_complex = convert_complex
         self._autoscale = autoscale
+        self._miller_index_annotations = []
 
         self._set_scale_factor_normalization()
+        self._set_normalization(vmin=vmin, vmax=vmax, power=power)
         self.set_artists()
 
-        self._set_normalization(vmin=vmin, vmax=vmax, power=power)
+
         #
         # if cbar:
         #     self.set_cbars()
@@ -1491,6 +1499,55 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         # self.set_y_units(units)
         # self.set_x_labels()
         # self.set_y_labels()
+
+    # def update_vmin(self, vmin=None):
+    #     self._update_scale_vmin(vmin=vmin)
+    #     self.update_artists()
+    #     self._update_vmin(vmin=vmin)
+    #
+    def _update_scale_vmin(self, vmin=None):
+        for i, measurement in self.iterate_measurements():
+            norm = self._scale_normalization[i]
+            vmin = measurement.min() if vmin is None else vmin
+            norm.vmin = vmin ** 0.5
+
+    def _update_scale_vmax(self, vmax=None):
+        for i, measurement in self.iterate_measurements():
+            norm = self._scale_normalization[i]
+            vmax = measurement.max() if vmax is None else vmax
+            norm.vmax = vmax ** 0.5
+
+    def _update_vmin(self, vmin=None):
+        for i, measurement in self.iterate_measurements():
+            norm = self._normalization[i]
+            vmin = measurement.min() if vmin is None else vmin
+            norm.vmin = vmin
+
+    def _update_vmax(self, vmax=None):
+        for i, measurement in self.iterate_measurements():
+            norm = self._normalization[i]
+            vmax = measurement.max() if vmax is None else vmax
+            norm.vmax = vmax
+
+    def update_vmin_vmax(self, vmin=None, vmax=None):
+        self._update_vmin(vmin)
+        self._update_vmax(vmax)
+        self._update_scale_vmin(vmin)
+        self._update_scale_vmax(vmax)
+        self.update_artists()
+
+    # def _update_vmax(self, vmax=None):
+    #     for i, measurement in self.iterate_measurements():
+    #         norm = self._normalization[i]
+    #         scale_norm = self._scale_normalization[i]
+    #
+    #         if vmax is None:
+    #             validated_vmax = measurement.max()
+    #         else:
+    #             validated_vmax = vmax
+    #
+    #         norm.vmax = validated_vmax
+    #         scale_norm.vmax = validated_vmax ** 0.5
 
     def _set_scale_factor_normalization(
         self,
@@ -1532,10 +1589,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
         self._normalization = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
-            artists = self._artists[i]
-
-            if power is None:
-                power = artists.norm.gamma
 
             norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
             norm.autoscale_None(measurement.array)
@@ -1544,7 +1597,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             #    images[1].norm = norm1
             # else:
             self._normalization[i] = norm
-            artists.set_norm(norm)
+
 
     def _get_plot_data(
         self, indexed_diffraction_spots: "IndexedDiffractionSpots", norm
@@ -1571,6 +1624,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             ax = self.axes[i]
 
             scale_norm = self._scale_normalization[i]
+            norm = self._normalization[i]
 
             intensities, positions, scales = self._get_plot_data(
                 measurement, scale_norm
@@ -1588,6 +1642,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
                 transOffset=ax.transData,
             )
 
+            ellipse_collection.norm = norm
+
             ellipse_collection = ax.add_collection(ellipse_collection)
 
             self._artists[i] = ellipse_collection
@@ -1602,8 +1658,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             ax.set_ylabel("ky [1/Å]")
 
     def update_artists(self):
-        if self._autoscale:
-            self._set_scale_factor_normalization()
+        # if self._autoscale:
+        #     self._set_scale_factor_normalization()
 
         for i, measurement in self.iterate_measurements(keep_dims=False):
             artists = self._artists[i]
@@ -1616,10 +1672,16 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
             artists.set(array=intensities, offsets=positions)
 
-        if self._autoscale:
-            self._set_normalization()
+        # if self._autoscale:
+        #     self._set_normalization()
+
+    def remove_miller_index_annotations(self):
+        for annotation in self._miller_index_annotations:
+            annotation.remove()
 
     def add_miller_index_annotations(self):
+
+        self._miller_index_annotations = []
         for i, measurement in self.iterate_measurements():
             ax = self.axes[i]
             for hkl, position in zip(
@@ -1635,6 +1697,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
                 )
                 annotation.set_path_effects([withStroke(foreground="w", linewidth=3)])
 
+                self._miller_index_annotations.append(annotation)
 
     def set_autoscale(self, autoscale: bool):
         self._autoscale = autoscale
