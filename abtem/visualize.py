@@ -54,7 +54,7 @@ def format_options(options):
     ]
 
 
-def indexing_sliders(
+def make_indexing_sliders(
     visualization,
     continuous_update: bool = False,
     range_axes=(),
@@ -90,10 +90,26 @@ def indexing_sliders(
     return sliders
 
 
+def rescale_vmin_vmax_slider(slider, visualization):
+    vmin = np.inf
+    vmax = -np.inf
+    for artist in visualization.artists.ravel():
+        vmin = min(vmin, artist.norm.vmin)
+        vmax = max(vmax, artist.norm.vmax)
+    vmin = min(vmin, 0.0)
+
+    slider.value = [vmin, vmax]
+    slider.min = vmin
+    slider.max = vmax
+
+
 def make_vmin_vmax_slider(visualization):
     def vmin_vmax_slider_changed(change):
         vmin, vmax = change["owner"].value
-        visualization.set_normalization(vmin=vmin, vmax=vmax)
+
+        for artist in visualization.artists.ravel():
+            artist.vmin = vmin
+            artist.vmax = vmax
 
     vmin_vmax_slider = widgets.FloatRangeSlider(
         value=[0, 1],
@@ -112,11 +128,35 @@ def make_vmin_vmax_slider(visualization):
     return vmin_vmax_slider
 
 
-def rescale_vmin_vmax_slider(slider, visualization):
-    vmin, vmax = visualization.get_vmin_vmax()
-    slider.value = [vmin, vmax]
-    slider.min = vmin
-    slider.max = vmax
+def make_scale_button(visualization, vmin_vmax_slider=None):
+    scale_button = widgets.Button(description="Scale once")
+
+    def scale_button_clicked(*args):
+        visualization.set_normalization()
+
+        if vmin_vmax_slider is not None:
+            rescale_vmin_vmax_slider(vmin_vmax_slider, visualization)
+
+    scale_button.on_click(scale_button_clicked)
+
+    return scale_button
+
+
+def make_autoscale_button(visualization, vmin_vmax_slider=None):
+    def autoscale_button_changed(change):
+        visualization.set_autoscale(change["new"])
+
+        if vmin_vmax_slider is not None:
+            rescale_vmin_vmax_slider(vmin_vmax_slider, visualization)
+
+    autoscale_button = widgets.ToggleButton(
+        value=visualization._autoscale,
+        description="Autoscale",
+        tooltip="Autoscale",
+    )
+    autoscale_button.observe(autoscale_button_changed, "value")
+
+    return autoscale_button
 
 
 class MeasurementVisualization:
@@ -819,16 +859,17 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         self.set_artists()
         self.set_normalization(vmin=vmin, vmax=vmax, power=power)
 
-        if cbar:
-            self.set_cbars()
-            self.set_scale_units()
-            self.set_cbar_labels()
-
-        self.set_extent()
-        self.set_x_units(units)
-        self.set_y_units(units)
-        self.set_x_labels()
-        self.set_y_labels()
+        # 1
+        # if cbar:
+        #     self.set_cbars()
+        #     self.set_scale_units()
+        #     self.set_cbar_labels()
+        #
+        # self.set_extent()
+        # self.set_x_units(units)
+        # self.set_y_units(units)
+        # self.set_x_labels()
+        # self.set_y_labels()
 
     @property
     def _artists_per_axes(self):
@@ -1042,7 +1083,6 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         self._artists = images
 
     def update_artists(self):
-
         for i, measurement in self.iterate_measurements(keep_dims=False):
             images = self._artists[i]
 
@@ -1056,8 +1096,9 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             else:
                 images.set_data(measurement.array.T)
 
-        if self._autoscale:
-            self.set_normalization()
+        # if self._autoscale:
+        #     self.set_normalization()
+        #
 
 
 class MeasurementVisualization1D(MeasurementVisualization):
@@ -1451,16 +1492,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         # self.set_x_labels()
         # self.set_y_labels()
 
-    def get_vmin_vmax(self):
-        vmin = np.inf
-        vmax = -np.inf
-        for i, measurement in self.iterate_measurements():
-            vmin = min(vmin, self.artists[i].norm.vmin)
-            vmax = max(vmax, self.artists[i].norm.vmax)
-
-        vmin = min(vmin, 0.0)
-        return vmin, vmax
-
     def _set_scale_factor_normalization(
         self,
         power: float = None,
@@ -1499,6 +1530,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             vmin = float(measurements.array.min())
             vmax = float(measurements.array.max())
 
+        self._normalization = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
             artists = self._artists[i]
 
@@ -1511,6 +1543,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             # if self._domain_coloring:
             #    images[1].norm = norm1
             # else:
+            self._normalization[i] = norm
             artists.set_norm(norm)
 
     def _get_plot_data(
@@ -1586,6 +1619,23 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         if self._autoscale:
             self._set_normalization()
 
+    def add_miller_index_annotations(self):
+        for i, measurement in self.iterate_measurements():
+            ax = self.axes[i]
+            for hkl, position in zip(
+                measurement.miller_indices,
+                measurement.positions,
+            ):
+                annotation = ax.annotate(
+                    "{} {} {}".format(*hkl),
+                    xy=position[:2],
+                    ha="center",
+                    va="center",
+                    size=8,
+                )
+                annotation.set_path_effects([withStroke(foreground="w", linewidth=3)])
+
+
     def set_autoscale(self, autoscale: bool):
         self._autoscale = autoscale
         if autoscale is True:
@@ -1603,7 +1653,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             idx = change["owner"].index
             self.set_indices((idx,))
 
-        sliders = indexing_sliders(self, continuous_update=continuous_update)
+        sliders = make_indexing_sliders(self, continuous_update=continuous_update)
 
         for slider in sliders:
             slider.observe(update, "value")
@@ -1615,19 +1665,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         return app
 
 
-def add_miller_index_annotations(ax, indexed_diffraction_patterns):
-    for hkl, position in zip(
-        indexed_diffraction_patterns.miller_indices,
-        indexed_diffraction_patterns.positions,
-    ):
-        annotation = ax.annotate(
-            "{} {} {}".format(*hkl),
-            xy=position[:2],
-            ha="center",
-            va="center",
-            size=8,
-        )
-        annotation.set_path_effects([withStroke(foreground="w", linewidth=3)])
 
 
 def get_annotations(ax):
