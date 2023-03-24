@@ -106,11 +106,17 @@ def rescale_vmin_vmax_slider(slider, visualization):
 
 def make_vmin_vmax_slider(visualization):
     def vmin_vmax_slider_changed(change):
-        vmin, vmax = change["owner"].value
 
-        for artist in visualization.artists.ravel():
-            artist.vmin = vmin
-            artist.vmax = vmax
+        vmin, vmax = change["new"]
+        old_vmin, old_vmax = change["old"]
+
+        if old_vmin != vmin:
+            visualization._update_vmin(vmin=vmin)
+
+        if old_vmax != vmax:
+            visualization._update_vmax(vmax=vmax)
+
+        visualization.update_artists()
 
     vmin_vmax_slider = widgets.FloatRangeSlider(
         value=[0, 1],
@@ -133,8 +139,7 @@ def make_scale_button(visualization, vmin_vmax_slider=None):
     scale_button = widgets.Button(description="Scale once")
 
     def scale_button_clicked(*args):
-        visualization._update_vmin()
-        visualization._update_vmax()
+        visualization.rescale()
 
         visualization.update_artists()
 
@@ -824,6 +829,39 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
 
 class MeasurementVisualization2D(BaseMeasurementVisualization2D):
+    """
+    Show the image(s) using matplotlib.
+
+    Parameters
+    ----------
+    measurements
+    axes : matplotlib.axes.Axes, optional
+        If given the plots are added to the axis. This is not available for image grids.
+    figsize : two int, optional
+        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+    title : bool or str, optional
+        Add a title to the figure. If True is given instead of a string the title will be given by the value
+        corresponding to the "name" key of the metadata dictionary, if this item exists.
+    cmap : str, optional
+        Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
+    power : float
+        Show image on a power scale.
+    vmin : float, optional
+        Minimum of the intensity color scale. Default is the minimum of the array values.
+    vmax : float, optional
+        Maximum of the intensity color scale. Default is the maximum of the array values.
+    common_color_scale : bool, optional
+        If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
+        it is requested). Default is False.
+    cbar : bool, optional
+        Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
+        keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
+
+    Returns
+    -------
+    matplotlib.figure.Figure, matplotlib.axes.Axes
+    """
+
     def __init__(
         self,
         measurements: "BaseMeasurement2D",
@@ -863,17 +901,16 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         self.set_artists()
         self.set_normalization(vmin=vmin, vmax=vmax, power=power)
 
-        # 1
-        # if cbar:
-        #     self.set_cbars()
-        #     self.set_scale_units()
-        #     self.set_cbar_labels()
-        #
-        # self.set_extent()
-        # self.set_x_units(units)
-        # self.set_y_units(units)
-        # self.set_x_labels()
-        # self.set_y_labels()
+        if cbar:
+            self.set_cbars()
+            self.set_scale_units()
+            self.set_cbar_labels()
+
+        self.set_extent()
+        self.set_x_units(units)
+        self.set_y_units(units)
+        self.set_x_labels()
+        self.set_y_labels()
 
     @property
     def _artists_per_axes(self):
@@ -974,7 +1011,11 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     ):
 
         if self._common_color_scale:
-            measurements = self._get_indexed_measurements().abs()
+            measurements = self._get_indexed_measurements()
+
+            if measurements.is_complex:
+                measurements = measurements.abs()
+
             vmin = float(measurements.array.min())
             vmax = float(measurements.array.max())
 
@@ -1233,117 +1274,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         pass
 
 
-def show_measurements_2d(
-    measurements: "BaseMeasurement",
-    axes: Axes = None,
-    figsize: Tuple[int, int] = None,
-    title: str = None,
-    power: float = 1.0,
-    vmin: float = None,
-    vmax: float = None,
-    common_color_scale: bool = False,
-    cbar: bool = False,
-    cmap: str = None,
-):
-    """
-    Show the image(s) using matplotlib.
-
-    Parameters
-    ----------
-    measurements
-    axes : matplotlib.axes.Axes, optional
-        If given the plots are added to the axis. This is not available for image grids.
-    figsize : two int, optional
-        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
-    title : bool or str, optional
-        Add a title to the figure. If True is given instead of a string the title will be given by the value
-        corresponding to the "name" key of the metadata dictionary, if this item exists.
-    cmap : str, optional
-        Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
-    power : float
-        Show image on a power scale.
-    vmin : float, optional
-        Minimum of the intensity color scale. Default is the minimum of the array values.
-    vmax : float, optional
-        Maximum of the intensity color scale. Default is the maximum of the array values.
-    common_color_scale : bool, optional
-        If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
-        it is requested). Default is False.
-    cbar : bool, optional
-        Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
-        keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
-
-    Returns
-    -------
-    matplotlib.figure.Figure, matplotlib.axes.Axes
-    """
-    measurements = measurements.compute().to_cpu()
-
-    # if cbar and measurements.is_complex and measurements.ensemble_shape:
-    #     raise NotImplementedError(
-    #         "colorbar not implemented for exploded plot with domain coloring"
-    #     )
-
-    complex_representation = "domain_coloring"
-
-    if measurements.is_complex and complex_representation != "domain_coloring":
-        measurements = getattr(measurements, complex_representation)()
-
-    if not measurements.ensemble_shape:
-        if axes is None:
-            fig, axes = plt.subplots(figsize=figsize)
-        else:
-            fig = axes.get_figure()
-    else:
-        if axes is None:
-            fig = plt.figure(1, figsize, clear=True)
-            image_grid_kwargs = {}
-            image_grid_kwargs["share_all"] = True
-            if common_color_scale:
-                if cbar:
-                    image_grid_kwargs["cbar_mode"] = "single"
-
-                image_grid_kwargs["axes_pad"] = [0.1, 0.1]
-            else:
-                if cbar:
-                    image_grid_kwargs["cbar_mode"] = "each"
-                    image_grid_kwargs["cbar_pad"] = 0.05
-                    image_grid_kwargs["axes_pad"] = [0.8, 0.3]
-                else:
-                    image_grid_kwargs["axes_pad"] = [0.1, 0.1]
-
-            axes = ImageGrid(fig, 111, nrows_ncols=(nrows, ncols), **image_grid_kwargs)
-        else:
-            fig = axes.get_figure()
-
-    measurements = measurements[(0,) * max(len(measurements.ensemble_shape) - 2, 0)]
-
-    visualization = MeasurementVisualization2D(
-        axes, measurements, vmin=vmin, vmax=vmax, common_color_scale=common_color_scale
-    )
-
-    if title:
-        visualization.set_column_titles()
-        visualization.set_row_titles()
-
-    if cbar:
-        visualization.set_cbars()
-
-    return visualization
-
-
-def _show_indexed_diffraction_pattern(
-    indexed_diffraction_pattern,
-    scale: float = 1.0,
-    ax: Axes = None,
-    figsize: Tuple[float, float] = (6, 6),
-    title: str = None,
-    overlay_hkl: bool = True,
-    power: float = 1.0,
-    cmap: str = "viridis",
-    colors: str = "cmap",
-    background_color: str = "white",
-):
+class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     """
     Display a diffraction pattern as indexed Bragg reflections.
 
@@ -1371,69 +1302,9 @@ def _show_indexed_diffraction_pattern(
     -------
     figure, axis_handle : matplotlib.figure.Figure, matplotlib.axis.Axis
     """
-    indexed_diffraction_pattern = indexed_diffraction_pattern.block_direct()
-
-    positions = indexed_diffraction_pattern.positions[:, :2]
-
-    intensities = indexed_diffraction_pattern.intensities**power
-
-    order = np.argsort(-np.linalg.norm(positions, axis=1))
-
-    positions = positions[order]
-    intensities = intensities[order]
-
-    scales = intensities / intensities.max()
-
-    min_distance = squareform(distance_matrix(positions, positions)).min()
-
-    scale_factor = min_distance / scales.max() * scale
-
-    scales = scales**power * scale_factor
-
-    if colors == "cmap":
-        norm = matplotlib.colors.Normalize(vmin=0, vmax=intensities.max())
-        cmap = matplotlib.cm.get_cmap(cmap)
-        colors = cmap(norm(intensities))
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-    else:
-        fig = ax.get_figure()
-
-    if title:
-        ax.set_title(title)
-
-    ax.add_collection(
-        EllipseCollection(
-            widths=scales,
-            heights=scales,
-            angles=0.0,
-            units="xy",
-            facecolors=colors,
-            offsets=positions,
-            transOffset=ax.transData,
-        )
-    )
-
-    x_lim = np.abs(positions[:, 0]).max() * 1.1
-    y_lim = np.abs(positions[:, 1]).max() * 1.1
-
-    ax.axis("equal")
-    ax.set_xlim(-x_lim * 1.1, x_lim * 1.1)
-    ax.set_ylim(-y_lim * 1.1, y_lim * 1.1)
-    ax.set_xlabel("kx [1/Å]")
-    ax.set_ylabel("ky [1/Å]")
-
-    # fig.patch.set_facecolor(background_color)
-    # ax.axis("off")
-
-    if overlay_hkl:
-        add_miller_index_annotations(ax, indexed_diffraction_pattern)
-
-    return fig, ax
 
 
-class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
+
     def __init__(
         self,
         measurements,
@@ -1451,6 +1322,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         convert_complex: str = "domain_coloring",
         autoscale: bool = True,
     ):
+
+
 
         self._scale = scale
 
@@ -1505,17 +1378,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     #     self.update_artists()
     #     self._update_vmin(vmin=vmin)
     #
-    def _update_scale_vmin(self, vmin=None):
-        for i, measurement in self.iterate_measurements():
-            norm = self._scale_normalization[i]
-            vmin = measurement.min() if vmin is None else vmin
-            norm.vmin = vmin ** 0.5
-
-    def _update_scale_vmax(self, vmax=None):
-        for i, measurement in self.iterate_measurements():
-            norm = self._scale_normalization[i]
-            vmax = measurement.max() if vmax is None else vmax
-            norm.vmax = vmax ** 0.5
 
     def _update_vmin(self, vmin=None):
         for i, measurement in self.iterate_measurements():
@@ -1523,18 +1385,24 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             vmin = measurement.min() if vmin is None else vmin
             norm.vmin = vmin
 
+            norm = self._scale_normalization[i]
+            vmin = measurement.min() if vmin is None else vmin
+            norm.vmin = vmin ** 0.5
+
     def _update_vmax(self, vmax=None):
         for i, measurement in self.iterate_measurements():
             norm = self._normalization[i]
             vmax = measurement.max() if vmax is None else vmax
             norm.vmax = vmax
 
+            norm = self._scale_normalization[i]
+            vmax = measurement.max() if vmax is None else vmax
+            norm.vmax = vmax ** 0.5
+
     def update_vmin_vmax(self, vmin=None, vmax=None):
         self._update_vmin(vmin)
         self._update_vmax(vmax)
-        self._update_scale_vmin(vmin)
-        self._update_scale_vmax(vmax)
-        self.update_artists()
+        #self.update_artists()
 
     # def _update_vmax(self, vmax=None):
     #     for i, measurement in self.iterate_measurements():
@@ -1658,8 +1526,9 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             ax.set_ylabel("ky [1/Å]")
 
     def update_artists(self):
-        # if self._autoscale:
-        #     self._set_scale_factor_normalization()
+        if self._autoscale:
+            self._update_vmin()
+            self._update_vmax()
 
         for i, measurement in self.iterate_measurements(keep_dims=False):
             artists = self._artists[i]
@@ -1699,10 +1568,15 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
                 self._miller_index_annotations.append(annotation)
 
+    def rescale(self):
+        self._update_vmin()
+        self._update_vmax()
+        self.update_artists()
+
     def set_autoscale(self, autoscale: bool):
         self._autoscale = autoscale
         if autoscale is True:
-            self.set_normalization()
+            self.update_artists()
 
     def set_normalization(self, vmin=None, vmax=None, power=None):
         self._set_scale_factor_normalization(vmin=vmin, vmax=vmax, power=power)

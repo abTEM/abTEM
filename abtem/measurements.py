@@ -43,6 +43,7 @@ from abtem.visualize import (
     AxesGrid,
     MeasurementVisualization1D,
     format_label,
+    DiffractionSpotsVisualization,
 )
 
 # Enables CuPy-accelerated functions if it is available.
@@ -750,9 +751,11 @@ class BaseMeasurement2D(BaseMeasurement):
             cbar_mode = "each"
 
         if ax is None:
-            with plt.ioff():
-                # fig = plt.figure()
-                fig = plt.figure(figsize=figsize)
+            # with plt.ioff():
+            #     # fig = plt.figure()
+            #     fig = plt.figure(figsize=figsize)
+
+            fig = plt.figure(figsize=figsize)
 
             axes = AxesGrid.from_measurements(
                 fig, self, axes_types, cbars, cbar_mode=cbar_mode
@@ -3491,7 +3494,14 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
         return indexed_diffraction_patterns
 
-    def show(self, power: float = 1.0, overlay_hkl: bool = False, **kwargs):
+    def show(
+        self,
+        power: float = 1.0,
+        overlay_hkl: bool = False,
+        cmap: str = None,
+        scale: float = 1,
+        **kwargs,
+    ):
         """
 
 
@@ -3504,16 +3514,34 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
         """
 
-        indexed_diffraction_patterns = self
+        axes_types = ("index",) * len(self.ensemble_shape)
 
-        if self.ensemble_shape:
-            indexed_diffraction_patterns = indexed_diffraction_patterns[
-                (0,) * len(self.ensemble_shape)
-            ]
+        with plt.ioff():
+            fig = plt.figure()
 
-        return _show_indexed_diffraction_pattern(
-            indexed_diffraction_patterns, power=power, overlay_hkl=overlay_hkl, **kwargs
+        axes = AxesGrid(fig, 1, 1)
+        visualization = DiffractionSpotsVisualization(
+            self,
+            axes,
+            axes_types=axes_types,
+            power=power,
+            autoscale=False,
+            cmap=cmap,
+            scale=scale,
         )
+
+        visualization.interact(True)
+
+        return visualization
+
+        # if self.ensemble_shape:
+        #     indexed_diffraction_patterns = indexed_diffraction_patterns[
+        #         (0,) * len(self.ensemble_shape)
+        #     ]
+        #
+        # return _show_indexed_diffraction_pattern(
+        #     indexed_diffraction_patterns, power=power, overlay_hkl=overlay_hkl, **kwargs
+        # )
 
     def interact(
         self,
