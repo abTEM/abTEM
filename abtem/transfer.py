@@ -1077,6 +1077,9 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         Number of grid points describing the wave functions.
     sampling : two float, optional
         Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+    flip_phase : bool, optional
+        Changes the sign of all negative parts of the CTF to positive (following doi:10.1016/j.ultramic.2008.03.004)
+        (default is False).
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
 
@@ -1097,6 +1100,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         extent: Union[float, Tuple[float, float]] = None,
         gpts: Union[int, Tuple[int, int]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
+        flip_phase: bool = False,
         **kwargs,
     ):
 
@@ -1126,6 +1130,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         self._focal_spread = focal_spread
         self._semiangle_cutoff = semiangle_cutoff
         self._soft = soft
+        self._flip_phase = flip_phase
 
     @property
     def aberration_coefficients(self):
@@ -1221,6 +1226,14 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     def angular_spread(self, value: float):
         self._angular_spread = value
 
+    @property
+    def flip_phase(self) -> bool:
+        return self._flip_phase
+
+    @flip_phase.setter
+    def flip_phase(self, value: bool):
+        self._flip_phase = value
+
     def _evaluate_with_alpha_and_phi(self, alpha, phi):
         array = self._aberrations._evaluate_with_alpha_and_phi(alpha, phi)
 
@@ -1257,6 +1270,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         return array
 
     def profiles(self, max_angle: float = None, phi: float = 0.0):
+
         if max_angle is None:
             if self.semiangle_cutoff == np.inf:
                 max_angle = 50
@@ -1280,9 +1294,15 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
         axis_metadata = ["ctf"]
         metadata = {"energy": self.energy}
+
+        if self._flip_phase:
+            _transfers = np.abs(-aberrations.imag * envelope)
+        else:
+            _transfers = -aberrations.imag * envelope
+
         profiles = [
             ReciprocalSpaceLineProfiles(
-                -aberrations.imag * envelope,
+                _transfers,
                 sampling=sampling,
                 metadata=metadata,
                 ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,
