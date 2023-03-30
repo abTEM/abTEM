@@ -557,6 +557,8 @@ class HasArray(HasAxes, CopyMixin):
 
         array = da.from_array(self.array, chunks=chunks)
 
+        print(array)
+
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
 
     def compute(
@@ -664,6 +666,47 @@ class HasArray(HasAxes, CopyMixin):
             else:
                 attrs[key] = value
 
+    @classmethod
+    def _unpack_kwargs(cls, attrs):
+        kwargs = {}
+        kwargs["ensemble_axes_metadata"] = []
+        for key, value in attrs.items():
+            if key == "ensemble_axes_metadata":
+                kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
+            elif key == "type":
+                pass
+            else:
+                kwargs[key] = value
+
+        return kwargs
+
+    def _metadata_to_dict(self):
+        metadata = copy.copy(self.metadata)
+        metadata["axes"] = {
+            f"axis_{i}": axis_to_dict(axis) for i, axis in enumerate(self.axes_metadata)
+        }
+        metadata["data_origin"] = f"abTEM_v{__version__}"
+        metadata["type"] = self.__class__.__name__
+        return metadata
+
+    def _metadata_to_json_string(self):
+        return json.dumps(self._metadata_to_dict())
+
+    @classmethod
+    def _metadata_from_json_string(self, json_string):
+        import abtem
+
+        metadata = json.loads(json_string)
+        cls = getattr(abtem, metadata["type"])
+        del metadata["type"]
+
+        axes_metadata = []
+        for key, axis_metadata in metadata["axes"].items():
+            axes_metadata.append(axis_from_dict(axis_metadata))
+
+        del metadata["axes"]
+        return cls, axes_metadata, metadata
+
     def _metadata_to_json(self):
         metadata = copy.copy(self.metadata)
         metadata["axes"] = {
@@ -698,19 +741,6 @@ class HasArray(HasAxes, CopyMixin):
             filename, array, description=self._metadata_to_json(), **kwargs
         )
 
-    @classmethod
-    def _unpack_kwargs(cls, attrs):
-        kwargs = {}
-        kwargs["ensemble_axes_metadata"] = []
-        for key, value in attrs.items():
-            if key == "ensemble_axes_metadata":
-                kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
-            elif key == "type":
-                pass
-            else:
-                kwargs[key] = value
-
-        return kwargs
 
     @classmethod
     def from_zarr(cls, url, chunks: int = "auto") -> "T":
@@ -772,6 +802,8 @@ def stack(
         axis_metadata = OrdinalAxis(values=axis_metadata)
 
     xp = get_array_module(has_arrays[0].array)
+
+    print(axis)
 
     assert axis <= len(has_arrays[0].ensemble_shape)
 

@@ -4,7 +4,7 @@ import numpy as np
 from ase.cell import Cell
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-
+from scipy.ndimage import maximum_filter
 from abtem.core.utils import label_to_index
 
 if TYPE_CHECKING:
@@ -33,8 +33,19 @@ def get_frequency_bin_edges(diffraction_patterns):
     return bin_edge_x, bin_edge_y
 
 
-def sphere_of_miller_index_grid_points(diffraction_patterns):
-    max_index = min(diffraction_patterns.shape[-2:]) // 2
+def sphere_of_miller_index_grid_points(diffraction_patterns, cell=None, max_index=None):
+    if max_index is None:
+        if cell is None:
+            raise RuntimeError()
+
+        min_planar_distance = cell.reciprocal().lengths().min()
+        max_limit = max(
+            (
+                abs(diffraction_patterns.limits[0][0]),
+                abs(diffraction_patterns.limits[1][0]),
+            )
+        )
+        max_index = int(np.ceil(max_limit / min_planar_distance))
 
     hkl = np.meshgrid(*(np.arange(-max_index, max_index + 1),) * 3, indexing="ij")
     hkl = np.stack((hkl[0], hkl[1], hkl[2]), -1).reshape((-1, 3))
@@ -74,17 +85,66 @@ def _validate_cell(cell):
         return cell
 
 
+def disk(width, height):
+    H = np.linspace(-1 + 1 / width, 1 - 1 / width, width)
+    W = np.linspace(-1 + 1 / height, 1 - 1 / height, height)
+    X, Y = np.meshgrid(H, W, indexing="ij")
+    return np.array((X**2 + Y**2) <= 1.0, dtype=bool)
+
+
+def hkl_tuples_to_str(miller_indices):
+    return ["{} {} {}".format(*hkl) for hkl in miller_indices]
+
+
+def hkl_str_to_tuples(miller_indices):
+    return [tuple(int(index) for index in hkl.split(" ")) for hkl in miller_indices]
+
+
+def integrate_disk(array, center, footprint):
+
+    radius = footprint.shape[0] // 2, footprint.shape[1] // 2
+    slice_limits = [
+        (
+            max(center[i] - radius[i], 0),
+            min(center[i] + radius[i] + 1, array.shape[-2 + i]),
+        )
+        for i in range(2)
+    ]
+
+    mask_slice_limits = [
+        (
+            slice_limits[i][0] - (center[i] - radius[i]),
+            footprint.shape[i] + (slice_limits[i][1] - (center[i] + radius[i] + 1)),
+        )
+        for i in range(2)
+    ]
+    cropped = array[..., slice(*slice_limits[0]), slice(*slice_limits[1])]
+    cropped_integration_footprint = footprint[
+        slice(*mask_slice_limits[0]), slice(*mask_slice_limits[1])
+    ]
+
+    #import matplotlib.pyplot as plt
+    #plt.imshow((cropped * cropped_integration_footprint) ** .05)
+    #plt.show()
+
+    return (cropped * cropped_integration_footprint).sum((-2, -1))
+
+
 def _index_diffraction_patterns(
-    diffraction_patterns, cell, threshold, distance_threshold
+    diffraction_patterns,
+    cell,
+    threshold,
+    distance_threshold,
+    min_distance: float = 0.0,
+    integration_radius: float = 0.0,
+    max_index: int = None,
 ):
 
     cell = _validate_cell(cell)
 
     shape = diffraction_patterns.shape[-2:]
 
-    hkl = sphere_of_miller_index_grid_points(
-        diffraction_patterns,
-    )
+    hkl = sphere_of_miller_index_grid_points(diffraction_patterns, cell, max_index)
 
     k = k_space_grid_points(hkl, cell)
 
@@ -107,6 +167,31 @@ def _index_diffraction_patterns(
     ensemble_indices = tuple(range(len(diffraction_patterns.ensemble_shape)))
     max_intensities = diffraction_patterns.array.max(axis=ensemble_indices)
 
+    if min_distance:
+        size = (
+            np.ceil((min_distance / np.array(diffraction_patterns.sampling))) // 2 * 4
+            + 1
+        ).astype(int)
+
+        footprint = disk(*size)
+        maximum_filtered = maximum_filter(
+            max_intensities, footprint=footprint, mode="constant"
+        )
+    else:
+        maximum_filtered = None
+
+    if integration_radius:
+        size = (
+            np.ceil((integration_radius / np.array(diffraction_patterns.sampling)))
+            // 2
+            * 4
+            + 1
+        ).astype(int)
+
+        integration_footprint = disk(*size)
+    else:
+        integration_footprint = None
+
     selected_hkl = []
     intensities = []
     positions = []
@@ -119,16 +204,34 @@ def _index_diffraction_patterns(
 
         max_intensity = max_intensities[n, m]
 
-        if max_intensity < threshold:
-            continue
+        if maximum_filtered is not None:
+            if max_intensity != maximum_filtered[n, m]:
+                continue
 
         if np.min(np.abs(d_ewald[indices])) > distance_threshold:
+            continue
+
+        if integration_footprint is not None:
+            max_intensity = integrate_disk(
+                max_intensities, (n, m), integration_footprint
+            )
+
+        if max_intensity < threshold:
             continue
 
         min_index = np.argmin(np.abs(d_ewald[indices]))
 
         selected_hkl.append(hkl[indices][min_index])
-        intensities.append(diffraction_patterns.array[..., n, m])
+
+        if integration_footprint is not None:
+            intensities.append(
+                integrate_disk(
+                    diffraction_patterns.array, (n, m), integration_footprint
+                )
+            )
+        else:
+            intensities.append(diffraction_patterns.array[..., n, m])
+
         positions.append(k[indices][min_index])
 
     return np.array(selected_hkl), np.array(intensities).T, np.array(positions)
@@ -193,5 +296,3 @@ def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
             spots[indices[sub_indices[order][-1]]] = True
 
     return spots
-
-

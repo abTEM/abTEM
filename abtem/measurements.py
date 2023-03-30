@@ -1,7 +1,19 @@
 """Module for handling measurements."""
 import copy
+import itertools
 from abc import ABCMeta, abstractmethod
-from typing import Union, Tuple, TypeVar, Dict, List, Sequence, Type, TYPE_CHECKING
+from collections import defaultdict
+from typing import (
+    Union,
+    Tuple,
+    TypeVar,
+    Dict,
+    List,
+    Sequence,
+    Type,
+    TYPE_CHECKING,
+    ChainMap,
+)
 
 import dask.array as da
 import matplotlib.pyplot as plt
@@ -363,13 +375,13 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         self._check_axes_metadata()
 
-        if not allow_base_axis_chunks:
-            if self.is_lazy and (
-                not all(len(chunks) == 1 for chunks in array.chunks[-2:])
-            ):
-                raise RuntimeError(
-                    f"Chunks not allowed in base axes of {self.__class__}."
-                )
+        # if not allow_base_axis_chunks:
+        #     if self.is_lazy and (
+        #         not all(len(chunks) == 1 for chunks in array.chunks[-2:])
+        #     ):
+        #         raise RuntimeError(
+        #             f"Chunks not allowed in base axes of {self.__class__}."
+        #         )
 
     # TODO: should be removed and the more basic version in superclass used instead.
     def iterate_ensemble(self, keep_dims: bool = False):
@@ -692,6 +704,7 @@ class BaseMeasurement2D(BaseMeasurement):
         common_color_scale: bool = False,
         cbar: bool = False,
         units: str = None,
+        display: bool = True,
     ) -> MeasurementVisualization2D:
         """
         Show the image(s) using matplotlib.
@@ -751,11 +764,11 @@ class BaseMeasurement2D(BaseMeasurement):
             cbar_mode = "each"
 
         if ax is None:
-            # with plt.ioff():
-            #     # fig = plt.figure()
+            with plt.ioff():
+                fig = plt.figure(figsize=figsize)
             #     fig = plt.figure(figsize=figsize)
 
-            fig = plt.figure(figsize=figsize)
+            # fig = plt.figure(figsize=figsize)
 
             axes = AxesGrid.from_measurements(
                 fig, self, axes_types, cbars, cbar_mode=cbar_mode
@@ -768,6 +781,7 @@ class BaseMeasurement2D(BaseMeasurement):
             axes_types = ()
             axes = np.array([[ax]])
 
+
         visualization = MeasurementVisualization2D(
             measurements,
             axes,
@@ -778,7 +792,11 @@ class BaseMeasurement2D(BaseMeasurement):
             common_color_scale=common_color_scale,
             units=units,
             power=power,
+            cmap=cmap,
         )
+
+        #if display:
+        #    plt.show(visualization.fig)
 
         return visualization
 
@@ -2024,6 +2042,9 @@ class DiffractionPatterns(BaseMeasurement2D):
         cell: Union[Cell, float, Tuple[float, float, float]],
         threshold: float = 0.001,
         distance_threshold=0.15,
+        min_distance=0.0,
+        integration_radius=0.,
+        max_index=None,
     ) -> "IndexedDiffractionPatterns":
 
         """
@@ -2046,6 +2067,9 @@ class DiffractionPatterns(BaseMeasurement2D):
             cell,
             threshold=threshold,
             distance_threshold=distance_threshold,
+            min_distance=min_distance,
+            integration_radius=integration_radius,
+            max_index=max_index
         )
 
         ensemble_axes_metadata = self.ensemble_axes_metadata
@@ -3344,15 +3368,25 @@ class IndexedDiffractionPatterns(BaseMeasurement):
     def ensemble_axes_metadata(self):
         return self._ensemble_axes_metadata
 
-    # def __getitem__(self, item):
-    #     if not self.ensemble_shape:
-    #         raise IndexError(
-    #             "indexing not available for indexed diffraction pattern without ensemble dimension"
-    #         )
-    #
-    #     return self.__class__(
-    #         self.miller_indices, self.intensities[item], self.positions
-    #     )
+    @classmethod
+    def _pack_kwargs(cls, attrs, kwargs):
+        kwargs["miller_indices"] = [tuple(hkl) for hkl in kwargs["miller_indices"]]
+        kwargs["positions"] = [
+            (float(position[0]), float(position[1]), float(position[2]))
+            for position in kwargs["positions"]
+        ]
+        super()._pack_kwargs(attrs, kwargs)
+
+    @classmethod
+    def _unpack_kwargs(cls, attrs):
+        kwargs = super()._unpack_kwargs(attrs)
+        kwargs["miller_indices"] = np.array(kwargs["miller_indices"], dtype=int)
+        kwargs["positions"] = np.array(kwargs["positions"], dtype=np.float32)
+        return kwargs
+
+        # return tuple(
+        #     (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
+        # )
 
     def remove_low_intensity(self, threshold: float = 1e-3):
         """
@@ -3390,12 +3424,10 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
     def crop(self, max_angle=None):
         mask = np.linalg.norm(self.angular_positions, axis=1) < max_angle
-
         miller_indices = self.miller_indices[mask]
         intensities = self.intensities[mask]
         positions = self.positions[mask]
-
-        return self.__class__(miller_indices, intensities, positions)
+        return self.__class__(intensities, miller_indices, positions)
 
     @staticmethod
     def _dict_to_arrays(spots):
@@ -3427,6 +3459,26 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         spots = {hkl: intensity / c for hkl, intensity in self._spots.items()}
 
         return self.__class__(spots, self._vectors)
+
+    def to_data_array(self):
+        import xarray
+
+        coords = []
+        for axes_metadata, n in zip(self.ensemble_axes_metadata, self.ensemble_shape):
+            coords.append(list(axes_metadata.coordinates(n)))
+
+        coords.append(["{} {} {}".format(*hkl) for hkl in self.miller_indices])
+
+        dims = [
+            axes_metadata.label for axes_metadata in self.ensemble_axes_metadata
+        ] + ["hkl"]
+
+        data = xarray.DataArray(
+            self.array,
+            coords=coords,
+            dims=dims,
+        )
+        return data
 
     def to_dataframe(self):
         """
@@ -3480,26 +3532,26 @@ class IndexedDiffractionPatterns(BaseMeasurement):
     def block_direct(self):
         to_delete = np.where(np.all(self.miller_indices == 0, axis=1))[0]
 
-        indexed_diffraction_patterns = self.copy()
+        miller_indices = np.delete(self.miller_indices, to_delete, axis=0)
+        intensities = np.delete(self.intensities, to_delete, axis=-1)
+        positions = np.delete(self.positions, to_delete, axis=0)
 
-        indexed_diffraction_patterns._miller_indices = np.delete(
-            indexed_diffraction_patterns._miller_indices, to_delete, axis=0
+        return self.__class__(
+            intensities,
+            miller_indices,
+            positions,
+            self.ensemble_axes_metadata,
+            self.metadata,
         )
-        indexed_diffraction_patterns._intensities = np.delete(
-            indexed_diffraction_patterns._intensities, to_delete, axis=0
-        )
-        indexed_diffraction_patterns._positions = np.delete(
-            indexed_diffraction_patterns._positions, to_delete, axis=0
-        )
-
-        return indexed_diffraction_patterns
 
     def show(
         self,
+        ax=None,
         power: float = 1.0,
         overlay_hkl: bool = False,
         cmap: str = None,
         scale: float = 1,
+        display:bool=True,
         **kwargs,
     ):
         """
@@ -3516,10 +3568,15 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
         axes_types = ("index",) * len(self.ensemble_shape)
 
-        with plt.ioff():
-            fig = plt.figure()
+        # with plt.ioff():
 
-        axes = AxesGrid(fig, 1, 1)
+        if ax is None:
+            with plt.ioff():
+                fig = plt.figure()
+            axes = AxesGrid(fig, 1, 1)
+        else:
+            axes = np.array([[ax]])
+
         visualization = DiffractionSpotsVisualization(
             self,
             axes,
@@ -3530,7 +3587,10 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             scale=scale,
         )
 
-        visualization.interact(True)
+        # visualization.interact(True)
+
+        if display:
+            plt.show(fig)
 
         return visualization
 
@@ -3542,6 +3602,62 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         # return _show_indexed_diffraction_pattern(
         #     indexed_diffraction_patterns, power=power, overlay_hkl=overlay_hkl, **kwargs
         # )
+
+    @property
+    def intensities_dict(self):
+        intensities = {
+            tuple(hkl): intensity
+            for hkl, intensity in zip(
+                self.miller_indices,
+                np.moveaxis(self.intensities, -1, 0),
+            )
+        }
+
+        values = np.zeros(self.shape[:-1], dtype=np.float32)
+        intensities = defaultdict(lambda: values, intensities)
+        return intensities
+
+    @property
+    def positions_dict(self):
+        positions = {
+            tuple(hkl): position
+            for hkl, position in zip(self.miller_indices, self.positions)
+        }
+        return positions
+
+    @classmethod
+    def merge(cls, diffracton_spots, axis):
+        intensities = [spots1.intensities_dict for spots1 in diffracton_spots]
+        positions = dict(
+            ChainMap(*[spots1.positions_dict for spots1 in diffracton_spots])
+        )
+
+        miller_indices = list(
+            set(itertools.chain(*[intensities1.keys() for intensities1 in intensities]))
+        )
+
+        new_intensities = {}
+        for hkl in miller_indices:
+            new_intensities[hkl] = []
+
+            for intensity in intensities:
+                new_intensities[hkl].append(intensity[hkl])
+
+            new_intensities[hkl] = np.stack(new_intensities[hkl], axis=0)
+
+        positions = dict(sorted(positions.items()))
+        intensities = dict(sorted(new_intensities.items()))
+
+        miller_indices = np.stack(list(intensities.keys()), axis=0)
+        positions = np.stack(list(positions.values()))
+        intensities = np.stack(list(intensities.values()), axis=-1)
+
+        ensemble_axes_metadata = [axis] + diffracton_spots[0].ensemble_axes_metadata
+        metadata = diffracton_spots[0].metadata
+
+        return IndexedDiffractionPatterns(
+            intensities, miller_indices, positions, ensemble_axes_metadata, metadata
+        )
 
     def interact(
         self,
@@ -3559,18 +3675,6 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         fig, ax = self.show(
             power=power, overlay_indices=overlay_miller_indices, ax=ax, **kwargs
         )
-
-        toggle_hkl_button = widgets.ToggleButton(
-            description="Toggle hkl", value=overlay_miller_indices
-        )
-
-        def update_toggle_hkl_button(change):
-            if change["new"]:
-                add_miller_index_annotations(ax, self)
-            else:
-                remove_annotations(ax)
-
-        toggle_hkl_button.observe(update_toggle_hkl_button, "value")
 
         right_sidebar = widgets.VBox([toggle_hkl_button])
 

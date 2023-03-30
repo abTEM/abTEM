@@ -20,6 +20,7 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
     PolarMeasurements,
+    IndexedDiffractionPatterns
 )
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.inelastic.phonons import FrozenPhonons, MDFrozenPhonons
