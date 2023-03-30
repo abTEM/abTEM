@@ -442,9 +442,11 @@ def show_measurement_2d(
                 _add_colorbar_abs(cax2, cbar_vmin, cbar_vmax)
             else:
                 try:
-                    ax.cax.colorbar(im, label=cbar_label)
+                    cbar = ax.cax.colorbar(im)
+                    cbar.set_label(cbar_label)
                 except AttributeError:
-                    plt.colorbar(im, ax=ax, label=cbar_label)
+                    cbar = plt.colorbar(im, ax=ax)
+                    cbar.set_label(cbar_label)
 
         if sizebar:
             size = (
