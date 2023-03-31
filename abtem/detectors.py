@@ -651,14 +651,14 @@ class PixelatedDetector(BaseDetector):
                     sampling=sampling[0],
                     offset=-(gpts[0] // 2) * sampling[0],
                     label="kx",
-                    units="1 / Å",
+                    units="1/Å",
                     fftshift=True,
                 ),
                 FourierSpaceAxis(
                     sampling=sampling[1],
                     offset=-(gpts[1] // 2) * sampling[1],
                     label="ky",
-                    units="1 / Å",
+                    units="1/Å",
                     fftshift=True,
                 ),
             ]

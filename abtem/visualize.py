@@ -95,7 +95,9 @@ def rescale_vmin_vmax_slider(slider, visualization):
 def rescale_power_slider(slider, visualization):
     power = np.inf
     for artist in visualization.artists.ravel():
-        power = min(power, artist.norm.gamma)
+        if isinstance(artist.norm, colors.PowerNorm):
+            power = min(power, artist.norm.gamma)
+        #elif isinstance()
 
     slider.value = power
 
@@ -142,12 +144,11 @@ def make_scale_button(visualization, vmin_vmax_slider=None):
         vmin, vmax = visualization.rescale()
 
         if vmin_vmax_slider is not None:
-            vmin_vmax_slider.min = vmin
-            vmin_vmax_slider.max = vmax
-            vmin_vmax_slider.value = [vmin, vmax]
-            vmin_vmax_slider.step = (vmax - vmin) / 100.0
-
-            #rescale_vmin_vmax_slider(vmin_vmax_slider, visualization)
+            with vmin_vmax_slider.hold_trait_notifications():
+                vmin_vmax_slider.min = vmin
+                vmin_vmax_slider.max = vmax
+                vmin_vmax_slider.value = [vmin, vmax]
+                vmin_vmax_slider.step = (vmax - vmin) / 100.0
 
         visualization.update_artists()
 
@@ -174,7 +175,7 @@ def make_autoscale_button(visualization, vmin_vmax_slider=None):
 
 
 def make_power_scale_slider(visualization, power=1.0):
-    def powerscale_button_changed(change):
+    def powerscale_slider_changed(change):
         visualization._update_power(change["new"])
 
     power_scale_slider = widgets.FloatSlider(
@@ -184,7 +185,7 @@ def make_power_scale_slider(visualization, power=1.0):
         description="Power",
         tooltip="Power",
     )
-    power_scale_slider.observe(powerscale_button_changed, "value")
+    power_scale_slider.observe(powerscale_slider_changed, "value")
 
     rescale_power_slider(power_scale_slider, visualization)
 
@@ -785,6 +786,25 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         if self.nrows > 1:
             self.set_row_titles()
 
+    @abstractmethod
+    def _update_vmin(self):
+        pass
+
+    @abstractmethod
+    def _update_vmax(self):
+        pass
+
+    def rescale(self):
+        vmin = self._update_vmin()
+        vmax = self._update_vmax()
+        self.update_artists()
+        return vmin, vmax
+
+    def set_autoscale(self, autoscale: bool):
+        self._autoscale = autoscale
+        if autoscale is True:
+            self.update_artists()
+
     @property
     def artists(self):
         return self._artists
@@ -918,6 +938,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         if phase_cmap is None:
             phase_cmap = config.get("phase_cmap", "hsluv")
 
+        self._normalization = None
         self._cmap = cmap
         self._phase_cmap = phase_cmap
         self._size_bars = []
@@ -926,18 +947,43 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         self._autoscale = autoscale
 
         self.set_artists()
-        self.set_normalization(vmin=vmin, vmax=vmax, power=power)
 
         if cbar:
             self.set_cbars()
             self.set_scale_units()
             self.set_cbar_labels()
 
-        # self.set_extent()
-        # self.set_x_units(units)
-        # self.set_y_units(units)
-        # self.set_x_labels()
-        # self.set_y_labels()
+        self.set_normalization(vmin=vmin, vmax=vmax, power=power)
+
+        self.set_extent()
+        self.set_x_units(units)
+        self.set_y_units(units)
+        self.set_x_labels()
+        self.set_y_labels()
+
+    def _update_vmin(self, vmin: float = None):
+        for i, measurement in self.iterate_measurements():
+            norm = self._normalization[i]
+            vmin = measurement.min() if vmin is None else vmin
+            norm.vmin = vmin
+
+        return vmin
+
+    def _update_vmax(self, vmax: float = None):
+        for i, measurement in self.iterate_measurements():
+            norm = self._normalization[i]
+            vmax = measurement.max() if vmax is None else vmax
+            norm.vmax = vmax
+
+        return vmax
+
+    def _update_power(self, power: float = 1.0):
+
+        for i, measurement in self.iterate_measurements():
+            norm = self._normalization[i]
+            norm.gamma = power
+
+        self.update_artists()
 
     @property
     def _artists_per_axes(self):
@@ -1043,15 +1089,24 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             if measurements.is_complex:
                 measurements = measurements.abs()
 
-            vmin = float(measurements.array.min())
-            vmax = float(measurements.array.max())
+            if vmin is None:
+                vmin = float(measurements.array.min())
 
+            if vmax is None:
+                vmax = float(measurements.array.max())
+
+        self._normalization = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
             artists = self._artists[i]
 
-            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+            if power == 1.:
+                norm = colors.Normalize(vmin=vmin, vmax=vmax)
+            else:
+                norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+
             norm.autoscale_None(measurement.array)
 
+            self._normalization[i] = norm
             # if self._domain_coloring:
             #    images[1].norm = norm1
             # else:
@@ -1144,7 +1199,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
         for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
-            print(ax)
+
             if self._domain_coloring:
                 images[i] = self._add_domain_coloring_imshow(ax, measurement.array)
             else:
@@ -1156,6 +1211,10 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         self._artists = images
 
     def update_artists(self):
+        if self._autoscale:
+            self._update_vmin()
+            self._update_vmax()
+
         for i, measurement in self.iterate_measurements(keep_dims=False):
             images = self._artists[i]
 
@@ -1169,9 +1228,43 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             else:
                 images.set_data(measurement.array.T)
 
-        # if self._autoscale:
-        #     self.set_normalization()
-        #
+    def interact(self, continuous_update: bool = False):
+
+        canvas = self.fig.canvas
+
+        sliders = make_indexing_sliders(self, continuous_update=True)
+
+        def update(change):
+
+            indices = ()
+            for slider in sliders:
+                idx = slider.index
+                indices += (idx,)
+
+            self.set_indices(indices)
+            #self._set_hkl_visibility()
+
+        for slider in sliders:
+            slider.observe(update, "value")
+
+        vmin_vmax_slider = make_vmin_vmax_slider(self)
+        power_scale_button = make_power_scale_slider(self)
+        scale_button = make_scale_button(self, vmin_vmax_slider)
+        autoscale_button = make_autoscale_button(self, vmin_vmax_slider)
+        toggle_hkl_button = make_toggle_hkl_button(self)
+
+        gui = widgets.VBox(
+            [
+                widgets.VBox(sliders),
+                widgets.VBox([widgets.HBox([scale_button, autoscale_button])]),
+                vmin_vmax_slider,
+                power_scale_button,
+                toggle_hkl_button,
+            ]
+        )
+
+        app = widgets.HBox([gui, canvas])
+        return app
 
 
 class MeasurementVisualization1D(MeasurementVisualization):
@@ -1608,16 +1701,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
                 self._miller_index_annotations.append(annotation)
 
-    def rescale(self):
-        vmin = self._update_vmin()
-        vmax = self._update_vmax()
-        self.update_artists()
-        return vmin, vmax
-
-    def set_autoscale(self, autoscale: bool):
-        self._autoscale = autoscale
-        if autoscale is True:
-            self.update_artists()
 
     def set_normalization(self, vmin=None, vmax=None, power=None):
         self._set_scale_factor_normalization(vmin=vmin, vmax=vmax, power=power)

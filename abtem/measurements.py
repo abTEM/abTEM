@@ -795,8 +795,8 @@ class BaseMeasurement2D(BaseMeasurement):
             cmap=cmap,
         )
 
-        #if display:
-        #    plt.show(visualization.fig)
+        if display:
+           plt.show(visualization.fig)
 
         return visualization
 
