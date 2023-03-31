@@ -537,7 +537,7 @@ class IndexedDiffractionPatterns:
     def to_dataframe(
         self,
         intensity_threshold: float = 1e-3,
-        inequivalency_threshold: float = 1.0,
+        inequivalency_threshold: float = np.inf,
         normalize: bool = False,
     ):
         """
@@ -561,9 +561,12 @@ class IndexedDiffractionPatterns:
 
         import pandas as pd
 
-        indexed = self.remove_equivalent(
-            inequivalency_threshold=inequivalency_threshold
-        )
+        if inequivalency_threshold < np.inf:
+            indexed = self.remove_equivalent(
+                inequivalency_threshold=inequivalency_threshold
+            )
+        else:
+            indexed = self
 
         indexed = indexed.remove_low_intensity(intensity_threshold)
 
