@@ -85,7 +85,14 @@ class ComputableList(list):
                 array = has_array.copy_to_device("cpu").array
 
                 computables.append(array.to_zarr(url, compute=compute, component=f"array{i}", overwrite=overwrite))
-                root.attrs[f"metadata{i}"] = has_array._metadata_to_json_string()
+                kwargs = has_array._copy_kwargs(exclude=("array",))
+
+                #print(kwargs)
+                #sss
+                packed_kwargs = has_array._pack_kwargs(kwargs)
+                #print(packed_kwargs)
+                root.attrs[f"kwargs{i}"] = packed_kwargs #has_array._metadata_to_json_string()
+                root.attrs[f"type{i}"] = has_array.__class__.__name__
 
         if not compute:
             return computables
@@ -681,12 +688,28 @@ class HasArray(HasAxes, CopyMixin):
         # return stored
 
     @classmethod
-    def _pack_kwargs(cls, attrs, kwargs):
+    def _unpack_kwargs(cls, attrs):
+        kwargs = {}
+        kwargs["ensemble_axes_metadata"] = []
+        for key, value in attrs.items():
+            if key == "ensemble_axes_metadata":
+                kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
+            elif key == "type":
+                pass
+            else:
+                kwargs[key] = value
+
+        return kwargs
+
+    @classmethod
+    def _pack_kwargs(cls, kwargs):
+        attrs = {}
         for key, value in kwargs.items():
             if key == "ensemble_axes_metadata":
                 attrs[key] = [axis_to_dict(axis) for axis in value]
             else:
                 attrs[key] = value
+        return attrs
 
     def _metadata_to_dict(self):
         metadata = copy.copy(self.metadata)
@@ -740,6 +763,30 @@ class HasArray(HasAxes, CopyMixin):
             filename, array, description=self._metadata_to_json_string(), **kwargs
         )
 
+    @classmethod
+    def from_zarr(cls, url, chunks: int = "auto") -> "T":
+        """
+        Read wave functions from a hdf5 file.
+
+        url : str
+            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
+            s3:// for remote data.
+        chunks : int, optional
+            aaaa
+        """
+        with zarr.open(url, mode="r") as f:
+            kwargs = cls._unpack_kwargs(f.attrs)
+
+        num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
+
+        if chunks == "auto":
+            chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+
+        array = da.from_zarr(url, component="array", chunks=chunks)
+
+        with config.set({"warnings.overspecified-grid": False}):
+            return cls(array, **kwargs)
+
 
 def expand_dims(a, axis):
     if type(axis) not in (tuple, list):
@@ -767,25 +814,70 @@ def from_zarr(url: str, chunks: Chunks = None):
         on-disc dataset is not optimal for the calculations to follow.
 
     """
-    has_arrays = []
-    with zarr.open(url, mode="r") as f:
-        for (key, json_string), component in zip(f.attrs.items(), f.array_keys()):
-            cls, axes_metadata, metadata = HasArray._metadata_from_json_string(json_string)
+    import abtem
 
-            num_ensemble_axes = len(axes_metadata) - cls._base_dims
+    imported = []
+    with zarr.open(url, mode="r") as f:
+        i = 0
+        types = []
+        while True:
+            try:
+                types.append(f.attrs[f"type{i}"])
+            except KeyError:
+                break
+            i += 1
+
+        for i, t in enumerate(types):
+            cls = getattr(abtem, t)
+            kwargs = cls._unpack_kwargs(f.attrs[f"kwargs{i}"])
+            num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
+
             if chunks == "auto":
                 chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
 
-            array = da.from_zarr(url, component=component, chunks=chunks)
-            has_array = cls.from_array_and_metadata(
-                array=array, axes_metadata=axes_metadata, metadata=metadata
-            )
-            has_arrays.append(has_array)
+            array = da.from_zarr(url, component=f"array{i}", chunks=chunks)
 
-    if len(has_arrays) == 1:
-        return has_arrays[0]
-    else:
-        return ComputableList(has_arrays)
+            with config.set({"warnings.overspecified-grid": False}):
+                imported.append(cls(array, **kwargs))
+
+    if len(imported) == 1:
+        imported = imported[0]
+
+    return imported
+
+
+# def from_zarr(url: str, chunks: Chunks = None):
+#     """
+#     Read abTEM data from zarr.
+#
+#     Parameters
+#     ----------
+#     url : str
+#         Location of the data. A URL can include a protocol specifier like s3:// for remote data.
+#     chunks :  tuple of ints or tuples of ints
+#         Passed to dask.array.from_array(), allows setting the chunks on initialisation, if the chunking scheme in the
+#         on-disc dataset is not optimal for the calculations to follow.
+#
+#     """
+#     has_arrays = []
+#     with zarr.open(url, mode="r") as f:
+#         for (key, json_string), component in zip(f.attrs.items(), f.array_keys()):
+#             cls, axes_metadata, metadata = HasArray._metadata_from_json_string(json_string)
+#
+#             num_ensemble_axes = len(axes_metadata) - cls._base_dims
+#             if chunks == "auto":
+#                 chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+#
+#             array = da.from_zarr(url, component=component, chunks=chunks)
+#             has_array = cls.from_array_and_metadata(
+#                 array=array, axes_metadata=axes_metadata, metadata=metadata
+#             )
+#             has_arrays.append(has_array)
+#
+#     if len(has_arrays) == 1:
+#         return has_arrays[0]
+#     else:
+#         return ComputableList(has_arrays)
 
 
 def stack(
