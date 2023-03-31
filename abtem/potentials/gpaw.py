@@ -77,6 +77,9 @@ class _DummyGPAW:
     D_asp: np.ndarray
     atoms: Atoms
 
+    def __len__(self):
+        return 1
+
     @property
     def setups(self):
         gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
