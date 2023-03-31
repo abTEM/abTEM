@@ -1638,6 +1638,7 @@ class _BaseMeasurement1d(BaseMeasurement):
         units: str = None,
         common_scale: bool = True,
         axes_types=None,
+        display: bool = True,
         **kwargs,
     ):
         """
@@ -1700,16 +1701,12 @@ class _BaseMeasurement1d(BaseMeasurement):
             axes_types = ("overlay",) * num_ensemble_axes
             axes = np.array([[ax]])
 
-        return MeasurementVisualization1D(measurements, axes, axes_types, units=units)
+        visualization = MeasurementVisualization1D(measurements, axes, axes_types, units=units)
 
-        # return show_measurements_1d(
-        #     self,
-        #     ax=ax,
-        #     figsize=figsize,
-        #     title=title,
-        #     units=units,
-        #     **kwargs,
-        # )
+        if display:
+            plt.show(visualization.fig)
+
+        return visualization
 
 
 class RealSpaceLineProfiles(_BaseMeasurement1d):
@@ -3590,7 +3587,7 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         # visualization.interact(True)
 
         if display:
-            plt.show(fig)
+            plt.show(visualization.fig)
 
         return visualization
 

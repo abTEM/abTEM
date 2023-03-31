@@ -198,6 +198,8 @@ class MeasurementVisualization:
         self._axes = axes
         self._axes_types = axes_types
         self._indices = self._validate_indices()
+        self._column_titles = []
+        self._row_titles = []
 
     @property
     def fig(self):
@@ -1282,6 +1284,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self._y_units = None
         self._x_label = None
         self._y_label = None
+        self._column_titles = []
         self._lines = np.array([[]])
         self.set_plots()
         self.set_x_units(units=units)
