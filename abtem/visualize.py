@@ -22,6 +22,8 @@ from mpl_toolkits.axes_grid1 import Size, Divider
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from mpl_toolkits.axes_grid1.axes_divider import AxesDivider
 from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
+from scipy.spatial import distance_matrix
+from scipy.spatial.distance import squareform
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
@@ -1445,13 +1447,11 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         autoscale: bool = True,
     ):
 
-        self._scale = scale
-
         positions = measurements.positions[:, :2]
-        self._scale_factor = 0.3
-        #     np.sqrt(
-        #     squareform(distance_matrix(positions, positions)).min()
-        # )
+
+        self._scale = np.sqrt(
+            squareform(distance_matrix(positions, positions)).min()
+        ) * scale
 
         self._normalization = None
         self._scale_normalization = None
@@ -1482,11 +1482,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         self._set_normalization(vmin=vmin, vmax=vmax, power=power)
         self.set_artists()
 
-        #
-        # if cbar:
-        #     self.set_cbars()
-        #     self.set_scale_units()
-        #     self.set_cbar_labels()
+        if cbar:
+            self.set_cbars()
+            self.set_scale_units()
+            self.set_cbar_labels()
 
         # self.set_extent()
         # self.set_x_units(units)
@@ -1499,6 +1498,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     #     self.update_artists()
     #     self._update_vmin(vmin=vmin)
     #
+
+    @property
+    def _artists_per_axes(self):
+        return 1
 
     def _update_vmin(self, vmin: float = None):
         for i, measurement in self.iterate_measurements():
@@ -1549,8 +1552,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
         if self._common_color_scale:
             measurements = self._get_indexed_measurements().abs()
-            vmin = float(measurements.array.min()) ** 0.5
-            vmax = float(measurements.array.max()) ** 0.5
+            vmin = float(measurements.array.min()) #** 0.5
+            vmax = float(measurements.array.max()) #** 0.5
 
         if power is None:
             power = 1.0
@@ -1558,11 +1561,13 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         self._scale_normalization = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
 
-            vmin = vmin**0.5 if vmin is not None else vmin
-            vmax = vmax**0.5 if vmax is not None else vmax
+            vmin = vmin**2 if vmin is not None else vmin
+            vmax = vmax**2 if vmax is not None else vmax
+
+            print(vmin, vmax)
 
             norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-            norm.autoscale_None(measurement.array**0.5)
+            norm.autoscale_None(measurement.array ** .5)
 
             self._scale_normalization[i] = norm
 
@@ -1604,7 +1609,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
         sqrt_intensities = intensities**0.5
 
-        scales = norm(sqrt_intensities) * self._scale_factor
+        scales = norm(sqrt_intensities) * self._scale
 
         return intensities, positions, scales
 

@@ -231,7 +231,6 @@ def _annular_detector_mask(
     fftshift: bool = False,
     xp=np,
 ) -> Union[np.ndarray, List[np.ndarray]]:
-
     kx, ky = spatial_frequencies(
         gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
     )
@@ -449,7 +448,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
     def abs(self) -> T:
         """Calculates the absolute value of a complex-valued measurement."""
-        self._check_is_complex()
+        #self._check_is_complex()
         return self._apply_element_wise_func(get_array_module(self.array).abs)
 
     def intensity(self) -> T:
@@ -682,6 +681,45 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         return interact.interact(self, **kwargs)
 
 
+def _validate_axes(measurements, ax, explode, cbar, common_color_scale, figsize):
+    num_ensemble_axes = len(measurements.ensemble_shape)
+
+    if explode:
+        num_index_axes = max(num_ensemble_axes - 2, 0)
+        num_explode_axes = min(num_ensemble_axes, 2)
+        axes_types = ("index",) * num_index_axes + ("explode",) * num_explode_axes
+    else:
+        axes_types = ("index",) * num_ensemble_axes
+
+    if cbar:
+        if measurements.is_complex:
+            cbars = 2
+        else:
+            cbars = 1
+    else:
+        cbars = 0
+
+    if common_color_scale:
+        cbar_mode = "single"
+    else:
+        cbar_mode = "each"
+
+    if ax is None:
+        with plt.ioff():
+            fig = plt.figure(figsize=figsize)
+
+        axes = AxesGrid.from_measurements(
+            fig, measurements, axes_types, cbars, cbar_mode=cbar_mode
+        )
+    else:
+        if explode:
+            raise NotImplementedError("`ax` not implemented with `explode = True`.")
+        axes_types = ()
+        axes = np.array([[ax]])
+
+    return axes, axes_types
+
+
 class BaseMeasurement2D(BaseMeasurement):
     # @abstractmethod
     # def _plot_extent_x(self, units):
@@ -741,49 +779,12 @@ class BaseMeasurement2D(BaseMeasurement):
         Figure, matplotlib.axes.Axes
         """
 
-        num_ensemble_axes = len(self.ensemble_shape)
-
-        if explode:
-            num_index_axes = max(num_ensemble_axes - 2, 0)
-            num_explode_axes = min(num_ensemble_axes, 2)
-            axes_types = ("index",) * num_index_axes + ("explode",) * num_explode_axes
-        else:
-            axes_types = ("index",) * num_ensemble_axes
-
-        if cbar:
-            if self.is_complex:
-                cbars = 2
-            else:
-                cbars = 1
-        else:
-            cbars = 0
-
-        if common_color_scale:
-            cbar_mode = "single"
-        else:
-            cbar_mode = "each"
-
-        if ax is None:
-            with plt.ioff():
-                fig = plt.figure(figsize=figsize)
-            #     fig = plt.figure(figsize=figsize)
-
-            # fig = plt.figure(figsize=figsize)
-
-            axes = AxesGrid.from_measurements(
-                fig, self, axes_types, cbars, cbar_mode=cbar_mode
-            )
-            measurements = self
-        else:
-            if explode:
-                raise NotImplementedError("`ax` not implemented with `explode = True`.")
-            measurements = self  # [("index",) * num_ensemble_axes]
-            axes_types = ()
-            axes = np.array([[ax]])
-
+        axes, axes_types = _validate_axes(
+            self, ax, explode, cbar, common_color_scale, figsize
+        )
 
         visualization = MeasurementVisualization2D(
-            measurements,
+            self,
             axes,
             vmin=vmin,
             vmax=vmax,
@@ -796,7 +797,7 @@ class BaseMeasurement2D(BaseMeasurement):
         )
 
         if display:
-           plt.show(visualization.fig)
+            plt.show(visualization.fig)
 
         return visualization
 
@@ -1701,7 +1702,9 @@ class _BaseMeasurement1d(BaseMeasurement):
             axes_types = ("overlay",) * num_ensemble_axes
             axes = np.array([[ax]])
 
-        visualization = MeasurementVisualization1D(measurements, axes, axes_types, units=units)
+        visualization = MeasurementVisualization1D(
+            measurements, axes, axes_types, units=units
+        )
 
         if display:
             plt.show(visualization.fig)
@@ -2040,7 +2043,7 @@ class DiffractionPatterns(BaseMeasurement2D):
         threshold: float = 0.001,
         distance_threshold=0.15,
         min_distance=0.0,
-        integration_radius=0.,
+        integration_radius=0.0,
         max_index=None,
     ) -> "IndexedDiffractionPatterns":
 
@@ -2066,7 +2069,7 @@ class DiffractionPatterns(BaseMeasurement2D):
             distance_threshold=distance_threshold,
             min_distance=min_distance,
             integration_radius=integration_radius,
-            max_index=max_index
+            max_index=max_index,
         )
 
         ensemble_axes_metadata = self.ensemble_axes_metadata
@@ -3262,7 +3265,6 @@ class PolarMeasurements(BaseMeasurement):
 
 
 class IndexedDiffractionPatterns(BaseMeasurement):
-
     _base_dims = 1
 
     def __init__(
@@ -3396,12 +3398,13 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
         """
         mask = self.intensities > threshold
+
         miller_indices = self.miller_indices[mask]
         intensities = self.intensities[mask]
         positions = self.positions[mask]
 
         return self.__class__(
-            miller_indices, intensities, positions, metadata=self._metadata
+            intensities, miller_indices, positions, metadata=self._metadata
         )
 
         # miller_indices, intensities = self._dict_to_arrays(self._spots)
@@ -3548,8 +3551,11 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         overlay_hkl: bool = False,
         cmap: str = None,
         scale: float = 1,
-        display:bool=True,
-        **kwargs,
+        display: bool = True,
+        explode: bool = False,
+        cbar:bool=False,
+        common_color_scale:bool=False,
+        figsize=None
     ):
         """
 
@@ -3563,16 +3569,9 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
         """
 
-        axes_types = ("index",) * len(self.ensemble_shape)
-
-        # with plt.ioff():
-
-        if ax is None:
-            with plt.ioff():
-                fig = plt.figure()
-            axes = AxesGrid(fig, 1, 1)
-        else:
-            axes = np.array([[ax]])
+        axes, axes_types = _validate_axes(
+            self, ax, explode, cbar, common_color_scale, figsize
+        )
 
         visualization = DiffractionSpotsVisualization(
             self,
@@ -3582,6 +3581,8 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             autoscale=False,
             cmap=cmap,
             scale=scale,
+            cbar=cbar,
+            common_color_scale=common_color_scale,
         )
 
         # visualization.interact(True)
