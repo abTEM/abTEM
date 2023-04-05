@@ -18,6 +18,7 @@ from typing import (
 import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
+from IPython.core.display_functions import display
 from ase import Atom
 from ase.cell import Cell
 from matplotlib.axes import Axes
@@ -448,7 +449,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
     def abs(self) -> T:
         """Calculates the absolute value of a complex-valued measurement."""
-        #self._check_is_complex()
+        # self._check_is_complex()
         return self._apply_element_wise_func(get_array_module(self.array).abs)
 
     def intensity(self) -> T:
@@ -678,26 +679,62 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         **kwargs,
     ):
 
+        visualization = self.show()
+
         return interact.interact(self, **kwargs)
 
 
-def _validate_axes(measurements, ax, explode, cbar, common_color_scale, figsize):
+def _axes_grid_cols_and_rows(measurements, axes_types):
+    shape = measurements.ensemble_shape
+
+    shape = tuple(
+        n
+        for n, axes_type in zip(shape, axes_types)
+        if not axes_type in ("index", "range", "overlay")
+    )
+
+    if len(shape) > 0:
+        ncols = shape[0]
+    else:
+        ncols = 1
+
+    if len(shape) > 1:
+        nrows = shape[1]
+    else:
+        nrows = 1
+
+    return ncols, nrows
+
+
+def _validate_axes(
+    measurements: BaseMeasurement,
+    ax: Axes,
+    axes_types: Tuple[str, ...] = None,
+    explode: bool = False,
+    cbar: bool = False,
+    common_color_scale: bool = False,
+    figsize: Tuple[float, float] = None,
+    ioff:bool=False
+):
     num_ensemble_axes = len(measurements.ensemble_shape)
 
-    if explode:
-        num_index_axes = max(num_ensemble_axes - 2, 0)
-        num_explode_axes = min(num_ensemble_axes, 2)
-        axes_types = ("index",) * num_index_axes + ("explode",) * num_explode_axes
+    if axes_types is None:
+        if explode:
+            num_index_axes = max(num_ensemble_axes - 2, 0)
+            num_explode_axes = min(num_ensemble_axes, 2)
+            axes_types = ("index",) * num_index_axes + ("explode",) * num_explode_axes
+        else:
+            axes_types = ("index",) * num_ensemble_axes
     else:
-        axes_types = ("index",) * num_ensemble_axes
+        assert len(axes_types) == num_ensemble_axes
 
     if cbar:
         if measurements.is_complex:
-            cbars = 2
+            ncbars = 2
         else:
-            cbars = 1
+            ncbars = 1
     else:
-        cbars = 0
+        ncbars = 0
 
     if common_color_scale:
         cbar_mode = "single"
@@ -705,11 +742,16 @@ def _validate_axes(measurements, ax, explode, cbar, common_color_scale, figsize)
         cbar_mode = "each"
 
     if ax is None:
-        with plt.ioff():
+        if ioff:
+            with plt.ioff():
+                fig = plt.figure(figsize=figsize)
+        else:
             fig = plt.figure(figsize=figsize)
 
-        axes = AxesGrid.from_measurements(
-            fig, measurements, axes_types, cbars, cbar_mode=cbar_mode
+        ncols, nrows = _axes_grid_cols_and_rows(measurements, axes_types)
+
+        axes = AxesGrid(
+            fig=fig, ncols=ncols, nrows=nrows, ncbars=ncbars, cbar_mode=cbar_mode
         )
     else:
         if explode:
@@ -721,13 +763,6 @@ def _validate_axes(measurements, ax, explode, cbar, common_color_scale, figsize)
 
 
 class BaseMeasurement2D(BaseMeasurement):
-    # @abstractmethod
-    # def _plot_extent_x(self, units):
-    #     pass
-    #
-    # @abstractmethod
-    # def _plot_extent_y(self, units):
-    #     pass
 
     def show(
         self,
@@ -742,7 +777,8 @@ class BaseMeasurement2D(BaseMeasurement):
         common_color_scale: bool = False,
         cbar: bool = False,
         units: str = None,
-        display: bool = True,
+        interact: bool = False,
+        axes_types=None,
     ) -> MeasurementVisualization2D:
         """
         Show the image(s) using matplotlib.
@@ -780,7 +816,14 @@ class BaseMeasurement2D(BaseMeasurement):
         """
 
         axes, axes_types = _validate_axes(
-            self, ax, explode, cbar, common_color_scale, figsize
+            self,
+            ax,
+            axes_types=axes_types,
+            explode=explode,
+            cbar=cbar,
+            common_color_scale=common_color_scale,
+            figsize=figsize,
+            ioff=interact,
         )
 
         visualization = MeasurementVisualization2D(
@@ -796,8 +839,10 @@ class BaseMeasurement2D(BaseMeasurement):
             cmap=cmap,
         )
 
-        if display:
-            plt.show(visualization.fig)
+        if interact:
+            display(visualization.widgets)
+        #else:
+            #plt.show(visualization.fig)
 
         return visualization
 
@@ -3404,7 +3449,11 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         positions = self.positions[mask]
 
         return self.__class__(
-            intensities, miller_indices, positions, metadata=self._metadata
+            intensities,
+            miller_indices,
+            positions,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self._metadata,
         )
 
         # miller_indices, intensities = self._dict_to_arrays(self._spots)
@@ -3425,9 +3474,15 @@ class IndexedDiffractionPatterns(BaseMeasurement):
     def crop(self, max_angle=None):
         mask = np.linalg.norm(self.angular_positions, axis=1) < max_angle
         miller_indices = self.miller_indices[mask]
-        intensities = self.intensities[mask]
+        array = self.array[..., mask]
         positions = self.positions[mask]
-        return self.__class__(intensities, miller_indices, positions)
+        return self.__class__(
+            array,
+            miller_indices,
+            positions,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self._metadata,
+        )
 
     @staticmethod
     def _dict_to_arrays(spots):
@@ -3553,9 +3608,9 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         scale: float = 1,
         display: bool = True,
         explode: bool = False,
-        cbar:bool=False,
-        common_color_scale:bool=False,
-        figsize=None
+        cbar: bool = False,
+        common_color_scale: bool = False,
+        figsize=None,
     ):
         """
 

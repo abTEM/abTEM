@@ -319,7 +319,7 @@ class Grid(CopyMixin, EqualityMixin):
                     "Inconsistent grid gpts ({} != {})".format(self.gpts, other.gpts)
                 )
 
-    def round_to_power(self, power: int = 2):
+    def round_to_power(self):
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
         whose size can be factored into small primes (2, 3, 5 and 7).
@@ -330,9 +330,14 @@ class Grid(CopyMixin, EqualityMixin):
             The gpts will be a power of this number.
         """
 
-        self.gpts = tuple(
-            power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts
-        )
+        gpts = ()
+        for n in self.gpts:
+            best_n = 2 ** np.ceil(np.log(n) / np.log(2))
+            for power in [3, 5, 7]:
+                best_n = min(power ** np.ceil(np.log(n) / np.log(power)), best_n)
+            gpts += (best_n,)
+
+        self.gpts = gpts
 
 
 class HasGridMixin:

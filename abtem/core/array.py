@@ -557,8 +557,6 @@ class HasArray(HasAxes, CopyMixin):
 
         array = da.from_array(self.array, chunks=chunks)
 
-        print(array)
-
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
 
     def compute(
@@ -802,8 +800,6 @@ def stack(
         axis_metadata = OrdinalAxis(values=axis_metadata)
 
     xp = get_array_module(has_arrays[0].array)
-
-    print(axis)
 
     assert axis <= len(has_arrays[0].ensemble_shape)
 

@@ -123,9 +123,9 @@ def integrate_disk(array, center, footprint):
         slice(*mask_slice_limits[0]), slice(*mask_slice_limits[1])
     ]
 
-    #import matplotlib.pyplot as plt
-    #plt.imshow((cropped * cropped_integration_footprint) ** .05)
-    #plt.show()
+    # import matplotlib.pyplot as plt
+    # plt.imshow((cropped * cropped_integration_footprint) ** .05)
+    # plt.show()
 
     return (cropped * cropped_integration_footprint).sum((-2, -1))
 
@@ -145,6 +145,15 @@ def _index_diffraction_patterns(
     shape = diffraction_patterns.shape[-2:]
 
     hkl = sphere_of_miller_index_grid_points(diffraction_patterns, cell, max_index)
+
+    is_valid = ((hkl % 2 == 0).all(axis=1) + (hkl % 2 == 1).all(axis=1)) #\
+
+    # a= ((hkl[:, [0, 1]].sum(axis=1) % 2 == 0)
+    #     * (hkl[:, [0, 2]].sum(axis=1) % 2 == 0)
+    #     * (hkl[:, [1, 2]].sum(axis=1) % 2 == 0)
+    # )
+
+    hkl = hkl[is_valid]
 
     k = k_space_grid_points(hkl, cell)
 
@@ -182,9 +191,9 @@ def _index_diffraction_patterns(
 
     if integration_radius:
         size = (
-            np.ceil((integration_radius / np.array(diffraction_patterns.sampling)))
+            np.ceil((2 * integration_radius / np.array(diffraction_patterns.sampling)))
             // 2
-            * 4
+            * 2
             + 1
         ).astype(int)
 
@@ -234,7 +243,11 @@ def _index_diffraction_patterns(
 
         positions.append(k[indices][min_index])
 
-    return np.array(selected_hkl), np.array(intensities).T, np.array(positions)
+    #print(np.array(intensities).shape)
+    intensities = np.array(intensities)
+    intensities = np.moveaxis(intensities, 0, -1)
+
+    return np.array(selected_hkl), intensities, np.array(positions)
 
 
 def format_miller_indices(hkl):

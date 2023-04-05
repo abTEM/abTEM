@@ -225,7 +225,7 @@ class NonLinearAxis(OrdinalAxis):
             return " ".join([f"{value:.2f}" for value in self.values])
 
     def format_title(self, formatting, units=None, include_label=True):
-        value = self.values[0] #* _get_conversion_factor(units, self.units)
+        value = self.values[0] * _get_conversion_factor(units, self.units)
 
         units = _validate_units(units,self.units)
 
