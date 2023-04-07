@@ -537,6 +537,7 @@ class AxesGrid:
             cbar_mode=cbar_mode,
             direction="col",
         )
+
         row_layout = make_grid_layout(
             rows, ncbars=0, sizes=self._row_sizes, direction="row"
         )
@@ -546,9 +547,10 @@ class AxesGrid:
         )
 
         i = 0
+        #n_single_cb_axes = 0
         caxes = []
         for nx, col_size in enumerate(col_layout):
-            add_cb_axes = True
+
             for ny, row_size in enumerate(row_layout):
 
                 if isinstance(col_size, Size.AxesX) and (
@@ -558,25 +560,45 @@ class AxesGrid:
                     ax.set_axes_locator(divider.new_locator(nx=nx, ny=ny))
                     i += 1
 
-                if (
-                    (col_size is self._col_sizes["cbar"])
-                    # col_size is col_layout[-2]
-                    and (isinstance(row_size, Size.AxesY))
-                    and add_cb_axes
-                ):
+                if cbar_mode == "each":
+                    if (col_size is self._col_sizes["cbar"]) and (isinstance(row_size, Size.AxesY)):
+                        cb_ax = _cbaraxes_class_factory(Axes)(
+                            fig, divider.get_position(), orientation="vertical"
+                        )
 
-                    cb_ax = _cbaraxes_class_factory(Axes)(
-                        fig, divider.get_position(), orientation="vertical"
-                    )
-
-                    fig.add_axes(cb_ax)
-
-                    caxes.append(cb_ax)
-                    if cbar_mode == "each":
+                        fig.add_axes(cb_ax)
                         cb_ax.set_axes_locator(divider.new_locator(nx=nx, ny=ny))
-                    else:
-                        cb_ax.set_axes_locator(divider.new_locator(nx=-3, ny=0, ny1=-1))
-                        add_cb_axes = False
+                        caxes.append(cb_ax)
+
+                if cbar_mode == "single":
+                    if (col_size is self._col_sizes["cbar"]) and (isinstance(row_size, Size.AxesY)):
+                        cb_ax = _cbaraxes_class_factory(Axes)(
+                            fig, divider.get_position(), orientation="vertical"
+                        )
+                        fig.add_axes(cb_ax)
+                        cb_ax.set_axes_locator(divider.new_locator(nx=nx, ny=0))
+                        caxes.append(cb_ax)
+
+
+                # if (
+                #     (col_size is self._col_sizes["cbar"])
+                #     and (isinstance(row_size, Size.AxesY))
+                #     and add_cb_axes
+                # ):
+                #
+                #     cb_ax = _cbaraxes_class_factory(Axes)(
+                #         fig, divider.get_position(), orientation="vertical"
+                #     )
+                #
+                #     fig.add_axes(cb_ax)
+                #
+                #     caxes.append(cb_ax)
+                #     if cbar_mode == "each":
+                #         cb_ax.set_axes_locator(divider.new_locator(nx=nx, ny=ny))
+                #     else:
+                #         #sss
+                #         cb_ax.set_axes_locator(divider.new_locator(nx=-3, ny=0, ny1=-1))
+                #         add_cb_axes = False
 
         if cbar_mode == "single":
             caxes = caxes * len(axes)
@@ -661,6 +683,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         self._row_titles = []
         self._artists = None
         self._autoscale = None
+        self._common_color_scale = None
 
         if self.ncols > 1:
             self.set_column_titles()
@@ -668,8 +691,55 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         if self.nrows > 1:
             self.set_row_titles()
 
+    def _validate_vmin_vmax(self, vmin: float = None, vmax: float = None):
+        for i, measurement in self.iterate_measurements():
+            vmin = measurement.min() if vmin is None else vmin
+            vmax = measurement.max() if vmax is None else vmax
+
+        return vmin, vmax
+
+    def _set_vmin_vmax(self, vmin, vmax):
+        for norm in self._normalization.ravel():
+            norm.vmin = vmin
+            norm.vmax = vmax
+            print("sssssss")
+
+    def _create_normalization(
+        self,
+        power: float = None,
+        vmin: float = None,
+        vmax: float = None,
+    ):
+
+        if self._common_color_scale:
+            measurements = self._get_indexed_measurements()
+
+            if measurements.is_complex:
+                measurements = measurements.abs()
+
+            if vmin is None:
+                vmin = float(measurements.array.min())
+
+            if vmax is None:
+                vmax = float(measurements.array.max())
+
+        self._normalization = np.zeros(self.axes.shape, dtype=object)
+        for i, measurement in self.iterate_measurements(keep_dims=False):
+
+            if power == 1.0:
+                norm = colors.Normalize(vmin=vmin, vmax=vmax)
+            else:
+                norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+
+            if measurement.is_complex:
+                measurement = measurement.abs()
+
+            norm.autoscale_None(measurement.array)
+
+            self._normalization[i] = norm
+
     @abstractmethod
-    def _validate_vmin_vmax(self):
+    def set_normalization(self):
         pass
 
     @property
@@ -783,7 +853,6 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         axes_types: tuple = None,
         cbar: bool = False,
         cmap: str = None,
-        phase_cmap: str = None,
         vmin: float = None,
         vmax: float = None,
         power: float = 1.0,
@@ -799,46 +868,28 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             axes_types=axes_types,
         )
 
-        if cmap is None:
-            cmap = config.get("visualize.cmap", "viridis")
 
-        if phase_cmap is None:
-            phase_cmap = config.get("phase_cmap", "hsluv")
 
         self._normalization = None
         self._cmap = cmap
-        self._phase_cmap = phase_cmap
         self._size_bars = []
         self._common_color_scale = common_color_scale
         self._convert_complex = convert_complex
         self._autoscale = autoscale
 
         self.set_artists()
-
-        if cbar:
-            self.set_cbars()
-            self.set_scale_units()
-            self.set_cbar_labels()
-
         self.set_normalization(vmin=vmin, vmax=vmax, power=power)
 
-        self.set_extent()
-        self.set_x_units(units)
-        self.set_y_units(units)
-        self.set_x_labels()
-        self.set_y_labels()
-
-    def _validate_vmin_vmax(self, vmin: float = None, vmax: float = None):
-        for i, measurement in self.iterate_measurements():
-            vmin = measurement.min() if vmin is None else vmin
-            vmax = measurement.max() if vmax is None else vmax
-
-        return vmin, vmax
-
-    def _set_vmin_vmax(self, vmin, vmax):
-        for norm in self._normalization.ravel():
-            norm.vmin = vmin
-            norm.vmax = vmax
+        # if cbar:
+        #     self.set_cbars()
+        #     self.set_scale_units()
+        #     self.set_cbar_labels()
+        #
+        # self.set_extent()
+        # self.set_x_units(units)
+        # self.set_y_units(units)
+        # self.set_x_labels()
+        # self.set_y_labels()
 
     def _set_power(self, power: float = 1.0):
         for i, measurement in self.iterate_measurements(keep_dims=False):
@@ -952,43 +1003,18 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             cbar2.formatter.set_powerlimits((0, 0))
             cbar2.formatter.set_useMathText(True)
             cbar2.ax.yaxis.set_offset_position("left")
+    def set_normalization(self, power:float=1., vmin:float=None, vmax:float=None):
 
-    def set_normalization(
-        self,
-        power: float = None,
-        vmin: float = None,
-        vmax: float = None,
-    ):
+        self._create_normalization(power=power, vmin=vmin, vmax=vmax)
 
-        if self._common_color_scale:
-            measurements = self._get_indexed_measurements()
-
-            if measurements.is_complex:
-                measurements = measurements.abs()
-
-            if vmin is None:
-                vmin = float(measurements.array.min())
-
-            if vmax is None:
-                vmax = float(measurements.array.max())
-
-        self._normalization = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
             artists = self._artists[i]
+            norm = self._normalization[i]
 
-            if power == 1.0:
-                norm = colors.Normalize(vmin=vmin, vmax=vmax)
+            if self._domain_coloring:
+                artists[1].set_norm(norm)
             else:
-                norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-
-            norm.autoscale_None(measurement.array)
-
-            self._normalization[i] = norm
-            # if self._domain_coloring:
-            #    images[1].norm = norm1
-            # else:
-            artists.set_norm(norm)
-
+                artists.set_norm(norm)
     def set_x_labels(self, label=None):
         if label is None:
             self._x_label = self.measurements.axes_metadata[-2].label
@@ -1038,7 +1064,14 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     def _add_domain_coloring_imshow(self, ax, array):
         abs_array = np.abs(array)
         alpha = (abs_array - abs_array.min()) / abs_array.ptp()
-        cmap = hsluv_cmap if self._phase_cmap == "hsluv" else self._phase_cmap
+
+        if self._cmap is None:
+            cmap = config.get("phase_cmap", "hsluv")
+        else:
+            cmap = self._cmap
+
+        if cmap == "hsluv":
+            cmap = hsluv_cmap
 
         im1 = ax.imshow(
             np.angle(array).T,
@@ -1095,7 +1128,9 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             if self._domain_coloring:
                 array = measurement.array
                 abs_array = np.abs(array)
-                alpha = (abs_array - abs_array.min()) / abs_array.ptp()
+                alpha = self._normalization[i](abs_array)
+                alpha = np.clip(alpha, a_min=0, a_max=1)
+
                 images[0].set_alpha(alpha)
                 images[0].set_data(np.angle(array))
                 images[1].set_data(abs_array)
@@ -1347,14 +1382,20 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         self._autoscale = autoscale
         self._miller_index_annotations = []
 
-        self._set_scale_factor_normalization(power=power)
-        self._set_normalization(vmin=vmin, vmax=vmax, power=power)
+        #self._set_scale_factor_normalization(power=power)
+        self._create_normalization(power=power, vmin=vmin, vmax=vmax)
         self.set_artists()
 
-        if cbar:
-            self.set_cbars()
-            self.set_scale_units()
-            self.set_cbar_labels()
+        #self.set_normalization(vmin=vmin, vmax=vmax, power=power)
+
+
+
+        #
+        # if cbar:
+        #     self.set_cbars()
+        #     self.set_scale_units()
+        #
+        #     #self.set_cbar_labels()
 
         # self.set_extent()
         # self.set_x_units(units)
@@ -1372,99 +1413,49 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     def _artists_per_axes(self):
         return 1
 
-    def _update_vmin(self, vmin: float = None):
-        for i, measurement in self.iterate_measurements():
-            norm = self._normalization[i]
-            vmin = measurement.min() if vmin is None else vmin
-            norm.vmin = vmin
-
-            norm = self._scale_normalization[i]
-            vmin = measurement.min() if vmin is None else vmin
-            norm.vmin = vmin**0.5
-
-        return vmin
-
-    def _update_vmax(self, vmax: float = None):
-        for i, measurement in self.iterate_measurements():
-            norm = self._normalization[i]
-            vmax = measurement.max() if vmax is None else vmax
-            norm.vmax = vmax
-
-            norm = self._scale_normalization[i]
-            vmax = measurement.max() if vmax is None else vmax
-            norm.vmax = vmax**0.5
-
-        return vmax
-
-    def _update_power(self, power: float = 1.0):
-
-        for i, measurement in self.iterate_measurements():
-            norm = self._normalization[i]
-            norm.gamma = power
-
-            norm = self._scale_normalization[i]
-            norm.gamma = power
-
-        self.update_artists()
-
-    def update_vmin_vmax(self, vmin=None, vmax=None):
-        self._update_vmin(vmin)
-        self._update_vmax(vmax)
-        self.update_artists()
-
-    def _set_scale_factor_normalization(
-        self,
-        power: float = None,
-        vmin: float = None,
-        vmax: float = None,
-    ):
-
-        if self._common_color_scale:
-            measurements = self._get_indexed_measurements().abs()
-            vmin = float(measurements.array.min())  # ** 0.5
-            vmax = float(measurements.array.max())  # ** 0.5
-
-        if power is None:
-            power = 1.0
-
-        self._scale_normalization = np.zeros(self.axes.shape, dtype=object)
-        for i, measurement in self.iterate_measurements(keep_dims=False):
-
-            vmin = vmin**0.5 if vmin is not None else vmin
-            vmax = vmax**0.5 if vmax is not None else vmax
-
-            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-            norm.autoscale_None(measurement.array**0.5)
-
-            self._scale_normalization[i] = norm
-
-    def _set_normalization(
-        self,
-        power: float = None,
-        vmin: float = None,
-        vmax: float = None,
-    ):
-
-        if self._common_color_scale:
-            measurements = self._get_indexed_measurements().abs()
-            vmin = float(measurements.array.min())
-            vmax = float(measurements.array.max())
-
-        self._normalization = np.zeros(self.axes.shape, dtype=object)
-        for i, measurement in self.iterate_measurements(keep_dims=False):
-
-            norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-            norm.autoscale_None(measurement.array)
-
-            # if self._domain_coloring:
-            #    images[1].norm = norm1
-            # else:
-            self._normalization[i] = norm
+    # def _update_vmin(self, vmin: float = None):
+    #     for i, measurement in self.iterate_measurements():
+    #         norm = self._normalization[i]
+    #         vmin = measurement.min() if vmin is None else vmin
+    #         norm.vmin = vmin
+    #
+    #         norm = self._scale_normalization[i]
+    #         vmin = measurement.min() if vmin is None else vmin
+    #         norm.vmin = vmin**0.5
+    #
+    #     return vmin
+    #
+    # def _update_vmax(self, vmax: float = None):
+    #     for i, measurement in self.iterate_measurements():
+    #         norm = self._normalization[i]
+    #         vmax = measurement.max() if vmax is None else vmax
+    #         norm.vmax = vmax
+    #
+    #         norm = self._scale_normalization[i]
+    #         vmax = measurement.max() if vmax is None else vmax
+    #         norm.vmax = vmax**0.5
+    #
+    #     return vmax
+    #
+    # def _update_power(self, power: float = 1.0):
+    #
+    #     for i, measurement in self.iterate_measurements():
+    #         norm = self._normalization[i]
+    #         norm.gamma = power
+    #
+    #         norm = self._scale_normalization[i]
+    #         norm.gamma = power
+    #
+    #     self.update_artists()
+    #
+    # def update_vmin_vmax(self, vmin=None, vmax=None):
+    #     self._update_vmin(vmin)
+    #     self._update_vmax(vmax)
+    #     self.update_artists()
 
     def _get_plot_data(
         self, indexed_diffraction_spots: "IndexedDiffractionSpots", norm
     ):
-
         positions = indexed_diffraction_spots.positions[:, :2]
 
         intensities = indexed_diffraction_spots.intensities
@@ -1474,9 +1465,9 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         positions = positions[order]
         intensities = intensities[order]
 
-        sqrt_intensities = intensities**0.5
+        sqrt_intensities = intensities
 
-        scales = norm(sqrt_intensities) * self._scale
+        scales = norm(sqrt_intensities) * self._scale *.5
 
         return intensities, positions, scales
 
@@ -1486,11 +1477,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
 
-            scale_norm = self._scale_normalization[i]
             norm = self._normalization[i]
 
             intensities, positions, scales = self._get_plot_data(
-                measurement, scale_norm
+              measurement, norm
             )
 
             ellipse_collection = EllipseCollection(
@@ -1504,8 +1494,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
                 offsets=positions,
                 transOffset=ax.transData,
             )
-
-            ellipse_collection.norm = norm
 
             ellipse_collection = ax.add_collection(ellipse_collection)
 
@@ -1521,20 +1509,16 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             ax.set_ylabel("ky [1/Å]")
 
     def update_artists(self):
-        if self._autoscale:
-            self._update_vmin()
-            self._update_vmax()
-
         for i, measurement in self.iterate_measurements(keep_dims=False):
             artists = self._artists[i]
-            norm = self._scale_normalization[i]
+            norm = self._normalization[i]
 
             intensities, positions, scales = self._get_plot_data(measurement, norm)
 
-            artists._widths = scales * 0.5
-            artists._heights = scales * 0.5
+            artists._widths = scales #* 0.5
+            artists._heights = scales #* 0.5
 
-            artists.set(array=intensities, offsets=positions)
+            artists.set(array=intensities)
 
     def remove_miller_index_annotations(self):
         for annotation in self._miller_index_annotations:
@@ -1576,48 +1560,81 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
                 self._miller_index_annotations.append(annotation)
 
-    def set_normalization(self, vmin=None, vmax=None, power=None):
-        self._set_scale_factor_normalization(vmin=vmin, vmax=vmax, power=power)
-        self._set_normalization(vmin=vmin, vmax=vmax)
-        self.update_artists()
-
-    def interact(self, continuous_update: bool = False):
-
+    @property
+    def widgets(self):
         canvas = self.fig.canvas
-
-        sliders = make_indexing_sliders(self, continuous_update=True)
-
-        def update(change):
-
-            indices = ()
-            for slider in sliders:
-                idx = slider.index
-                indices += (idx,)
-
-            self.set_indices(indices)
-            self._set_hkl_visibility()
-
-        for slider in sliders:
-            slider.observe(update, "value")
-
         vmin_vmax_slider = make_vmin_vmax_slider(self)
+
+        def index_update_callback(change):
+            if self._autoscale:
+                vmin_vmax_slider.value = self._validate_vmin_vmax()
+
+        sliders = make_indexing_sliders(
+            self, self.axes_types, callbacks=(index_update_callback,)
+        )
         power_scale_button = make_power_scale_slider(self)
         scale_button = make_scale_button(self, vmin_vmax_slider)
         autoscale_button = make_autoscale_button(self, vmin_vmax_slider)
-        toggle_hkl_button = make_toggle_hkl_button(self)
+        continuous_update_button = make_continuous_button(sliders)
+
+        scale_button.layout = widgets.Layout(width="20%")
+        autoscale_button.layout = widgets.Layout(width="30%")
+        continuous_update_button.layout = widgets.Layout(width="50%")
+
+        scale_box = widgets.VBox(
+            [widgets.HBox([scale_button, autoscale_button, continuous_update_button])]
+        )
+        scale_box.layout = widgets.Layout(width="300px")
 
         gui = widgets.VBox(
             [
                 widgets.VBox(sliders),
-                widgets.VBox([widgets.HBox([scale_button, autoscale_button])]),
+                scale_box,
                 vmin_vmax_slider,
                 power_scale_button,
-                toggle_hkl_button,
             ]
         )
 
-        app = widgets.HBox([gui, canvas])
-        return app
+        return widgets.HBox([gui, canvas])
+
+
+    # def interact(self, continuous_update: bool = False):
+    #
+    #     canvas = self.fig.canvas
+    #
+    #     sliders = make_indexing_sliders(self, continuous_update=True)
+    #
+    #     def update(change):
+    #
+    #         indices = ()
+    #         for slider in sliders:
+    #             idx = slider.index
+    #             indices += (idx,)
+    #
+    #         self.set_indices(indices)
+    #         self._set_hkl_visibility()
+    #
+    #     for slider in sliders:
+    #         slider.observe(update, "value")
+    #
+    #     vmin_vmax_slider = make_vmin_vmax_slider(self)
+    #     power_scale_button = make_power_scale_slider(self)
+    #     scale_button = make_scale_button(self, vmin_vmax_slider)
+    #     autoscale_button = make_autoscale_button(self, vmin_vmax_slider)
+    #     toggle_hkl_button = make_toggle_hkl_button(self)
+    #
+    #     gui = widgets.VBox(
+    #         [
+    #             widgets.VBox(sliders),
+    #             widgets.VBox([widgets.HBox([scale_button, autoscale_button])]),
+    #             vmin_vmax_slider,
+    #             power_scale_button,
+    #             toggle_hkl_button,
+    #         ]
+    #     )
+    #
+    #     app = widgets.HBox([gui, canvas])
+    #     return app
 
 
 def make_toggle_hkl_button(visualization):

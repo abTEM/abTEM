@@ -31,4 +31,4 @@ visualize:
   reciprocal_space_units: "Angstrom"
   cmap: "viridis"
   phase_cmap: "hsluv"
-  use_tex: false
+  use_tex: true

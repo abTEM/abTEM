@@ -714,7 +714,7 @@ def _validate_axes(
     cbar: bool = False,
     common_color_scale: bool = False,
     figsize: Tuple[float, float] = None,
-    ioff:bool=False
+    ioff: bool = False,
 ):
     num_ensemble_axes = len(measurements.ensemble_shape)
 
@@ -723,6 +723,8 @@ def _validate_axes(
             num_index_axes = max(num_ensemble_axes - 2, 0)
             num_explode_axes = min(num_ensemble_axes, 2)
             axes_types = ("index",) * num_index_axes + ("explode",) * num_explode_axes
+        elif isinstance(measurements, _BaseMeasurement1d):
+            axes_types = ("overlay",) * num_ensemble_axes
         else:
             axes_types = ("index",) * num_ensemble_axes
     else:
@@ -763,7 +765,6 @@ def _validate_axes(
 
 
 class BaseMeasurement2D(BaseMeasurement):
-
     def show(
         self,
         ax: Axes = None,
@@ -841,8 +842,6 @@ class BaseMeasurement2D(BaseMeasurement):
 
         if interact:
             display(visualization.widgets)
-        #else:
-            #plt.show(visualization.fig)
 
         return visualization
 
@@ -1685,6 +1684,7 @@ class _BaseMeasurement1d(BaseMeasurement):
         common_scale: bool = True,
         axes_types=None,
         display: bool = True,
+        interact: bool = False,
         **kwargs,
     ):
         """
@@ -1715,17 +1715,16 @@ class _BaseMeasurement1d(BaseMeasurement):
         matplotlib Axes
         """
 
-        num_ensemble_axes = len(self.ensemble_shape)
-
-        if axes_types is None:
-            if explode:
-                num_index_axes = max(num_ensemble_axes - 2, 0)
-                num_explode_axes = min(num_ensemble_axes, 2)
-                axes_types = ("index",) * num_index_axes + (
-                    "explode",
-                ) * num_explode_axes
-            else:
-                axes_types = ("overlay",) * num_ensemble_axes
+        axes, axes_types = _validate_axes(
+            self,
+            ax,
+            axes_types=axes_types,
+            explode=explode,
+            cbar=False,
+            common_color_scale=False,
+            figsize=figsize,
+            ioff=interact,
+        )
 
         if ax is None:
             fig = plt.figure(figsize=figsize)
@@ -3606,11 +3605,12 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         overlay_hkl: bool = False,
         cmap: str = None,
         scale: float = 1,
-        display: bool = True,
         explode: bool = False,
         cbar: bool = False,
         common_color_scale: bool = False,
         figsize=None,
+        axes_types=None,
+        interact: bool = False,
     ):
         """
 
@@ -3625,7 +3625,14 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         """
 
         axes, axes_types = _validate_axes(
-            self, ax, explode, cbar, common_color_scale, figsize
+            self,
+            ax,
+            axes_types=axes_types,
+            explode=explode,
+            cbar=cbar,
+            common_color_scale=common_color_scale,
+            figsize=figsize,
+            ioff=interact,
         )
 
         visualization = DiffractionSpotsVisualization(
@@ -3640,12 +3647,16 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             common_color_scale=common_color_scale,
         )
 
-        # visualization.interact(True)
-
-        if display:
-            plt.show(visualization.fig)
+        if interact:
+            display(visualization.widgets)
 
         return visualization
+        # # visualization.interact(True)
+        #
+        # if display:
+        #     plt.show(visualization.fig)
+
+        #return visualization
 
         # if self.ensemble_shape:
         #     indexed_diffraction_patterns = indexed_diffraction_patterns[
