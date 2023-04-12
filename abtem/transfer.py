@@ -657,12 +657,15 @@ class _HasAberrations:
         axes_metadata = []
         for parameter_name, value in self._aberration_coefficients.items():
             if isinstance(value, BaseDistribution):
+                m = re.search(r"\d", parameter_name).start()
+                _tex_label = f"${parameter_name[:m]}_{{{parameter_name[m:]}}}$"
                 axes_metadata += [
                     ParameterAxis(
                         label=parameter_name,
                         values=tuple(value.values),
                         units="Å",
                         _ensemble_mean=value.ensemble_mean,
+                        _tex_label=_tex_label
                     )
                 ]
         return axes_metadata

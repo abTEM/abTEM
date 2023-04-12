@@ -30,7 +30,7 @@ from abtem.core.axes import (
     HasAxes,
     RealSpaceAxis,
     AxisMetadata,
-    FourierSpaceAxis,
+    ReciprocalSpaceAxis,
     LinearAxis,
     NonLinearAxis,
     SampleAxis,
@@ -715,6 +715,7 @@ def _validate_axes(
     common_color_scale: bool = False,
     figsize: Tuple[float, float] = None,
     ioff: bool = False,
+    aspect:bool=True
 ):
     num_ensemble_axes = len(measurements.ensemble_shape)
 
@@ -753,7 +754,7 @@ def _validate_axes(
         ncols, nrows = _axes_grid_cols_and_rows(measurements, axes_types)
 
         axes = AxesGrid(
-            fig=fig, ncols=ncols, nrows=nrows, ncbars=ncbars, cbar_mode=cbar_mode
+            fig=fig, ncols=ncols, nrows=nrows, ncbars=ncbars, cbar_mode=cbar_mode, aspect=aspect
         )
     else:
         if explode:
@@ -780,6 +781,7 @@ class BaseMeasurement2D(BaseMeasurement):
         units: str = None,
         interact: bool = False,
         axes_types=None,
+        display:bool=True
     ) -> MeasurementVisualization2D:
         """
         Show the image(s) using matplotlib.
@@ -824,7 +826,7 @@ class BaseMeasurement2D(BaseMeasurement):
             cbar=cbar,
             common_color_scale=common_color_scale,
             figsize=figsize,
-            ioff=interact,
+            ioff=interact + (not display),
         )
 
         visualization = MeasurementVisualization2D(
@@ -834,7 +836,7 @@ class BaseMeasurement2D(BaseMeasurement):
             vmax=vmax,
             axes_types=axes_types,
             cbar=cbar,
-            common_color_scale=common_color_scale,
+            common_scale=common_color_scale,
             units=units,
             power=power,
             cmap=cmap,
@@ -844,28 +846,6 @@ class BaseMeasurement2D(BaseMeasurement):
             display(visualization.widgets)
 
         return visualization
-
-        # if not explode:
-        #     measurements = self[(0,) * len(self.ensemble_shape)]
-        # else:
-        #     measurements = self
-        # # else:
-        # #     if ax is not None:
-        # #         raise NotImplementedError("`ax` not implemented with `explode = True`.")
-        # #     measurements = self
-        #
-        # return show_measurements_2d(
-        #     measurements=measurements,
-        #     cmap=cmap,
-        #     figsize=figsize,
-        #     power=power,
-        #     vmin=vmin,
-        #     vmax=vmax,
-        #     common_color_scale=common_color_scale,
-        #     cbar=cbar,
-        #     axes=ax,
-        #     title=title,
-        # )
 
 
 class Images(BaseMeasurement2D):
@@ -981,8 +961,8 @@ class Images(BaseMeasurement2D):
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [
-            RealSpaceAxis(label="x", sampling=self.sampling[0], units="Å"),
-            RealSpaceAxis(label="y", sampling=self.sampling[1], units="Å"),
+            RealSpaceAxis(label="x", sampling=self.sampling[0], units="Å", _tex_label="$x$"),
+            RealSpaceAxis(label="y", sampling=self.sampling[1], units="Å", _tex_label="$y$"),
         ]
 
     def integrate_gradient(self):
@@ -1560,7 +1540,7 @@ class _BaseMeasurement1d(BaseMeasurement):
 
     @property
     @abstractmethod
-    def base_axes_metadata(self) -> List[Union[RealSpaceAxis, FourierSpaceAxis]]:
+    def base_axes_metadata(self) -> List[Union[RealSpaceAxis, ReciprocalSpaceAxis]]:
         pass
 
     def width(self, height: float = 0.5):
@@ -1723,35 +1703,43 @@ class _BaseMeasurement1d(BaseMeasurement):
             cbar=False,
             common_color_scale=False,
             figsize=figsize,
+            aspect=False,
             ioff=interact,
         )
 
-        if ax is None:
-            fig = plt.figure(figsize=figsize)
-            axes = AxesGrid.from_measurements(
-                fig,
-                self,
-                axes_types,
-                0,
-                cbar_mode="single",
-                sharey=common_scale,
-                aspect=False,
-            )
-            measurements = self
-        else:
-            if explode:
-                raise NotImplementedError("`ax` not implemented with `explode = True`.")
-
-            measurements = self  # [("index",) * num_ensemble_axes]
-            axes_types = ("overlay",) * num_ensemble_axes
-            axes = np.array([[ax]])
-
         visualization = MeasurementVisualization1D(
-            measurements, axes, axes_types, units=units
+            self,
+            axes,
+            axes_types=axes_types,
+            #common_scale=common_scale,
+            units=units,
         )
 
-        if display:
-            plt.show(visualization.fig)
+        # if ax is None:
+        #     fig = plt.figure(figsize=figsize)
+        #     axes = AxesGrid(
+        #         fig,
+        #         axes_types,
+        #         0,
+        #         cbar_mode="single",
+        #         sharey=common_scale,
+        #         aspect=False,
+        #     )
+        #     measurements = self
+        # else:
+        #     if explode:
+        #         raise NotImplementedError("`ax` not implemented with `explode = True`.")
+        #
+        #     measurements = self  # [("index",) * num_ensemble_axes]
+        #     axes_types = ("overlay",) * num_ensemble_axes
+        #     axes = np.array([[ax]])
+
+        #visualization = MeasurementVisualization1D(
+        #    measurements, axes, axes_types, units=units
+        #)
+
+        #if display:
+        #    plt.show(visualization.fig)
 
         return visualization
 
@@ -1789,7 +1777,7 @@ class RealSpaceLineProfiles(_BaseMeasurement1d):
 
     @property
     def base_axes_metadata(self) -> List[RealSpaceAxis]:
-        return [RealSpaceAxis(label="r", sampling=self.sampling, units="Å")]
+        return [RealSpaceAxis(label="r", sampling=self.sampling, units="Å", _tex_label="$r$")]
 
     def tile(self, reps: int) -> "RealSpaceLineProfiles":
         kwargs = self._copy_kwargs(exclude=("array",))
@@ -1861,7 +1849,7 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [FourierSpaceAxis(label="k", sampling=self.sampling, units="1/Å")]
+        return [ReciprocalSpaceAxis(label="k", sampling=self.sampling, units="1/Å", _tex_label="$k$")]
 
     @property
     def angular_extent(self):
@@ -2065,14 +2053,14 @@ class DiffractionPatterns(BaseMeasurement2D):
     def base_axes_metadata(self):
         limits = self.limits
         return [
-            FourierSpaceAxis(
+            ReciprocalSpaceAxis(
                 sampling=self.sampling[0],
                 offset=limits[0][0],
                 label="kx",
                 units="1/Å",
                 fftshift=self.fftshift,
             ),
-            FourierSpaceAxis(
+            ReciprocalSpaceAxis(
                 sampling=self.sampling[1],
                 offset=limits[1][0],
                 label="ky",
@@ -2912,7 +2900,6 @@ class DiffractionPatterns(BaseMeasurement2D):
         return array
 
     def _plot_extent_x(self, units=None):
-        # units = _validate_units(units, "1/Å")
         if units is None:
             units = "1/Å"
 
@@ -3427,10 +3414,6 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         kwargs["positions"] = np.array(kwargs["positions"], dtype=np.float32)
         return kwargs
 
-        # return tuple(
-        #     (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
-        # )
-
     def remove_low_intensity(self, threshold: float = 1e-3):
         """
         Remove diffraction spots with intensity below a threshold.
@@ -3455,20 +3438,20 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             metadata=self._metadata,
         )
 
-        # miller_indices, intensities = self._dict_to_arrays(self._spots)
-        #
-        # if len(intensities.shape) > 1:
-        #     summed_intensities = intensities.sum(-1, keepdims=True)
-        # else:
-        #     summed_intensities = intensities
-        #
-        # include = summed_intensities > threshold * summed_intensities.max()
-        # include = np.squeeze(include)
-        #
-        # vectors = self._vectors[include]
-        # miller_indices, intensities = miller_indices[include], intensities[include]
-        # spots = self._arrays_to_dict(miller_indices, intensities)
-        # return self.__class__(spots, vectors)
+    def order(self):
+        order = np.argsort(-np.linalg.norm(self.positions, axis=1))
+
+        positions = self.positions[order]
+        array = self.array[..., order]
+        miller_indices = self.miller_indices[order]
+
+        return self.__class__(
+            array,
+            miller_indices,
+            positions,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self._metadata,
+        )
 
     def crop(self, max_angle=None):
         mask = np.linalg.norm(self.angular_positions, axis=1) < max_angle

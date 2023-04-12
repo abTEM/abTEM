@@ -14,7 +14,7 @@ from ase import Atoms
 
 from abtem.core.array import HasArray, validate_lazy, ComputableList, expand_dims
 from abtem.core.axes import HasAxes
-from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
+from abtem.core.axes import RealSpaceAxis, ReciprocalSpaceAxis, AxisMetadata
 from abtem.core.backend import HasDevice
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
@@ -192,12 +192,12 @@ class BaseWaves(
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         return [
-            FourierSpaceAxis(
+            ReciprocalSpaceAxis(
                 label="scattering angle x",
                 sampling=self.angular_sampling[0],
                 units="mrad",
             ),
-            FourierSpaceAxis(
+            ReciprocalSpaceAxis(
                 label="scattering angle y",
                 sampling=self.angular_sampling[1],
                 units="mrad",

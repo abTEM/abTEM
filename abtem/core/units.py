@@ -50,7 +50,8 @@ _tex_units = {
 
 def _format_units(units):
     if config.get("visualize.use_tex", False):
-        return _tex_units.get(units, f"\mathrm{{{units}}}")
+        units = _tex_units.get(units, f'\mathrm{{{units}}}')
+        return f"${units}$"
     else:
         return units
 

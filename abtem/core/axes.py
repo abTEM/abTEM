@@ -13,12 +13,28 @@ from abtem.core.utils import safe_equality
 from abtem.core.units import _get_conversion_factor, _format_units, _validate_units
 
 
+def format_label(axes, units=None):
+    if axes._tex_label is not None and config.get("visualize.use_tex", False):
+        label = axes._tex_label
+    else:
+        label = axes.label
+
+    if units is None and axes.units is not None:
+        units = _format_units(axes.units)
+
+    if units is None:
+        return f"{label}"
+    else:
+        return f"{label} [{units}]"
+
+
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     _concatenate: bool = True
     _events: bool = False
     label: str = "unknown"
-    _tex_label = None
+    _tex_label: str = None
+    units: str = None
 
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
@@ -35,8 +51,8 @@ class AxisMetadata:
     def format_type(self):
         return self.__class__.__name__
 
-    def format_label(self):
-        return f"{self.label}"
+    def format_label(self, units:str=None):
+        return format_label(self, units=units)
 
     def format_title(self, *args, **kwargs):
         return f"{self.label}"
@@ -71,13 +87,16 @@ class SampleAxis(AxisMetadata):
     pass
 
 
-def format_label_with_units(label, units=None, old_units=None) -> str:
-    units = _validate_units(units, old_units)
-
-    if config.get("visualize.use_tex", False):
-        return f"${label} \ [{_format_units(units)}]$"
-    else:
-        return f"{label} [{units}]"
+# def format_label_with_units(label, units=None) -> str:
+#     #units = _validate_units(units, old_units)
+#
+#     if units is None:
+#
+#
+#     if config.get("visualize.use_tex", False):
+#         return f"${label} \ [{_format_units(units)}]$"
+#     else:
+#         return f"{label} [{units}]"
 
 
 def latex_float(f, formatting):
@@ -117,9 +136,6 @@ class LinearAxis(AxisMetadata):
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )
 
-    def format_label(self, units=None) -> str:
-        return format_label_with_units(self.label, units, self.units)
-
     def concatenate(self, other: AxisMetadata) -> "LinearAxis":
         if not self._concatenate:
             raise RuntimeError()
@@ -138,7 +154,7 @@ class RealSpaceAxis(LinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class FourierSpaceAxis(LinearAxis):
+class ReciprocalSpaceAxis(LinearAxis):
     sampling: float = 1.0
     units: str = "pixels"
     fftshift: bool = True
@@ -214,9 +230,6 @@ class OrdinalAxis(AxisMetadata):
 class NonLinearAxis(OrdinalAxis):
     units: str = "unknown"
 
-    def format_label(self, units=None):
-        return format_label_with_units(self.label, units, self.units)
-
     def format_coordinates(self, n: int = None):
         if len(self.values) > 3:
             values = [f"{self.values[i]:.2f}" for i in [0, 1, -1]]
@@ -224,18 +237,22 @@ class NonLinearAxis(OrdinalAxis):
         else:
             return " ".join([f"{value:.2f}" for value in self.values])
 
-    def format_title(self, formatting, units=None, include_label=True):
+    def format_title(self, formatting:str=".3f", units=None, include_label=True):
         value = self.values[0] * _get_conversion_factor(units, self.units)
 
         units = _validate_units(units,self.units)
 
         if include_label:
-            label = f"{self.label} = "
+            if self._tex_label is not None:
+                label = self._tex_label
+            else:
+                label = self.label
+            label = f"{label} = "
         else:
             label = ""
 
         if config.get("visualize.use_tex", False):
-            return f"$\mathrm{{{label}}}{format_value(value, formatting)} \ {_format_units(units)}$"
+            return f"{label}${format_value(value, formatting)}$ {_format_units(units)}"
         else:
             return f"{label}{value:>{formatting}} {units}"
 
