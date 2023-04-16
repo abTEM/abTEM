@@ -18,6 +18,7 @@ from ase.io.trajectory import read_atoms
 from ase.units import Bohr
 from scipy.interpolate import interp1d
 
+from abtem.core.fft import fft_interpolate, fft_crop
 from abtem.potentials.charge_density import _generate_slices
 from abtem.core.axes import AxisMetadata
 from abtem.core.constants import eps0
@@ -29,7 +30,8 @@ from abtem.core.parametrizations.ewald import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
-    BaseFrozenPhonons, _safe_read_atoms,
+    BaseFrozenPhonons,
+    _safe_read_atoms,
 )
 from abtem.potentials.iam import _PotentialBuilder, Potential
 
@@ -44,6 +46,7 @@ try:
     from gpaw.mpi import SerialCommunicator
     from gpaw.grid_descriptor import GridDescriptor
     from gpaw.utilities import unpack_atomic_matrices
+    from gpaw.atom.shapefunc import shape_functions
 
     if TYPE_CHECKING:
         from gpaw.setup import Setups
@@ -76,6 +79,8 @@ class _DummyGPAW:
     gd: Any
     D_asp: np.ndarray
     atoms: Atoms
+    Q_aL: dict
+    valence_potential: np.ndarray
 
     def __len__(self):
         return 1
@@ -84,7 +89,6 @@ class _DummyGPAW:
     def setups(self):
         gpaw = GPAW(txt=None, mode=self.setup_mode, xc=self.setup_xc)
         gpaw.initialize(self.atoms)
-
         return gpaw.setups
 
     @classmethod
@@ -102,6 +106,8 @@ class _DummyGPAW:
             "gd": gpaw.density.gd.new_descriptor(comm=SerialCommunicator()),
             "D_asp": dict(gpaw.density.D_asp),
             "atoms": atoms,
+            "valence_potential": gpaw.get_electrostatic_potential(),
+            "Q_aL": dict(gpaw.density.Q_aL),
         }
 
         return cls(**kwargs)
@@ -111,44 +117,51 @@ class _DummyGPAW:
         if lazy:
             return dask.delayed(cls.from_file)(path, lazy=False)
 
-        with Reader(path) as reader:
-            atoms = read_atoms(reader.atoms)
+        calc = GPAW(path)
 
-            from gpaw.calculator import GPAW
+        return cls.from_gpaw(calc)
 
-            parameters = copy.copy(GPAW.default_parameters)
-            parameters.update(reader.parameters.asdict())
 
-            setup_mode = parameters["mode"]
-            setup_xc = parameters["xc"]
-
-            if isinstance(setup_xc, dict) and "setup_name" in setup_xc:
-                setup_xc = setup_xc["setup_name"]
-
-            assert isinstance(setup_xc, str)
-
-            density = reader.density.density * units.Bohr**3
-            gd = GridDescriptor(
-                N_c=density.shape[-3:],
-                cell_cv=atoms.get_cell() / Bohr,
-                comm=SerialCommunicator(),
-            )
-
-            setups = _get_gpaw_setups(atoms, setup_mode, setup_xc)
-
-            D_asp = unpack_atomic_matrices(
-                reader.density.atomic_density_matrices, setups
-            )
-
-        kwargs = {
-            "setup_mode": setup_mode,
-            "setup_xc": setup_xc,
-            "nt_sG": density,
-            "gd": gd,
-            "D_asp": D_asp,
-            "atoms": atoms,
-        }
-        return cls(**kwargs)
+        # with Reader(path) as reader:
+        #     atoms = read_atoms(reader.atoms)
+        #
+        #     from gpaw.calculator import GPAW
+        #
+        #     parameters = copy.copy(GPAW.default_parameters)
+        #     parameters.update(reader.parameters.asdict())
+        #
+        #     setup_mode = parameters["mode"]
+        #     setup_xc = parameters["xc"]
+        #
+        #     if isinstance(setup_xc, dict) and "setup_name" in setup_xc:
+        #         setup_xc = setup_xc["setup_name"]
+        #
+        #     assert isinstance(setup_xc, str)
+        #
+        #     density = reader.density.density * units.Bohr**3
+        #     gd = GridDescriptor(
+        #         N_c=density.shape[-3:],
+        #         cell_cv=atoms.get_cell() / Bohr,
+        #         comm=SerialCommunicator(),
+        #     )
+        #
+        #     setups = _get_gpaw_setups(atoms, setup_mode, setup_xc)
+        #
+        #     D_asp = unpack_atomic_matrices(
+        #         reader.density.atomic_density_matrices, setups
+        #     )
+        #
+        #     hamiltonian = reader.hamiltonian
+        #
+        # kwargs = {
+        #     "setup_mode": setup_mode,
+        #     "setup_xc": setup_xc,
+        #     "nt_sG": density,
+        #     "gd": gd,
+        #     "D_asp": D_asp,
+        #     "atoms": atoms,
+        # }
+        # return cls(**kwargs)
 
     @classmethod
     def from_generic(cls, calculator, lazy: bool = True):
@@ -224,7 +237,7 @@ def _add_valence_density_correction(n_sg, gd, D_asp, setups, atoms):
     W = 0
     for a in phi.atom_indices:
         nw = len(phi.sphere_a[a].M_w)
-        a_W[W: W + nw] = a
+        a_W[W : W + nw] = a
         W += nw
 
     x_W = phi.create_displacement_arrays()[0]
@@ -273,7 +286,7 @@ def _add_core_density_correction(n_sg, gd, I_sa, setups, atoms):
     W = 0
     for a in nc.atom_indices:
         nw = len(nc.sphere_a[a].M_w)
-        a_W[W: W + nw] = a
+        a_W[W : W + nw] = a
         W += nw
     scale = 1.0 / nspins
 
@@ -375,6 +388,104 @@ def _get_all_electron_density(
                 n_sg[s][tuple(g_c)] -= I / gd.dv
 
     return n_sg.sum(0) / Bohr**3
+
+
+def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
+    # density = calc.density
+    # D_asp = dict(density.D_asp)
+
+    interpolators = []
+    for a, D_sp in D_asp.items():
+        setup = setups[a]
+        c = setup.xc_correction
+
+        rgd = c.rgd
+        params = setup.data.shape_function.copy()
+        params["lmax"] = 0
+        ghat_g = shape_functions(rgd, **params)[0]
+        Z_g = shape_functions(rgd, "gauss", rcgauss, lmax=0)[0] * setup.Z
+        D_q = np.dot(D_sp.sum(0), c.B_pqL[:, :, 0])
+
+        dn_g = np.dot(D_q, (c.n_qg - c.nt_qg)) * np.sqrt(4 * np.pi)
+        dn_g += 4 * np.pi * (c.nc_g - c.nct_g)
+        dn_g -= Z_g
+        dn_g -= Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
+
+        dv_g = rgd.poisson(dn_g) / np.sqrt(4 * np.pi)
+        dv_g[1:] /= rgd.r_g[1:]
+        dv_g[0] = dv_g[1]
+        dv_g[-1] = 0.0
+
+        interpolator = interp1d(
+            units.Bohr * rgd.r_g,
+            -dv_g / np.sqrt(4 * np.pi) * units.Ha,
+            fill_value=0,
+            bounds_error=False,
+        )
+        interpolators.append(interpolator)
+
+    return interpolators
+
+
+def integrate_slice(array, gpts, a, b, thickness):
+    dz = thickness / array.shape[2]
+    na = int(np.floor(a / dz))
+    nb = int(np.floor(b / dz))
+    slice_array = np.sum(array[..., na:nb], axis=-1) * dz
+    new_shape = (nb - na,) + gpts
+    old_shape = (nb - na,) + slice_array.shape
+    slice_array = np.fft.fftn(slice_array)
+    slice_array = fft_crop(slice_array, gpts)
+    slice_array = (
+        np.fft.ifftn(slice_array).real * np.prod(new_shape) / np.prod(old_shape)
+    )
+    return slice_array
+
+
+class _DummyParametrization:
+    def __init__(self, potential):
+        self._potential = potential
+        super().__init__()
+
+    def potential(self, symbol):
+        return self._potential
+
+
+def _generate_slices(
+    interpolators, valence_potential, atoms, gpts, slice_thickness, first_slice=0, last_slice=None
+):
+    # interpolators = get_core_correction_interpolators(calc, 0.02)
+
+    potential_generators = []
+    for i, interpolator in enumerate(interpolators):
+        parametrization = _DummyParametrization(interpolator)
+
+        potential = Potential(
+            gpts=gpts,
+            atoms=atoms[i : i + 1],
+            parametrization=parametrization,
+            slice_thickness=slice_thickness,
+            projection="finite",
+        )
+        potential_generators.append(potential.generate_slices())
+
+    # valence_potential = calc.get_electrostatic_potential()
+
+    if last_slice is None:
+        last_slice = len(potential)
+
+    for i, slice_idx in enumerate(range(first_slice, last_slice)):
+        slic = next(potential_generators[0])
+
+        a, b = potential.sliced_atoms.slice_limits[slice_idx]
+
+        for potential_generator in potential_generators[1:]:
+            slic.array[:] += next(potential_generator).array
+
+        slic.array[:] -= integrate_slice(
+            valence_potential, potential.gpts, a, b, potential.thickness
+        )
+        yield slic
 
 
 class GPAWPotential(_PotentialBuilder):
@@ -533,6 +644,7 @@ class GPAWPotential(_PotentialBuilder):
         # assert len(self.calculators) == 1
 
         calculator = _DummyGPAW.from_generic(calculator)
+
         atoms = self.frozen_phonons.atoms
 
         if self.repetitions != (1, 1, 1):
@@ -562,7 +674,7 @@ class GPAWPotential(_PotentialBuilder):
         )
 
     def _get_ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(width=2)
+        ewald_parametrization = EwaldParametrization(width=3)
 
         atoms = self.frozen_phonons.atoms * self.repetitions
 
@@ -603,14 +715,65 @@ class GPAWPotential(_PotentialBuilder):
         if last_slice is None:
             last_slice = len(self)
 
-        ewald_potential = self._get_ewald_potential()
+        calculator = (
+            self.calculators[0]
+            if isinstance(self.calculators, list)
+            else self.calculators
+        )
 
-        array = self._get_all_electron_density()
+        try:
+            calculator = calculator.compute()
+        except AttributeError:
+            pass
+
+        # assert len(self.calculators) == 1
+
+        calculator = _DummyGPAW.from_generic(calculator)
+
+        #print(calculator)
+
+        atoms = self.frozen_phonons.atoms
+
+        if self.repetitions != (1, 1, 1):
+            cell_cv = calculator.gd.cell_cv * self.repetitions
+            N_c = tuple(
+                n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
+            )
+            gd = calculator.gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
+            atoms = atoms * self.repetitions
+            nt_sG = np.tile(calculator.nt_sG, self.repetitions)
+        else:
+            gd = calculator.gd
+            nt_sG = calculator.nt_sG
+
+        random_atoms = self.frozen_phonons.randomize(atoms)
+
+        interpolators = get_core_correction_interpolators(
+            calculator.setups, calculator.D_asp, calculator.Q_aL, 0.02
+        )
+
+        #calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
+        #calc.initialize(random_atoms)
+
+        # ewald_potential = self._get_ewald_potential()
+        #
+        # array = self._get_all_electron_density()
+
 
         for slic in _generate_slices(
-            array, ewald_potential, first_slice=first_slice, last_slice=last_slice
+            interpolators,
+            valence_potential=calculator.valence_potential,
+            atoms=random_atoms,
+            gpts=self.gpts,
+            slice_thickness=self.slice_thickness,
+            first_slice=first_slice,
+            last_slice=last_slice,
         ):
             yield slic
+        # for slic in _generate_slices(
+        #     array, ewald_potential, first_slice=first_slice, last_slice=last_slice
+        # ):
+        #     yield slic
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
@@ -731,8 +894,6 @@ class GPAWParametrization:
         ionic_config = config_str_to_config_tuples(
             electron_configurations[chemical_symbols[number - charge]]
         )
-        #print(electron_configurations[chemical_symbols[number]])
-        #print(electron_configurations[chemical_symbols[number - charge]])
 
         config = defaultdict(lambda: 0, {shell[:2]: shell[2] for shell in config})
 
@@ -740,7 +901,7 @@ class GPAWParametrization:
             lambda: 0, {shell[:2]: shell[2] for shell in ionic_config}
         )
 
-        #sss
+        # sss
 
         electrons = []
         for key in set(config.keys()).union(set(ionic_config.keys())):
@@ -754,7 +915,7 @@ class GPAWParametrization:
 
     def _get_all_electron_atom(self, symbol, charge=0.0):
 
-        #with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+        # with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
         ae = AllElectronAtom(symbol, spinpol=False, xc="PBE")
 
         added_electrons = self._get_added_electrons(symbol, charge)
@@ -765,7 +926,7 @@ class GPAWParametrization:
         # # ae.run()
         # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
         ae.run(maxiter=5000, mix=0.005, dnmax=1e-5)
-        #ae.refine()
+        # ae.refine()
 
         return ae
 

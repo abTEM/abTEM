@@ -87,7 +87,7 @@ class CachedFFTWConvolution:
 
 
 def get_fftw_object(
-    array: np.ndarray, name: str, allow_new_wisdom: bool = True, overwrite_x=False
+    array: np.ndarray, name: str, allow_new_wisdom: bool = True, overwrite_x=False, axes=(-2,-1)
 ):
     direction = _fft_name_to_fftw_direction(name)
 
@@ -99,7 +99,7 @@ def get_fftw_object(
         fftw = pyfftw.FFTW(
             array,
             array,
-            axes=(-2, -1),
+            axes=axes,
             direction=direction,
             threads=config.get("fftw.threads"),  # noqa
             flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
@@ -118,7 +118,7 @@ def get_fftw_object(
         _new_fftw_object(array, name, flags=flags)
 
         return get_fftw_object(
-            array, name, allow_new_wisdom=False, overwrite_x=overwrite_x
+            array, name, allow_new_wisdom=False, overwrite_x=overwrite_x, axes=axes
         )
 
     return fftw
@@ -354,7 +354,9 @@ def fft_interpolate(
         if len(new_shape) != len(array.shape):
             axes = tuple(range(len(array.shape) - len(new_shape), len(array.shape)))
         else:
-            axes = None
+            axes = tuple(range(len(array.shape)))
+
+        print(axes)
 
         array = ifftn(
             fft_crop(fftn(array, axes=axes), new_shape),
