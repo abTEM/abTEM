@@ -12,7 +12,6 @@ from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib import colors
 from matplotlib.animation import FuncAnimation
-from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection, EllipseCollection
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
@@ -20,7 +19,6 @@ from matplotlib.patches import Circle
 from matplotlib.patheffects import withStroke
 from mpl_toolkits.axes_grid1 import Size, Divider
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from mpl_toolkits.axes_grid1.axes_divider import AxesDivider
 from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
 from scipy.spatial import distance_matrix
 from scipy.spatial.distance import squareform
@@ -28,26 +26,25 @@ from traitlets import link
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
-from abtem.core.axes import ReciprocalSpaceAxis
+from abtem.core.axes import ReciprocalSpaceAxis, format_label, LinearAxis
 from abtem.core.colors import hsluv_cmap
-from abtem.core.units import _get_conversion_factor, _validate_units, _format_units
+from abtem.core.units import _get_conversion_factor
 from abtem.core.utils import label_to_index
 
 if TYPE_CHECKING:
     from abtem.measurements import (
         BaseMeasurement2D,
-        IndexedDiffractionSpots,
     )
 
 
-def format_label(label, units: str = None, italic: bool = False) -> str:
-    if config.get("visualize.use_tex", False):
-        if not italic:
-            label = f"\mathrm{{{label}}}"
-
-        return f"${label} \ [{_format_units(units)}]$"
-    else:
-        return f"{label} [{units}]"
+# def format_label(label, units: str = None, italic: bool = False) -> str:
+#     if config.get("visualize.use_tex", False):
+#         if not italic:
+#             label = f"\mathrm{{{label}}}"
+#
+#         return f"${label} \ [{_format_units(units)}]$"
+#     else:
+#         return f"{label} [{units}]"
 
 
 def make_default_sizes():
@@ -293,7 +290,6 @@ def format_options(options):
 def make_indexing_sliders(
     visualization, axes_types, continuous_update: bool = False, callbacks=()
 ):
-
     sliders = []
     for axes_metadata, n, axes_type in zip(
         visualization.measurements.ensemble_axes_metadata,
@@ -436,7 +432,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self._x_units = x_units
         self._y_units = y_units
 
-
     @property
     def fig(self):
         return self._axes[0, 0].get_figure()
@@ -525,7 +520,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         column_titles = []
         for i, ax in enumerate(self.axes[:, -1]):
-
             annotation = ax.annotate(
                 titles[i],
                 xy=(0.5, 1),
@@ -562,7 +556,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         for ax in np.array(self.axes).ravel():
             ax.set_ylabel(label)
-
     @abstractmethod
     def _set_x_limits(self):
         pass
@@ -593,6 +586,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
             self._y_units = self._get_default_y_units()
         else:
             self._y_units = units
+
 
         self.set_y_labels()
         self._set_y_limits()
@@ -629,7 +623,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         row_titles = []
         for i, ax in enumerate(self.axes[0, :]):
-
             annotation = ax.annotate(
                 titles[i],
                 xy=(0, 0.5),
@@ -746,9 +739,9 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         self._panel_labels = panel_labels
 
-    #def
+    # def
 
-    def set_metadata_labels(self, include_index_label:bool=False, **kwargs):
+    def set_metadata_labels(self, include_index_label: bool = False, **kwargs):
         if "loc" not in kwargs:
             kwargs["loc"] = 2
 
@@ -761,13 +754,12 @@ class MeasurementVisualization(metaclass=ABCMeta):
         for label in self._metadata_labels.ravel():
             label.remove()
 
-        self._metadata_labels=np.zeros(self.axes.shape, dtype=object)
+        self._metadata_labels = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=True):
             titles = []
             for j, axes_type in enumerate(self._axes_types):
                 if axes_type in included:
                     titles.append(measurement.ensemble_axes_metadata[j].format_title())
-
 
             l = ", ".join(titles)
             at = AnchoredText(l, pad=0.0, borderpad=0.5, frameon=False, **kwargs)
@@ -777,9 +769,9 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
             self._metadata_labels[i] = at
 
-        #self._set_panel_labels(labels, **kwargs)
+        # self._set_panel_labels(labels, **kwargs)
 
-        #self._metadata_labels = label
+        # self._metadata_labels = label
 
     def set_panel_labels(self, labels: Union[str, List[str]], **kwargs):
         if "loc" not in kwargs:
@@ -794,7 +786,14 @@ class MeasurementVisualization(metaclass=ABCMeta):
             ax.add_artist(at)
             at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=5)])
 
-    def animate(self, interval=20, blit=True, repeat: bool = False, adjust_scale:bool=True, **kwargs):
+    def animate(
+        self,
+        interval=20,
+        blit=True,
+        repeat: bool = False,
+        adjust_scale: bool = True,
+        **kwargs,
+    ):
         def update(i):
             self.set_indices((i,))
             if adjust_scale:
@@ -1200,16 +1199,16 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     def set_extent(self, extent=None):
 
         if extent is None:
-            extent = self.measurements._plot_extent_x(
-                self._x_units
-            ) + self.measurements._plot_extent_y(self._y_units)
+            x_extent = self.measurements._plot_extent_x(self._x_units)
+            y_extent = self.measurements._plot_extent_y(self._y_units)
+            extent = x_extent + y_extent
 
         for image in self._artists.ravel():
             image.set_extent(extent)
 
     def _add_domain_coloring_imshow(self, ax, array, norm):
         abs_array = np.abs(array)
-        alpha = np.clip(norm(abs_array), a_min=0., a_max=1.)
+        alpha = np.clip(norm(abs_array), a_min=0.0, a_max=1.0)
 
         if self._cmap is None:
             cmap = config.get("phase_cmap", "hsluv")
@@ -1333,6 +1332,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         axes,
         axes_types: tuple = None,
         units=None,
+        common_scale:bool=True
     ):
 
         super().__init__(axes, measurements, axes_types=axes_types)
@@ -1343,8 +1343,14 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self._y_label = None
         self._column_titles = []
         self._lines = np.array([[]])
+        self._common_scale = common_scale
         self.set_artists()
         self.set_x_units(units=units)
+        self.set_y_units()
+
+        if "overlay" in axes_types:
+            self.set_legends()
+
         # self.set_y_units()
         # self.set_x_labels()
         # self.set_y_labels()
@@ -1375,7 +1381,8 @@ class MeasurementVisualization1D(MeasurementVisualization):
         return self.measurements.axes_metadata[-1].format_label(units)
 
     def _get_default_y_label(self, units: str = None):
-        return self.measurements.metadata["label"]
+        axes = LinearAxis(label=self.measurements.metadata.get("label", ""))
+        return format_label(axes, units)
 
     def _get_default_x_units(self):
         return self.measurements.axes_metadata[-1].units
@@ -1385,21 +1392,38 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
     def _set_x_limits(self):
         extent = self.measurements._plot_extent(self._x_units)
-        conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
-        margin = (extent[1] - extent[0]) * .05 * conversion
+        #conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
+        margin = (extent[1] - extent[0]) * 0.05
         for i, measurement in self.iterate_measurements():
-            self.axes[i].set_xlim([-extent[0] * conversion - margin, extent[1] * conversion + margin])
+            self.axes[i].set_xlim(
+                [-extent[0] - margin, extent[1] + margin]
+            )
             artists = self.artists[i]
             for artist in artists:
                 x = self._get_xdata()
                 artist.set_xdata(x)
 
     def _set_y_limits(self):
-        pass
 
-    def set_legends(self):
+        def _get_extent(measurements):
+            min_value = measurements.min()
+            max_value = measurements.max()
+            margin = (max_value - min_value) * 0.05
+            return [min_value - margin, max_value + margin]
+
+        if self._common_scale:
+            y_lim = _get_extent(self.measurements)
+
+        for i, measurement in self.iterate_measurements():
+
+            if not self._common_scale:
+                y_lim = _get_extent(measurement)
+
+            self.axes[i].set_ylim(y_lim)
+
+    def set_legends(self, **kwargs):
         for i, _ in self.iterate_measurements():
-            self.axes[i].legend()
+            self.axes[i].legend(**kwargs)
 
     def set_artists(self):
         # indexed_measurements = self._get_indexed_measurements()
@@ -1410,7 +1434,6 @@ class MeasurementVisualization1D(MeasurementVisualization):
         artists = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
-
             x = self._get_xdata()
 
             new_lines = []
@@ -1434,10 +1457,10 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
     def _get_xdata(self):
         extent = self.measurements._plot_extent(self._x_units)
-        conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
+        #conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
         return np.linspace(
-            extent[0] * conversion,
-            extent[1] * conversion,
+            extent[0],
+            extent[1],
             self.measurements.shape[-1],
             endpoint=False,
         )
@@ -1740,7 +1763,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         for i, measurement in self.iterate_measurements(keep_dims=False):
             visibility = measurement.intensities > self._annotation_threshold
             for annotation, visible in zip(self._miller_index_annotations, visibility):
-
                 annotation.set_visible(visible)
 
     def set_miller_index_annotations(
@@ -1759,7 +1781,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
                 positions,
                 visibility,
             ):
-
                 annotation = ax.annotate(
                     "{} {} {}".format(*hkl),
                     xy=position[:2],

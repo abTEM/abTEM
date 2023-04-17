@@ -715,7 +715,9 @@ def _validate_axes(
     common_color_scale: bool = False,
     figsize: Tuple[float, float] = None,
     ioff: bool = False,
-    aspect:bool=True
+    aspect: bool = True,
+    sharex: bool = True,
+    sharey: bool = True,
 ):
     num_ensemble_axes = len(measurements.ensemble_shape)
 
@@ -754,7 +756,14 @@ def _validate_axes(
         ncols, nrows = _axes_grid_cols_and_rows(measurements, axes_types)
 
         axes = AxesGrid(
-            fig=fig, ncols=ncols, nrows=nrows, ncbars=ncbars, cbar_mode=cbar_mode, aspect=aspect
+            fig=fig,
+            ncols=ncols,
+            nrows=nrows,
+            ncbars=ncbars,
+            cbar_mode=cbar_mode,
+            aspect=aspect,
+            sharex=sharex,
+            sharey=sharey,
         )
     else:
         if explode:
@@ -781,7 +790,7 @@ class BaseMeasurement2D(BaseMeasurement):
         units: str = None,
         interact: bool = False,
         axes_types=None,
-        display:bool=True
+        display: bool = True,
     ) -> MeasurementVisualization2D:
         """
         Show the image(s) using matplotlib.
@@ -961,8 +970,12 @@ class Images(BaseMeasurement2D):
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [
-            RealSpaceAxis(label="x", sampling=self.sampling[0], units="Å", _tex_label="$x$"),
-            RealSpaceAxis(label="y", sampling=self.sampling[1], units="Å", _tex_label="$y$"),
+            RealSpaceAxis(
+                label="x", sampling=self.sampling[0], units="Å", _tex_label="$x$"
+            ),
+            RealSpaceAxis(
+                label="y", sampling=self.sampling[1], units="Å", _tex_label="$y$"
+            ),
         ]
 
     def integrate_gradient(self):
@@ -1705,13 +1718,14 @@ class _BaseMeasurement1d(BaseMeasurement):
             figsize=figsize,
             aspect=False,
             ioff=interact,
+            sharey=common_scale,
         )
 
         visualization = MeasurementVisualization1D(
             self,
             axes,
             axes_types=axes_types,
-            #common_scale=common_scale,
+            common_scale=common_scale,
             units=units,
         )
 
@@ -1734,11 +1748,11 @@ class _BaseMeasurement1d(BaseMeasurement):
         #     axes_types = ("overlay",) * num_ensemble_axes
         #     axes = np.array([[ax]])
 
-        #visualization = MeasurementVisualization1D(
+        # visualization = MeasurementVisualization1D(
         #    measurements, axes, axes_types, units=units
-        #)
+        # )
 
-        #if display:
+        # if display:
         #    plt.show(visualization.fig)
 
         return visualization
@@ -1777,7 +1791,11 @@ class RealSpaceLineProfiles(_BaseMeasurement1d):
 
     @property
     def base_axes_metadata(self) -> List[RealSpaceAxis]:
-        return [RealSpaceAxis(label="r", sampling=self.sampling, units="Å", _tex_label="$r$")]
+        return [
+            RealSpaceAxis(
+                label="r", sampling=self.sampling, units="Å", _tex_label="$r$"
+            )
+        ]
 
     def tile(self, reps: int) -> "RealSpaceLineProfiles":
         kwargs = self._copy_kwargs(exclude=("array",))
@@ -1849,7 +1867,11 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [ReciprocalSpaceAxis(label="k", sampling=self.sampling, units="1/Å", _tex_label="$k$")]
+        return [
+            ReciprocalSpaceAxis(
+                label="k", sampling=self.sampling, units="1/Å", _tex_label="$k$"
+            )
+        ]
 
     @property
     def angular_extent(self):
@@ -2059,6 +2081,7 @@ class DiffractionPatterns(BaseMeasurement2D):
                 label="kx",
                 units="1/Å",
                 fftshift=self.fftshift,
+                _tex_label="$k_x$",
             ),
             ReciprocalSpaceAxis(
                 sampling=self.sampling[1],
@@ -2066,6 +2089,7 @@ class DiffractionPatterns(BaseMeasurement2D):
                 label="ky",
                 units="1/Å",
                 fftshift=self.fftshift,
+                _tex_label="$k_y$",
             ),
         ]
 
@@ -3639,7 +3663,7 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         # if display:
         #     plt.show(visualization.fig)
 
-        #return visualization
+        # return visualization
 
         # if self.ensemble_shape:
         #     indexed_diffraction_patterns = indexed_diffraction_patterns[

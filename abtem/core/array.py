@@ -803,6 +803,8 @@ def stack(
 
     assert axis <= len(has_arrays[0].ensemble_shape)
 
+
+
     if has_arrays[0].is_lazy:
         array = da.stack([measurement.array for measurement in has_arrays], axis=axis)
     else:

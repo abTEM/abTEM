@@ -20,7 +20,9 @@ def format_label(axes, units=None):
         label = axes.label
 
     if units is None and axes.units is not None:
-        units = _format_units(axes.units)
+        units = axes.units
+
+    units = _format_units(units)
 
     if units is None:
         return f"{label}"
@@ -51,7 +53,7 @@ class AxisMetadata:
     def format_type(self):
         return self.__class__.__name__
 
-    def format_label(self, units:str=None):
+    def format_label(self, units: str = None):
         return format_label(self, units=units)
 
     def format_title(self, *args, **kwargs):
@@ -237,10 +239,10 @@ class NonLinearAxis(OrdinalAxis):
         else:
             return " ".join([f"{value:.2f}" for value in self.values])
 
-    def format_title(self, formatting:str=".3f", units=None, include_label=True):
+    def format_title(self, formatting: str = ".3f", units=None, include_label=True):
         value = self.values[0] * _get_conversion_factor(units, self.units)
 
-        units = _validate_units(units,self.units)
+        units = _validate_units(units, self.units)
 
         if include_label:
             if self._tex_label is not None:
@@ -303,7 +305,7 @@ class PositionsAxis(OrdinalAxis):
     label: str = "x, y"
     units: str = "Å"
 
-    def format_title(self, formatting, units=None,  include_label=True):
+    def format_title(self, formatting, units=None, include_label=True):
         formatted = ", ".join(
             tuple(f"{value:>{formatting}}" for value in self.values[0])
         )
@@ -340,11 +342,12 @@ def axis_from_dict(d):
 
 
 def format_axes_metadata(axes_metadata, shape):
-    data = []
-    for axis, n in zip(axes_metadata, shape):
-        data += [axis._tabular_repr_data(n)]
+    with config.set({"visualize.use_tex": False}):
+        data = []
+        for axis, n in zip(axes_metadata, shape):
+            data += [axis._tabular_repr_data(n)]
 
-    return tabulate(data, headers=["type", "label", "coordinates"], tablefmt="simple")
+        return tabulate(data, headers=["type", "label", "coordinates"], tablefmt="simple")
 
 
 def _iterate_axes_type(has_axes, axis_type):
