@@ -49,6 +49,7 @@ class ProgressBar:
     """Object to describe progress bar indicators for computations."""
 
     def __init__(self, **kwargs):
+        from tqdm.auto import tqdm
         self._tqdm = tqdm(**kwargs)
 
     @property
