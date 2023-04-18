@@ -1077,6 +1077,12 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         Number of grid points describing the wave functions.
     sampling : two float, optional
         Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+    flip_phase : bool, optional
+        Changes the sign of all negative parts of the CTF to positive (following doi:10.1016/j.ultramic.2008.03.004)
+        (default is False).
+    wiener_snr : float, optional
+        Applies a Wiener filter to the CTF (following doi:10.1016/j.ultramic.2008.03.004) with a given SNR value.
+        If no value is given, the default value of 0.0 means that no filter is applied.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
 
@@ -1097,6 +1103,8 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         extent: Union[float, Tuple[float, float]] = None,
         gpts: Union[int, Tuple[int, int]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
+        flip_phase: bool = False,
+        wiener_snr: float = 0.0,
         **kwargs,
     ):
 
@@ -1126,6 +1134,8 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         self._focal_spread = focal_spread
         self._semiangle_cutoff = semiangle_cutoff
         self._soft = soft
+        self._flip_phase = flip_phase
+        self._wiener_snr = wiener_snr
 
     @property
     def aberration_coefficients(self):
@@ -1221,6 +1231,22 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     def angular_spread(self, value: float):
         self._angular_spread = value
 
+    @property
+    def flip_phase(self) -> bool:
+        return self._flip_phase
+
+    @flip_phase.setter
+    def flip_phase(self, value: bool):
+        self._flip_phase = value
+
+    @property
+    def wiener_snr(self) -> float:
+        return self._wiener_snr
+
+    @wiener_snr.setter
+    def wiener_snr(self, value: float):
+        self._wiener_snr = value
+
     def _evaluate_with_alpha_and_phi(self, alpha, phi):
         array = self._aberrations._evaluate_with_alpha_and_phi(alpha, phi)
 
@@ -1254,9 +1280,17 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             )
             array = array * new_array
 
-        return array
+        if self._wiener_snr != 0.0:
+            return (1 + 1/self._wiener_snr) * array**2 / (array**2 + 1/self._wiener_snr)
+
+        elif self._flip_phase:
+            return (array.real - (1j) * np.abs(array.imag))
+
+        else:
+            return array
 
     def profiles(self, max_angle: float = None, phi: float = 0.0):
+
         if max_angle is None:
             if self.semiangle_cutoff == np.inf:
                 max_angle = 50
@@ -1280,9 +1314,18 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
         axis_metadata = ["ctf"]
         metadata = {"energy": self.energy}
+
+        _transfers = -aberrations.imag * envelope
+
+        if self._flip_phase:
+            _transfers = np.abs(_transfers)
+
+        if self._wiener_snr != 0.0:
+            _transfers = (1 + 1/self._wiener_snr) * _transfers**2 / (_transfers**2 + 1/self._wiener_snr)
+
         profiles = [
             ReciprocalSpaceLineProfiles(
-                -aberrations.imag * envelope,
+                _transfers,
                 sampling=sampling,
                 metadata=metadata,
                 ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,

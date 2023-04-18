@@ -178,7 +178,7 @@ def add_point_charges_fourier(
 
 
 def _interpolate_between_cells(
-    array, new_shape, old_cell, new_cell, offset=(0.0, 0.0, 0.0), order=2
+    array, new_shape, old_cell, new_cell, offset=(0.0, 0.0, 0.0), order=3
 ):
     x = np.linspace(0, 1, new_shape[0], endpoint=False)
     y = np.linspace(0, 1, new_shape[1], endpoint=False)
