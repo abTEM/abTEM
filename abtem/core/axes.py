@@ -173,8 +173,13 @@ class ScanAxis(RealSpaceAxis):
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
 
-    def format_title(self, formatting, **kwargs):
-        return f"{self.values[0]}"
+    def format_title(self, formatting, include_label:bool=True, **kwargs):
+        if include_label and len(self.label) > 0:
+            label = f"{self.label} = "
+        else:
+            label = ""
+
+        return f"{label}{self.values[0]}"
 
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):

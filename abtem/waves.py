@@ -232,7 +232,6 @@ class BaseWaves(
             safe_floor_int(cutoff_gpts[0] / np.sqrt(2)),
             safe_floor_int(cutoff_gpts[1] / np.sqrt(2)),
         )
-        # print(cutoff_gpts[1] / np.sqrt(2), safe_floor_int(cutoff_gpts[1] / np.sqrt(2)))
 
         valid_gpts = _ensure_parity_of_gpts(valid_gpts, self.gpts, parity="same")
 

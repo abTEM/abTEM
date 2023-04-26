@@ -1013,8 +1013,6 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
                 )
             )
 
-        print(array.dtype)
-
         if self._nonzero_coefficients(("C21", "phi21", "C23", "phi23")):
             array = array + (
                 1

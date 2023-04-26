@@ -352,7 +352,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         atoms = atoms.copy()
 
         rng = np.random.default_rng(self.seeds[0])
-        r = rng.normal(size=(len(atoms), 3))
+        r = rng.normal(size=(len(atoms), 3)) / np.sqrt(3)
 
         for axis in self.axes:
             atoms.positions[:, axis] += sigmas * r[:, axis]

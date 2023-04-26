@@ -556,6 +556,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         for ax in np.array(self.axes).ravel():
             ax.set_ylabel(label)
+
     @abstractmethod
     def _set_x_limits(self):
         pass
@@ -586,7 +587,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
             self._y_units = self._get_default_y_units()
         else:
             self._y_units = units
-
 
         self.set_y_labels()
         self._set_y_limits()
@@ -749,8 +749,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
         if include_index_label:
             included += ("index",)
 
-        print(self._metadata_labels)
-
         for label in self._metadata_labels.ravel():
             label.remove()
 
@@ -912,6 +910,20 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             vmax = measurement.max() if vmax is None else vmax
 
         return vmin, vmax
+
+    def add_area_indicator(self, area_indicator, panel="first", **kwargs):
+
+        xlim = self.axes[0, 0].get_xlim()
+        ylim = self.axes[0, 0].get_ylim()
+
+        for i, ax in enumerate(np.array(self.axes).ravel()):
+            if panel == "first" and i == 0:
+                area_indicator.add_to_axes(ax, **kwargs)
+            elif panel == "all":
+                area_indicator.add_to_axes(ax, **kwargs)
+
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
 
     def _update_vmin_vmax(self, vmin, vmax):
         for norm in self._normalization.ravel():
@@ -1332,7 +1344,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         axes,
         axes_types: tuple = None,
         units=None,
-        common_scale:bool=True
+        common_scale: bool = True,
     ):
 
         super().__init__(axes, measurements, axes_types=axes_types)
@@ -1392,19 +1404,16 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
     def _set_x_limits(self):
         extent = self.measurements._plot_extent(self._x_units)
-        #conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
+
         margin = (extent[1] - extent[0]) * 0.05
         for i, measurement in self.iterate_measurements():
-            self.axes[i].set_xlim(
-                [-extent[0] - margin, extent[1] + margin]
-            )
+            self.axes[i].set_xlim([-extent[0] - margin, extent[1] + margin])
             artists = self.artists[i]
             for artist in artists:
                 x = self._get_xdata()
                 artist.set_xdata(x)
 
     def _set_y_limits(self):
-
         def _get_extent(measurements):
             min_value = measurements.min()
             max_value = measurements.max()
@@ -1457,7 +1466,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
     def _get_xdata(self):
         extent = self.measurements._plot_extent(self._x_units)
-        #conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
+        # conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
         return np.linspace(
             extent[0],
             extent[1],

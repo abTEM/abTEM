@@ -775,6 +775,144 @@ def _validate_axes(
 
 
 class BaseMeasurement2D(BaseMeasurement):
+    @abstractmethod
+    def _get_1d_equivalent(self):
+        pass
+
+    @property
+    @abstractmethod
+    def sampling(self):
+        pass
+
+    @property
+    @abstractmethod
+    def extent(self):
+        pass
+
+    @property
+    @abstractmethod
+    def offset(self):
+        pass
+
+    def _interpolate_line(
+        self,
+        start: Union[Tuple[float, float], Atom] = None,
+        end: Union[Tuple[float, float], Atom] = None,
+        sampling: float = None,
+        gpts: int = None,
+        width: float = 0.0,
+        margin: float = 0.0,
+        order: int = 3,
+        endpoint: bool = False,
+        fractional: bool = False,
+    ):
+        from abtem.scan import LineScan
+
+        if self.is_complex:
+            raise NotImplementedError
+
+        if (sampling is None) and (gpts is None):
+            sampling = min(self.sampling)
+
+        xp = get_array_module(self.array)
+
+        if start is None:
+            start = (0.0, 0.0)
+
+        if end is None and fractional:
+            end = (0.0, 1.0)
+        elif end is None:
+            end = (0.0, self.extent[0])
+
+        if fractional:
+            extent = self.extent
+        else:
+            extent = None
+
+        scan = LineScan(
+            start=start,
+            end=end,
+            gpts=gpts,
+            sampling=sampling,
+            endpoint=endpoint,
+            potential=extent,
+            fractional=fractional,
+        )
+
+        if margin != 0.0:
+            scan.add_margin(margin)
+
+        positions = xp.asarray(
+            (scan.get_positions(lazy=False) - self.offset) / self.sampling
+        )
+
+        if width:
+            direction = xp.array(scan.end) - xp.array(scan.start)
+            direction = direction / xp.linalg.norm(direction)
+            perpendicular_direction = xp.array([-direction[1], direction[0]])
+            n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
+            perpendicular_positions = (
+                xp.linspace(-n / 2, n / 2, int(n))[:, None]
+                * perpendicular_direction[None]
+            )
+            positions = perpendicular_positions[None, :] + positions[:, None]
+
+        if self.is_lazy:
+            array = self.array.map_blocks(
+                _interpolate_stack,
+                positions=positions,
+                mode="wrap",
+                order=order,
+                drop_axis=self.base_axes,
+                new_axis=self.base_axes[0],
+                chunks=self.array.chunks[:-2] + (positions.shape[0],),
+                meta=xp.array((), dtype=np.float32),
+            )
+        else:
+            array = _interpolate_stack(self.array, positions, mode="wrap", order=order)
+
+        metadata = copy.copy(self.metadata)
+        metadata.update(scan.metadata)
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+
+        if width:
+            array = array.mean(-1)
+            metadata["width"] = width
+
+        return self._get_1d_equivalent()(
+            array=array,
+            sampling=scan.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    def interpolate_line_at_position(
+        self,
+        center: Union[Tuple[float, float], Atom],
+        angle: float,
+        extent: float,
+        gpts: int = None,
+        sampling: float = None,
+        width: float = 0.0,
+        order: int = 3,
+        endpoint: bool = True,
+    ):
+
+        from abtem.scan import LineScan
+
+        scan = LineScan.at_position(position=center, extent=extent, angle=angle)
+
+        return self.interpolate_line(
+            scan.start,
+            scan.end,
+            gpts=gpts,
+            sampling=sampling,
+            width=width,
+            order=order,
+            endpoint=endpoint,
+        )
+
     def show(
         self,
         ax: Axes = None,
@@ -839,7 +977,7 @@ class BaseMeasurement2D(BaseMeasurement):
         )
 
         visualization = MeasurementVisualization2D(
-            self,
+            self.to_cpu(),
             axes,
             vmin=vmin,
             vmax=vmax,
@@ -943,6 +1081,9 @@ class Images(BaseMeasurement2D):
             metadata=metadata,
         )
 
+    def _get_1d_equivalent(self):
+        return RealSpaceLineProfiles
+
     @property
     def _area_per_pixel(self):
         return np.prod(self.sampling)
@@ -951,6 +1092,10 @@ class Images(BaseMeasurement2D):
     def sampling(self) -> Tuple[float, float]:
         """Sampling of images in `x` and `y` [Å]."""
         return self._sampling
+
+    @property
+    def offset(self):
+        return 0.0, 0.0
 
     @property
     def extent(self) -> Tuple[float, float]:
@@ -1191,31 +1336,7 @@ class Images(BaseMeasurement2D):
         kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def interpolate_line_at_position(
-        self,
-        center: Union[Tuple[float, float], Atom],
-        angle: float,
-        extent: float,
-        gpts: int = None,
-        sampling: float = None,
-        width: float = 0.0,
-        order: int = 3,
-        endpoint: bool = True,
-    ):
 
-        from abtem.scan import LineScan
-
-        scan = LineScan.at_position(position=center, extent=extent, angle=angle)
-
-        return self.interpolate_line(
-            scan.start,
-            scan.end,
-            gpts=gpts,
-            sampling=sampling,
-            width=width,
-            order=order,
-            endpoint=endpoint,
-        )
 
     def interpolate_line(
         self,
@@ -1556,6 +1677,34 @@ class _BaseMeasurement1d(BaseMeasurement):
     def base_axes_metadata(self) -> List[Union[RealSpaceAxis, ReciprocalSpaceAxis]]:
         pass
 
+    def normalize_ensemble(self, scale="max", shift="mean"):
+        if shift != "none":
+            array = self.array - getattr(np, shift)(self.array, axis=-1, keepdims=True)
+        else:
+            array = self.array
+
+        array = array / getattr(np, scale)(self.array, axis=-1, keepdims=True)
+
+        kwargs = self._copy_kwargs(exclude=("array",))
+
+        return self.__class__(array, **kwargs)
+
+    def _line_scan(self, sampling=None):
+        start, end = self.metadata["start"], self.metadata["end"]
+        from abtem.scan import LineScan
+        return LineScan(start=start, end=end, sampling=sampling)
+
+    def add_to_axes(self, *args, **kwargs):
+        if not all(key in self.metadata for key in ("start", "end")):
+            raise RuntimeError(
+                "The metadata does not contain the keys 'start' and 'end'"
+            )
+
+        if "width" in self.metadata:
+            kwargs["width"] = self.metadata["width"]
+
+        self._line_scan().add_to_axes(*args, **kwargs)
+
     def width(self, height: float = 0.5):
         """
         Calculate the width of line(s) at a given height, e.g. full width at half maximum (the default).
@@ -1809,17 +1958,6 @@ class RealSpaceLineProfiles(_BaseMeasurement1d):
 
         return self.__class__(**kwargs)
 
-    def add_to_plot(self, *args, **kwargs):
-        if not all(key in self.metadata for key in ("start", "end")):
-            raise RuntimeError(
-                "The metadata does not contain the keys 'start' and 'end'"
-            )
-
-        start, end = self.metadata["start"], self.metadata["end"]
-        from abtem.scan import LineScan
-
-        return LineScan(start=start, end=end).add_to_plot(*args, **kwargs)
-
     def _plot_extent(self, units=None):
         scale = _get_conversion_factor(units, "Å")
         return [0, self.extent * scale]
@@ -1886,6 +2024,8 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
     def _plot_extent(self, units=None):
         if units is None:
             units = "1/Å"
+
+
 
         if units == "mrad":
             return [0, self.angular_extent]
@@ -2071,6 +2211,9 @@ class DiffractionPatterns(BaseMeasurement2D):
             metadata=metadata,
         )
 
+    def _get_1d_equivalent(self):
+        return ReciprocalSpaceLineProfiles
+
     @property
     def base_axes_metadata(self):
         limits = self.limits
@@ -2092,6 +2235,22 @@ class DiffractionPatterns(BaseMeasurement2D):
                 _tex_label="$k_y$",
             ),
         ]
+
+    def interpolate_line(
+        self,
+        start: Union[Tuple[float, float], Atom] = None,
+        end: Union[Tuple[float, float], Atom] = None,
+        sampling: float = None,
+        gpts: int = None,
+        width: float = 0.0,
+        margin: float = 0.0,
+        order: int = 3,
+        endpoint: bool = False,
+        fractional: bool = False,
+    ):
+        return self._interpolate_line(
+            start, end, sampling, gpts, width, margin, order, endpoint, fractional
+        )
 
     def index_diffraction_spots(
         self,
@@ -2204,6 +2363,16 @@ class DiffractionPatterns(BaseMeasurement2D):
             limits[1][1] * self.wavelength * 1e3,
         )
         return limits
+
+    @property
+    def offset(self):
+        limits = self.limits
+        return limits[0][0], limits[1][0]
+
+    @property
+    def extent(self):
+        limits = self.limits
+        return limits[0][0] - limits[0][1], limits[1][0] - limits[1][1]
 
     @property
     def coordinates(self) -> Tuple[np.ndarray, np.ndarray]:

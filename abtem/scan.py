@@ -19,6 +19,7 @@ from abtem.core.transform import WaveTransform
 from abtem.distributions import _AxisAlignedDistributionND, BaseDistribution
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
+from abtem.visualize import MeasurementVisualization
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -397,12 +398,21 @@ class LineScan(BaseScan):
             fractional=True,
         )
 
+    @property
+    def direction(self):
+        direction = np.array(self.end) - np.array(self.start)
+        return direction / np.linalg.norm(direction)
+
+    @property
+    def angle(self):
+        direction = self.direction
+        return np.arctan2(direction[1], direction[1])
+
     def add_margin(self, margin: Union[float, Tuple[float, float]]):
         if isinstance(margin, Number):
             margin = (margin,) * 2
 
-        direction = np.array(self.end) - np.array(self.start)
-        direction = direction / np.linalg.norm(direction)
+        direction = self.direction
 
         self.start = tuple(np.array(self.start) - direction * margin[0])
         self.end = tuple(np.array(self.end) + direction * margin[1])
@@ -425,6 +435,7 @@ class LineScan(BaseScan):
 
         start = tuple(np.array(position) - extent / 2 * direction)
         end = tuple(np.array(position) + extent / 2 * direction)
+
         return cls(
             start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
         )
@@ -606,7 +617,7 @@ class LineScan(BaseScan):
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
-    def add_to_plot(self, ax: Axes, linestyle: str = "-", color: str = "r", **kwargs):
+    def add_to_axes(self, ax: Axes, width=0., **kwargs):
         """
         Add a visualization of a scan line to a matplotlib plot.
 
@@ -621,13 +632,24 @@ class LineScan(BaseScan):
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-        ax.plot(
-            [self.start[0], self.end[0]],
-            [self.start[1], self.end[1]],
-            linestyle=linestyle,
-            color=color,
-            **kwargs
-        )
+
+        if width:
+            rect = Rectangle(
+                tuple(self.start),
+                self.extent, width,
+                angle=self.angle,
+                #alpha=alpha,
+                #facecolor=facecolor,
+                #edgecolor=edgecolor,
+                **kwargs
+            )
+            ax.add_patch(rect)
+        else:
+            ax.plot(
+                [self.start[0], self.end[0]],
+                [self.start[1], self.end[1]],
+                **kwargs
+            )
 
 
 class GridScan(HasGridMixin, BaseScan):
