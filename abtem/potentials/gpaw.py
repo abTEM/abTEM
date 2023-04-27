@@ -1,5 +1,4 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
-import copy
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -14,18 +13,18 @@ import numpy as np
 from ase import Atoms
 from ase import units
 from ase.data import chemical_symbols, atomic_numbers
-from ase.io.trajectory import read_atoms
 from ase.units import Bohr
 from scipy.interpolate import interp1d
+from scipy.ndimage import map_coordinates
 
-from abtem.core.fft import fft_interpolate, fft_crop
-from abtem.potentials.charge_density import _generate_slices
 from abtem.core.axes import AxisMetadata
 from abtem.core.constants import eps0
 from abtem.core.electron_configurations import (
     electron_configurations,
     config_str_to_config_tuples,
 )
+from abtem.core.fft import fft_crop
+from abtem.potentials.charge_density import _interpolate_slice
 from abtem.core.parametrizations.ewald import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
@@ -33,6 +32,7 @@ from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     _safe_read_atoms,
 )
+from abtem.potentials.charge_density import _generate_slices
 from abtem.potentials.iam import _PotentialBuilder, Potential
 
 try:
@@ -121,7 +121,6 @@ class _DummyGPAW:
 
         return cls.from_gpaw(calc)
 
-
         # with Reader(path) as reader:
         #     atoms = read_atoms(reader.atoms)
         #
@@ -175,225 +174,7 @@ class _DummyGPAW:
             raise RuntimeError()
 
 
-def _interpolate_pseudo_density(nt_sg, gd, gridrefinement=1):
-    if gridrefinement == 1:
-        return nt_sg, gd
-
-    assert gridrefinement % 2 == 0
-
-    iterations = int(np.log(gridrefinement) / np.log(2))
-
-    finegd = gd
-    n_sg = nt_sg
-
-    for i in range(iterations):
-        finegd = gd.refine()
-        interpolator = Transformer(gd, finegd, 3)
-
-        n_sg = finegd.empty(nt_sg.shape[0])
-
-        for s in range(nt_sg.shape[0]):
-            interpolator.apply(nt_sg[s], n_sg[s])
-
-        nt_sg = n_sg
-        gd = finegd
-
-    return n_sg, finegd
-
-
-def _calculate_I_a(nspins, D_asp, setups):
-    I_sa = np.zeros((nspins, len(D_asp)))
-
-    for s in range(nspins):
-        for a, setup in enumerate(setups):
-            D_sp = D_asp.get(a % len(D_asp))
-
-            if D_sp is not None:
-                I_sa[s, a] = setup.Nct / nspins - np.sqrt(4 * pi) * np.dot(
-                    D_sp[s], setup.Delta_pL[:, 0]
-                )
-                I_sa[s, a] -= setup.Nc / nspins
-
-    return I_sa
-
-
-def _add_valence_density_correction(n_sg, gd, D_asp, setups, atoms):
-    nspins = n_sg.shape[0]
-    spos_ac = atoms.get_scaled_positions() % 1.0
-
-    phi_aj = []
-    phit_aj = []
-    for setup in setups:
-        phi_j, phit_j = setup.get_partial_waves()[:2]
-        phi_aj.append(phi_j)
-        phit_aj.append(phit_j)
-
-    phi = BasisFunctions(gd, phi_aj)
-    phit = BasisFunctions(gd, phit_aj)
-    phi.set_positions(spos_ac)
-    phit.set_positions(spos_ac)
-
-    a_W = np.empty(len(phi.M_W), np.intc)
-    W = 0
-    for a in phi.atom_indices:
-        nw = len(phi.sphere_a[a].M_w)
-        a_W[W : W + nw] = a
-        W += nw
-
-    x_W = phi.create_displacement_arrays()[0]
-
-    I_sa = _calculate_I_a(nspins, D_asp, setups)
-
-    rho_MM = np.zeros((phi.Mmax, phi.Mmax))
-
-    for s in range(nspins):
-        M1 = 0
-        for a, setup in enumerate(setups):
-            ni = setup.ni
-            D_sp = D_asp.get(a % len(D_asp))
-
-            if D_sp is None:
-                D_sp = np.zeros((nspins, ni * (ni + 1) // 2))
-
-            M2 = M1 + ni
-            rho_MM[M1:M2, M1:M2] = unpack2(D_sp[s])
-            M1 = M2
-
-        assert np.all(n_sg[s].shape == phi.gd.n_c)
-        phi.lfc.ae_valence_density_correction(rho_MM, n_sg[s], a_W, I_sa[s], x_W)
-        phit.lfc.ae_valence_density_correction(-rho_MM, n_sg[s], a_W, I_sa[s], x_W)
-
-    return n_sg, I_sa
-
-
-def _add_core_density_correction(n_sg, gd, I_sa, setups, atoms):
-    nspins = n_sg.shape[0]
-    spos_ac = atoms.get_scaled_positions() % 1.0
-
-    nc_a = []
-    nct_a = []
-    for setup in setups:
-        nc, nct = setup.get_partial_waves()[2:4]
-        nc_a.append([nc])
-        nct_a.append([nct])
-
-    nc = LFC(gd, nc_a)
-    nct = LFC(gd, nct_a)
-    nc.set_positions(spos_ac)
-    nct.set_positions(spos_ac)
-
-    a_W = np.empty(len(nc.M_W), np.intc)
-    W = 0
-    for a in nc.atom_indices:
-        nw = len(nc.sphere_a[a].M_w)
-        a_W[W : W + nw] = a
-        W += nw
-    scale = 1.0 / nspins
-
-    for s, I_a in enumerate(I_sa):
-        nc.lfc.ae_core_density_correction(scale, n_sg[s], a_W, I_a)
-        nct.lfc.ae_core_density_correction(-scale, n_sg[s], a_W, I_a)
-
-        N_c = gd.N_c
-        g_ac = np.around(N_c * spos_ac).astype(int) % N_c - gd.beg_c
-
-        for I, g_c in zip(I_a, g_ac):
-            if np.all(g_c >= 0) and np.all(g_c < gd.n_c):
-                n_sg[s][tuple(g_c)] -= I / gd.dv
-
-    return n_sg
-
-
-def _get_all_electron_density(
-    nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
-):
-    nspins = nt_sG.shape[0]
-    spos_ac = atoms.get_scaled_positions() % 1.0
-
-    n_sg, gd = _interpolate_pseudo_density(nt_sG, gd, gridrefinement)
-
-    phi_aj = []
-    phit_aj = []
-    nc_a = []
-    nct_a = []
-    for setup in setups:
-        phi_j, phit_j, nc, nct = setup.get_partial_waves()[:4]
-        phi_aj.append(phi_j)
-        phit_aj.append(phit_j)
-        nc_a.append([nc])
-        nct_a.append([nct])
-
-    # Create localized functions from splines
-    phi = BasisFunctions(gd, phi_aj)
-    phit = BasisFunctions(gd, phit_aj)
-    nc = LFC(gd, nc_a)
-    nct = LFC(gd, nct_a)
-    phi.set_positions(spos_ac)
-    phit.set_positions(spos_ac)
-    nc.set_positions(spos_ac)
-    nct.set_positions(spos_ac)
-
-    I_sa = np.zeros((nspins, len(spos_ac)))
-    a_W = np.empty(len(phi.M_W), np.intc)
-    W = 0
-    for a in phi.atom_indices:
-        nw = len(phi.sphere_a[a].M_w)
-        a_W[W : W + nw] = a
-        W += nw
-
-    x_W = phi.create_displacement_arrays()[0]
-
-    rho_MM = np.zeros((phi.Mmax, phi.Mmax))
-
-    for s, I_a in enumerate(I_sa):
-        M1 = 0
-        for a, setup in enumerate(setups):
-            ni = setup.ni
-            D_sp = D_asp.get(a % len(D_asp))
-
-            if D_sp is None:
-                D_sp = np.zeros((nspins, ni * (ni + 1) // 2))
-            else:
-                I_a[a] = setup.Nct / nspins - np.sqrt(4 * pi) * np.dot(
-                    D_sp[s], setup.Delta_pL[:, 0]
-                )
-                I_a[a] -= setup.Nc / nspins
-
-            M2 = M1 + ni
-            rho_MM[M1:M2, M1:M2] = unpack2(D_sp[s])
-            M1 = M2
-
-        assert np.all(n_sg[s].shape == phi.gd.n_c)
-        phi.lfc.ae_valence_density_correction(rho_MM, n_sg[s], a_W, I_a, x_W)
-        phit.lfc.ae_valence_density_correction(-rho_MM, n_sg[s], a_W, I_a, x_W)
-
-    a_W = np.empty(len(nc.M_W), np.intc)
-    W = 0
-    for a in nc.atom_indices:
-        nw = len(nc.sphere_a[a].M_w)
-        a_W[W : W + nw] = a
-        W += nw
-    scale = 1.0 / nspins
-
-    for s, I_a in enumerate(I_sa):
-        nc.lfc.ae_core_density_correction(scale, n_sg[s], a_W, I_a)
-        nct.lfc.ae_core_density_correction(-scale, n_sg[s], a_W, I_a)
-        # D_asp.partition.comm.sum(I_a)
-
-        N_c = gd.N_c
-        g_ac = np.around(N_c * spos_ac).astype(int) % N_c - gd.beg_c
-
-        for I, g_c in zip(I_a, g_ac):
-            if np.all(g_c >= 0) and np.all(g_c < gd.n_c):
-                n_sg[s][tuple(g_c)] -= I / gd.dv
-
-    return n_sg.sum(0) / Bohr**3
-
-
 def get_core_correction_interpolators(setups, D_asp, Q_aL, rcgauss):
-    # density = calc.density
-    # D_asp = dict(density.D_asp)
-
     interpolators = []
     for a, D_sp in D_asp.items():
         setup = setups[a]
@@ -452,9 +233,14 @@ class _DummyParametrization:
 
 
 def _generate_slices(
-    interpolators, valence_potential, atoms, gpts, slice_thickness, first_slice=0, last_slice=None
+    interpolators,
+    valence_potential,
+    atoms,
+    gpts,
+    slice_thickness,
+    first_slice=0,
+    last_slice=None,
 ):
-    # interpolators = get_core_correction_interpolators(calc, 0.02)
 
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
@@ -469,7 +255,12 @@ def _generate_slices(
         )
         potential_generators.append(potential.generate_slices())
 
-    # valence_potential = calc.get_electrostatic_potential()
+    transformed_atoms = potential.transformed_atoms()
+
+    if np.allclose(transformed_atoms.cell, atoms.cell):
+        transform_valence_potential = False
+    else:
+        transform_valence_potential = True
 
     if last_slice is None:
         last_slice = len(potential)
@@ -482,9 +273,15 @@ def _generate_slices(
         for potential_generator in potential_generators[1:]:
             slic.array[:] += next(potential_generator).array
 
-        slic.array[:] -= integrate_slice(
-            valence_potential, potential.gpts, a, b, potential.thickness
-        )
+        if transform_valence_potential:
+            slic.array[:] -= _interpolate_slice(
+                valence_potential, atoms.cell, potential.gpts, potential.sampling, a, b
+            )
+        else:
+            slic.array[:] -= integrate_slice(
+                valence_potential, potential.gpts, a, b, potential.thickness
+            )
+
         yield slic
 
 
@@ -730,7 +527,7 @@ class GPAWPotential(_PotentialBuilder):
 
         calculator = _DummyGPAW.from_generic(calculator)
 
-        #print(calculator)
+        # print(calculator)
 
         atoms = self.frozen_phonons.atoms
 
@@ -752,13 +549,12 @@ class GPAWPotential(_PotentialBuilder):
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.02
         )
 
-        #calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
-        #calc.initialize(random_atoms)
+        # calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
+        # calc.initialize(random_atoms)
 
         # ewald_potential = self._get_ewald_potential()
         #
         # array = self._get_all_electron_density()
-
 
         for slic in _generate_slices(
             interpolators,
