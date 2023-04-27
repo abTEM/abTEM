@@ -54,8 +54,12 @@ def sphere_of_miller_index_grid_points(diffraction_patterns, cell=None, max_inde
 
 
 def k_space_grid_points(hkl, cell):
-    return (hkl[:, None] * cell.reciprocal()[None]).sum(-1)
-
+    k = (
+        hkl[:, 0, None] * cell.reciprocal()[0, None]
+        + hkl[:, 1, None] * cell.reciprocal()[1, None]
+        + hkl[:, 2, None] * cell.reciprocal()[2, None]
+    )
+    return k
 
 def sagita(radius, chord):
     return radius - np.sqrt(radius**2 - (chord / 2) ** 2)
@@ -123,10 +127,6 @@ def integrate_disk(array, center, footprint):
         slice(*mask_slice_limits[0]), slice(*mask_slice_limits[1])
     ]
 
-    # import matplotlib.pyplot as plt
-    # plt.imshow((cropped * cropped_integration_footprint) ** .05)
-    # plt.show()
-
     return (cropped * cropped_integration_footprint).sum((-2, -1))
 
 
@@ -146,28 +146,37 @@ def _index_diffraction_patterns(
 
     hkl = sphere_of_miller_index_grid_points(diffraction_patterns, cell, max_index)
 
-    is_valid = ((hkl % 2 == 0).all(axis=1) + (hkl % 2 == 1).all(axis=1)) #\
+    # is_valid = ((hkl % 2 == 0).all(axis=1) + (hkl % 2 == 1).all(axis=1)) #\
 
     # a= ((hkl[:, [0, 1]].sum(axis=1) % 2 == 0)
     #     * (hkl[:, [0, 2]].sum(axis=1) % 2 == 0)
     #     * (hkl[:, [1, 2]].sum(axis=1) % 2 == 0)
     # )
 
-    hkl = hkl[is_valid]
+    # hkl = hkl[is_valid]
 
     k = k_space_grid_points(hkl, cell)
 
-    nm = digitize_k_space_grid(k, diffraction_patterns)
-
-    mask = (
-        np.all((nm > 0), axis=1)
-        * (nm[:, 0] < diffraction_patterns.shape[-2])
-        * (nm[:, 1] < diffraction_patterns.shape[-1])
-    )
+    mask = ((k[:, 0] >= diffraction_patterns.limits[0][0]) *
+            (k[:, 0] <= diffraction_patterns.limits[0][1]) *
+            (k[:, 1] >= diffraction_patterns.limits[1][0]) *
+            (k[:, 1] <= diffraction_patterns.limits[1][1])
+            )
 
     k = k[mask]
-    nm = nm[mask]
     hkl = hkl[mask]
+
+    nm = digitize_k_space_grid(k, diffraction_patterns)
+
+    # mask = (
+    #     np.all((nm > 0), axis=1)
+    #     * (nm[:, 0] < diffraction_patterns.shape[-2])
+    #     * (nm[:, 1] < diffraction_patterns.shape[-1])
+    # )
+
+    #k = k[mask]
+    #nm = nm[mask]
+    #hkl = hkl[mask]
 
     labels = np.ravel_multi_index(nm.T, shape)
 
@@ -239,11 +248,12 @@ def _index_diffraction_patterns(
                 )
             )
         else:
+            # intensities.append(diffraction_patterns.array[..., n, m])
             intensities.append(diffraction_patterns.array[..., n, m])
 
         positions.append(k[indices][min_index])
 
-    #print(np.array(intensities).shape)
+    # print(np.array(intensities).shape)
     intensities = np.array(intensities)
     intensities = np.moveaxis(intensities, 0, -1)
 

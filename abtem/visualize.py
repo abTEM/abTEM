@@ -739,8 +739,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         self._panel_labels = panel_labels
 
-    # def
-
     def set_metadata_labels(self, include_index_label: bool = False, **kwargs):
         if "loc" not in kwargs:
             kwargs["loc"] = 2
@@ -977,7 +975,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
         for cbar in self._cbars.ravel():
             cbar.set_label(label, **kwargs)
-            cbar.formatter.set_powerlimits((0, 0))
+            cbar.formatter.set_powerlimits((-3, 3))
             cbar.formatter.set_useMathText(True)
             cbar.ax.yaxis.set_offset_position("left")
 
@@ -1000,7 +998,11 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
                 for j, image in enumerate(images):
                     cbars[i + (j,)] = plt.colorbar(image, cax=ax.cax[j], **kwargs)
             else:
-                cbars[i] = plt.colorbar(images, cax=ax.cax[0], **kwargs)
+                if hasattr(ax, "cax"):
+                    cbars[i] = plt.colorbar(images, cax=ax.cax[0], **kwargs)
+                else:
+
+                    cbars[i] = plt.colorbar(images, **kwargs)
 
         if cbars.shape[-1] == 1:
             cbars = np.squeeze(cbars, -1)
@@ -1435,10 +1437,6 @@ class MeasurementVisualization1D(MeasurementVisualization):
             self.axes[i].legend(**kwargs)
 
     def set_artists(self):
-        # indexed_measurements = self._get_indexed_measurements()
-
-        # for line in self._lines:
-        #     line.remove()
 
         artists = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):

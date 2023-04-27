@@ -18,7 +18,8 @@ from typing import (
 import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
-from IPython.core.display_functions import display
+from IPython.display import display
+#from IPython.core.display_functions import display
 from ase import Atom
 from ase.cell import Cell
 from matplotlib.axes import Axes
@@ -3632,6 +3633,8 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         )
 
     def order(self):
+
+
         order = np.argsort(-np.linalg.norm(self.positions, axis=1))
 
         positions = self.positions[order]
