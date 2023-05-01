@@ -3,6 +3,7 @@ import copy
 import itertools
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from numbers import Number
 from typing import (
     Union,
     Tuple,
@@ -12,14 +13,15 @@ from typing import (
     Sequence,
     Type,
     TYPE_CHECKING,
-    ChainMap,
+    ChainMap, Iterable,
 )
 
 import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
-from IPython.display import display
-#from IPython.core.display_functions import display
+from IPython.display import display as ipython_display
+
+# from IPython.core.display_functions import display
 from ase import Atom
 from ase.cell import Cell
 from matplotlib.axes import Axes
@@ -39,6 +41,7 @@ from abtem.core.axes import (
     UnknownAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
+from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_interpolate, fft_crop
@@ -540,14 +543,16 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         rng = xp.random.RandomState(seed=randomized_seed)
 
-        return rng.poisson(xp.clip(array, a_min=0.0, a_max=None) * total_dose).astype(
-            xp.float32
-        )
+        array = array[None] * xp.expand_dims(total_dose, tuple(range(1, len(array.shape) + 1)))
+
+        array = xp.clip(array, a_min=0.0, a_max=None)
+
+        return rng.poisson(array).astype(xp.float32)
 
     def poisson_noise(
         self,
-        dose_per_area: float = None,
-        total_dose: float = None,
+        dose_per_area: Union[float, Sequence[float]] = None,
+        total_dose: Union[float, Sequence[float]] = None,
         samples: int = 1,
         seed: int = None,
     ):
@@ -581,7 +586,10 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
             if total_dose is not None:
                 raise wrong_dose_error
 
-            total_dose = self._area_per_pixel * dose_per_area
+            if np.isscalar(dose_per_area):
+                total_dose = self._area_per_pixel * dose_per_area
+            else:
+                total_dose = self._area_per_pixel * np.array(dose_per_area, dtype=np.float32)
 
         elif total_dose is not None:
             if dose_per_area is not None:
@@ -592,19 +600,44 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         xp = get_array_module(self.array)
 
+        total_dose = xp.array(total_dose, dtype=xp.float32)
+
         seeds = _validate_seeds(seed, samples)
+
+        squeeze = ()
+        if samples == 1:
+            squeeze += (0,)
+
+        if not len(total_dose):
+            total_dose = total_dose[None]
+            squeeze += (1,)
 
         arrays = []
         for seed in seeds:
             if self.is_lazy:
 
-                arrays.append(
-                    self.array.map_blocks(
+                #total_dose = da.from_array()
+
+                chunks = validate_chunks(
+                    total_dose.shape + self.shape,
+                    ("auto",)
+                    + tuple(max(chunk) for chunk in self.array.chunks),
+                    limit=max_batch,
+                    dtype=np.dtype("complex64"),
+                )
+
+
+                sss
+
+                array = self.array.map_blocks(
                         self._add_poisson_noise,
                         total_dose=total_dose,
                         seed=seed,
                         meta=xp.array((), dtype=xp.float32),
                     )
+
+                arrays.append(array
+
                 )
             else:
                 arrays.append(
@@ -613,15 +646,13 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
                     )
                 )
 
-        if len(seeds) > 1:
-            if self.is_lazy:
-                arrays = da.stack(arrays)
-            else:
-                arrays = xp.stack(arrays)
-            axes_metadata = [SampleAxis(label="sample")]
+        if self.is_lazy:
+            arrays = da.stack(arrays)
         else:
-            arrays = arrays[0]
-            axes_metadata = []
+            arrays = xp.stack(arrays)
+
+        axes_metadata = [SampleAxis(label="sample"),
+                         NonLinearAxis(label="dose", values=tuple(total_dose))]
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = arrays
@@ -632,7 +663,9 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         kwargs["metadata"]["label"] = "electron count"
         kwargs["metadata"].pop("units", None)
 
-        return self.__class__(**kwargs)
+        measurement = self.__class__(**kwargs)
+        measurement = measurement.squeeze(squeeze)
+        return measurement
 
     def to_hyperspy(self):
         """Convert measurement to a Hyperspy signal."""
@@ -991,7 +1024,7 @@ class BaseMeasurement2D(BaseMeasurement):
         )
 
         if interact:
-            display(visualization.widgets)
+            ipython_display(visualization.widgets)
 
         return visualization
 
@@ -1337,8 +1370,6 @@ class Images(BaseMeasurement2D):
         kwargs["array"] = array
         return self.__class__(**kwargs)
 
-
-
     def interpolate_line(
         self,
         start: Union[Tuple[float, float], Atom] = None,
@@ -1532,16 +1563,18 @@ class Images(BaseMeasurement2D):
         )
 
         if self.is_lazy:
+
             depth = tuple(
-                min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.base_shape)
+                min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
             )
+
             array = self.array.map_overlap(
                 gaussian_filter,
                 sigma=sigma,
                 boundary=boundary,
                 mode=mode,
                 cval=cval,
-                depth=(0,) * (len(self.shape) - 2) + depth,
+                depth=depth,
                 meta=xp.array((), dtype=xp.float32),
             )
         else:
@@ -1693,6 +1726,7 @@ class _BaseMeasurement1d(BaseMeasurement):
     def _line_scan(self, sampling=None):
         start, end = self.metadata["start"], self.metadata["end"]
         from abtem.scan import LineScan
+
         return LineScan(start=start, end=end, sampling=sampling)
 
     def add_to_axes(self, *args, **kwargs):
@@ -2025,8 +2059,6 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1d):
     def _plot_extent(self, units=None):
         if units is None:
             units = "1/Å"
-
-
 
         if units == "mrad":
             return [0, self.angular_extent]
@@ -3634,7 +3666,6 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
     def order(self):
 
-
         order = np.argsort(-np.linalg.norm(self.positions, axis=1))
 
         positions = self.positions[order]
@@ -3790,6 +3821,9 @@ class IndexedDiffractionPatterns(BaseMeasurement):
         figsize=None,
         axes_types=None,
         interact: bool = False,
+        vmin=None,
+        vmax=None,
+        display: bool = True,
     ):
         """
 
@@ -3811,7 +3845,7 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             cbar=cbar,
             common_color_scale=common_color_scale,
             figsize=figsize,
-            ioff=interact,
+            ioff=interact + (not display),
         )
 
         visualization = DiffractionSpotsVisualization(
@@ -3824,10 +3858,12 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             scale=scale,
             cbar=cbar,
             common_color_scale=common_color_scale,
+            vmin=vmin,
+            vmax=vmax,
         )
 
         if interact:
-            display(visualization.widgets)
+            ipython_display(visualization.widgets)
 
         return visualization
         # # visualization.interact(True)

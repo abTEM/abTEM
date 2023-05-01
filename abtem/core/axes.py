@@ -19,6 +19,9 @@ def format_label(axes, units=None):
     else:
         label = axes.label
 
+    if len(label) == 0:
+        return ""
+
     if units is None and axes.units is not None:
         units = axes.units
 
@@ -30,11 +33,61 @@ def format_label(axes, units=None):
         return f"{label} [{units}]"
 
 
+def latex_float(f, formatting):
+    float_str = f"{f:>{formatting}}"
+    if "e" in float_str:
+        base, exponent = float_str.split("e")
+        return f"{base} \\times 10^{{{int(exponent)}}}"
+    else:
+        return float_str
+
+
+def format_value(value: Union[tuple, float], formatting: str, tolerance: float = 1e-14):
+
+    if isinstance(value, tuple):
+        return ", ".join(format_value(v, formatting=formatting) for v in value)
+
+    if isinstance(value, float):
+        if np.abs(value) < tolerance:
+            value = 0.0
+
+        if config.get("visualize.use_tex", False):
+            return latex_float(value, formatting)
+        else:
+            return f"{value:>{formatting}}"
+    return value
+
+
+def format_title(
+    axes, formatting: str = ".3f", units: str = None, include_label: bool = True
+):
+    try:
+        value = axes.values[0] * _get_conversion_factor(units, axes.units)
+    except KeyError:
+        value = axes.values[0]
+
+    units = _validate_units(units, axes.units)
+
+    if include_label:
+        if axes._tex_label is not None:
+            label = axes._tex_label
+        else:
+            label = axes.label
+        label = f"{label} = "
+    else:
+        label = ""
+
+    if config.get("visualize.use_tex", False):
+        return f"{label}${format_value(value, formatting)}$ {_format_units(units)}"
+    else:
+        return f"{label}{value:>{formatting}} {units}"
+
+
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     _concatenate: bool = True
     _events: bool = False
-    label: str = "unknown"
+    label: str = ""
     _tex_label: str = None
     units: str = None
 
@@ -87,35 +140,6 @@ class UnknownAxis(AxisMetadata):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class SampleAxis(AxisMetadata):
     pass
-
-
-# def format_label_with_units(label, units=None) -> str:
-#     #units = _validate_units(units, old_units)
-#
-#     if units is None:
-#
-#
-#     if config.get("visualize.use_tex", False):
-#         return f"${label} \ [{_format_units(units)}]$"
-#     else:
-#         return f"{label} [{units}]"
-
-
-def latex_float(f, formatting):
-    float_str = f"{f:>{formatting}}"
-    if "e" in float_str:
-        base, exponent = float_str.split("e")
-        return f"{base} \\times 10^{{{int(exponent)}}}"
-    else:
-        return float_str
-
-
-def format_value(value, formatting):
-    if isinstance(value, float):
-        if config.get("visualize.use_tex", False):
-            return latex_float(value, formatting)
-        else:
-            return f"{value:>{formatting}}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -173,7 +197,7 @@ class ScanAxis(RealSpaceAxis):
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
 
-    def format_title(self, formatting, include_label:bool=True, **kwargs):
+    def format_title(self, formatting, include_label: bool = True, **kwargs):
         if include_label and len(self.label) > 0:
             label = f"{self.label} = "
         else:
@@ -244,24 +268,10 @@ class NonLinearAxis(OrdinalAxis):
         else:
             return " ".join([f"{value:.2f}" for value in self.values])
 
-    def format_title(self, formatting: str = ".3f", units=None, include_label=True):
-        value = self.values[0] * _get_conversion_factor(units, self.units)
-
-        units = _validate_units(units, self.units)
-
-        if include_label:
-            if self._tex_label is not None:
-                label = self._tex_label
-            else:
-                label = self.label
-            label = f"{label} = "
-        else:
-            label = ""
-
-        if config.get("visualize.use_tex", False):
-            return f"{label}${format_value(value, formatting)}$ {_format_units(units)}"
-        else:
-            return f"{label}{value:>{formatting}} {units}"
+    def format_title(
+        self, formatting: str = ".3f", units: str = None, include_label: bool = True
+    ):
+        return format_title(self, formatting, units, include_label)
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -291,6 +301,9 @@ class TiltAxis(OrdinalAxis):
     @property
     def tilt(self):
         return self.values
+
+    def format_title(self, formatting, include_label: bool = True, **kwargs):
+        return format_title(self, formatting, units=None, include_label=include_label)
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -352,7 +365,9 @@ def format_axes_metadata(axes_metadata, shape):
         for axis, n in zip(axes_metadata, shape):
             data += [axis._tabular_repr_data(n)]
 
-        return tabulate(data, headers=["type", "label", "coordinates"], tablefmt="simple")
+        return tabulate(
+            data, headers=["type", "label", "coordinates"], tablefmt="simple"
+        )
 
 
 def _iterate_axes_type(has_axes, axis_type):

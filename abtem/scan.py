@@ -44,7 +44,7 @@ def _validate_scan_sampling(scan, probe):
         if not hasattr(probe, "semiangle_cutoff"):
             raise ValueError()
 
-        scan.sampling = 0.99 * nyquist_sampling(probe.semiangle_cutoff, probe.energy)
+        scan.sampling = 0.99 * nyquist_sampling(probe.aperture._max_semiangle_cutoff, probe.energy)
 
 
 class BaseScan(WaveTransform, metaclass=ABCMeta):

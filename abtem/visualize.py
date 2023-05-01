@@ -1,6 +1,7 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 import string
 from abc import abstractmethod, ABCMeta
+from collections import defaultdict
 from typing import TYPE_CHECKING, List
 from typing import Union, Tuple
 
@@ -177,54 +178,55 @@ class AxesGrid:
             fig, rect, horizontal=col_layout, vertical=row_layout, aspect=aspect
         )
 
-        i = 0
-        caxes = []
+        axes_index = 0
+        caxes_index = 0
+        caxes = defaultdict(list)
         for nx, col_size in enumerate(col_layout):
-
             for ny, row_size in enumerate(row_layout):
-
                 if isinstance(col_size, Size.AxesX) and (
                     isinstance(row_size, Size.AxesY)
                 ):
-                    ax = axes[i]
+                    ax = axes[axes_index]
                     ax.set_axes_locator(self._divider.new_locator(nx=nx, ny=ny))
-                    i += 1
+                    axes_index += 1
 
-                if cbar_mode == "each":
-                    if (col_size is self._col_sizes["cbar"]) and (
-                        isinstance(row_size, Size.AxesY)
-                    ):
-                        cb_ax = _cbaraxes_class_factory(Axes)(
-                            fig, self._divider.get_position(), orientation="vertical"
+                if (
+                    (cbar_mode == "each")
+                    and (col_size is self._col_sizes["cbar"])
+                    and (isinstance(row_size, Size.AxesY))
+                ):
+
+                    ax = axes[
+                        np.ravel_multi_index(
+                            (caxes_index // (ncbars * nrows), caxes_index % nrows),
+                            (ncols, nrows),
                         )
+                    ]
 
-                        fig.add_axes(cb_ax)
-                        cb_ax.set_axes_locator(self._divider.new_locator(nx=nx, ny=ny))
-                        caxes.append(cb_ax)
+                    caxes_index += 1
 
-                if cbar_mode == "single":
-                    if (col_size is self._col_sizes["cbar"]) and (
-                        isinstance(row_size, Size.AxesY)
-                    ):
-                        cb_ax = _cbaraxes_class_factory(Axes)(
-                            fig, self._divider.get_position(), orientation="vertical"
-                        )
-                        fig.add_axes(cb_ax)
-                        cb_ax.set_axes_locator(self._divider.new_locator(nx=nx, ny=0))
-                        caxes.append(cb_ax)
+                    cb_ax = _cbaraxes_class_factory(Axes)(
+                        fig, self._divider.get_position(), orientation="vertical"
+                    )
 
-        if cbar_mode == "single":
-            caxes = caxes * len(axes)
+                    fig.add_axes(cb_ax)
+                    cb_ax.set_axes_locator(self._divider.new_locator(nx=nx, ny=ny))
+                    caxes[ax].append(cb_ax)
 
-        new_caxes = [[] for _ in range(nrows * ncols)]
-        for i in range(nrows * ncols * ncbars):
-            col = i // (ncbars * nrows)
-            row = i % nrows
-            j = np.ravel_multi_index((col, row), (ncols, nrows))
-            new_caxes[j].append(caxes[i])
-
-        for ax, cax in zip(axes, new_caxes):
-            ax.cax = cax
+                if (
+                    (cbar_mode == "single")
+                    and (len(caxes[axes[0]]) < ncbars)
+                    and (col_size is self._col_sizes["cbar"])
+                    and (isinstance(row_size, Size.AxesY))
+                ):
+                    cb_ax = _cbaraxes_class_factory(Axes)(
+                        fig, self._divider.get_position(), orientation="vertical"
+                    )
+                    fig.add_axes(cb_ax)
+                    cb_ax.set_axes_locator(
+                        self._divider.new_locator(nx=nx, ny=0, ny1=-1)
+                    )
+                    caxes[axes[0]].append(cb_ax)
 
         axes = np.array(axes, dtype=object).reshape((ncols, nrows))
 
@@ -239,6 +241,7 @@ class AxesGrid:
                     ax._axislines["left"].toggle(ticklabels=False, label=False)
 
         self._axes = axes
+        self._caxes = caxes
 
     @property
     def divider(self):
@@ -323,6 +326,8 @@ def make_indexing_sliders(
         indices = ()
         for slider in sliders:
             idx = slider.index
+            if isinstance(idx, tuple):
+                idx = range(*idx)
             indices += (idx,)
 
         visualization.set_indices(indices)
@@ -344,10 +349,38 @@ def make_continuous_button(sliders):
     return continuous_update_checkbox
 
 
+def get_max_range(array, axes_types):
+
+    if np.iscomplexobj(array):
+        array = np.abs(array)
+
+    max_values = array.max(
+        tuple(
+            i for i, axes_type in enumerate(axes_types) if axes_type not in ("range",)
+        )
+    )
+
+    positive_indices = np.where(max_values > 0)[0]
+
+    if len(positive_indices) <= 1:
+        max_value = np.max(max_values)
+    else:
+        max_value = np.sum(max_values[positive_indices])
+
+    return max_value
+
+
 def make_vmin_vmax_slider(visualization):
-    min_value = visualization.measurements.array.min()
-    max_value = visualization.measurements.array.max()
-    step = (max_value - min_value) / 1000.0
+
+    axes_types = (
+        tuple(visualization._axes_types)
+        + ("base",) * visualization.measurements.num_base_axes
+    )
+
+    max_value = get_max_range(visualization.measurements.array, axes_types)
+    min_value = -get_max_range(-visualization.measurements.array, axes_types)
+
+    step = (max_value - min_value) / 1e6
 
     vmin_vmax_slider = widgets.FloatRangeSlider(
         value=visualization._get_vmin_vmax(),
@@ -356,7 +389,7 @@ def make_vmin_vmax_slider(visualization):
         step=step,
         disabled=visualization._autoscale,
         description="Normalization",
-        readout=False,
+        # readout=False,
         continuous_update=True,
     )
 
@@ -375,7 +408,8 @@ def make_scale_button(visualization, vmin_vmax_slider=None):
     scale_button = widgets.Button(description="Scale")
 
     def scale_button_clicked(*args):
-        vmin, vmax = visualization._validate_vmin_vmax()
+        # if visualization._common_scale:
+        vmin, vmax = visualization._get_global_vmin_vmax()
 
         with vmin_vmax_slider.hold_trait_notifications():
             vmin_vmax_slider.value = [vmin, vmax]
@@ -417,6 +451,13 @@ def make_power_scale_slider(visualization):
     power_scale_slider.observe(powerscale_slider_changed, "value")
 
     return power_scale_slider
+
+
+def get_joined_titles(measurement, formatting):
+    titles = []
+    for axes_metadata in measurement.ensemble_axes_metadata:
+        titles.append(axes_metadata.format_title(formatting))
+    return "\n".join(titles)
 
 
 class MeasurementVisualization(metaclass=ABCMeta):
@@ -480,8 +521,17 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def set_axes_padding(self, padding: Tuple[float, float] = (0.0, 0.0)):
         self._axes.set_axes_padding(padding)
 
-    def _get_indexed_measurements(self):
-        return self.measurements.get_items(self._indices, keep_dims=True)
+    def _get_indexed_measurements(self, keepdims: bool = True):
+
+        indexed = self.measurements.get_items(self._indices, keep_dims=keepdims)
+        indexed = indexed.sum(
+            axes=tuple(
+                i
+                for i, axes_type in enumerate(self._axes_types)
+                if axes_type == "range"
+            )
+        )
+        return indexed
 
     def set_column_titles(
         self,
@@ -492,7 +542,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         fontsize=12,
         **kwargs,
     ):
-        indexed_measurements = self._get_indexed_measurements()
+        indexed_measurements = self._get_indexed_measurements(keepdims=False)
 
         if titles is None:
             if not len(indexed_measurements.ensemble_shape):
@@ -554,15 +604,18 @@ class MeasurementVisualization(metaclass=ABCMeta):
         if label is None:
             label = self._get_default_y_label(units=self._y_units)
 
-        for ax in np.array(self.axes).ravel():
+        for i, ax in enumerate(np.array(self.axes).ravel()):
+            # print(self.axes.shape[0], i, i % self.axes.shape[0])
+            # if i % self.axes.shape[0] == 1:
+
             ax.set_ylabel(label)
 
     @abstractmethod
-    def _set_x_limits(self):
+    def set_xlim(self):
         pass
 
     @abstractmethod
-    def _set_y_limits(self):
+    def set_ylim(self):
         pass
 
     @abstractmethod
@@ -580,7 +633,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
             self._x_units = units
 
         self.set_x_labels()
-        self._set_x_limits()
+        self.set_xlim()
 
     def set_y_units(self, units=None):
         if units is None:
@@ -589,13 +642,13 @@ class MeasurementVisualization(metaclass=ABCMeta):
             self._y_units = units
 
         self.set_y_labels()
-        self._set_y_limits()
+        self.set_ylim()
 
     def set_row_titles(
         self,
         titles: Union[str, List[str]] = None,
         pad: float = 0.0,
-        format: str = ".2g",
+        format: str = ".3g",
         units: str = None,
         fontsize=12,
         **kwargs,
@@ -703,84 +756,89 @@ class MeasurementVisualization(metaclass=ABCMeta):
             elif j < len(indices):
                 validated_indices.append(indices[j])
                 j += 1
-            else:
+            elif axes_type == "index":
                 validated_indices.append(0)
+            elif axes_type == "range":
+                validated_indices.append(slice(None))
+            else:
+                raise RuntimeError()
 
         return tuple(validated_indices)
 
     def set_indices(self, indices=()):
+
         self._indices = self._validate_indices(indices)
         self.update_artists()
+        self.update_panel_labels()
 
     @abstractmethod
     def update_artists(self):
         pass
 
-    def set_alphabetic_labels(self, **kwargs):
-        labels = string.ascii_lowercase
-        labels = [f"({label})" for label in labels]
-        if config.get("visualize.use_tex", False):
-            labels = [f"${label}$" for label in labels]
+    def set_panel_labels(
+        self,
+        labels: str = "alphabetic",
+        frameon: bool = True,
+        loc: str = "upper left",
+        pad: float = 0.1,
+        borderpad: float = 0.1,
+        prop: dict = None,
+        formatting: str = ".3g",
+        **kwargs,
+    ):
 
-        self.set_panel_labels(labels, **kwargs)
+        labels_type = labels
 
-    def _set_panel_labels(self, labels, **kwargs):
+        if labels == "alphabetic":
+            labels = string.ascii_lowercase
+            labels = [f"({label})" for label in labels]
+            if config.get("visualize.use_tex", False):
+                labels = [f"${label}$" for label in labels]
+        elif labels == "metadata":
+            labels = []
+            for i, measurement in self.iterate_measurements(keep_dims=True):
+                labels.append(get_joined_titles(measurement, formatting))
+        elif (
+            not isinstance(labels, (tuple, list))
+            and len(labels) != np.array(self.axes).size
+        ):
+            raise ValueError()
+
+        if prop is None:
+            prop = {}
 
         for old_label in self._panel_labels:
             old_label.remove()
 
-        panel_labels = []
+        anchored_text = []
         for ax, l in zip(np.array(self.axes).ravel(), labels):
-            at = AnchoredText(l, pad=0.0, borderpad=0.5, frameon=False, **kwargs)
+            at = AnchoredText(
+                l,
+                pad=pad,
+                borderpad=borderpad,
+                frameon=frameon,
+                loc=loc,
+                prop=prop,
+                **kwargs,
+            )
+            at.formatting = formatting
+            at.patch.set_boxstyle("round,pad=0.,rounding_size=0.2")
             ax.add_artist(at)
-            at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=5)])
+            anchored_text.append(at)
 
-            labels.append(at)
+        self._panel_labels = anchored_text
 
-        self._panel_labels = panel_labels
+        if labels_type == "metadata":
+            self._metadata_labels = self._panel_labels
+        else:
+            self._metadata_labels = []
 
-    def set_metadata_labels(self, include_index_label: bool = False, **kwargs):
-        if "loc" not in kwargs:
-            kwargs["loc"] = 2
-
-        included = ("explode",)
-        if include_index_label:
-            included += ("index",)
-
-        for label in self._metadata_labels.ravel():
-            label.remove()
-
-        self._metadata_labels = np.zeros(self.axes.shape, dtype=object)
-        for i, measurement in self.iterate_measurements(keep_dims=True):
-            titles = []
-            for j, axes_type in enumerate(self._axes_types):
-                if axes_type in included:
-                    titles.append(measurement.ensemble_axes_metadata[j].format_title())
-
-            l = ", ".join(titles)
-            at = AnchoredText(l, pad=0.0, borderpad=0.5, frameon=False, **kwargs)
-            ax = self.axes[i]
-            ax.add_artist(at)
-            at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=5)])
-
-            self._metadata_labels[i] = at
-
-        # self._set_panel_labels(labels, **kwargs)
-
-        # self._metadata_labels = label
-
-    def set_panel_labels(self, labels: Union[str, List[str]], **kwargs):
-        if "loc" not in kwargs:
-            kwargs["loc"] = 2
-
-        for panel_label in self._panel_labels:
-            panel_label.remove()
-
-        self._panel_labels = []
-        for ax, l in zip(np.array(self.axes).ravel(), labels):
-            at = AnchoredText(l, pad=0.0, borderpad=0.5, frameon=False, **kwargs)
-            ax.add_artist(at)
-            at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=5)])
+    def update_panel_labels(self):
+        for anchored_text, (i, measurement) in zip(
+            self._metadata_labels, self.iterate_measurements(keep_dims=True)
+        ):
+            label = get_joined_titles(measurement, anchored_text.formatting)
+            anchored_text.txt.set_text(label)
 
     def animate(
         self,
@@ -794,6 +852,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
             self.set_indices((i,))
             if adjust_scale:
                 self._update_vmin_vmax(*self._validate_vmin_vmax())
+
             return self.artists.ravel()
 
         index_axes = self._get_axes_from_axes_types("index")
@@ -873,16 +932,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
     ):
 
         if self._common_scale:
-            measurements = self._get_indexed_measurements()
-
-            if measurements.is_complex:
-                measurements = measurements.abs()
-
-            if vmin is None:
-                vmin = float(measurements.array.min())
-
-            if vmax is None:
-                vmax = float(measurements.array.max())
+            vmin, vmax = self._get_global_vmin_vmax(vmin=vmin, vmax=vmax)
 
         self._normalization = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
@@ -899,15 +949,32 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
             self._normalization[i] = norm
 
-    def _validate_vmin_vmax(self, vmin: float = None, vmax: float = None):
-        for i, measurement in self.iterate_measurements():
-            if measurement.is_complex:
-                measurement = measurement.abs()
+    def _get_global_vmin_vmax(self, vmin=None, vmax=None):
+        measurements = self._get_indexed_measurements()
 
-            vmin = measurement.min() if vmin is None else vmin
-            vmax = measurement.max() if vmax is None else vmax
+        if measurements.is_complex:
+            measurements = measurements.abs()
+
+        if vmin is None:
+            vmin = float(measurements.array.min())
+
+        if vmax is None:
+            vmax = float(measurements.array.max())
 
         return vmin, vmax
+
+    def _validate_vmin_vmax(self, vmin: float = None, vmax: float = None):
+        if self._common_scale:
+            global_vmin, global_vmax = self._get_global_vmin_vmax()
+
+        return vmin, vmax
+
+    def _update_vmin_vmax(self, vmin=None, vmax=None):
+        for norm, measurement in zip(
+            self._normalization.ravel(), self.iterate_measurements(keep_dims=False)
+        ):
+            norm.vmin = vmin
+            norm.vmax = vmax
 
     def add_area_indicator(self, area_indicator, panel="first", **kwargs):
 
@@ -922,11 +989,6 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
             ax.set_xlim(xlim)
             ax.set_ylim(ylim)
-
-    def _update_vmin_vmax(self, vmin, vmax):
-        for norm in self._normalization.ravel():
-            norm.vmin = vmin
-            norm.vmax = vmax
 
     def _update_power(self, power: float = 1.0):
         for i, measurement in self.iterate_measurements(keep_dims=False):
@@ -973,11 +1035,12 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
         label = f"{label} [{self._scale_units}]"
 
-        for cbar in self._cbars.ravel():
-            cbar.set_label(label, **kwargs)
-            cbar.formatter.set_powerlimits((-3, 3))
-            cbar.formatter.set_useMathText(True)
-            cbar.ax.yaxis.set_offset_position("left")
+        for cbars in self._cbars.values():
+            for cbar in cbars:
+                cbar.set_label(label, **kwargs)
+                cbar.formatter.set_powerlimits((-3, 3))
+                cbar.formatter.set_useMathText(True)
+                cbar.ax.yaxis.set_offset_position("left")
 
     def set_cbar_padding(self, padding: Tuple[float, float] = (0.1, 0.1)):
         self._axes.set_cbar_padding(padding)
@@ -989,23 +1052,23 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         self._axes.set_cbar_spacing(spacing)
 
     def set_cbars(self, **kwargs):
-        cbars = np.zeros(self.axes.shape + (self._artists_per_axes,), dtype=object)
+        cbars = defaultdict(list)
+
         for i, _ in self.iterate_measurements():
             ax = self.axes[i]
+
+            if ax in self.axes._caxes.keys():
+                cax = self.axes._caxes[ax]
+            else:
+                continue
+
             images = self._artists[i]
 
             if isinstance(images, np.ndarray):
                 for j, image in enumerate(images):
-                    cbars[i + (j,)] = plt.colorbar(image, cax=ax.cax[j], **kwargs)
+                    cbars[ax].append(plt.colorbar(image, cax=cax[j], **kwargs))
             else:
-                if hasattr(ax, "cax"):
-                    cbars[i] = plt.colorbar(images, cax=ax.cax[0], **kwargs)
-                else:
-
-                    cbars[i] = plt.colorbar(images, **kwargs)
-
-        if cbars.shape[-1] == 1:
-            cbars = np.squeeze(cbars, -1)
+                cbars[ax].append(plt.colorbar(images, cax=cax[0], **kwargs))
 
         self._cbars = cbars
 
@@ -1170,7 +1233,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
     def set_cbar_labels(self, label: str = None, **kwargs):
         if self._domain_coloring:
-            for cbar1, cbar2 in self._cbars.reshape((-1, 2)):
+            for cbar1, cbar2 in self._cbars.values():
                 cbar1.set_label("arg", rotation=0, ha="center", va="top")
                 cbar1.ax.yaxis.set_label_coords(0.5, -0.02)
                 cbar1.set_ticks([-np.pi, -np.pi / 2, 0, +np.pi / 2, np.pi])
@@ -1204,10 +1267,10 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     def _get_default_y_units(self):
         return self.measurements.axes_metadata[-1].units
 
-    def _set_x_limits(self):
+    def set_xlim(self):
         self.set_extent()
 
-    def _set_y_limits(self):
+    def set_ylim(self):
         self.set_extent()
 
     def set_extent(self, extent=None):
@@ -1299,6 +1362,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
                 images[0].set_data(np.angle(array))
                 images[1].set_data(abs_array)
             else:
+
                 images.set_data(measurement.array.T)
 
     @property
@@ -1308,7 +1372,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
         def index_update_callback(change):
             if self._autoscale:
-                vmin_vmax_slider.value = self._validate_vmin_vmax()
+                vmin_vmax_slider.value = self._get_global_vmin_vmax()
 
         sliders = make_indexing_sliders(
             self, self.axes_types, callbacks=(index_update_callback,)
@@ -1404,7 +1468,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
     def _get_default_y_units(self):
         return self.measurements.metadata.get("units", "")
 
-    def _set_x_limits(self):
+    def set_xlim(self):
         extent = self.measurements._plot_extent(self._x_units)
 
         margin = (extent[1] - extent[0]) * 0.05
@@ -1415,20 +1479,24 @@ class MeasurementVisualization1D(MeasurementVisualization):
                 x = self._get_xdata()
                 artist.set_xdata(x)
 
-    def _set_y_limits(self):
+    def set_ylim(self, ylim=None):
         def _get_extent(measurements):
             min_value = measurements.min()
             max_value = measurements.max()
             margin = (max_value - min_value) * 0.05
             return [min_value - margin, max_value + margin]
 
-        if self._common_scale:
-            y_lim = _get_extent(self.measurements)
+        if self._common_scale and ylim is None:
+            common_ylim = _get_extent(self.measurements)
+        else:
+            common_ylim = ylim
 
         for i, measurement in self.iterate_measurements():
 
-            if not self._common_scale:
+            if not self._common_scale and common_ylim is None:
                 y_lim = _get_extent(measurement)
+            else:
+                y_lim = common_ylim
 
             self.axes[i].set_ylim(y_lim)
 
@@ -1471,49 +1539,6 @@ class MeasurementVisualization1D(MeasurementVisualization):
             self.measurements.shape[-1],
             endpoint=False,
         )
-
-    # def set_x_units(self, units=None):
-    #     if units is None:
-    #         units = self.measurements.axes_metadata[-1].units
-    #     self._x_units = units
-    #     self.set_x_labels()
-    #
-    #     # for i, _ in self.iterate_measurements():
-    #
-    #     for lines in self._lines.rael():
-    #         for line in lines:
-    #             line.set_xdata(self._get_xdata())
-    #
-    #     for ax in np.array(self.axes).ravel():
-    #         ax.relim()
-    #         ax.autoscale()
-    #
-    # def set_y_units(self, units=None):
-    #     self._y_units = _validate_units(
-    #         units, self.measurements.metadata.get("units", None)
-    #     )
-    #     self.set_y_labels()
-    #
-    # def set_y_labels(self, label=None):
-    #     if label is None:
-    #         self._y_label = self.measurements.metadata.get("label", None)
-    #     else:
-    #         self._y_label = label
-    #
-    #     if self._y_label is None:
-    #         return
-    #
-    #     for ax in np.array(self.axes).ravel():
-    #         ax.set_ylabel(format_label(self._y_label, self._y_units))
-    #
-    # def set_x_labels(self, label=None):
-    #     if label is None:
-    #         self._x_label = self.measurements.base_axes_metadata[-1].label
-    #     else:
-    #         self._x_label = label
-    #
-    #     for i, _ in self.iterate_measurements():
-    #         self.axes[i].set_xlabel(format_label(self._x_label, self._x_units))
 
     def update_artists(self):
         pass
@@ -1610,8 +1635,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         # self.set_extent()
         # self.set_x_units(units)
         # self.set_y_units(units)
-        # self.set_x_labels()
-        # self.set_y_labels()
+        self.set_x_labels()
+        self.set_y_labels()
 
     @property
     def _artists_per_axes(self):
@@ -1698,17 +1723,17 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         ]
 
     def _get_default_x_label(self, units: str = None):
-        return self._reciprocal_space_axes[-1].format_label(units)
+        return self._reciprocal_space_axes[-2].format_label(units)
 
     def _get_default_y_label(self, units: str = None):
-        return self._reciprocal_space_axes[-2].format_label(units)
+        return self._reciprocal_space_axes[-1].format_label(units)
 
     def _get_default_x_units(self):
         return self._reciprocal_space_axes[-1].units
 
     _get_default_y_units = _get_default_x_units
 
-    def _set_x_limits(self):
+    def set_xlim(self):
         for i, measurement in self.iterate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
@@ -1717,7 +1742,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             )
             self.axes[i].set_xlim([-x_lim, x_lim])
 
-    def _set_y_limits(self):
+    def set_ylim(self):
         for i, measurement in self.iterate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
@@ -1773,32 +1798,37 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
                 annotation.set_visible(visible)
 
     def set_miller_index_annotations(
-        self, threshold: float = 1.0, size=8, xytext=(0, 0), textcoords="offset points"
+        self,
+        threshold: float = 1.0,
+        size=8,
+        xytext=(0, 0),
+        textcoords="offset points",
+        **kwargs,
     ):
 
         self._annotation_threshold = threshold
         self._miller_index_annotations = []
         for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
+            norm = self._normalization[i]
             visibility = measurement.intensities > threshold
             positions = self._get_positions(measurement)
+            scales = self._get_scales(measurement, norm)
 
-            for hkl, position, visible in zip(
-                measurement.miller_indices,
-                positions,
-                visibility,
+            for hkl, position, visible, scale in zip(
+                measurement.miller_indices, positions, visibility, scales
             ):
+
                 annotation = ax.annotate(
                     "{} {} {}".format(*hkl),
-                    xy=position[:2],
+                    xy=position[:2] + [0, scale / 2],
                     xytext=xytext,
                     textcoords=textcoords,
                     ha="center",
                     va="center",
                     size=size,
                     visible=visible,
-                    color="w"
-                    # path_effects=[withStroke(foreground="w", linewidth=4)],
+                    **kwargs,
                 )
                 self._miller_index_annotations.append(annotation)
 
@@ -1846,7 +1876,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
         def index_update_callback(change):
             if self._autoscale:
-                vmin_vmax_slider.value = self._validate_vmin_vmax()
+                vmin_vmax_slider.value = self._get_global_vmin_vmax()
 
         def hkl_slider_changed(change):
             self.set_hkl_threshold(change["new"])

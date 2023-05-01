@@ -1348,14 +1348,12 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             )
 
             component_metadata = [
-                OrdinalAxis(label="ctf_component", values=tuple(components.values()))
+                OrdinalAxis(label="", values=tuple(components.keys()))
             ]
 
             ensemble_axes_metadata = ensemble_axes_metadata + component_metadata
         else:
             profiles = components["ctf"]
-
-        print(profiles.shape, profiles.dtype, len(ensemble_axes_metadata))
 
         metadata = {"energy": self.energy}
 

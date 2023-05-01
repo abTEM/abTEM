@@ -8,8 +8,10 @@ from abtem.core.utils import EqualityMixin, CopyMixin
 
 
 def antialias_aperture(gpts, sampling, xp):
+
     cutoff = config.get("antialias.cutoff") / max(sampling) / 2
     taper = config.get("antialias.taper") / max(sampling)
+    #taper = 0.0 / max(sampling)
 
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
     r = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
