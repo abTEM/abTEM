@@ -20,6 +20,7 @@ from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
 )
+from abtem.distributions import _EnsembleFromDistributionsMixin
 
 if TYPE_CHECKING:
     from abtem.waves import Waves, BaseWaves
@@ -147,6 +148,23 @@ class CompositeWaveTransform(WaveTransform):
             i += len(arg_indices)
 
         return partial(self.ctf, partials=partials)
+
+
+class EnsembleTransform(_EnsembleFromDistributionsMixin, WaveTransform):
+
+    def __init__(self, distributions):
+        super().__init__(distributions=distributions)
+
+    @abstractmethod
+    def _apply_array(self, x):
+        pass
+
+    def apply(self, x):
+        array = self._apply_array(x)
+        kwargs = x._copy_kwargs(exclude=("array",))
+        kwargs["ensemble_axes_metadata"] = self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+        kwargs["metadata"].update(self.metadata)
+        return x.__class__(array, **kwargs)
 
 
 class FourierSpaceConvolution(

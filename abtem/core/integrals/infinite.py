@@ -38,7 +38,7 @@ def superpose_deltas(
 
     if round_positions:
         rounded = xp.round(positions).astype(xp.int32)
-        i, j = rounded[:, 0][None], rounded[:, 1][None]
+        i, j = rounded[:, 0][None] % shape[0], rounded[:, 1][None] % shape[1]
         v = xp.array([1.0], dtype=xp.float32)[:, None]
     else:
         rounded = xp.floor(positions).astype(xp.int32)

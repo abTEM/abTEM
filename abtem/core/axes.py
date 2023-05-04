@@ -61,6 +61,7 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
 def format_title(
     axes, formatting: str = ".3f", units: str = None, include_label: bool = True
 ):
+
     try:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
     except KeyError:
@@ -271,6 +272,7 @@ class NonLinearAxis(OrdinalAxis):
     def format_title(
         self, formatting: str = ".3f", units: str = None, include_label: bool = True
     ):
+
         return format_title(self, formatting, units, include_label)
 
 

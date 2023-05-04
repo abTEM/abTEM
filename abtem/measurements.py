@@ -3,6 +3,7 @@ import copy
 import itertools
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from functools import partial
 from numbers import Number
 from typing import (
     Union,
@@ -13,7 +14,8 @@ from typing import (
     Sequence,
     Type,
     TYPE_CHECKING,
-    ChainMap, Iterable,
+    ChainMap,
+    Iterable,
 )
 
 import dask.array as da
@@ -51,8 +53,10 @@ from abtem.core.grid import (
     spatial_frequencies,
 )
 from abtem.core.interpolate import interpolate_bilinear
+from abtem.core.transform import EnsembleTransform
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
+from abtem.distributions import _validate_distribution, BaseDistribution
 from abtem.indexing import _index_diffraction_patterns, format_miller_indices
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.visualize import (
@@ -341,6 +345,99 @@ def _interpolate_stack(array, positions, mode, order, **kwargs):
     return output
 
 
+class NoiseTransform(EnsembleTransform):
+    def __init__(
+        self,
+        dose: Union[float, np.ndarray, BaseDistribution],
+        samples: int = None,
+        seeds: Union[int, Tuple[int, ...]] = None,
+    ):
+
+        self._dose = _validate_distribution(dose)
+
+        if samples is None and seeds is None:
+            samples = 1
+
+        if seeds is None and samples > 1:
+            seeds = _validate_seeds(seeds, samples)
+            seeds = _validate_distribution(seeds)
+
+        self._seeds = seeds
+
+        super().__init__(
+            distributions=(
+                "dose",
+                "seeds",
+            )
+        )
+
+    @property
+    def dose(self):
+        return self._dose
+
+    @property
+    def seeds(self):
+        return self._seeds
+
+    @property
+    def samples(self):
+        if hasattr(self.seeds, "__len__"):
+            return len(self.seeds)
+        else:
+            return 1
+
+    @property
+    def ensemble_axes_metadata(self):
+        ensemble_axes_metadata = []
+
+        if isinstance(self.dose, BaseDistribution):
+            ensemble_axes_metadata += [
+                NonLinearAxis(label="Dose", values=tuple(self.dose.values), units="e")
+            ]
+
+        if isinstance(self.seeds, BaseDistribution):
+            ensemble_axes_metadata += [SampleAxis()]
+
+        return ensemble_axes_metadata
+
+    @property
+    def metadata(self):
+        return {"units": ""}
+
+    def _apply_array(self, x):
+
+        array = x.array
+        xp = get_array_module(array)
+
+        if isinstance(self.seeds, BaseDistribution):
+            array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
+
+        if isinstance(self.dose, BaseDistribution):
+            dose = xp.array(self.dose.values, dtype=xp.float32)
+            array = array[None] * xp.expand_dims(
+                dose, tuple(range(1, len(array.shape) + 1))
+            )
+        else:
+            array = array * self.dose
+
+        if isinstance(self.seeds, BaseDistribution):
+            seed = sum(self.seeds.values)
+        else:
+            seed = self.seeds
+
+        rng = xp.random.default_rng(seed=seed)
+
+        randomized_seed = int(
+            rng.integers(np.iinfo(np.int32).max)
+        )  # fixes strange cupy bug
+
+        rng = xp.random.RandomState(seed=randomized_seed)
+
+        array = xp.clip(array, a_min=0.0, a_max=None)
+
+        return rng.poisson(array).astype(xp.float32)
+
+
 class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     Parent class common to all measurement types.
@@ -387,10 +484,14 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         #             f"Chunks not allowed in base axes of {self.__class__}."
         #         )
 
-    # TODO: should be removed and the more basic version in superclass used instead.
     def iterate_ensemble(self, keep_dims: bool = False):
         for i in np.ndindex(*self.ensemble_shape):
             yield i, self.get_items(i, keep_dims=keep_dims)
+
+    def from_partitioned_args(self):
+        d = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
+        cls = self.__class__
+        return partial(lambda *args, **kwargs: cls(args[0], **kwargs), **d)
 
     @property
     def ensemble_axes_metadata(self):
@@ -525,30 +626,6 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
     def _area_per_pixel(self):
         pass
 
-    @staticmethod
-    def _add_poisson_noise(array, seed, total_dose, block_info=None):
-        xp = get_array_module(array)
-
-        if block_info is not None:
-            chunk_index = np.ravel_multi_index(
-                block_info[0]["chunk-location"], block_info[0]["num-chunks"]
-            )
-        else:
-            chunk_index = 0
-
-        rng = xp.random.default_rng(seed + chunk_index)
-        randomized_seed = int(
-            rng.integers(np.iinfo(np.int32).max)
-        )  # fixes strange cupy bug
-
-        rng = xp.random.RandomState(seed=randomized_seed)
-
-        array = array[None] * xp.expand_dims(total_dose, tuple(range(1, len(array.shape) + 1)))
-
-        array = xp.clip(array, a_min=0.0, a_max=None)
-
-        return rng.poisson(array).astype(xp.float32)
-
     def poisson_noise(
         self,
         dose_per_area: Union[float, Sequence[float]] = None,
@@ -582,6 +659,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
             "Provide one of 'dose_per_area' or 'total_dose'."
         )
 
+        dose_axes_metadata = None
         if dose_per_area is not None:
             if total_dose is not None:
                 raise wrong_dose_error
@@ -589,7 +667,12 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
             if np.isscalar(dose_per_area):
                 total_dose = self._area_per_pixel * dose_per_area
             else:
-                total_dose = self._area_per_pixel * np.array(dose_per_area, dtype=np.float32)
+                total_dose = self._area_per_pixel * np.array(
+                    dose_per_area, dtype=np.float32
+                )
+                dose_axes_metadata = NonLinearAxis(
+                    label="Dose", values=tuple(dose_per_area), units="e/Å^2"
+                )
 
         elif total_dose is not None:
             if dose_per_area is not None:
@@ -602,69 +685,14 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         total_dose = xp.array(total_dose, dtype=xp.float32)
 
-        seeds = _validate_seeds(seed, samples)
+        transform = NoiseTransform(total_dose, samples)
+        measurement = self.apply_transform(transform)
 
-        squeeze = ()
-        if samples == 1:
-            squeeze += (0,)
+        if isinstance(transform.dose, BaseDistribution) and dose_axes_metadata:
+            measurement = measurement.set_ensemble_axes_metadata(
+                dose_axes_metadata, axis=0
+            )
 
-        if not len(total_dose):
-            total_dose = total_dose[None]
-            squeeze += (1,)
-
-        arrays = []
-        for seed in seeds:
-            if self.is_lazy:
-
-                #total_dose = da.from_array()
-
-                chunks = validate_chunks(
-                    total_dose.shape + self.shape,
-                    ("auto",)
-                    + tuple(max(chunk) for chunk in self.array.chunks),
-                    limit=max_batch,
-                    dtype=np.dtype("complex64"),
-                )
-
-
-                sss
-
-                array = self.array.map_blocks(
-                        self._add_poisson_noise,
-                        total_dose=total_dose,
-                        seed=seed,
-                        meta=xp.array((), dtype=xp.float32),
-                    )
-
-                arrays.append(array
-
-                )
-            else:
-                arrays.append(
-                    self._add_poisson_noise(
-                        self.array, total_dose=total_dose, seed=seed
-                    )
-                )
-
-        if self.is_lazy:
-            arrays = da.stack(arrays)
-        else:
-            arrays = xp.stack(arrays)
-
-        axes_metadata = [SampleAxis(label="sample"),
-                         NonLinearAxis(label="dose", values=tuple(total_dose))]
-
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = arrays
-        kwargs["ensemble_axes_metadata"] = (
-            axes_metadata + kwargs["ensemble_axes_metadata"]
-        )
-
-        kwargs["metadata"]["label"] = "electron count"
-        kwargs["metadata"].pop("units", None)
-
-        measurement = self.__class__(**kwargs)
-        measurement = measurement.squeeze(squeeze)
         return measurement
 
     def to_hyperspy(self):
@@ -1010,6 +1038,9 @@ class BaseMeasurement2D(BaseMeasurement):
             ioff=interact + (not display),
         )
 
+        if not display:
+            plt.close()
+
         visualization = MeasurementVisualization2D(
             self.to_cpu(),
             axes,
@@ -1183,6 +1214,7 @@ class Images(BaseMeasurement2D):
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
+        kwargs["metadata"].update({"label": "iCOM", "units": "arb. unit"})
         return self.__class__(**kwargs)
 
     def crop(
@@ -3511,9 +3543,10 @@ class PolarMeasurements(BaseMeasurement):
         ax.set_xticks(azimuthal_ticks)
 
         if cbar:
-            fig.colorbar(
-                im, label=format_label(self.metadata["label"], self.metadata["units"])
-            )
+            label = self.metadata["label"]
+            units = self.metadata["units"]
+            label = f"{label} [{units}]"
+            fig.colorbar(im, label=label)
 
         if grid:
             ax.grid(linewidth=2, color="white")
@@ -3847,6 +3880,9 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             figsize=figsize,
             ioff=interact + (not display),
         )
+
+        if not display:
+            plt.close()
 
         visualization = DiffractionSpotsVisualization(
             self,

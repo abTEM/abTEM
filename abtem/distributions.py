@@ -319,6 +319,9 @@ def _validate_distribution(distribution):
     if isinstance(distribution, (BaseDistribution, Number, str)):
         return distribution
 
+    if isinstance(distribution, np.ndarray) and len(distribution.shape) == 0:
+        return distribution
+
     if isinstance(distribution, (tuple, list, np.ndarray)):
         distribution = np.array(distribution)
         return _DistributionFromValues(
@@ -403,6 +406,7 @@ class _EnsembleFromDistributionsMixin(Ensemble, CopyMixin):
     @classmethod
     def _partial_wave_transform(cls, *args, keys, **kwargs):
         assert len(args) == len(keys)
+        #print(kwargs)
         kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
         transform = cls(**kwargs)
         return transform

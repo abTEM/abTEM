@@ -45,6 +45,7 @@ _tex_units = {
     "1/m": "\mathrm{m}^{-1}",
     "mrad": "\mathrm{mrad}",
     "deg": "\mathrm{deg}",
+    "e/Å^2": "\mathrm{e}^-/\mathrm{\AA}^2"
 }
 
 

@@ -1,4 +1,5 @@
 import copy
+import itertools
 import json
 import warnings
 from abc import abstractmethod
@@ -35,7 +36,7 @@ from abtem.core.backend import (
     device_name_from_array_module,
     check_cupy_is_installed,
 )
-from abtem.core.chunks import Chunks
+from abtem.core.chunks import Chunks, validate_chunks
 from abtem.core.utils import normalize_axes, CopyMixin
 from abtem._version import __version__
 
@@ -739,7 +740,6 @@ class HasArray(HasAxes, CopyMixin):
             filename, array, description=self._metadata_to_json(), **kwargs
         )
 
-
     @classmethod
     def from_zarr(cls, url, chunks: int = "auto") -> "T":
         """
@@ -763,6 +763,123 @@ class HasArray(HasAxes, CopyMixin):
 
         with config.set({"warnings.overspecified-grid": False}):
             return cls(array, **kwargs)
+
+    @staticmethod
+    def _apply_wave_transform(
+        *args, waves_partial, transform_partial, transform_ensemble_shape
+    ):
+        transform = transform_partial(
+            *(arg.item() for arg in args[: len(transform_ensemble_shape)])
+        )
+        ensemble_axes_metadata = [
+            axis.item() for axis in args[len(transform_ensemble_shape) : -1]
+        ]
+        array = args[-1]
+
+        waves = waves_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
+
+        waves = transform.apply(waves)
+        return waves.array
+
+    def apply_transform(
+        self, transform, max_batch: Union[int, str] = "auto"
+    ):
+        """
+        Transform the wave functions by a given transformation.
+
+        Parameters
+        ----------
+        transform : WaveTransform
+            The wave-function transformation to apply.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
+
+        Returns
+        -------
+        transformed_waves : Waves
+            The transformed waves.
+        """
+
+        if self.is_lazy:
+            if isinstance(max_batch, int):
+                max_batch = max_batch * np.prod(self.base_shape)
+
+            chunks = validate_chunks(
+                transform.ensemble_shape + self.shape,
+                transform._default_ensemble_chunks
+                + tuple(max(chunk) for chunk in self.array.chunks),
+                limit=max_batch,
+                dtype=np.dtype("complex64"),
+            )
+
+            transform_blocks = tuple(
+                (arg, (i,))
+                for i, arg in enumerate(
+                    transform._partition_args(chunks[: -len(self.shape)])
+                )
+            )
+            transform_blocks = tuple(itertools.chain(*transform_blocks))
+
+            axes_blocks = ()
+            for i, (axis, c) in enumerate(
+                zip(self.ensemble_axes_metadata, self.array.chunks)
+            ):
+                axes_blocks += (
+                    axis._to_blocks(
+                        (c,),
+                    ),
+                    (len(transform.ensemble_shape) + i,),
+                )
+
+            symbols = tuple(range(len(transform.ensemble_shape) + len(self.shape)))
+
+            array_blocks = (
+                self.array,
+                tuple(
+                    range(
+                        len(transform.ensemble_shape),
+                        len(transform.ensemble_shape) + len(self.shape),
+                    )
+                ),
+            )
+            xp = get_array_module(self.device)
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Increasing number of chunks")
+                array = da.blockwise(
+                    self._apply_wave_transform,
+                    symbols,
+                    *transform_blocks,
+                    *axes_blocks,
+                    *array_blocks,
+                    adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                    transform_partial=transform._from_partitioned_args(),
+                    transform_ensemble_shape=transform.ensemble_shape,
+                    waves_partial=self.from_partitioned_args(),  # noqa
+                    meta=xp.array((), dtype=self.array.dtype),
+                    align_arrays=False
+                )
+
+            kwargs = self._copy_kwargs(exclude=("array",))
+            kwargs["array"] = array
+            kwargs["ensemble_axes_metadata"] = (
+                transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+            )
+            return self.__class__(**kwargs)
+        else:
+            return transform.apply(self)
+
+    def set_ensemble_axes_metadata(self, axes_metadata, axis):
+
+        #axes_metadata =
+
+        self.ensemble_axes_metadata[axis] = axes_metadata
+
+        self._check_axes_metadata()
+
+        return self
 
 
 def expand_dims(a, axis):

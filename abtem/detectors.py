@@ -674,6 +674,12 @@ class PixelatedDetector(BaseDetector):
         else:
             return Images
 
+    def measurement_metadata(self, waves: "BaseWaves") -> dict:
+        metadata = super().measurement_metadata(waves)
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+        return metadata
+
     def detect(self, waves: "Waves") -> "DiffractionPatterns":
         """
         Calculate the far-field intensity of the wave functions. The output is cropped to include the non-suppressed

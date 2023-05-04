@@ -410,16 +410,17 @@ def make_scale_button(visualization, vmin_vmax_slider=None):
     def scale_button_clicked(*args):
         # if visualization._common_scale:
         vmin, vmax = visualization._get_global_vmin_vmax()
+        visualization._update_vmin_vmax(vmin, vmax)
 
-        with vmin_vmax_slider.hold_trait_notifications():
-            vmin_vmax_slider.value = [vmin, vmax]
+        # with vmin_vmax_slider.hold_trait_notifications():
+        #    vmin_vmax_slider.value = [vmin, vmax]
 
     scale_button.on_click(scale_button_clicked)
 
     return scale_button
 
 
-def make_autoscale_button(visualization, vmin_vmax_slider):
+def make_autoscale_button(visualization, vmin_vmax_slider=None):
     def autoscale_button_changed(change):
         if change["new"]:
             visualization._autoscale = True
@@ -524,6 +525,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def _get_indexed_measurements(self, keepdims: bool = True):
 
         indexed = self.measurements.get_items(self._indices, keep_dims=keepdims)
+
         indexed = indexed.sum(
             axes=tuple(
                 i
@@ -542,6 +544,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         fontsize=12,
         **kwargs,
     ):
+
         indexed_measurements = self._get_indexed_measurements(keepdims=False)
 
         if titles is None:
@@ -556,6 +559,8 @@ class MeasurementVisualization(metaclass=ABCMeta):
                         format, units=units, include_label=i == 0
                     )
                 )
+                if i == indexed_measurements.ensemble_shape[0]:
+                    break
 
         elif isinstance(titles, str):
             if indexed_measurements.ensemble_shape:
@@ -668,6 +673,8 @@ class MeasurementVisualization(metaclass=ABCMeta):
                         format, units=units, include_label=i == 0
                     )
                 )
+                if i == indexed_measurements.ensemble_shape[1]:
+                    break
         elif isinstance(titles, str):
             titles = [titles] * max(len(indexed_measurements.ensemble_shape), 1)
 
@@ -1368,18 +1375,20 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     @property
     def widgets(self):
         canvas = self.fig.canvas
-        vmin_vmax_slider = make_vmin_vmax_slider(self)
+        # vmin_vmax_slider = make_vmin_vmax_slider(self)
 
         def index_update_callback(change):
             if self._autoscale:
-                vmin_vmax_slider.value = self._get_global_vmin_vmax()
+                vmin, vmax = self._get_global_vmin_vmax()
+                self._update_vmin_vmax(vmin, vmax)
+                # vmin_vmax_slider.value = self._get_global_vmin_vmax()
 
         sliders = make_indexing_sliders(
             self, self.axes_types, callbacks=(index_update_callback,)
         )
         power_scale_button = make_power_scale_slider(self)
-        scale_button = make_scale_button(self, vmin_vmax_slider)
-        autoscale_button = make_autoscale_button(self, vmin_vmax_slider)
+        scale_button = make_scale_button(self)
+        autoscale_button = make_autoscale_button(self)
         continuous_update_button = make_continuous_button(sliders)
 
         scale_button.layout = widgets.Layout(width="20%")
@@ -1395,7 +1404,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             [
                 widgets.VBox(sliders),
                 scale_box,
-                vmin_vmax_slider,
+                # vmin_vmax_slider,
                 power_scale_button,
             ]
         )
@@ -1800,9 +1809,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     def set_miller_index_annotations(
         self,
         threshold: float = 1.0,
-        size=8,
-        xytext=(0, 0),
-        textcoords="offset points",
+        size: int = 8,
+        alignment: str = "top",
         **kwargs,
     ):
 
@@ -1818,14 +1826,29 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             for hkl, position, visible, scale in zip(
                 measurement.miller_indices, positions, visibility, scales
             ):
+                if alignment == "top":
+                    xy = position[:2] + [0, scale / 2]
+                    va = "bottom"
+                elif alignment == "center":
+                    xy = position[:2]
+                    va = "center"
+                elif alignment == "bottom":
+                    xy = position[:2] - [0, scale / 2]
+                    va = "top"
+                else:
+                    raise ValueError()
+
+                if config.get("visualize.use_tex"):
+                    text = "".join([f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl])
+                    text = f"${text}$"
+                else:
+                    text = "{} {} {}".format(*hkl)
 
                 annotation = ax.annotate(
-                    "{} {} {}".format(*hkl),
-                    xy=position[:2] + [0, scale / 2],
-                    xytext=xytext,
-                    textcoords=textcoords,
+                    text,
+                    xy=xy,
                     ha="center",
-                    va="center",
+                    va=va,
                     size=size,
                     visible=visible,
                     **kwargs,
