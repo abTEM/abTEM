@@ -43,7 +43,6 @@ def latex_float(f, formatting):
 
 
 def format_value(value: Union[tuple, float], formatting: str, tolerance: float = 1e-14):
-
     if isinstance(value, tuple):
         return ", ".join(format_value(v, formatting=formatting) for v in value)
 
@@ -59,9 +58,8 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
 
 
 def format_title(
-    axes, formatting: str = ".3f", units: str = None, include_label: bool = True
+        axes, formatting: str = ".3f", units: str = None, include_label: bool = True
 ):
-
     try:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
     except KeyError:
@@ -90,6 +88,7 @@ class AxisMetadata:
     _events: bool = False
     label: str = ""
     _tex_label: str = None
+    _default_type: str = "index"
     units: str = None
 
     def _tabular_repr_data(self, n):
@@ -270,7 +269,7 @@ class NonLinearAxis(OrdinalAxis):
             return " ".join([f"{value:.2f}" for value in self.values])
 
     def format_title(
-        self, formatting: str = ".3f", units: str = None, include_label: bool = True
+            self, formatting: str = ".3f", units: str = None, include_label: bool = True
     ):
 
         return format_title(self, formatting, units, include_label)

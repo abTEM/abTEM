@@ -345,7 +345,10 @@ def _interpolate_stack(array, positions, mode, order, **kwargs):
     return output
 
 
-class NoiseTransform(EnsembleTransform):
+class _NoiseTransform(EnsembleTransform):
+    def apply(self, x):
+        return super().apply(x)
+
     def __init__(
         self,
         dose: Union[float, np.ndarray, BaseDistribution],
@@ -685,7 +688,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         total_dose = xp.array(total_dose, dtype=xp.float32)
 
-        transform = NoiseTransform(total_dose, samples)
+        transform = _NoiseTransform(total_dose, samples)
         measurement = self.apply_transform(transform)
 
         if isinstance(transform.dose, BaseDistribution) and dose_axes_metadata:
@@ -987,7 +990,6 @@ class BaseMeasurement2D(BaseMeasurement):
         vmax: float = None,
         common_color_scale: bool = False,
         cbar: bool = False,
-        units: str = None,
         interact: bool = False,
         axes_types=None,
         display: bool = True,
@@ -997,13 +999,13 @@ class BaseMeasurement2D(BaseMeasurement):
 
         Parameters
         ----------
-        cmap : str, optional
-            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
+        ax : matplotlib.axes.Axes, optional
+            If given the plots are added to the axis. This is not available for image grids.
         explode : bool, optional
             If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
             ensemble item is shown.
-        ax : matplotlib.axes.Axes, optional
-            If given the plots are added to the axis. This is not available for image grids.
+        cmap : str, optional
+            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
         figsize : two int, optional
             The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
         title : bool or str, optional
@@ -1011,6 +1013,8 @@ class BaseMeasurement2D(BaseMeasurement):
             corresponding to the "name" key of the metadata dictionary, if this item exists.
         power : float
             Show image on a power scale.
+        cmap : str
+            The Colormap instance or registered colormap name used to map scalar data to colors.
         vmin : float, optional
             Minimum of the intensity color scale. Default is the minimum of the array values.
         vmax : float, optional
@@ -1021,10 +1025,14 @@ class BaseMeasurement2D(BaseMeasurement):
         cbar : bool, optional
             Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
             keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
+        interact : bool
+            If True, create an interactive visualization. This requires enabling the ipympl package.
+
+
 
         Returns
         -------
-        Figure, matplotlib.axes.Axes
+        MeasurementVisualization2D
         """
 
         axes, axes_types = _validate_axes(
@@ -1038,8 +1046,8 @@ class BaseMeasurement2D(BaseMeasurement):
             ioff=interact + (not display),
         )
 
-        if not display:
-            plt.close()
+        #if not display:
+        #    plt.close()
 
         visualization = MeasurementVisualization2D(
             self.to_cpu(),
@@ -1049,7 +1057,6 @@ class BaseMeasurement2D(BaseMeasurement):
             axes_types=axes_types,
             cbar=cbar,
             common_scale=common_color_scale,
-            units=units,
             power=power,
             cmap=cmap,
         )
@@ -1916,8 +1923,6 @@ class _BaseMeasurement1d(BaseMeasurement):
             metadata. A string may be given to override this.
         units : str, optional
             The units of the reciprocal line profile can be either 'reciprocal' (resulting in [1 / Å]), or 'mrad'.
-        float_formatting : str, optional
-            A formatting string used for formatting the floats of the panel titles.
 
         Returns
         -------
@@ -1944,33 +1949,6 @@ class _BaseMeasurement1d(BaseMeasurement):
             common_scale=common_scale,
             units=units,
         )
-
-        # if ax is None:
-        #     fig = plt.figure(figsize=figsize)
-        #     axes = AxesGrid(
-        #         fig,
-        #         axes_types,
-        #         0,
-        #         cbar_mode="single",
-        #         sharey=common_scale,
-        #         aspect=False,
-        #     )
-        #     measurements = self
-        # else:
-        #     if explode:
-        #         raise NotImplementedError("`ax` not implemented with `explode = True`.")
-        #
-        #     measurements = self  # [("index",) * num_ensemble_axes]
-        #     axes_types = ("overlay",) * num_ensemble_axes
-        #     axes = np.array([[ax]])
-
-        # visualization = MeasurementVisualization1D(
-        #    measurements, axes, axes_types, units=units
-        # )
-
-        # if display:
-        #    plt.show(visualization.fig)
-
         return visualization
 
 
@@ -3881,8 +3859,8 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             ioff=interact + (not display),
         )
 
-        if not display:
-            plt.close()
+        #if not display:
+        #    plt.close()
 
         visualization = DiffractionSpotsVisualization(
             self,
