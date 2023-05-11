@@ -10,7 +10,7 @@ from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
 from abtem.core.backend import copy_to_device
-from abtem.core.fft import fft_crop, fft_interpolate, ifftn, fftn
+from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.core.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, _PotentialBuilder
 from abtem.inelastic.phonons import MDFrozenPhonons, DummyFrozenPhonons
@@ -211,7 +211,10 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     slice_array = _interpolate_between_cells(
         array, slice_shape, cell, slice_box, (0, 0, a)
     )
-    return np.trapz(slice_array, axis=-1, dx=(b - a) / (slice_shape[-1] - 1))
+
+    dz = (b - a) / slice_shape[-1]
+
+    return np.sum(slice_array, axis=-1) * dz #np.trapz(slice_array, axis=-1, dx=(b - a) / (slice_shape[-1] - 1))
 
 
 def _generate_slices(
