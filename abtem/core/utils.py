@@ -52,7 +52,7 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
         if key in exclude:
             continue
 
-        print(key, value, b.__dict__[key], value == b.__dict__[key])
+        #print(key, value, b.__dict__[key], value == b.__dict__[key])
 
         try:
             equal = value == b.__dict__[key]

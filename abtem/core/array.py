@@ -475,6 +475,7 @@ class HasArray(HasAxes, CopyMixin):
             if isinstance(item, Number):
                 metadata = {**metadata, **expanded_axes_metadata[i].item_metadata(0)}
             else:
+
                 axes_metadata += [expanded_axes_metadata[i][item].copy()]
 
         axes_metadata += expanded_axes_metadata[last_indexed:]

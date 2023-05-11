@@ -215,6 +215,7 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
+
         unpacked, _ = _unpack_distributions(
             self.semiangle_cutoff, shape=alpha.shape, xp=xp
         )
@@ -223,6 +224,7 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         semiangle_cutoff = semiangle_cutoff * 1e-3
 
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
+
 
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
@@ -242,8 +244,6 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         zeros = (slice(None),) * len(self.ensemble_shape) + (0,) * (
             len(denominator.shape) - len(self.ensemble_shape)
         )
-
-        denominator[zeros] = 1.0
 
         array = xp.clip(
             (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0

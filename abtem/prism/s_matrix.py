@@ -1705,7 +1705,6 @@ class SMatrix(BaseSMatrix, Ensemble):
                     if self.ensemble_shape:
                         items = i + items
 
-                    # print(type(array), type(self._build_s_matrix(s_matrix, slice(start, stop))))
                     new_array = self._build_s_matrix(s_matrix, slice(start, stop))
 
                     if self.store_on_host:

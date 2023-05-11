@@ -13,7 +13,7 @@ from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib import colors
 from matplotlib.animation import FuncAnimation
-from matplotlib.collections import PatchCollection, EllipseCollection
+from matplotlib.collections import PatchCollection, EllipseCollection, CircleCollection
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Circle
@@ -322,6 +322,10 @@ def make_indexing_sliders(
                 )
             )
 
+    return sliders
+
+
+def set_update_indices_callback(sliders, visualization, callbacks):
     def update_indices(change):
         indices = ()
         for slider in sliders:
@@ -330,14 +334,13 @@ def make_indexing_sliders(
                 idx = range(*idx)
             indices += (idx,)
 
-        visualization.set_indices(indices)
+        with sliders[0].hold_trait_notifications():
+            visualization.set_indices(indices)
 
     for slider in sliders:
         slider.observe(update_indices, "value")
         for callback in callbacks:
             slider.observe(callback, "value")
-
-    return sliders
 
 
 def make_continuous_button(sliders):
@@ -404,23 +407,19 @@ def make_vmin_vmax_slider(visualization):
     return vmin_vmax_slider
 
 
-def make_scale_button(visualization, vmin_vmax_slider=None):
+def make_scale_button(visualization):
     scale_button = widgets.Button(description="Scale")
 
     def scale_button_clicked(*args):
-        # if visualization._common_scale:
         vmin, vmax = visualization._get_global_vmin_vmax()
         visualization._update_vmin_vmax(vmin, vmax)
-
-        # with vmin_vmax_slider.hold_trait_notifications():
-        #    vmin_vmax_slider.value = [vmin, vmax]
 
     scale_button.on_click(scale_button_clicked)
 
     return scale_button
 
 
-def make_autoscale_button(visualization, vmin_vmax_slider=None):
+def make_autoscale_button(visualization):
     def autoscale_button_changed(change):
         if change["new"]:
             visualization._autoscale = True
@@ -503,7 +502,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
         )
 
         for indices in np.ndindex(*shape):
-
             axes_index = ()
             for i, axes_type in zip(indices, self._axes_types):
                 if axes_type == "explode":
@@ -514,10 +512,10 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 i if axes_type != "overlay" else slice(None)
                 for i, axes_type in zip(indices, self._axes_types)
             )
-
             yield axes_index, indexed_measurements.get_items(
                 indices, keep_dims=keep_dims
             )
+
 
     def set_axes_padding(self, padding: Tuple[float, float] = (0.0, 0.0)):
         self._axes.set_axes_padding(padding)
@@ -1063,19 +1061,25 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
         for i, _ in self.iterate_measurements():
             ax = self.axes[i]
-
-            if ax in self.axes._caxes.keys():
-                cax = self.axes._caxes[ax]
-            else:
-                continue
-
             images = self._artists[i]
 
-            if isinstance(images, np.ndarray):
-                for j, image in enumerate(images):
-                    cbars[ax].append(plt.colorbar(image, cax=cax[j], **kwargs))
+            if isinstance(self.axes, AxesGrid):
+
+                if ax in self.axes._caxes.keys():
+                    cax = self.axes._caxes[ax]
+                else:
+                    continue
+
+                if isinstance(images, np.ndarray):
+                    for j, image in enumerate(images):
+                        cbars[ax].append(plt.colorbar(image, cax=cax[j], **kwargs))
+                else:
+                    cbars[ax].append(plt.colorbar(images, cax=cax[0], **kwargs))
+
             else:
-                cbars[ax].append(plt.colorbar(images, cax=cax[0], **kwargs))
+                plt.colorbar(images, **kwargs)
+                #ax.colorbar()
+
 
         self._cbars = cbars
 
@@ -1420,6 +1424,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         axes_types: tuple = None,
         units=None,
         common_scale: bool = True,
+        legend=False
     ):
 
         super().__init__(axes, measurements, axes_types=axes_types)
@@ -1435,8 +1440,11 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self.set_x_units(units=units)
         self.set_y_units()
 
-        if "overlay" in axes_types:
+        if "overlay" in axes_types and legend:
             self.set_legends()
+
+        if self.ncols > 1:
+            self.set_column_titles()
 
         # self.set_y_units()
         # self.set_x_labels()
@@ -1519,9 +1527,9 @@ class MeasurementVisualization1D(MeasurementVisualization):
         for i, measurement in self.iterate_measurements(keep_dims=False):
             ax = self.axes[i]
             x = self._get_xdata()
-
             new_lines = []
             for _, line_profile in measurement.iterate_ensemble(keep_dims=True):
+
                 labels = []
                 for axis in line_profile.ensemble_axes_metadata:
                     labels += [axis.format_title(".3f")]
@@ -1679,7 +1687,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             artists._heights = scales
             artists.set()
 
-    def _update_vmin_vmax(self, vmin, vmax):
+    def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
         super()._update_vmin_vmax(vmin, vmax)
         self._update_scales()
 
@@ -1714,7 +1722,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
             ellipse_collection.set_norm(norm)
 
-            ellipse_collection = ax.add_collection(ellipse_collection)
+            ax.add_collection(ellipse_collection)
 
             self._artists[i] = ellipse_collection
 
@@ -1782,8 +1790,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
             scales = self._get_scales(measurement, norm)
 
-            artists._widths = scales
-            artists._heights = scales
+            artists._widths = np.clip(scales, a_min=1e-3, a_max=1e3)
+            artists._heights = np.clip(scales, a_min=1e-3, a_max=1e3)
 
             artists.set(array=measurement.intensities)
             self._set_hkl_visibility()
@@ -1839,7 +1847,9 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
                     raise ValueError()
 
                 if config.get("visualize.use_tex"):
-                    text = "".join([f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl])
+                    text = " \ ".join(
+                        [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
+                    )
                     text = f"${text}$"
                 else:
                     text = "{} {} {}".format(*hkl)
@@ -1895,11 +1905,22 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     @property
     def widgets(self):
         canvas = self.fig.canvas
-        vmin_vmax_slider = make_vmin_vmax_slider(self)
+
+        sliders = make_indexing_sliders(
+            self, self.axes_types  # , callbacks=(index_update_callback,)
+        )
 
         def index_update_callback(change):
+            # for slider in sliders:
+
             if self._autoscale:
-                vmin_vmax_slider.value = self._get_global_vmin_vmax()
+                vmin, vmax = self._get_global_vmin_vmax()
+                self._update_vmin_vmax(vmin, vmax)
+
+            # if self._autoscale:
+            #    vmin_vmax_slider.value = self._get_global_vmin_vmax()
+
+        set_update_indices_callback(sliders, self, callbacks=(index_update_callback,))
 
         def hkl_slider_changed(change):
             self.set_hkl_threshold(change["new"])
@@ -1909,12 +1930,9 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         )
         hkl_slider.observe(hkl_slider_changed, "value")
 
-        sliders = make_indexing_sliders(
-            self, self.axes_types, callbacks=(index_update_callback,)
-        )
         power_scale_slider = make_power_scale_slider(self)
-        scale_button = make_scale_button(self, vmin_vmax_slider)
-        autoscale_button = make_autoscale_button(self, vmin_vmax_slider)
+        scale_button = make_scale_button(self)
+        autoscale_button = make_autoscale_button(self)
         continuous_update_button = make_continuous_button(sliders)
 
         scale_button.layout = widgets.Layout(width="20%")
@@ -1930,7 +1948,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             [
                 widgets.VBox(sliders),
                 scale_box,
-                vmin_vmax_slider,
+                # vmin_vmax_slider,
                 power_scale_slider,
                 hkl_slider,
             ]

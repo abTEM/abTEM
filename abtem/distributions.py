@@ -316,6 +316,7 @@ def gaussian(
 
 
 def _validate_distribution(distribution):
+
     if isinstance(distribution, (BaseDistribution, Number, str)):
         return distribution
 

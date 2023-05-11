@@ -4,7 +4,6 @@ import itertools
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
 from functools import partial
-from numbers import Number
 from typing import (
     Union,
     Tuple,
@@ -15,15 +14,12 @@ from typing import (
     Type,
     TYPE_CHECKING,
     ChainMap,
-    Iterable,
 )
 
 import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import display as ipython_display
-
-# from IPython.core.display_functions import display
 from ase import Atom
 from ase.cell import Cell
 from matplotlib.axes import Axes
@@ -43,7 +39,6 @@ from abtem.core.axes import (
     UnknownAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
-from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_interpolate, fft_crop
@@ -63,7 +58,6 @@ from abtem.visualize import (
     MeasurementVisualization2D,
     AxesGrid,
     MeasurementVisualization1D,
-    format_label,
     DiffractionSpotsVisualization,
 )
 
@@ -421,7 +415,7 @@ class _NoiseTransform(EnsembleTransform):
                 dose, tuple(range(1, len(array.shape) + 1))
             )
         else:
-            array = array * self.dose
+            array = array * xp.array(self.dose, dtype=xp.float32)
 
         if isinstance(self.seeds, BaseDistribution):
             seed = sum(self.seeds.values)
@@ -684,9 +678,9 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         else:
             raise wrong_dose_error
 
-        xp = get_array_module(self.array)
+        # xp = get_array_module(self.array)
 
-        total_dose = xp.array(total_dose, dtype=xp.float32)
+        total_dose = np.array(total_dose, dtype=np.float32)
 
         transform = _NoiseTransform(total_dose, samples)
         measurement = self.apply_transform(transform)
@@ -776,6 +770,7 @@ def _validate_axes(
     ax: Axes,
     axes_types: Tuple[str, ...] = None,
     explode: bool = False,
+    overlay: bool = False,
     cbar: bool = False,
     common_color_scale: bool = False,
     figsize: Tuple[float, float] = None,
@@ -787,16 +782,54 @@ def _validate_axes(
     num_ensemble_axes = len(measurements.ensemble_shape)
 
     if axes_types is None:
-        if explode:
-            num_index_axes = max(num_ensemble_axes - 2, 0)
-            num_explode_axes = min(num_ensemble_axes, 2)
-            axes_types = ("index",) * num_index_axes + ("explode",) * num_explode_axes
-        elif isinstance(measurements, _BaseMeasurement1d):
-            axes_types = ("overlay",) * num_ensemble_axes
+        axes_types = tuple(
+            axis_metadata._default_type
+            for axis_metadata in measurements.ensemble_axes_metadata
+        )
+
+        if measurements._base_dims == 1 and not explode:
+            axes_types = ["overlay"] * num_ensemble_axes
+
+        if explode is True:
+            explode = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
+        elif explode is False:
+            explode = ()
+
+        if overlay is True:
+            overlay = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
         else:
-            axes_types = ("index",) * num_ensemble_axes
-    else:
-        assert len(axes_types) == num_ensemble_axes
+            overlay = ()
+
+        if isinstance(measurements, _BaseMeasurement1d):
+            validated_axes_types = ["overlay"] * num_ensemble_axes
+        else:
+            validated_axes_types = ["index"] * num_ensemble_axes
+
+        for i, axis_type in enumerate(axes_types):
+
+            if i in explode:
+                validated_axes_types[i] = "explode"
+
+            if i in overlay:
+                validated_axes_types[i] = "overlay"
+
+        axes_types = validated_axes_types
+
+    # # axes_types = axes_types[:-2] + ("explode",) * num_explode_axes
+    # if isinstance(measurements, _BaseMeasurement1d):
+    #     axes_types = tuple("index" for i  in range(num_ensemble_axes))
+    #
+    #     # axes_types = axes_types[:-2] + ("explode",) * num_explode_axes
+    #
+    #         "overlay", ) *
+    #
+    #         # else:
+    #         #    axes_types = ("index",) * num_ensemble_axes
+    #         else:
+    #         assert len(axes_types) == num_ensemble_axes
+
+    # else:
+    #    assert len(axes_types) == num_ensemble_axes
 
     if cbar:
         if measurements.is_complex:
@@ -833,7 +866,8 @@ def _validate_axes(
     else:
         if explode:
             raise NotImplementedError("`ax` not implemented with `explode = True`.")
-        axes_types = ()
+        # axes_types = ()
+        # print(axes_types)
         axes = np.array([[ax]])
 
     return axes, axes_types
@@ -991,7 +1025,7 @@ class BaseMeasurement2D(BaseMeasurement):
         common_color_scale: bool = False,
         cbar: bool = False,
         interact: bool = False,
-        axes_types=None,
+        units: str = None,
         display: bool = True,
     ) -> MeasurementVisualization2D:
         """
@@ -1038,16 +1072,13 @@ class BaseMeasurement2D(BaseMeasurement):
         axes, axes_types = _validate_axes(
             self,
             ax,
-            axes_types=axes_types,
+            axes_types=None,
             explode=explode,
             cbar=cbar,
             common_color_scale=common_color_scale,
             figsize=figsize,
-            ioff=interact + (not display),
+            ioff=interact,  # + (not display),
         )
-
-        #if not display:
-        #    plt.close()
 
         visualization = MeasurementVisualization2D(
             self.to_cpu(),
@@ -1061,7 +1092,14 @@ class BaseMeasurement2D(BaseMeasurement):
             cmap=cmap,
         )
 
-        if interact:
+        if units is not None:
+            visualization.set_x_units("mrad")
+            visualization.set_y_units("mrad")
+
+        if not display and not interact:
+            plt.close()
+
+        if interact and display:
             ipython_display(visualization.widgets)
 
         return visualization
@@ -1901,6 +1939,7 @@ class _BaseMeasurement1d(BaseMeasurement):
         axes_types=None,
         display: bool = True,
         interact: bool = False,
+        legend: bool = False,
         **kwargs,
     ):
         """
@@ -1948,7 +1987,9 @@ class _BaseMeasurement1d(BaseMeasurement):
             axes_types=axes_types,
             common_scale=common_scale,
             units=units,
+            legend=legend,
         )
+
         return visualization
 
 
@@ -2299,10 +2340,10 @@ class DiffractionPatterns(BaseMeasurement2D):
         self,
         cell: Union[Cell, float, Tuple[float, float, float]],
         threshold: float = 0.001,
-        distance_threshold=0.15,
-        min_distance=0.0,
-        integration_radius=0.0,
-        max_index=None,
+        distance_threshold: float = 0.15,
+        min_distance: float = 0.0,
+        integration_radius: float = 0.0,
+        max_index: int = None,
     ) -> "IndexedDiffractionPatterns":
 
         """
@@ -2313,12 +2354,27 @@ class DiffractionPatterns(BaseMeasurement2D):
         cell : ase.cell.Cell or float or tuple of float
             The assumed unit cell with respect to the diffraction pattern should be indexed. Must be one of ASE `Cell`
             object, float (for a cubic unit cell) or three floats (for orthorhombic unit cells).
+        threshold : float
+            Minimum intensity of the diffraction spot peaks. Default is 0.001.
+        distance_threshold : float
+            Maximum reciprocal distance to the Ewald sphere of diffraction spots [1/Å]. Default is 0.15.
+        min_distance : float
+            The minimal allowed distance separating peaks [1/Å]. Default is 0.0.
+        integration_radius : float
+            If a non-zero value is given the intensity of diffraction spots is integrated over a disk of the given
+            value [1/Å].
+        max_index : int
+            Maximum miller index of diffraction spots. Default is determined from the maximum scattering angle of the
+            diffraction patterns.
 
         Returns
         -------
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
         """
+
+        if self.is_lazy:
+            raise RuntimeError("indexing not implemented for lazy measurement")
 
         hkl, intensities, positions = _index_diffraction_patterns(
             self,
@@ -2335,16 +2391,6 @@ class DiffractionPatterns(BaseMeasurement2D):
         return IndexedDiffractionPatterns(
             intensities, hkl, positions, ensemble_axes_metadata, metadata=self.metadata
         )
-        #
-        # diffraction_patterns = self.to_cpu()
-        #
-        # return IndexedDiffractionPatterns.index_diffraction_patterns(
-        #     diffraction_patterns,
-        #     cell,
-        #     threshold=threshold,
-        #     distance_threshold=distance_threshold,
-        #     metadata=self.metadata,
-        # )
 
     @property
     def fftshift(self):
@@ -2961,8 +3007,6 @@ class DiffractionPatterns(BaseMeasurement2D):
             Center-of-mass line profiles (returned if there is only one scan axis).
         """
 
-        # units = _validate_reciprocal_space_units(units)
-
         if units == "mrad":
             x, y = self.angular_coordinates
         elif units == "1/Å":
@@ -3443,18 +3487,21 @@ class PolarMeasurements(BaseMeasurement):
             array, **differential_1._copy_kwargs(exclude=("array",))
         )
 
-    def to_images(self):
+    def to_image_ensemble(self):
 
         image_axes = _scan_axes(self)
+
         xp = get_array_module(self.array)
 
-        array = xp.moveaxis(self.array, image_axes, (-2, -1))
+        array = xp.moveaxis(self.array, image_axes, (-2, -1))[..., 0, :, :]
 
         ensemble_axes_metadata = [
             axis.copy()
-            for i, axis in enumerate(self.axes_metadata)
+            for i, axis in enumerate(self.axes_metadata[:-1])
             if not i in image_axes
         ]
+        ensemble_axes_metadata[-1]._default_type = "range"
+
         sampling = _scan_sampling(self)
 
         return Images(
@@ -3856,11 +3903,8 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             cbar=cbar,
             common_color_scale=common_color_scale,
             figsize=figsize,
-            ioff=interact + (not display),
+            ioff=interact,  # + (not display),
         )
-
-        #if not display:
-        #    plt.close()
 
         visualization = DiffractionSpotsVisualization(
             self,
@@ -3876,25 +3920,13 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             vmax=vmax,
         )
 
-        if interact:
+        if not display and not interact:
+            plt.close()
+
+        if interact and display:
             ipython_display(visualization.widgets)
 
         return visualization
-        # # visualization.interact(True)
-        #
-        # if display:
-        #     plt.show(visualization.fig)
-
-        # return visualization
-
-        # if self.ensemble_shape:
-        #     indexed_diffraction_patterns = indexed_diffraction_patterns[
-        #         (0,) * len(self.ensemble_shape)
-        #     ]
-        #
-        # return _show_indexed_diffraction_pattern(
-        #     indexed_diffraction_patterns, power=power, overlay_hkl=overlay_hkl, **kwargs
-        # )
 
     @property
     def intensities_dict(self):

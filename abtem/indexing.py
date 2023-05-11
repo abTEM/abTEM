@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 import numpy as np
+from ase import Atoms
 from ase.cell import Cell
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
@@ -61,6 +62,7 @@ def k_space_grid_points(hkl, cell):
     )
     return k
 
+
 def sagita(radius, chord):
     return radius - np.sqrt(radius**2 - (chord / 2) ** 2)
 
@@ -83,6 +85,9 @@ def k_space_distances_to_ewald_sphere(k_grid, wavelength):
 
 
 def _validate_cell(cell):
+    if isinstance(cell, Atoms):
+        cell = cell.cell
+
     if isinstance(cell, float):
         return Cell(np.diag([cell] * 3))
     else:
@@ -157,11 +162,12 @@ def _index_diffraction_patterns(
 
     k = k_space_grid_points(hkl, cell)
 
-    mask = ((k[:, 0] >= diffraction_patterns.limits[0][0]) *
-            (k[:, 0] <= diffraction_patterns.limits[0][1]) *
-            (k[:, 1] >= diffraction_patterns.limits[1][0]) *
-            (k[:, 1] <= diffraction_patterns.limits[1][1])
-            )
+    mask = (
+        (k[:, 0] >= diffraction_patterns.limits[0][0])
+        * (k[:, 0] <= diffraction_patterns.limits[0][1])
+        * (k[:, 1] >= diffraction_patterns.limits[1][0])
+        * (k[:, 1] <= diffraction_patterns.limits[1][1])
+    )
 
     k = k[mask]
     hkl = hkl[mask]
@@ -174,9 +180,9 @@ def _index_diffraction_patterns(
     #     * (nm[:, 1] < diffraction_patterns.shape[-1])
     # )
 
-    #k = k[mask]
-    #nm = nm[mask]
-    #hkl = hkl[mask]
+    # k = k[mask]
+    # nm = nm[mask]
+    # hkl = hkl[mask]
 
     labels = np.ravel_multi_index(nm.T, shape)
 
