@@ -6,6 +6,9 @@ from ase.cell import Cell
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.ndimage import maximum_filter
+
+import abtem
+from abtem.atoms import is_cell_orthogonal
 from abtem.core.utils import label_to_index
 
 if TYPE_CHECKING:
@@ -87,6 +90,10 @@ def k_space_distances_to_ewald_sphere(k_grid, wavelength):
 def _validate_cell(cell):
     if isinstance(cell, Atoms):
         cell = cell.cell
+
+    if not is_cell_orthogonal(cell):
+        cell = Atoms(cell=cell)
+        cell = abtem.orthogonalize_cell(cell).cell
 
     if isinstance(cell, float):
         return Cell(np.diag([cell] * 3))

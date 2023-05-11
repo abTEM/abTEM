@@ -124,8 +124,9 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         radial_potential = xp.asarray(self.integrate(a, b))
 
         positions = xp.asarray(positions, dtype=np.float32)
-        sampling = xp.array(sampling, dtype=xp.float32)
-        positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
+        if False:
+            sampling = xp.array(sampling, dtype=xp.float32)
+            positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
 
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = (
