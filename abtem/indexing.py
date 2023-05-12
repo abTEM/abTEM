@@ -278,17 +278,31 @@ def format_miller_indices(hkl):
 
 
 def _miller_to_miller_bravais(hkl):
-    h, k, l = hkl[:, 0], hkl[:, 1], hkl[:, 2]
-    HKIL = np.zeros((len(hkl), 4), dtype=int)
-    HKIL[:, 0] = 2 * h - k
-    HKIL[:, 1] = 2 * k - h
-    HKIL[:, 2] = -HKIL[:, 0] - HKIL[:, 1]
-    HKIL[:, 3] = l
+    h, k, l = hkl
+    #HKIL = np.zeros((len(hkl), 4), dtype=int)
+    H = 2 * h - k
+    K = 2 * k - h
+    I = -H - K
+    L = l
 
     # hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
     # hkl = _miller_to_miller_bravais(hkl)
 
-    return HKIL
+    return H, K, I, L
+
+
+# def _miller_to_miller_bravais(hkl):
+#     h, k, l = hkl[:, 0], hkl[:, 1], hkl[:, 2]
+#     HKIL = np.zeros((len(hkl), 4), dtype=int)
+#     HKIL[:, 0] = 2 * h - k
+#     HKIL[:, 1] = 2 * k - h
+#     HKIL[:, 2] = -HKIL[:, 0] - HKIL[:, 1]
+#     HKIL[:, 3] = l
+#
+#     # hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
+#     # hkl = _miller_to_miller_bravais(hkl)
+#
+#     return HKIL
 
 
 def _equivalent_miller_indices(hkl):
