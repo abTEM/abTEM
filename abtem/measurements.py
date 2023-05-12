@@ -3919,7 +3919,7 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             vmin=vmin,
             vmax=vmax,
         )
-        sss
+
         if not display and not interact:
             plt.close()
 

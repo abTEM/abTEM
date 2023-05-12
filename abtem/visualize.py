@@ -939,12 +939,8 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         if self._common_scale:
             vmin, vmax = self._get_global_vmin_vmax(vmin=vmin, vmax=vmax)
 
-        print(vmin, vmax, self._common_scale)
-
         self._normalization = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self.iterate_measurements(keep_dims=False):
-
-            print(vmin, vmax)
 
             if power == 1.0:
                 norm = colors.Normalize(vmin=vmin, vmax=vmax)
@@ -1645,13 +1641,13 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         self._miller_index_annotations = None
 
         self.set_normalization(power=power, vmin=vmin, vmax=vmax)
-        #self.set_artists()
+        self.set_artists()
 
-        # if cbar:
-        #     self.set_cbars()
-        #     self.set_scale_units()
-        #     self.set_cbar_labels()
-        #
+        if cbar:
+            self.set_cbars()
+            self.set_scale_units()
+            self.set_cbar_labels()
+
         # # self.set_extent()
         # # self.set_x_units(units)
         # # self.set_y_units(units)
@@ -1709,8 +1705,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             ax = self.axes[i]
 
             norm = self._normalization[i]
-
-            print(norm.vmax)
 
             scales = self._get_scales(measurement, norm)
             positions = self._get_positions(measurement)

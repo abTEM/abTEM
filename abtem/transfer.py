@@ -1287,7 +1287,6 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     def wiener_snr(self, value: float):
         self._wiener_snr = value
 
-    def _evaluate_with_alpha_and_phi(self, alpha, phi):
     def _evaluate_to_match(self, component, alpha, phi):
 
         expanded_axes = ()

@@ -279,8 +279,11 @@ class NonLinearAxis(OrdinalAxis):
         else:
             return " ".join([f"{value:.2f}" for value in self.values])
 
-    def format_title(self, formatting):
-        return f"{self.label} = {self.values[0]:>{formatting}} {self.units}"
+    def format_title(self, formatting, **kwargs):
+
+        return format_title(self, formatting=formatting, **kwargs)
+
+        #return f"{self.label} = {self.values[0]:>{formatting}} {self.units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

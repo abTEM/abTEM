@@ -91,14 +91,14 @@ def _validate_cell(cell):
     if isinstance(cell, Atoms):
         cell = cell.cell
 
+    if isinstance(cell, float):
+        return Cell(np.diag([cell] * 3))
+
     if not is_cell_orthogonal(cell):
         cell = Atoms(cell=cell)
         cell = abtem.orthogonalize_cell(cell).cell
 
-    if isinstance(cell, float):
-        return Cell(np.diag([cell] * 3))
-    else:
-        return cell
+    return cell
 
 
 def disk(width, height):

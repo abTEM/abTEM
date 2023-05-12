@@ -36,7 +36,7 @@ from abtem.core.backend import (
     device_name_from_array_module,
     check_cupy_is_installed,
 )
-from abtem.core.chunks import Chunks
+from abtem.core.chunks import Chunks, validate_chunks
 from abtem.core.utils import normalize_axes, CopyMixin
 from abtem._version import __version__
 
@@ -66,11 +66,9 @@ class ComputableList(list):
                 computables.append(array.to_zarr(url, compute=compute, component=f"array{i}", overwrite=overwrite))
                 kwargs = has_array._copy_kwargs(exclude=("array",))
 
-                #print(kwargs)
-                #sss
                 packed_kwargs = has_array._pack_kwargs(kwargs)
-                #print(packed_kwargs)
-                root.attrs[f"kwargs{i}"] = packed_kwargs #has_array._metadata_to_json_string()
+
+                root.attrs[f"kwargs{i}"] = packed_kwargs
                 root.attrs[f"type{i}"] = has_array.__class__.__name__
 
         if not compute:
