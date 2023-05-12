@@ -12,21 +12,26 @@ from abtem.core.integrals.base import ProjectionIntegrator, ProjectionIntegrator
 from abtem.core.parametrizations import validate_parametrization
 
 if cp is not None:
-    from abtem.core.cuda import interpolate_radial_functions as interpolate_radial_functions_cuda
+    from abtem.core.cuda import (
+        interpolate_radial_functions as interpolate_radial_functions_cuda,
+    )
 else:
     interpolate_radial_functions_cuda = None
 
 if TYPE_CHECKING:
     from abtem.core.parametrizations.base import Parametrization
 
+
 @jit(nopython=True, nogil=True)
-def interpolate_radial_functions(array: np.ndarray,
-                                 positions: np.ndarray,
-                                 disk_indices: np.ndarray,
-                                 sampling: Tuple[float, float],
-                                 radial_gpts: np.ndarray,
-                                 radial_functions: np.ndarray,
-                                 radial_derivative: np.ndarray):
+def interpolate_radial_functions(
+    array: np.ndarray,
+    positions: np.ndarray,
+    disk_indices: np.ndarray,
+    sampling: Tuple[float, float],
+    radial_gpts: np.ndarray,
+    radial_functions: np.ndarray,
+    radial_derivative: np.ndarray,
+):
     n = radial_gpts.shape[0]
     dt = np.log(radial_gpts[-1] / radial_gpts[0]) / (n - 1)
 
@@ -40,8 +45,10 @@ def interpolate_radial_functions(array: np.ndarray,
             m = py + disk_indices[j, 1]
 
             if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
-                r_interp = np.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
-                                   (m * sampling[1] - positions[i, 1]) ** 2)
+                r_interp = np.sqrt(
+                    (k * sampling[0] - positions[i, 0]) ** 2
+                    + (m * sampling[1] - positions[i, 1]) ** 2
+                )
 
                 idx = int(np.floor(np.log(r_interp / radial_gpts[0] + 1e-12) / dt))
 
@@ -49,11 +56,12 @@ def interpolate_radial_functions(array: np.ndarray,
                     array[k, m] += radial_functions[i, 0]
                 elif idx < n - 1:
                     slope = radial_derivative[i, idx]
-                    array[k, m] += radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope
+                    array[k, m] += (
+                        radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope
+                    )
 
 
 class ProjectionIntegralTable(ProjectionIntegrator):
-
     def __init__(self, radial_gpts, limits, values):
         assert values.shape[0] == len(limits)
         assert values.shape[1] == len(radial_gpts)
@@ -74,17 +82,23 @@ class ProjectionIntegralTable(ProjectionIntegrator):
     def values(self):
         return self._values
 
-    def integrate(self, a: Union[float, np.ndarray], b: Union[float, np.ndarray]) -> np.ndarray:
-        f = interp1d(self.limits, self.values, axis=0, kind='linear', fill_value='extrapolate')
+    def integrate(
+        self, a: Union[float, np.ndarray], b: Union[float, np.ndarray]
+    ) -> np.ndarray:
+        f = interp1d(
+            self.limits, self.values, axis=0, kind="linear", fill_value="extrapolate"
+        )
         return f(b) - f(a)
 
-    def integrate_on_grid(self,
-                          positions: np.ndarray,
-                          a: float,
-                          b: float,
-                          gpts: Tuple[int, int],
-                          sampling: Tuple[float, float],
-                          device: str = 'cpu') -> np.ndarray:
+    def integrate_on_grid(
+        self,
+        positions: np.ndarray,
+        a: float,
+        b: float,
+        gpts: Tuple[int, int],
+        sampling: Tuple[float, float],
+        device: str = "cpu",
+    ) -> np.ndarray:
 
         # assert len(a) == len(b) == len(positions)
         # assert len(a.shape) == 1
@@ -104,29 +118,41 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         a = a - positions[:, 2]
         b = b - positions[:, 2]
 
-        disk_indices = xp.asarray(disc_meshgrid(int(np.ceil(self._radial_gpts[-1] / np.min(sampling)))))
+        disk_indices = xp.asarray(
+            disc_meshgrid(int(np.ceil(self._radial_gpts[-1] / np.min(sampling))))
+        )
         radial_potential = xp.asarray(self.integrate(a, b))
 
         positions = xp.asarray(positions, dtype=np.float32)
+        if False:
+            sampling = xp.array(sampling, dtype=xp.float32)
+            positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
+
         radial_potential_derivative = xp.zeros_like(radial_potential)
-        radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
+        radial_potential_derivative[:, :-1] = (
+            xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
+        )
 
         if xp is cp:
-            interpolate_radial_functions_cuda(array=array,
-                                              positions=positions,
-                                              disk_indices=disk_indices,
-                                              sampling=sampling,
-                                              radial_gpts=xp.asarray(self.radial_gpts),
-                                              radial_functions=radial_potential,
-                                              radial_derivative=radial_potential_derivative)
+            interpolate_radial_functions_cuda(
+                array=array,
+                positions=positions,
+                disk_indices=disk_indices,
+                sampling=sampling,
+                radial_gpts=xp.asarray(self.radial_gpts),
+                radial_functions=radial_potential,
+                radial_derivative=radial_potential_derivative,
+            )
         else:
-            interpolate_radial_functions(array=array,
-                                         positions=positions,
-                                         disk_indices=disk_indices,
-                                         sampling=sampling,
-                                         radial_gpts=self.radial_gpts,
-                                         radial_functions=radial_potential,
-                                         radial_derivative=radial_potential_derivative)
+            interpolate_radial_functions(
+                array=array,
+                positions=positions,
+                disk_indices=disk_indices,
+                sampling=sampling,
+                radial_gpts=self.radial_gpts,
+                radial_functions=radial_potential,
+                radial_derivative=radial_potential_derivative,
+            )
 
         return array
 
@@ -136,13 +162,14 @@ def cutoff(func, tolerance, a, b) -> float:
 
 
 class ProjectionQuadratureRule(ProjectionIntegratorPlan):
-
-    def __init__(self,
-                 parametrization: Union[str, "Parametrization"] = 'lobato',
-                 cutoff_tolerance: float = 1e-3,
-                 taper: float = 0.85,
-                 integration_step: float = 0.02,
-                 quad_order: int = 8):
+    def __init__(
+        self,
+        parametrization: Union[str, "Parametrization"] = "lobato",
+        cutoff_tolerance: float = 1e-3,
+        taper: float = 0.85,
+        integration_step: float = 0.02,
+        quad_order: int = 8,
+    ):
         """
         The atomic
 
@@ -186,7 +213,9 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         return self._integration_step
 
     def cutoff(self, symbol) -> float:
-        return cutoff(self.parametrization.potential(symbol), self.cutoff_tolerance, a=1e-3, b=1e3)  # noqa
+        return cutoff(
+            self.parametrization.potential(symbol), self.cutoff_tolerance, a=1e-3, b=1e3
+        )  # noqa
 
     def radial_gpts(self, inner_cutoff, cutoff) -> np.ndarray:
         num_points = int(np.ceil(cutoff / inner_cutoff))
@@ -196,8 +225,12 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         taper_start = self._taper * cutoff
         taper_mask = radial_gpts > taper_start
         taper_values = np.ones_like(radial_gpts)
-        taper_values[taper_mask] = (np.cos(
-            np.pi * (radial_gpts[taper_mask] - taper_start) / (cutoff - taper_start)) + 1.) / 2
+        taper_values[taper_mask] = (
+            np.cos(
+                np.pi * (radial_gpts[taper_mask] - taper_start) / (cutoff - taper_start)
+            )
+            + 1.0
+        ) / 2
         return taper_values
 
     def _integral_limits(self, cutoff):
@@ -224,18 +257,30 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         radial_gpts = self.radial_gpts(inner_limit, cutoff)
         limits = self._integral_limits(cutoff)
 
-        projection = lambda z: potential(np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2))
+        projection = lambda z: potential(
+            np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+        )
 
         table = np.zeros((len(limits) - 1, len(radial_gpts)))
-        table[0, :] = integrate.fixed_quad(projection, -limits[0] * 2, limits[0], n=self._quad_order)[0]
+        table[0, :] = integrate.fixed_quad(
+            projection, -limits[0] * 2, limits[0], n=self._quad_order
+        )[0]
 
         for j, (a, b) in enumerate(zip(limits[1:-1], limits[2:])):
-            table[j + 1] = table[j] + integrate.fixed_quad(projection, a, b, n=self._quad_order)[0]
+            table[j + 1] = (
+                table[j] + integrate.fixed_quad(projection, a, b, n=self._quad_order)[0]
+            )
 
         table = table * self._taper_values(radial_gpts, cutoff)[None]
 
         return ProjectionIntegralTable(radial_gpts, limits[1:], table)
 
-    def build(self, symbol: str, gpts: Tuple[int, int], sampling: Tuple[float, float], device: str = 'cpu'):
+    def build(
+        self,
+        symbol: str,
+        gpts: Tuple[int, int],
+        sampling: Tuple[float, float],
+        device: str = "cpu",
+    ):
         inner_limit = min(sampling) / 2
         return self.build_integral_table(symbol, inner_limit)

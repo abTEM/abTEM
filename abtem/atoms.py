@@ -567,9 +567,12 @@ def best_orthogonal_cell(
             "Two or more lattice vectors of the provided `Atoms` object have no length."
         )
 
-    k = np.arange(-max_repetitions, max_repetitions + 1)
-    l = np.arange(-max_repetitions, max_repetitions + 1)
-    m = np.arange(-max_repetitions, max_repetitions + 1)
+    if isinstance(max_repetitions, int):
+        max_repetitions = (max_repetitions,) * 3
+
+    k = np.arange(-max_repetitions[0], max_repetitions[0] + 1)
+    l = np.arange(-max_repetitions[1], max_repetitions[1] + 1)
+    m = np.arange(-max_repetitions[2], max_repetitions[2] + 1)
 
     a, b, c = cell
     vectors = np.abs(

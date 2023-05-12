@@ -1,4 +1,5 @@
 import copy
+import itertools
 import json
 import warnings
 from abc import abstractmethod
@@ -43,28 +44,6 @@ try:
     import tifffile
 except ImportError:
     tifffile = None
-
-
-# with zarr.open(url, mode="w") as root:
-#     has_array = self.ensure_lazy()
-#
-#     array = has_array.copy_to_device("cpu").array
-#
-#     stored = array.to_zarr(
-#         url, compute=False, component="array", overwrite=overwrite, **kwargs
-#     )
-#
-#     #kwargs = has_array._copy_kwargs(exclude=("array",))
-#
-#     #self._pack_kwargs(root.attrs, kwargs)
-#
-#     root.attrs["metadata"] = self.__class__.__name__
-#
-# if compute:
-#     with _compute_context():
-#         stored = stored.compute()
-#
-# return stored
 
 
 class ComputableList(list):
@@ -145,18 +124,18 @@ def _compute_context(
     else:
         resource_profiler = nullcontext()
 
-    try:
-        client = get_client()
-        client.run(config.set, *config.config)
-        worker_saturation = config.get("dask.worker-saturation")
-        client.run(
-            dask.config.set(
-                {"distributed.scheduler.worker-saturation": worker_saturation}
-            )
-        )
-
-    except ValueError:
-        pass
+    # try:
+    #     client = get_client()
+    #     client.run(config.set, *config.config)
+    #     worker_saturation = config.get("dask.worker-saturation")
+    #     client.run(
+    #         dask.config.set(
+    #             {"distributed.scheduler.worker-saturation": worker_saturation}
+    #         )
+    #     )
+    #
+    # except ValueError:
+    #     pass
 
     dask_configuration = {
         "optimization.fuse.active": config.get("dask.fuse"),
@@ -401,7 +380,6 @@ class HasArray(HasAxes, CopyMixin):
                 self.array, axes, split_every=split_every
             )
         else:
-
             kwargs["array"] = getattr(xp, reduction_func)(self.array, axes)
 
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
@@ -483,7 +461,7 @@ class HasArray(HasAxes, CopyMixin):
             raise NotImplementedError
 
         if len(tuple(item for item in items if item is not None)) > len(
-                self.ensemble_shape
+            self.ensemble_shape
         ):
             raise RuntimeError("base axes cannot be indexed")
 
@@ -503,6 +481,7 @@ class HasArray(HasAxes, CopyMixin):
             if isinstance(item, Number):
                 metadata = {**metadata, **expanded_axes_metadata[i].item_metadata(0)}
             else:
+
                 axes_metadata += [expanded_axes_metadata[i][item].copy()]
 
         axes_metadata += expanded_axes_metadata[last_indexed:]
@@ -688,6 +667,16 @@ class HasArray(HasAxes, CopyMixin):
         # return stored
 
     @classmethod
+    def _pack_kwargs(cls, kwargs):
+        attrs = {}
+        for key, value in kwargs.items():
+            if key == "ensemble_axes_metadata":
+                attrs[key] = [axis_to_dict(axis) for axis in value]
+            else:
+                attrs[key] = value
+        return attrs
+
+    @classmethod
     def _unpack_kwargs(cls, attrs):
         kwargs = {}
         kwargs["ensemble_axes_metadata"] = []
@@ -700,16 +689,6 @@ class HasArray(HasAxes, CopyMixin):
                 kwargs[key] = value
 
         return kwargs
-
-    @classmethod
-    def _pack_kwargs(cls, kwargs):
-        attrs = {}
-        for key, value in kwargs.items():
-            if key == "ensemble_axes_metadata":
-                attrs[key] = [axis_to_dict(axis) for axis in value]
-            else:
-                attrs[key] = value
-        return attrs
 
     def _metadata_to_dict(self):
         metadata = copy.copy(self.metadata)
@@ -738,6 +717,15 @@ class HasArray(HasAxes, CopyMixin):
         del metadata["axes"]
         return cls, axes_metadata, metadata
 
+    def _metadata_to_json(self):
+        metadata = copy.copy(self.metadata)
+        metadata["axes"] = {
+            f"axis_{i}": axis_to_dict(axis) for i, axis in enumerate(self.axes_metadata)
+        }
+        metadata["data_origin"] = f"abTEM_v{__version__}"
+        metadata["type"] = self.__class__.__name__
+        return json.dumps(metadata)
+
     def to_tiff(self, filename: str, **kwargs):
         """
         Write data to a tiff file.
@@ -760,8 +748,22 @@ class HasArray(HasAxes, CopyMixin):
             array = array.compute()
 
         return tifffile.imwrite(
-            filename, array, description=self._metadata_to_json_string(), **kwargs
+            filename, array, description=self._metadata_to_json(), **kwargs
         )
+
+    @classmethod
+    def _unpack_kwargs(cls, attrs):
+        kwargs = {}
+        kwargs["ensemble_axes_metadata"] = []
+        for key, value in attrs.items():
+            if key == "ensemble_axes_metadata":
+                kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
+            elif key == "type":
+                pass
+            else:
+                kwargs[key] = value
+
+        return kwargs
 
     @classmethod
     def from_zarr(cls, url, chunks: int = "auto") -> "T":
@@ -786,6 +788,123 @@ class HasArray(HasAxes, CopyMixin):
 
         with config.set({"warnings.overspecified-grid": False}):
             return cls(array, **kwargs)
+
+    @staticmethod
+    def _apply_wave_transform(
+        *args, waves_partial, transform_partial, transform_ensemble_shape
+    ):
+        transform = transform_partial(
+            *(arg.item() for arg in args[: len(transform_ensemble_shape)])
+        )
+        ensemble_axes_metadata = [
+            axis.item() for axis in args[len(transform_ensemble_shape) : -1]
+        ]
+        array = args[-1]
+
+        waves = waves_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
+
+        waves = transform.apply(waves)
+        return waves.array
+
+    def apply_transform(
+        self, transform, max_batch: Union[int, str] = "auto"
+    ):
+        """
+        Transform the wave functions by a given transformation.
+
+        Parameters
+        ----------
+        transform : WaveTransform
+            The wave-function transformation to apply.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
+
+        Returns
+        -------
+        transformed_waves : Waves
+            The transformed waves.
+        """
+
+        if self.is_lazy:
+            if isinstance(max_batch, int):
+                max_batch = max_batch * np.prod(self.base_shape)
+
+            chunks = validate_chunks(
+                transform.ensemble_shape + self.shape,
+                transform._default_ensemble_chunks
+                + tuple(max(chunk) for chunk in self.array.chunks),
+                limit=max_batch,
+                dtype=np.dtype("complex64"),
+            )
+
+            transform_blocks = tuple(
+                (arg, (i,))
+                for i, arg in enumerate(
+                    transform._partition_args(chunks[: -len(self.shape)])
+                )
+            )
+            transform_blocks = tuple(itertools.chain(*transform_blocks))
+
+            axes_blocks = ()
+            for i, (axis, c) in enumerate(
+                zip(self.ensemble_axes_metadata, self.array.chunks)
+            ):
+                axes_blocks += (
+                    axis._to_blocks(
+                        (c,),
+                    ),
+                    (len(transform.ensemble_shape) + i,),
+                )
+
+            symbols = tuple(range(len(transform.ensemble_shape) + len(self.shape)))
+
+            array_blocks = (
+                self.array,
+                tuple(
+                    range(
+                        len(transform.ensemble_shape),
+                        len(transform.ensemble_shape) + len(self.shape),
+                    )
+                ),
+            )
+            xp = get_array_module(self.device)
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Increasing number of chunks")
+                array = da.blockwise(
+                    self._apply_wave_transform,
+                    symbols,
+                    *transform_blocks,
+                    *axes_blocks,
+                    *array_blocks,
+                    adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                    transform_partial=transform._from_partitioned_args(),
+                    transform_ensemble_shape=transform.ensemble_shape,
+                    waves_partial=self.from_partitioned_args(),  # noqa
+                    meta=xp.array((), dtype=self.array.dtype),
+                    align_arrays=False
+                )
+
+            kwargs = self._copy_kwargs(exclude=("array",))
+            kwargs["array"] = array
+            kwargs["ensemble_axes_metadata"] = (
+                transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+            )
+            return self.__class__(**kwargs)
+        else:
+            return transform.apply(self)
+
+    def set_ensemble_axes_metadata(self, axes_metadata, axis):
+
+        #axes_metadata =
+
+        self.ensemble_axes_metadata[axis] = axes_metadata
+
+        self._check_axes_metadata()
+
+        return self
 
 
 def expand_dims(a, axis):
@@ -894,6 +1013,8 @@ def stack(
     xp = get_array_module(has_arrays[0].array)
 
     assert axis <= len(has_arrays[0].ensemble_shape)
+
+
 
     if has_arrays[0].is_lazy:
         array = da.stack([measurement.array for measurement in has_arrays], axis=axis)

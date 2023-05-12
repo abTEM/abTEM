@@ -113,7 +113,7 @@ class BaseSMatrix(BaseWaves):
             ctf = ctf.copy()
 
         if plane == "exit":
-            defocus = 0.
+            defocus = 0.0
             if hasattr(self, "potential"):
                 if self.potential is not None:
                     defocus = self.potential.thickness
@@ -173,12 +173,14 @@ def _chunked_axis(s_matrix_array):
 
 
 def _chunks_for_multiple_rechunk_reduce(partitions):
+    
     chunks_1 = ()
     chunk_indices_1 = ()
     for i in range(1, len(partitions) - 1, 3):
         chunks_1 += (sum(partitions[i - 1 : i + 2]),)
         chunk_indices_1 += (i - 1,)
     chunks_1 = chunks_1 + (sum(partitions[i + 2 :]),)
+
     assert sum(chunks_1) == sum(partitions)
 
     chunks_2 = (sum(partitions[:1]),)
@@ -187,6 +189,7 @@ def _chunks_for_multiple_rechunk_reduce(partitions):
         chunks_2 += (sum(partitions[i - 1 : i + 2]),)
         chunk_indices_2 += (i - 1,)
     chunks_2 = chunks_2 + (sum(partitions[i + 2 :]),)
+
     assert sum(chunks_2) == sum(partitions)
 
     chunks_3 = (sum(partitions[:2]),)
@@ -195,6 +198,7 @@ def _chunks_for_multiple_rechunk_reduce(partitions):
         chunks_3 += (sum(partitions[i - 1 : i + 2]),)
         chunk_indices_3 += (i - 1,)
     chunks_3 = chunks_3 + (sum(partitions[i + 2 :]),)
+
     assert sum(chunks_3) == sum(partitions)
     assert (
         len(chunk_indices_1 + chunk_indices_2 + chunk_indices_3) == len(partitions) - 2
@@ -1052,6 +1056,9 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
     def _validate_reduction_scheme(self, reduction_scheme):
 
+        if self.interpolation == (1, 1) and reduction_scheme == "no-chunks":
+            raise NotImplementedError
+
         if reduction_scheme == "auto" and max(self.interpolation) <= 2:
             return "no-chunks"
         elif reduction_scheme == "auto":
@@ -1308,7 +1315,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         if self.potential is not None:
             return self.potential.thickness
         else:
-            return 0.
+            return 0.0
 
     def round_gpts_to_interpolation(self) -> "SMatrix":
         """
@@ -1702,7 +1709,6 @@ class SMatrix(BaseSMatrix, Ensemble):
                     if self.ensemble_shape:
                         items = i + items
 
-                    # print(type(array), type(self._build_s_matrix(s_matrix, slice(start, stop))))
                     new_array = self._build_s_matrix(s_matrix, slice(start, stop))
 
                     if self.store_on_host:

@@ -15,6 +15,7 @@ from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_match
 from abtem.detectors import BaseDetector
+from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurement
 from abtem.potentials.iam import (
     BasePotential,
@@ -143,7 +144,6 @@ class FresnelPropagator:
 
             if hasattr(axis, "tilt"):
                 tilt = xp.array(axis.tilt)
-
                 array = _apply_tilt_to_fresnel_propagator_array(
                     array, sampling=waves.sampling, tilt=tilt, thickness=thickness
                 )
@@ -432,6 +432,7 @@ def multislice_and_detect(
             )
             exit_plane_index += 1
 
+        depth = 0
         for potential_slice in potential_configuration.generate_slices():
 
             waves = multislice_step(
@@ -442,6 +443,10 @@ def multislice_and_detect(
                 conjugate=conjugate,
                 transpose=transpose,
             )
+
+            depth += potential_slice.axes_metadata[0].values[0]
+
+            _update_plasmon_axes(waves, depth)
 
             if potential_slice.exit_planes:
                 measurement_index = _validate_potential_ensemble_indices(

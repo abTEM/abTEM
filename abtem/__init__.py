@@ -20,12 +20,13 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
     PolarMeasurements,
+    IndexedDiffractionPatterns
 )
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.inelastic.phonons import FrozenPhonons, MDFrozenPhonons
 from abtem.potentials.iam import Potential, CrystalPotential, PotentialArray
 from abtem.scan import CustomScan, LineScan, GridScan
 from abtem.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope
-from abtem.visualize import show_atoms, _show_indexed_diffraction_pattern
+from abtem.visualize import show_atoms
 from abtem.waves import Waves, Probe, PlaneWave
 from abtem import transfer

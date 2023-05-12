@@ -19,42 +19,42 @@ except:
 
 def check_cupy_is_installed():
     if cp is None:
-        raise RuntimeError('CuPy is not installed, GPU calculations disabled')
+        raise RuntimeError("CuPy is not installed, GPU calculations disabled")
 
 
 def xp_to_str(xp):
     if xp is np:
-        return 'numpy'
+        return "numpy"
 
     check_cupy_is_installed()
 
     if xp is cp:
-        return 'cupy'
+        return "cupy"
 
-    raise ValueError(f'array module must be NumPy or CuPy')
+    raise ValueError(f"array module must be NumPy or CuPy")
 
 
 def validate_device(device):
     if device is None:
-        return config.get('device')
+        return config.get("device")
 
     return device
 
 
 def get_array_module(x):
     if x is None:
-        return get_array_module(config.get('device'))
+        return get_array_module(config.get("device"))
 
     if isinstance(x, da.core.Array):
         return get_array_module(x._meta)
 
     if isinstance(x, str):
-        if x.lower() in ('numpy', 'cpu'):
+        if x.lower() in ("numpy", "cpu"):
             return np
 
         check_cupy_is_installed()
 
-        if x.lower() in ('cupy', 'gpu'):
+        if x.lower() in ("cupy", "gpu"):
             return cp
 
     if isinstance(x, np.ndarray):
@@ -74,15 +74,15 @@ def get_array_module(x):
     if x is cp:
         return cp
 
-    raise ValueError(f'array module specification {x} not recognized')
+    raise ValueError(f"array module specification {x} not recognized")
 
 
 def device_name_from_array_module(xp):
     if xp is np:
-        return 'cpu'
+        return "cpu"
 
     if xp is cp:
-        return 'gpu'
+        return "gpu"
 
     assert False
 
@@ -102,10 +102,12 @@ def get_ndimage_module(x):
 
     if xp is np:
         import scipy.ndimage
+
         return scipy.ndimage
 
     if xp is cp:
         import cupyx.scipy.ndimage
+
         return cupyx.scipy.ndimage
 
 
@@ -127,7 +129,9 @@ def copy_to_device(array, device):
         return array
 
     if isinstance(array, da.core.Array):
-        return array.map_blocks(copy_to_device, meta=new_xp.array((), dtype=array.dtype), device=device)
+        return array.map_blocks(
+            copy_to_device, meta=new_xp.array((), dtype=array.dtype), device=device
+        )
 
     if new_xp is np:
         return cp.asnumpy(array)

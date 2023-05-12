@@ -86,14 +86,16 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         func = self.get_function(name, symbol)
 
-        ensemble_axes_metadata = [OrdinalAxis(values=(symbol,))]
+        ensemble_axes_metadata = [OrdinalAxis(label="", values=(symbol,))]
 
         if name in real_space_funcs:
             r = np.arange(sampling, cutoff, sampling)
+            metadata = {"label":"potential", "units":"eV/e"}
             return RealSpaceLineProfiles(
                 func(r)[None],
                 sampling=sampling,
                 ensemble_axes_metadata=ensemble_axes_metadata,
+                metadata=metadata
             )
 
         elif name in fourier_space_funcs:

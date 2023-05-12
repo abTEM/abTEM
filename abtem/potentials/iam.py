@@ -375,7 +375,7 @@ class _PotentialBuilder(BasePotential):
         return False
 
     def __getitem__(self, item) -> "PotentialArray":
-        return self.build(*unpack_item(item, len(self)), lazy=False)
+        return self.build(lazy=False)[item]
 
     @staticmethod
     def _wrap_build_potential(potential, first_slice, last_slice):

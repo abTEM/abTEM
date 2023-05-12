@@ -12,7 +12,7 @@ from abtem.distributions import (
     _AxisAlignedDistributionND,
     _EnsembleFromDistributionsMixin,
     _DistributionFromValues,
-    from_values,
+    from_values, _validate_distribution,
 )
 
 if TYPE_CHECKING:
@@ -157,8 +157,13 @@ class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
     def __init__(
             self, tilt: Union[float, BaseDistribution] = 0.0, direction: str = "x"
     ):
+
+        if isinstance(tilt, (np.ndarray, list, tuple)):
+            tilt = _validate_distribution(tilt)
+
         if not isinstance(tilt, BaseDistribution):
             tilt = float(tilt)
+
         self._tilt = tilt
         self._direction = direction
         super().__init__(distributions=("tilt",))

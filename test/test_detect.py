@@ -14,17 +14,17 @@ from abtem.detectors import (
 from abtem.waves import Probe
 from utils import gpu
 
-
+#@reproduce_failure('6.61.0', b'AXicY2AAgwMGDCiA0aIBSAIAF6sBqg==')
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize(
     "detector",
     [
-        #abtem_st.segmented_detector,
-        #abtem_st.flexible_annular_detector,
+        abtem_st.segmented_detector,
+        abtem_st.flexible_annular_detector,
         abtem_st.pixelated_detector,
-        #abtem_st.waves_detector,
+        abtem_st.waves_detector,
     ],
 )
 def test_detect(data, detector, lazy, device):

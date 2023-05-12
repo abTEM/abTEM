@@ -43,7 +43,12 @@ def _validate_scan_sampling(scan, probe):
         if not hasattr(probe, "semiangle_cutoff"):
             raise ValueError()
 
-        scan.sampling = 0.99 * nyquist_sampling(probe.semiangle_cutoff, probe.energy)
+        if hasattr(probe, "dummy_probes"):
+            probe = probe.dummy_probes()
+
+        semiangle_cutoff = probe.aperture._max_semiangle_cutoff
+
+        scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe.energy)
 
 
 class BaseScan(WaveTransform, metaclass=ABCMeta):
@@ -281,6 +286,8 @@ def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
         coordinate = coordinate.x, coordinate.y
 
     if fractional:
+        potential = _validate_potential(potential)
+
         if isinstance(potential, BasePotential):
             if potential is None:
                 raise ValueError("provide potential for fractional coordinates")
@@ -395,12 +402,21 @@ class LineScan(BaseScan):
             fractional=True,
         )
 
+    @property
+    def direction(self):
+        direction = np.array(self.end) - np.array(self.start)
+        return direction / np.linalg.norm(direction)
+
+    @property
+    def angle(self):
+        direction = self.direction
+        return np.arctan2(direction[1], direction[1])
+
     def add_margin(self, margin: Union[float, Tuple[float, float]]):
         if isinstance(margin, Number):
             margin = (margin,) * 2
 
-        direction = np.array(self.end) - np.array(self.start)
-        direction = direction / np.linalg.norm(direction)
+        direction = self.direction
 
         self.start = tuple(np.array(self.start) - direction * margin[0])
         self.end = tuple(np.array(self.end) + direction * margin[1])
@@ -423,6 +439,7 @@ class LineScan(BaseScan):
 
         start = tuple(np.array(position) - extent / 2 * direction)
         end = tuple(np.array(position) + extent / 2 * direction)
+
         return cls(
             start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
         )
@@ -604,7 +621,7 @@ class LineScan(BaseScan):
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
-    def add_to_plot(self, ax: Axes, linestyle: str = "-", color: str = "r", **kwargs):
+    def add_to_axes(self, ax: Axes, width: float = 0.0, **kwargs):
         """
         Add a visualization of a scan line to a matplotlib plot.
 
@@ -612,20 +629,25 @@ class LineScan(BaseScan):
         ----------
         ax : matplotlib Axes
             The axes of the matplotlib plot the visualization should be added to.
-        linestyle : str, optional
-            Linestyle of scan line. Default is '-'.
-        color : str, optional
-            Color of the scan line. Default is 'r'.
+        width : float, optional
+            Width of line [Å].
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-        ax.plot(
-            [self.start[0], self.end[0]],
-            [self.start[1], self.end[1]],
-            linestyle=linestyle,
-            color=color,
-            **kwargs
-        )
+
+        if width:
+            rect = Rectangle(
+                tuple(self.start),
+                self.extent,
+                width,
+                angle=self.angle,
+                **kwargs
+            )
+            ax.add_patch(rect)
+        else:
+            ax.plot(
+                [self.start[0], self.end[0]], [self.start[1], self.end[1]], **kwargs
+            )
 
 
 class GridScan(HasGridMixin, BaseScan):

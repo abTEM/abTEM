@@ -14,7 +14,7 @@ from ase import Atoms
 
 from abtem.core.array import HasArray, validate_lazy, ComputableList, expand_dims
 from abtem.core.axes import HasAxes
-from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
+from abtem.core.axes import RealSpaceAxis, ReciprocalSpaceAxis, AxisMetadata
 from abtem.core.backend import HasDevice
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
@@ -192,12 +192,12 @@ class BaseWaves(
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         return [
-            FourierSpaceAxis(
+            ReciprocalSpaceAxis(
                 label="scattering angle x",
                 sampling=self.angular_sampling[0],
                 units="mrad",
             ),
-            FourierSpaceAxis(
+            ReciprocalSpaceAxis(
                 label="scattering angle y",
                 sampling=self.angular_sampling[1],
                 units="mrad",
@@ -232,7 +232,6 @@ class BaseWaves(
             safe_floor_int(cutoff_gpts[0] / np.sqrt(2)),
             safe_floor_int(cutoff_gpts[1] / np.sqrt(2)),
         )
-        # print(cutoff_gpts[1] / np.sqrt(2), safe_floor_int(cutoff_gpts[1] / np.sqrt(2)))
 
         valid_gpts = _ensure_parity_of_gpts(valid_gpts, self.gpts, parity="same")
 
@@ -407,7 +406,8 @@ class Waves(HasArray, BaseWaves):
 
     def from_partitioned_args(self):
         d = self._copy_kwargs(exclude=("array", "extent", "ensemble_axes_metadata"))
-        return partial(lambda *args, **kwargs: self.__class__(args[0], **kwargs), **d)
+        cls = self.__class__
+        return partial(lambda *args, **kwargs: cls(args[0], **kwargs), **d)
 
     @classmethod
     def from_array_and_metadata(
@@ -911,78 +911,7 @@ class Waves(HasArray, BaseWaves):
 
         return diffraction_patterns
 
-    @staticmethod
-    def _apply_wave_transform(*args, waves_partial, transform_partial):
-        waves = waves_partial(*args[-1:])
-        transform = transform_partial(*(arg.item() for arg in args[:-1]))
-        waves = transform.apply(waves)
-        return waves.array
 
-    def apply_transform(
-        self, transform: WaveTransform, max_batch: Union[int, str] = "auto"
-    ) -> "Waves":
-        """
-        Transform the wave functions by a given transformation.
-
-        Parameters
-        ----------
-        transform : WaveTransform
-            The wave-function transformation to apply.
-        max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
-
-        Returns
-        -------
-        transformed_waves : Waves
-            The transformed waves.
-        """
-
-        if self.is_lazy:
-            if isinstance(max_batch, int):
-                max_batch = max_batch * self.gpts[0] * self.gpts[1]
-
-            chunks = validate_chunks(
-                transform.ensemble_shape + self.shape,
-                transform._default_ensemble_chunks
-                + tuple(max(chunk) for chunk in self.array.chunks),
-                limit=max_batch,
-                dtype=np.dtype("complex64"),
-            )
-
-            args = tuple(
-                (arg, (i,))
-                for i, arg in enumerate(
-                    transform._partition_args(chunks[: -len(self.shape)])
-                )
-            )
-
-            xp = get_array_module(self.device)
-
-            kwargs = self._copy_kwargs(exclude=("array",))
-
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message="Increasing number of chunks")
-                array = da.blockwise(
-                    self._apply_wave_transform,
-                    tuple(range(len(args) + len(self.shape))),
-                    *tuple(itertools.chain(*args)),
-                    self.array,
-                    tuple(range(len(args), len(args) + len(self.shape))),
-                    adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                    transform_partial=transform._from_partitioned_args(),
-                    waves_partial=self.from_partitioned_args(),  # noqa
-                    meta=xp.array((), dtype=np.complex64)
-                )
-
-            kwargs["array"] = array
-            kwargs["ensemble_axes_metadata"] = (
-                transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-            )
-            return self.__class__(**kwargs)
-        else:
-            return transform.apply(self)
 
     def apply_ctf(
         self, ctf: CTF = None, max_batch: Union[int, str] = "auto", **kwargs
@@ -1144,6 +1073,9 @@ class Waves(HasArray, BaseWaves):
             Keyword arguments for `abtem.measurements.Images.show`.
         """
         return self.intensity().show(**kwargs)
+
+    def interact(self, **kwargs):
+        return self.complex_images().interact(**kwargs)
 
 
 class _WavesFactory(BaseWaves):
@@ -1577,10 +1509,15 @@ class Probe(_WavesFactory):
         device: str = None,
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
+        ctf=None,
         transforms: List[WaveTransform] = None,
-        metadata:dict=None,
+        metadata: dict = None,
         **kwargs
     ):
+        if ctf is not None:
+            aperture = ctf._aperture
+            aberrations = ctf._aberrations
+            energy = ctf.energy
 
         self._accelerator = Accelerator(energy=energy)
 
@@ -1599,7 +1536,10 @@ class Probe(_WavesFactory):
 
         if isinstance(aberrations, dict):
             aberrations = Aberrations(
-                semiangle_cutoff=semiangle_cutoff, energy=energy, **aberrations, **kwargs
+                semiangle_cutoff=semiangle_cutoff,
+                energy=energy,
+                **aberrations,
+                **kwargs
             )
 
         aberrations._accelerator = self._accelerator
@@ -1628,6 +1568,12 @@ class Probe(_WavesFactory):
             aberrations=ctf.aberration_coefficients,
             **kwargs
         )
+
+    @property
+    def ctf(self):
+        return CTF(aberration_coefficients=self.aberrations.aberration_coefficients,
+                   semiangle_cutoff=self.semiangle_cutoff,
+                   energy=self.energy)
 
     @property
     def semiangle_cutoff(self):
@@ -1900,7 +1846,7 @@ class Probe(_WavesFactory):
             transition_potentials=transition_potentials,
         )
 
-    def profile(self, angle: float = 0.0) -> RealSpaceLineProfiles:
+    def profiles(self, angle: float = 0.0) -> RealSpaceLineProfiles:
         """
         Create a line profile through the center of the probe.
 

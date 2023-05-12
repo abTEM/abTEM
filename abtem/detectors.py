@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 
-from abtem.core.axes import FourierSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
+from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.utils import CopyMixin
 from abtem.measurements import (
@@ -647,19 +647,21 @@ class PixelatedDetector(BaseDetector):
             gpts = waves._gpts_within_angle(self.max_angle)
 
             return [
-                FourierSpaceAxis(
+                ReciprocalSpaceAxis(
                     sampling=sampling[0],
                     offset=-(gpts[0] // 2) * sampling[0],
                     label="kx",
-                    units="1 / Å",
+                    units="1/Å",
                     fftshift=True,
+                    _tex_label="$k_x$"
                 ),
-                FourierSpaceAxis(
+                ReciprocalSpaceAxis(
                     sampling=sampling[1],
                     offset=-(gpts[1] // 2) * sampling[1],
                     label="ky",
-                    units="1 / Å",
+                    units="1/Å",
                     fftshift=True,
+                    _tex_label="$k_y$"
                 ),
             ]
         else:
@@ -673,6 +675,12 @@ class PixelatedDetector(BaseDetector):
             return DiffractionPatterns
         else:
             return Images
+
+    def measurement_metadata(self, waves: "BaseWaves") -> dict:
+        metadata = super().measurement_metadata(waves)
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+        return metadata
 
     def detect(self, waves: "Waves") -> "DiffractionPatterns":
         """

@@ -7,14 +7,89 @@ from tabulate import tabulate
 import numpy as np
 import dask.array as da
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
+from abtem.core import config
 from abtem.core.utils import safe_equality
+
+from abtem.core.units import _get_conversion_factor, _format_units, _validate_units
+
+
+def format_label(axes, units=None):
+    if axes._tex_label is not None and config.get("visualize.use_tex", False):
+        label = axes._tex_label
+    else:
+        label = axes.label
+
+    if len(label) == 0:
+        return ""
+
+    if units is None and axes.units is not None:
+        units = axes.units
+
+    units = _format_units(units)
+
+    if units is None:
+        return f"{label}"
+    else:
+        return f"{label} [{units}]"
+
+
+def latex_float(f, formatting):
+    float_str = f"{f:>{formatting}}"
+    if "e" in float_str:
+        base, exponent = float_str.split("e")
+        return f"{base} \\times 10^{{{int(exponent)}}}"
+    else:
+        return float_str
+
+
+def format_value(value: Union[tuple, float], formatting: str, tolerance: float = 1e-14):
+    if isinstance(value, tuple):
+        return ", ".join(format_value(v, formatting=formatting) for v in value)
+
+    if isinstance(value, float):
+        if np.abs(value) < tolerance:
+            value = 0.0
+
+        if config.get("visualize.use_tex", False):
+            return latex_float(value, formatting)
+        else:
+            return f"{value:>{formatting}}"
+    return value
+
+
+def format_title(
+        axes, formatting: str = ".3f", units: str = None, include_label: bool = True
+):
+    try:
+        value = axes.values[0] * _get_conversion_factor(units, axes.units)
+    except KeyError:
+        value = axes.values[0]
+
+    units = _validate_units(units, axes.units)
+
+    if include_label:
+        if axes._tex_label is not None:
+            label = axes._tex_label
+        else:
+            label = axes.label
+        label = f"{label} = "
+    else:
+        label = ""
+
+    if config.get("visualize.use_tex", False):
+        return f"{label}${format_value(value, formatting)}$ {_format_units(units)}"
+    else:
+        return f"{label}{value:>{formatting}} {units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     _concatenate: bool = True
     _events: bool = False
-    label: str = "unknown"
+    label: str = ""
+    _tex_label: str = None
+    _default_type: str = "index"
+    units: str = None
 
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
@@ -25,11 +100,14 @@ class AxisMetadata:
     def __eq__(self, other):
         return safe_equality(self, other)
 
+    def coordinates(self, n):
+        return np.arange(n)
+
     def format_type(self):
         return self.__class__.__name__
 
-    def format_label(self):
-        return f"{self.label}"
+    def format_label(self, units: str = None):
+        return format_label(self, units=units)
 
     def format_title(self, *args, **kwargs):
         return f"{self.label}"
@@ -78,11 +156,11 @@ class SampleAxis(AxisMetadata):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class LinearAxis(AxisMetadata):
     sampling: float = 1.0
-    units: str = "pixels"
+    units: str = ""
     offset: float = 0.0
     _ensemble_mean: bool = False
 
-    def format_coordinates(self, n: int = None):
+    def format_coordinates(self, n: int = None) -> str:
         coordinates = self.coordinates(n)
         if n > 3:
             coordinates = [f"{coord:.2f}" for coord in coordinates[[0, 1, -1]]]
@@ -95,10 +173,7 @@ class LinearAxis(AxisMetadata):
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )
 
-    def format_label(self):
-        return f"{self.label} [{self.units}]"
-
-    def concatenate(self, other):
+    def concatenate(self, other: AxisMetadata) -> "LinearAxis":
         if not self._concatenate:
             raise RuntimeError()
 
@@ -116,7 +191,7 @@ class RealSpaceAxis(LinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class FourierSpaceAxis(LinearAxis):
+class ReciprocalSpaceAxis(LinearAxis):
     sampling: float = 1.0
     units: str = "pixels"
     fftshift: bool = True
@@ -133,8 +208,13 @@ class ScanAxis(RealSpaceAxis):
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
 
-    def format_title(self, formatting):
-        return f"{self.values[0]}"
+    def format_title(self, formatting, include_label: bool = True, **kwargs):
+        if include_label and len(self.label) > 0:
+            label = f"{self.label} = "
+        else:
+            label = ""
+
+        return f"{label}{self.values[0]}"
 
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):
@@ -173,6 +253,9 @@ class OrdinalAxis(AxisMetadata):
 
         return self.__class__(**kwargs)  # noqa
 
+    def coordinates(self, n):
+        return self.values
+
     def _to_blocks(self, chunks):
         chunks = validate_chunks(shape=(len(self),), chunks=chunks)
 
@@ -188,9 +271,6 @@ class OrdinalAxis(AxisMetadata):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class NonLinearAxis(OrdinalAxis):
     units: str = "unknown"
-
-    def format_label(self):
-        return f"{self.label} [{self.units}]"
 
     def format_coordinates(self, n: int = None):
         if len(self.values) > 3:
@@ -231,6 +311,9 @@ class TiltAxis(OrdinalAxis):
     def tilt(self):
         return self.values
 
+    def format_title(self, formatting, include_label: bool = True, **kwargs):
+        return format_title(self, formatting, units=None, include_label=include_label)
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ThicknessAxis(NonLinearAxis):
@@ -249,11 +332,14 @@ class PositionsAxis(OrdinalAxis):
     label: str = "x, y"
     units: str = "Å"
 
-    def format_title(self, formatting):
+    def format_title(self, formatting, units=None, include_label=True):
         formatted = ", ".join(
             tuple(f"{value:>{formatting}}" for value in self.values[0])
         )
-        return f"{self.label} = {formatted} {self.units}"
+        if include_label:
+            return f"{self.label} = {formatted} {self.units}"
+        else:
+            return f"{formatted} {self.units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -283,11 +369,14 @@ def axis_from_dict(d):
 
 
 def format_axes_metadata(axes_metadata, shape):
-    data = []
-    for axis, n in zip(axes_metadata, shape):
-        data += [axis._tabular_repr_data(n)]
+    with config.set({"visualize.use_tex": False}):
+        data = []
+        for axis, n in zip(axes_metadata, shape):
+            data += [axis._tabular_repr_data(n)]
 
-    return tabulate(data, headers=["type", "label", "coordinates"], tablefmt="simple")
+        return tabulate(
+            data, headers=["type", "label", "coordinates"], tablefmt="simple"
+        )
 
 
 def _iterate_axes_type(has_axes, axis_type):
