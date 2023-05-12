@@ -1037,7 +1037,7 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
                 )
             )
 
-        if self._nonzero_coefficients(("C41", "phi41", "C43", "phi43", "C45", "phi41")):
+        if self._nonzero_coefficients(("C41", "phi41", "C43", "phi43", "C45", "phi45")):
             array = array + (
                 1
                 / 5

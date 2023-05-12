@@ -702,14 +702,10 @@ class SMatrixArray(HasArray, BaseSMatrix):
         self._periodic = periodic
         self._check_axes_metadata()
 
-    def _metadata_to_dict(self):
-        metadata = super()._metadata_to_dict()
-        print(metadata)
-
-    # @classmethod
-    # def _pack_kwargs(cls, attrs, kwargs):
-    #     kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
-    #     super()._pack_kwargs(attrs, kwargs)
+    @classmethod
+    def _pack_kwargs(cls, kwargs):
+        kwargs["wave_vectors"] = _pack_wave_vectors(kwargs["wave_vectors"])
+        return super()._pack_kwargs(kwargs)
 
     @classmethod
     def _unpack_kwargs(cls, attrs):

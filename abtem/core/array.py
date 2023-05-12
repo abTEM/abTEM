@@ -19,6 +19,7 @@ from dask.utils import format_bytes
 from dask.distributed import get_client
 from tabulate import tabulate
 
+import abtem
 from abtem.core import config
 from abtem.core.axes import (
     HasAxes,
@@ -749,19 +750,19 @@ class HasArray(HasAxes, CopyMixin):
             filename, array, description=self._metadata_to_json(), **kwargs
         )
 
-    @classmethod
-    def _unpack_kwargs(cls, attrs):
-        kwargs = {}
-        kwargs["ensemble_axes_metadata"] = []
-        for key, value in attrs.items():
-            if key == "ensemble_axes_metadata":
-                kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
-            elif key == "type":
-                pass
-            else:
-                kwargs[key] = value
-
-        return kwargs
+    # @classmethod
+    # def _unpack_kwargs(cls, attrs):
+    #     kwargs = {}
+    #     kwargs["ensemble_axes_metadata"] = []
+    #     for key, value in attrs.items():
+    #         if key == "ensemble_axes_metadata":
+    #             kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
+    #         elif key == "type":
+    #             pass
+    #         else:
+    #             kwargs[key] = value
+    #
+    #     return kwargs
 
     @classmethod
     def from_zarr(cls, url, chunks: int = "auto") -> "T":
@@ -774,18 +775,21 @@ class HasArray(HasAxes, CopyMixin):
         chunks : int, optional
             aaaa
         """
-        with zarr.open(url, mode="r") as f:
-            kwargs = cls._unpack_kwargs(f.attrs)
 
-        num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
+        return from_zarr(url, chunks=chunks)
 
-        if chunks == "auto":
-            chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
-
-        array = da.from_zarr(url, component="array", chunks=chunks)
-
-        with config.set({"warnings.overspecified-grid": False}):
-            return cls(array, **kwargs)
+        # with zarr.open(url, mode="r") as f:
+        #     kwargs = cls._unpack_kwargs(f.attrs)
+        #
+        # num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
+        #
+        # if chunks == "auto":
+        #     chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+        # sss
+        # array = da.from_zarr(url, component="array", chunks=chunks)
+        #
+        # with config.set({"warnings.overspecified-grid": False}):
+        #     return cls(array, **kwargs)
 
     @staticmethod
     def _apply_wave_transform(
@@ -896,8 +900,6 @@ class HasArray(HasAxes, CopyMixin):
 
     def set_ensemble_axes_metadata(self, axes_metadata, axis):
 
-        #axes_metadata =
-
         self.ensemble_axes_metadata[axis] = axes_metadata
 
         self._check_axes_metadata()
@@ -946,6 +948,7 @@ def from_zarr(url: str, chunks: Chunks = None):
 
         for i, t in enumerate(types):
             cls = getattr(abtem, t)
+
             kwargs = cls._unpack_kwargs(f.attrs[f"kwargs{i}"])
             num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
 
