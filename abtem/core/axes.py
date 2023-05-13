@@ -306,6 +306,15 @@ class AxisAlignedTiltAxis(NonLinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class WaveVectorAxis(OrdinalAxis):
+    units: str = "1/Å"
+    _ensemble_mean: bool = False
+
+    def format_title(self, formatting, include_label: bool = True, **kwargs):
+        return format_title(self, formatting, units=None, include_label=include_label)
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class TiltAxis(OrdinalAxis):
     units: str = "mrad"
     _ensemble_mean: bool = False

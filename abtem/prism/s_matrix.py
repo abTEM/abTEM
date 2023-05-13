@@ -12,7 +12,7 @@ from ase import Atoms
 from dask.graph_manipulation import wait_on
 
 from abtem.core.array import validate_lazy, HasArray
-from abtem.core.axes import OrdinalAxis, AxisMetadata, ScanAxis, UnknownAxis
+from abtem.core.axes import OrdinalAxis, AxisMetadata, ScanAxis, UnknownAxis, WaveVectorAxis
 from abtem.core.backend import get_array_module, cp, validate_device, copy_to_device
 from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks, Chunks
 from abtem.core.complex import complex_exponential
@@ -78,12 +78,13 @@ class BaseSMatrix(BaseWaves):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [
-            OrdinalAxis(
-                label="(n, m)",
-                values=self.wave_vectors,
-            )
-        ] + super().base_axes_metadata  # noqa
+        return [WaveVectorAxis(label="q", values=tuple(tuple(value) for value in self.wave_vectors),)] + super().base_axes_metadata
+        # return [
+        #     OrdinalAxis(
+        #         label="(n, m)",
+        #         values=self.wave_vectors,
+        #     )
+        # ] + super().base_axes_metadata  # noqa
 
     @property
     def base_shape(self):
