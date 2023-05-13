@@ -340,8 +340,6 @@ def _interpolate_stack(array, positions, mode, order, **kwargs):
 
 
 class _NoiseTransform(EnsembleTransform):
-    def apply(self, x):
-        return super().apply(x)
 
     def __init__(
         self,
@@ -401,7 +399,10 @@ class _NoiseTransform(EnsembleTransform):
     def metadata(self):
         return {"units": ""}
 
-    def _apply_array(self, x):
+    def apply(self, x, block_id=None):
+
+        if block_id is None:
+            block_id = 0
 
         array = x.array
         xp = get_array_module(array)
@@ -422,6 +423,9 @@ class _NoiseTransform(EnsembleTransform):
         else:
             seed = self.seeds
 
+        if seed is not None:
+            seed += block_id
+
         rng = xp.random.default_rng(seed=seed)
 
         randomized_seed = int(
@@ -432,7 +436,8 @@ class _NoiseTransform(EnsembleTransform):
 
         array = xp.clip(array, a_min=0.0, a_max=None)
 
-        return rng.poisson(array).astype(xp.float32)
+        array = rng.poisson(array).astype(xp.float32)
+        return self._pack_array(x, array)
 
 
 class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -682,7 +687,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         total_dose = np.array(total_dose, dtype=np.float32)
 
-        transform = _NoiseTransform(total_dose, samples)
+        transform = _NoiseTransform(total_dose, samples, seeds=seed)
         measurement = self.apply_transform(transform)
 
         if isinstance(transform.dose, BaseDistribution) and dose_axes_metadata:

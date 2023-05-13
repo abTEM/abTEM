@@ -29,7 +29,7 @@ def superpose_deltas(
     array: np.ndarray,
     # slice_index=None,
     weights=None,
-    round_positions: bool = True,
+    round_positions: bool = False,
 ) -> np.ndarray:
     xp = get_array_module(array)
     shape = array.shape

@@ -1,4 +1,5 @@
 import copy
+import inspect
 import itertools
 import json
 import warnings
@@ -793,19 +794,24 @@ class HasArray(HasAxes, CopyMixin):
 
     @staticmethod
     def _apply_wave_transform(
-        *args, waves_partial, transform_partial, transform_ensemble_shape
+        *args, waves_partial, transform_partial, transform_ensemble_shape,
     ):
         transform = transform_partial(
             *(arg.item() for arg in args[: len(transform_ensemble_shape)])
         )
         ensemble_axes_metadata = [
-            axis.item() for axis in args[len(transform_ensemble_shape) : -1]
+            axis.item() for axis in args[len(transform_ensemble_shape) : -2]
         ]
-        array = args[-1]
+        array = args[-2]
+        block_id = args[-1].item()
 
         waves = waves_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
 
-        waves = transform.apply(waves)
+        if "block_id" in inspect.signature(transform.apply).parameters:
+            waves = transform.apply(waves, block_id=block_id)
+        else:
+            waves = transform.apply(waves)
+
         return waves.array
 
     def apply_transform(
@@ -871,6 +877,12 @@ class HasArray(HasAxes, CopyMixin):
                     )
                 ),
             )
+
+            block_shape = self.array.blocks.shape
+
+            block_id = np.arange(np.prod(block_shape)).reshape(block_shape)
+            block_id_blocks = (da.from_array(block_id, chunks=1), array_blocks[-1])
+
             xp = get_array_module(self.device)
 
             with warnings.catch_warnings():
@@ -881,6 +893,7 @@ class HasArray(HasAxes, CopyMixin):
                     *transform_blocks,
                     *axes_blocks,
                     *array_blocks,
+                    *block_id_blocks,
                     adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                     transform_partial=transform._from_partitioned_args(),
                     transform_ensemble_shape=transform.ensemble_shape,

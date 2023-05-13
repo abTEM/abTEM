@@ -54,7 +54,9 @@ class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
         return CompositeWaveTransform(wave_transforms)
 
     @abstractmethod
-    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
+    def apply(
+        self, waves: "Waves", overwrite_x: bool = False, **kwargs
+    ) -> "Waves":
         pass
 
 
@@ -151,33 +153,39 @@ class CompositeWaveTransform(WaveTransform):
 
 
 class EnsembleTransform(_EnsembleFromDistributionsMixin, WaveTransform):
-
     def __init__(self, distributions):
         super().__init__(distributions=distributions)
 
-    @abstractmethod
-    def _apply_array(self, x):
-        pass
-
-    def apply(self, x):
-        array = self._apply_array(x)
+    def _pack_array(self, x, array):
         kwargs = x._copy_kwargs(exclude=("array",))
-        kwargs["ensemble_axes_metadata"] = self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+        kwargs["ensemble_axes_metadata"] = (
+                self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+        )
         kwargs["metadata"].update(self.metadata)
         return x.__class__(array, **kwargs)
+
+    @abstractmethod
+    def apply(
+        self,
+        x,
+        **kwargs
+    ):
+        pass
+
+
 
 
 class FourierSpaceConvolution(
     WaveTransform, HasAcceleratorMixin, HasGridMixin, HasDeviceMixin
 ):
     def __init__(
-            self,
-            energy: float,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            device: str = "cpu",
-            **kwargs
+        self,
+        energy: float,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        device: str = "cpu",
+        **kwargs
     ):
         self._accelerator = Accelerator(energy=energy, **kwargs)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -210,7 +218,9 @@ class FourierSpaceConvolution(
 
         if lazy:
             array = dask.delayed(self._evaluate)()
-            array = da.from_delayed(array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts)
+            array = da.from_delayed(
+                array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts
+            )
             return array
         else:
             return self._evaluate()
