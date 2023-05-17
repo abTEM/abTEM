@@ -27,7 +27,7 @@ def format_label(axes, units=None):
 
     units = _format_units(units)
 
-    if units is None:
+    if units is None or len(units) == 0:
         return f"{label}"
     else:
         return f"{label} [{units}]"

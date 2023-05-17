@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     pass
 
 
-def get_frequency_bin_edges(diffraction_patterns):
+def _get_frequency_bin_edges(diffraction_patterns):
     bin_edge_x = np.fft.fftshift(
         np.fft.fftfreq(
             diffraction_patterns.shape[-2], d=1 / diffraction_patterns.shape[-2]
@@ -37,7 +37,7 @@ def get_frequency_bin_edges(diffraction_patterns):
     return bin_edge_x, bin_edge_y
 
 
-def sphere_of_miller_index_grid_points(diffraction_patterns, cell=None, max_index=None):
+def _sphere_of_miller_index_grid_points(diffraction_patterns, cell=None, max_index=None):
     if max_index is None:
         if cell is None:
             raise RuntimeError()
@@ -57,7 +57,7 @@ def sphere_of_miller_index_grid_points(diffraction_patterns, cell=None, max_inde
     return hkl[np.linalg.norm(hkl, axis=-1) < max_index]
 
 
-def k_space_grid_points(hkl, cell):
+def _k_space_grid_points(hkl, cell):
     k = (
         hkl[:, 0, None] * cell.reciprocal()[0, None]
         + hkl[:, 1, None] * cell.reciprocal()[1, None]
@@ -66,12 +66,12 @@ def k_space_grid_points(hkl, cell):
     return k
 
 
-def sagita(radius, chord):
+def _sagita(radius, chord):
     return radius - np.sqrt(radius**2 - (chord / 2) ** 2)
 
 
-def digitize_k_space_grid(k_grid, diffraction_patterns):
-    bin_edge_x, bin_edge_y = get_frequency_bin_edges(diffraction_patterns)
+def _digitize_k_space_grid(k_grid, diffraction_patterns):
+    bin_edge_x, bin_edge_y = _get_frequency_bin_edges(diffraction_patterns)
 
     n = np.digitize(k_grid[:, 0], bin_edge_x) - 1
     m = np.digitize(k_grid[:, 1], bin_edge_y) - 1
@@ -81,9 +81,9 @@ def digitize_k_space_grid(k_grid, diffraction_patterns):
     return nm
 
 
-def k_space_distances_to_ewald_sphere(k_grid, wavelength):
+def _k_space_distances_to_ewald_sphere(k_grid, wavelength):
     k_norm = np.linalg.norm(k_grid[:, :2], axis=1)
-    ewald_z = sagita(1 / wavelength, k_norm * 2)
+    ewald_z = _sagita(1 / wavelength, k_norm * 2)
     return ewald_z - k_grid[:, 2]
 
 
@@ -101,22 +101,22 @@ def _validate_cell(cell):
     return cell
 
 
-def disk(width, height):
+def _disk(width, height):
     H = np.linspace(-1 + 1 / width, 1 - 1 / width, width)
     W = np.linspace(-1 + 1 / height, 1 - 1 / height, height)
     X, Y = np.meshgrid(H, W, indexing="ij")
     return np.array((X**2 + Y**2) <= 1.0, dtype=bool)
 
 
-def hkl_tuples_to_str(miller_indices):
+def _hkl_tuples_to_str(miller_indices):
     return ["{} {} {}".format(*hkl) for hkl in miller_indices]
 
 
-def hkl_str_to_tuples(miller_indices):
+def _hkl_str_to_tuples(miller_indices):
     return [tuple(int(index) for index in hkl.split(" ")) for hkl in miller_indices]
 
 
-def integrate_disk(array, center, footprint):
+def _integrate_disk(array, center, footprint):
 
     radius = footprint.shape[0] // 2, footprint.shape[1] // 2
     slice_limits = [
@@ -156,7 +156,7 @@ def _index_diffraction_patterns(
 
     shape = diffraction_patterns.shape[-2:]
 
-    hkl = sphere_of_miller_index_grid_points(diffraction_patterns, cell, max_index)
+    hkl = _sphere_of_miller_index_grid_points(diffraction_patterns, cell, max_index)
 
     # is_valid = ((hkl % 2 == 0).all(axis=1) + (hkl % 2 == 1).all(axis=1)) #\
 
@@ -167,7 +167,7 @@ def _index_diffraction_patterns(
 
     # hkl = hkl[is_valid]
 
-    k = k_space_grid_points(hkl, cell)
+    k = _k_space_grid_points(hkl, cell)
 
     mask = (
         (k[:, 0] >= diffraction_patterns.limits[0][0])
@@ -179,7 +179,7 @@ def _index_diffraction_patterns(
     k = k[mask]
     hkl = hkl[mask]
 
-    nm = digitize_k_space_grid(k, diffraction_patterns)
+    nm = _digitize_k_space_grid(k, diffraction_patterns)
 
     # mask = (
     #     np.all((nm > 0), axis=1)
@@ -193,7 +193,7 @@ def _index_diffraction_patterns(
 
     labels = np.ravel_multi_index(nm.T, shape)
 
-    d_ewald = k_space_distances_to_ewald_sphere(k, diffraction_patterns.wavelength)
+    d_ewald = _k_space_distances_to_ewald_sphere(k, diffraction_patterns.wavelength)
 
     ensemble_indices = tuple(range(len(diffraction_patterns.ensemble_shape)))
     max_intensities = diffraction_patterns.array.max(axis=ensemble_indices)
@@ -204,7 +204,7 @@ def _index_diffraction_patterns(
             + 1
         ).astype(int)
 
-        footprint = disk(*size)
+        footprint = _disk(*size)
         maximum_filtered = maximum_filter(
             max_intensities, footprint=footprint, mode="constant"
         )
@@ -219,7 +219,7 @@ def _index_diffraction_patterns(
             + 1
         ).astype(int)
 
-        integration_footprint = disk(*size)
+        integration_footprint = _disk(*size)
     else:
         integration_footprint = None
 
@@ -243,7 +243,7 @@ def _index_diffraction_patterns(
             continue
 
         if integration_footprint is not None:
-            max_intensity = integrate_disk(
+            max_intensity = _integrate_disk(
                 max_intensities, (n, m), integration_footprint
             )
 
@@ -256,7 +256,7 @@ def _index_diffraction_patterns(
 
         if integration_footprint is not None:
             intensities.append(
-                integrate_disk(
+                _integrate_disk(
                     diffraction_patterns.array, (n, m), integration_footprint
                 )
             )
@@ -273,36 +273,19 @@ def _index_diffraction_patterns(
     return np.array(selected_hkl), intensities, np.array(positions)
 
 
-def format_miller_indices(hkl):
+def _format_miller_indices(hkl):
     return "{} {} {}".format(*hkl)
 
 
 def _miller_to_miller_bravais(hkl):
     h, k, l = hkl
-    #HKIL = np.zeros((len(hkl), 4), dtype=int)
+
     H = 2 * h - k
     K = 2 * k - h
     I = -H - K
     L = l
 
-    # hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
-    # hkl = _miller_to_miller_bravais(hkl)
-
     return H, K, I, L
-
-
-# def _miller_to_miller_bravais(hkl):
-#     h, k, l = hkl[:, 0], hkl[:, 1], hkl[:, 2]
-#     HKIL = np.zeros((len(hkl), 4), dtype=int)
-#     HKIL[:, 0] = 2 * h - k
-#     HKIL[:, 1] = 2 * k - h
-#     HKIL[:, 2] = -HKIL[:, 0] - HKIL[:, 1]
-#     HKIL[:, 3] = l
-#
-#     # hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
-#     # hkl = _miller_to_miller_bravais(hkl)
-#
-#     return HKIL
 
 
 def _equivalent_miller_indices(hkl):

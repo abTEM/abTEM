@@ -907,6 +907,8 @@ class HasArray(HasAxes, CopyMixin):
             kwargs["ensemble_axes_metadata"] = (
                 transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
             )
+            kwargs["metadata"].update(transform.metadata)
+
             return self.__class__(**kwargs)
         else:
             return transform.apply(self)

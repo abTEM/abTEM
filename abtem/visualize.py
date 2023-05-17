@@ -31,6 +31,7 @@ from abtem.core.axes import ReciprocalSpaceAxis, format_label, LinearAxis
 from abtem.core.colors import hsluv_cmap
 from abtem.core.units import _get_conversion_factor
 from abtem.core.utils import label_to_index
+from matplotlib.colors import ListedColormap
 
 if TYPE_CHECKING:
     from abtem.measurements import (
@@ -38,17 +39,7 @@ if TYPE_CHECKING:
     )
 
 
-# def format_label(label, units: str = None, italic: bool = False) -> str:
-#     if config.get("visualize.use_tex", False):
-#         if not italic:
-#             label = f"\mathrm{{{label}}}"
-#
-#         return f"${label} \ [{_format_units(units)}]$"
-#     else:
-#         return f"{label} [{units}]"
-
-
-def make_default_sizes():
+def _make_default_sizes():
     sizes = {
         "cbar_padding_left": Size.Fixed(0.15),
         "cbar_spacing": Size.Fixed(0.4),
@@ -58,7 +49,7 @@ def make_default_sizes():
     return sizes
 
 
-def cbar_layout(n, sizes):
+def _cbar_layout(n, sizes):
     if n == 0:
         return []
 
@@ -73,7 +64,7 @@ def cbar_layout(n, sizes):
     return layout
 
 
-def make_grid_layout(
+def _make_grid_layout(
     axes, ncbars: int, sizes: dict, cbar_mode: str = "each", direction: str = "col"
 ):
     sizes_layout = []
@@ -93,13 +84,13 @@ def make_grid_layout(
             sizes["cbar"] = Size.from_any("5%", sizes_layout[0])
 
         if cbar_mode == "each":
-            sizes_layout.extend(cbar_layout(ncbars, sizes))
+            sizes_layout.extend(_cbar_layout(ncbars, sizes))
 
         if i < len(axes) - 1:
             sizes_layout.append(sizes["padding"])
 
     if cbar_mode == "single":
-        sizes_layout.extend(cbar_layout(ncbars, sizes))
+        sizes_layout.extend(_cbar_layout(ncbars, sizes))
 
     return sizes_layout
 
@@ -129,10 +120,10 @@ class AxesGrid:
         self._sharey = sharey
 
         if col_sizes is None:
-            col_sizes = make_default_sizes()
+            col_sizes = _make_default_sizes()
 
         if row_sizes is None:
-            row_sizes = make_default_sizes()
+            row_sizes = _make_default_sizes()
 
         self._col_sizes = col_sizes
         self._row_sizes = row_sizes
@@ -162,7 +153,7 @@ class AxesGrid:
         cols = np.array(axes, dtype=object).reshape((ncols, nrows))[:, 0]
         rows = np.array(axes, dtype=object).reshape((ncols, nrows))[0]
 
-        col_layout = make_grid_layout(
+        col_layout = _make_grid_layout(
             cols,
             ncbars=ncbars,
             sizes=self._col_sizes,
@@ -170,7 +161,7 @@ class AxesGrid:
             direction="col",
         )
 
-        row_layout = make_grid_layout(
+        row_layout = _make_grid_layout(
             rows, ncbars=0, sizes=self._row_sizes, direction="row"
         )
 
@@ -284,13 +275,13 @@ class AxesGrid:
         self._row_sizes["padding"].fixed_size = padding[1]
 
 
-def format_options(options):
+def _format_options(options):
     return [
         f"{option:.3f}" if isinstance(option, float) else option for option in options
     ]
 
 
-def make_indexing_sliders(
+def _make_indexing_sliders(
     visualization, axes_types, continuous_update: bool = False, callbacks=()
 ):
     sliders = []
@@ -299,7 +290,7 @@ def make_indexing_sliders(
         visualization.measurements.ensemble_shape,
         axes_types,
     ):
-        options = format_options(axes_metadata.coordinates(n))
+        options = _format_options(axes_metadata.coordinates(n))
 
         with config.set({"visualize.use_tex": False}):
             label = axes_metadata.format_label()
@@ -325,7 +316,7 @@ def make_indexing_sliders(
     return sliders
 
 
-def set_update_indices_callback(sliders, visualization, callbacks):
+def _set_update_indices_callback(sliders, visualization, callbacks):
     def update_indices(change):
         indices = ()
         for slider in sliders:
@@ -343,7 +334,7 @@ def set_update_indices_callback(sliders, visualization, callbacks):
             slider.observe(callback, "value")
 
 
-def make_continuous_button(sliders):
+def _make_continuous_button(sliders):
     continuous_update_checkbox = widgets.ToggleButton(
         description="Continuous update", value=False
     )
@@ -352,7 +343,7 @@ def make_continuous_button(sliders):
     return continuous_update_checkbox
 
 
-def get_max_range(array, axes_types):
+def _get_max_range(array, axes_types):
 
     if np.iscomplexobj(array):
         array = np.abs(array)
@@ -373,15 +364,15 @@ def get_max_range(array, axes_types):
     return max_value
 
 
-def make_vmin_vmax_slider(visualization):
+def _make_vmin_vmax_slider(visualization):
 
     axes_types = (
         tuple(visualization._axes_types)
         + ("base",) * visualization.measurements.num_base_axes
     )
 
-    max_value = get_max_range(visualization.measurements.array, axes_types)
-    min_value = -get_max_range(-visualization.measurements.array, axes_types)
+    max_value = _get_max_range(visualization.measurements.array, axes_types)
+    min_value = -_get_max_range(-visualization.measurements.array, axes_types)
 
     step = (max_value - min_value) / 1e6
 
@@ -407,7 +398,7 @@ def make_vmin_vmax_slider(visualization):
     return vmin_vmax_slider
 
 
-def make_scale_button(visualization):
+def _make_scale_button(visualization):
     scale_button = widgets.Button(description="Scale")
 
     def scale_button_clicked(*args):
@@ -419,7 +410,7 @@ def make_scale_button(visualization):
     return scale_button
 
 
-def make_autoscale_button(visualization):
+def _make_autoscale_button(visualization):
     def autoscale_button_changed(change):
         if change["new"]:
             visualization._autoscale = True
@@ -436,7 +427,7 @@ def make_autoscale_button(visualization):
     return autoscale_button
 
 
-def make_power_scale_slider(visualization):
+def _make_power_scale_slider(visualization):
     def powerscale_slider_changed(change):
         visualization._update_power(change["new"])
 
@@ -453,7 +444,7 @@ def make_power_scale_slider(visualization):
     return power_scale_slider
 
 
-def get_joined_titles(measurement, formatting):
+def _get_joined_titles(measurement, formatting):
     titles = []
     for axes_metadata in measurement.ensemble_axes_metadata:
         titles.append(axes_metadata.format_title(formatting))
@@ -516,7 +507,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 indices, keep_dims=keep_dims
             )
 
-
     def set_axes_padding(self, padding: Tuple[float, float] = (0.0, 0.0)):
         self._axes.set_axes_padding(padding)
 
@@ -545,7 +535,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         indexed_measurements = self._get_indexed_measurements(keepdims=False)
 
-        if titles is None:
+        if titles is None or titles is True:
             if not len(indexed_measurements.ensemble_shape):
                 return
 
@@ -802,7 +792,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         elif labels == "metadata":
             labels = []
             for i, measurement in self.iterate_measurements(keep_dims=True):
-                labels.append(get_joined_titles(measurement, formatting))
+                labels.append(_get_joined_titles(measurement, formatting))
         elif (
             not isinstance(labels, (tuple, list))
             and len(labels) != np.array(self.axes).size
@@ -842,7 +832,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         for anchored_text, (i, measurement) in zip(
             self._metadata_labels, self.iterate_measurements(keep_dims=True)
         ):
-            label = get_joined_titles(measurement, anchored_text.formatting)
+            label = _get_joined_titles(measurement, anchored_text.formatting)
             anchored_text.txt.set_text(label)
 
     def animate(
@@ -884,6 +874,8 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
     def __init__(
         self, measurements, axes, axes_types: tuple = None, common_scale: bool = True
     ):
+
+        measurements = measurements.compute().to_cpu()
 
         super().__init__(axes, measurements, axes_types=axes_types)
 
@@ -953,7 +945,6 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             norm.autoscale_None(measurement.array)
 
             self._normalization[i] = norm
-
 
     def _get_global_vmin_vmax(self, vmin=None, vmax=None):
         measurements = self._get_indexed_measurements()
@@ -1031,15 +1022,20 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
     def set_scale_units(self, units: str = None):
         if units is None:
-            units = self.measurements.metadata.get("units", "undefined")
+            units = self.measurements.metadata.get("units", "")
 
         self._scale_units = units
 
     def set_cbar_labels(self, label: str = None, **kwargs):
         if label is None:
-            label = self.measurements.metadata.get("label", "undefined")
+            label = self.measurements.metadata.get("label", "")
 
-        label = f"{label} [{self._scale_units}]"
+        # TODO: make units work more generally
+
+        if self._scale_units is None or len(self._scale_units) == 0:
+            label = f"{label}"
+        else:
+            label = f"{label} [{self._scale_units}]"
 
         for cbars in self._cbars.values():
             for cbar in cbars:
@@ -1078,7 +1074,11 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
                     cbars[ax].append(plt.colorbar(images, cax=cax[0], **kwargs))
 
             else:
-                cbars[ax].append(plt.colorbar(images, **kwargs))
+                if isinstance(images, np.ndarray):
+                    for j, image in enumerate(images):
+                        cbars[ax].append(plt.colorbar(image, **kwargs))
+                else:
+                    cbars[ax].append(plt.colorbar(images, **kwargs))
 
         self._cbars = cbars
 
@@ -1205,6 +1205,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         units: str = None,
         convert_complex: str = "domain_coloring",
         autoscale: bool = False,
+        title=None,
     ):
 
         super().__init__(
@@ -1229,6 +1230,9 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         self.set_y_units(units)
         self.set_x_labels()
         self.set_y_labels()
+
+        if title is not None:
+            self.set_column_titles(title)
 
     @property
     def _artists_per_axes(self):
@@ -1386,13 +1390,13 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
                 self._update_vmin_vmax(vmin, vmax)
                 # vmin_vmax_slider.value = self._get_global_vmin_vmax()
 
-        sliders = make_indexing_sliders(
+        sliders = _make_indexing_sliders(
             self, self.axes_types, callbacks=(index_update_callback,)
         )
-        power_scale_button = make_power_scale_slider(self)
-        scale_button = make_scale_button(self)
-        autoscale_button = make_autoscale_button(self)
-        continuous_update_button = make_continuous_button(sliders)
+        power_scale_button = _make_power_scale_slider(self)
+        scale_button = _make_scale_button(self)
+        autoscale_button = _make_autoscale_button(self)
+        continuous_update_button = _make_continuous_button(sliders)
 
         scale_button.layout = widgets.Layout(width="20%")
         autoscale_button.layout = widgets.Layout(width="30%")
@@ -1423,8 +1427,10 @@ class MeasurementVisualization1D(MeasurementVisualization):
         axes_types: tuple = None,
         units=None,
         common_scale: bool = True,
-        legend=False
+        legend=False,
     ):
+
+        measurements = measurements.compute().to_cpu()
 
         super().__init__(axes, measurements, axes_types=axes_types)
 
@@ -1504,6 +1510,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
         if self._common_scale and ylim is None:
             common_ylim = _get_extent(self.measurements)
+
         else:
             common_ylim = ylim
 
@@ -1513,7 +1520,6 @@ class MeasurementVisualization1D(MeasurementVisualization):
                 y_lim = _get_extent(measurement)
             else:
                 y_lim = common_ylim
-
             self.axes[i].set_ylim(y_lim)
 
     def set_legends(self, **kwargs):
@@ -1602,7 +1608,6 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         power: float = 1.0,
         scale: float = 1.0,
         common_color_scale: bool = False,
-        units: str = None,
         convert_complex: str = "domain_coloring",
         autoscale: bool = False,
     ):
@@ -1649,10 +1654,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             self.set_cbar_labels()
 
         # # self.set_extent()
-        # # self.set_x_units(units)
-        # # self.set_y_units(units)
-        # self.set_x_labels()
-        # self.set_y_labels()
+        self.set_x_units()
+        self.set_y_units()
+        self.set_x_labels()
+        self.set_y_labels()
 
     @property
     def _artists_per_axes(self):
@@ -1709,13 +1714,18 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             scales = self._get_scales(measurement, norm)
             positions = self._get_positions(measurement)
 
+            if self._cmap not in plt.colormaps():
+                cmap = ListedColormap([self._cmap])
+            else:
+                cmap = self._cmap
+
             ellipse_collection = EllipseCollection(
                 widths=scales,
                 heights=scales,
                 angles=0.0,
                 units="xy",
                 array=measurement.intensities,
-                cmap=self._cmap,
+                cmap=cmap,
                 offsets=positions,
                 transOffset=ax.transData,
             )
@@ -1906,7 +1916,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     def widgets(self):
         canvas = self.fig.canvas
 
-        sliders = make_indexing_sliders(
+        sliders = _make_indexing_sliders(
             self, self.axes_types  # , callbacks=(index_update_callback,)
         )
 
@@ -1920,7 +1930,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             # if self._autoscale:
             #    vmin_vmax_slider.value = self._get_global_vmin_vmax()
 
-        set_update_indices_callback(sliders, self, callbacks=(index_update_callback,))
+        _set_update_indices_callback(sliders, self, callbacks=(index_update_callback,))
 
         def hkl_slider_changed(change):
             self.set_hkl_threshold(change["new"])
@@ -1930,10 +1940,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         )
         hkl_slider.observe(hkl_slider_changed, "value")
 
-        power_scale_slider = make_power_scale_slider(self)
-        scale_button = make_scale_button(self)
-        autoscale_button = make_autoscale_button(self)
-        continuous_update_button = make_continuous_button(sliders)
+        power_scale_slider = _make_power_scale_slider(self)
+        scale_button = _make_scale_button(self)
+        autoscale_button = _make_autoscale_button(self)
+        continuous_update_button = _make_continuous_button(sliders)
 
         scale_button.layout = widgets.Layout(width="20%")
         autoscale_button.layout = widgets.Layout(width="30%")

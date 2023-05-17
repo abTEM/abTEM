@@ -52,7 +52,7 @@ from abtem.core.transform import EnsembleTransform
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.distributions import _validate_distribution, BaseDistribution
-from abtem.indexing import _index_diffraction_patterns, format_miller_indices
+from abtem.indexing import _index_diffraction_patterns, _format_miller_indices
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.visualize import (
     MeasurementVisualization2D,
@@ -397,7 +397,7 @@ class _NoiseTransform(EnsembleTransform):
 
     @property
     def metadata(self):
-        return {"units": ""}
+        return {"units": "", "label": "electron counts"}
 
     def apply(self, x, block_id=None):
 
@@ -437,7 +437,10 @@ class _NoiseTransform(EnsembleTransform):
         array = xp.clip(array, a_min=0.0, a_max=None)
 
         array = rng.poisson(array).astype(xp.float32)
-        return self._pack_array(x, array)
+
+        measurement = self._pack_array(x, array)
+
+        return measurement
 
 
 class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -552,6 +555,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
     def phase(self) -> T:
         """Calculates the phase of a complex-valued measurement."""
         self._check_is_complex()
+        self.metadata["label"] = "phase"
         return self._apply_element_wise_func(get_array_module(self.array).angle)
 
     def abs(self) -> T:
@@ -562,6 +566,8 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
     def intensity(self) -> T:
         """Calculates the squared norm of a complex-valued measurement."""
         self._check_is_complex()
+        self.metadata["label"] = "intensity"
+        self.metadata["units"] = "arb. unit"
         return self._apply_element_wise_func(abs2)
 
     def relative_difference(
@@ -784,6 +790,11 @@ def _validate_axes(
     sharex: bool = True,
     sharey: bool = True,
 ):
+
+    if isinstance(measurements, BaseMeasurement2D) and len(measurements.shape) == 2 and ax is None:
+        fig, ax = plt.subplots()
+
+
     num_ensemble_axes = len(measurements.ensemble_shape)
 
     if axes_types is None:
@@ -819,6 +830,12 @@ def _validate_axes(
                 validated_axes_types[i] = "overlay"
 
         axes_types = validated_axes_types
+
+
+        #axes = np.zeros((1,1), dtype=object)
+
+        #axes[0,0] = ax
+        #return axes, axes_types
 
     # # axes_types = axes_types[:-2] + ("explode",) * num_explode_axes
     # if isinstance(measurements, _BaseMeasurement1d):
@@ -1067,8 +1084,6 @@ class BaseMeasurement2D(BaseMeasurement):
         interact : bool
             If True, create an interactive visualization. This requires enabling the ipympl package.
 
-
-
         Returns
         -------
         MeasurementVisualization2D
@@ -1095,6 +1110,7 @@ class BaseMeasurement2D(BaseMeasurement):
             common_scale=common_color_scale,
             power=power,
             cmap=cmap,
+            title=title
         )
 
         if units is not None:
@@ -2340,6 +2356,32 @@ class DiffractionPatterns(BaseMeasurement2D):
         return self._interpolate_line(
             start, end, sampling, gpts, width, margin, order, endpoint, fractional
         )
+
+    def tile_scan(self, reps):
+
+        scan_axes = _scan_axes(self)
+
+        if len(scan_axes) != 2:
+            raise NotImplementedError
+
+        xp = get_array_module(self.array)
+
+        tiling = ()
+        j = 0
+        for i in range(len(self.shape)):
+            if i in scan_axes:
+                tiling += (reps[j],)
+                j += 1
+            else:
+                tiling += (1,)
+
+
+        array = xp.tile(self.array, tiling)
+
+        kwargs = self._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        return self.__class__(**kwargs)
+
 
     def index_diffraction_spots(
         self,
@@ -3843,7 +3885,7 @@ class IndexedDiffractionPatterns(BaseMeasurement):
 
         if self.ensemble_shape:
             intensities = {
-                format_miller_indices(hkl): self.intensities[..., i]
+                _format_miller_indices(hkl): self.intensities[..., i]
                 for i, hkl in enumerate(self.miller_indices)
             }
             return pd.DataFrame(
@@ -3851,7 +3893,7 @@ class IndexedDiffractionPatterns(BaseMeasurement):
             )
         else:
             intensities = {
-                format_miller_indices(hkl): intensity
+                _format_miller_indices(hkl): intensity
                 for hkl, intensity in zip(self.miller_indices, self.intensities)
             }
             return pd.DataFrame(intensities, index=[0])

@@ -8,5 +8,4 @@ matplotlib
 ase
 jupyter
 tabulate
-cplot
 threadpoolctl

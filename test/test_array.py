@@ -119,7 +119,7 @@ def test_ensure_lazy(data, has_array, lazy, device):
 
 @given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ['cpu', gpu])
+@pytest.mark.parametrize("device", [gpu, 'cpu'])
 @pytest.mark.parametrize("has_array", [
     abtem_st.images,
     abtem_st.diffraction_patterns,

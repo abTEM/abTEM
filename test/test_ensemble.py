@@ -104,8 +104,7 @@ def test_array_waves_transform(data, ensemble, chunks):
 
     assert np.allclose(blocks, array, atol=1e-5)
 
-#@reproduce_failure('6.61.0', b'AXicY2Rgs2RnZWQ4wN33VI+3/r+JOgsj4/8LDGDABZRoYJ0JAjM4QYpsweyZjGJsDGwcQDkOiDp2Rl5GCIvRooGBhUlemk1WVkyWWYSRkZWLk4mHhYGRk5eJkZ2ZjZmNiRnIYGOCqmdgEGFlZ2RoVPKv/w8E3MyMDMfvzkkFSQAAic4aRw==')
-#@reproduce_failure('6.61.0', b'AXicY2RkYGSgCMC1M1o0EKGcFbtyADaYAXw=')
+
 @given(data=st.data())
 @pytest.mark.parametrize(
     "ensemble",
