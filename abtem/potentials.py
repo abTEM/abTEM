@@ -822,7 +822,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
             return self._disc_indices[number]
         except KeyError:
             cutoff = self.get_cutoff(number)
-            margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
+            margin = int(np.ceil(cutoff / np.min(self.sampling)))
             rows, cols = _disc_meshgrid(margin)
             self._disc_indices[number] = np.hstack((rows[:, None], cols[:, None]))
             return self._disc_indices[number]
@@ -872,7 +872,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
             scattering_factors[atomic_number] = (f / (sinc * self.sampling[0] * self.sampling[1] * kappa)).astype(
                 xp.complex64)
 
-        slice_idx = np.floor(positions[:, 2] / atoms.cell[2, 2] * self.num_slices).astype(np.int)
+        slice_idx = np.floor(positions[:, 2] / atoms.cell[2, 2] * self.num_slices).astype(int)
 
         start, end = next(generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice))
 

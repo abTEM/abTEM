@@ -92,7 +92,7 @@ class AbstractScan(metaclass=ABCMeta):
         start = 0
         for batch_size in batch_sizes:
             end = start + batch_size
-            indices = np.arange(start, end, dtype=np.int)
+            indices = np.arange(start, end, dtype=int)
             start += batch_size
             self._batches.append(indices)
 
@@ -534,8 +534,8 @@ class GridScan(AbstractScan, HasGridMixin):
 
         for i, nx in enumerate(Nx):
             for j, ny in enumerate(Ny):
-                x = np.arange(Sx[i], Sx[i] + nx, dtype=np.int)
-                y = np.arange(Sy[j], Sy[j] + ny, dtype=np.int)
+                x = np.arange(Sx[i], Sx[i] + nx, dtype=int)
+                y = np.arange(Sy[j], Sy[j] + ny, dtype=int)
                 self._batches.append((y[None] + x[:, None] * self.gpts[1]).ravel())
 
     def add_to_mpl_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
