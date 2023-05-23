@@ -96,11 +96,11 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  seed=None):
 
         if isinstance(sigmas, Number):
-            sigmas_array = np.array(sigmas, dtype=np.float)
+            sigmas_array = np.array(sigmas, dtype=float)
             sigmas_array = np.tile(sigmas_array, len(atoms))
 
         elif isinstance(sigmas, dict):
-            sigmas_array = np.zeros(len(atoms), dtype=np.float)
+            sigmas_array = np.zeros(len(atoms), dtype=float)
             new_sigmas = {}
             for key, sigma in sigmas.items():
                 try:
@@ -115,7 +115,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                     raise RuntimeError('Displacement standard deviation must be provided for all atomic species.')
 
         elif isinstance(sigmas, Iterable):
-            sigmas_array = np.array(sigmas, dtype=np.float)
+            sigmas_array = np.array(sigmas, dtype=float)
 
         else:
             raise ValueError()
