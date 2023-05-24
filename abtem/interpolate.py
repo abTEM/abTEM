@@ -84,14 +84,14 @@ def compute_indices_and_weights(out_size, in_size, align_corners, xp):
     H, W = in_size
 
     if align_corners:
-        v = xp.linspace(0, H - 1, num=out_H, dtype=np.float)
-        u = xp.linspace(0, W - 1, num=out_W, dtype=np.float)
+        v = xp.linspace(0, H - 1, num=out_H, dtype=float)
+        u = xp.linspace(0, W - 1, num=out_W, dtype=float)
     else:
         y_scale = H / out_H
         x_scale = W / out_W
-        v = (xp.arange(out_H, dtype=np.float) + 0.5) * y_scale - 0.5
+        v = (xp.arange(out_H, dtype=float) + 0.5) * y_scale - 0.5
         v = xp.maximum(v, 0)
-        u = (xp.arange(out_W, dtype=np.float) + 0.5) * x_scale - 0.5
+        u = (xp.arange(out_W, dtype=float) + 0.5) * x_scale - 0.5
         u = xp.maximum(u, 0)
     vw, v = xp.modf(v)
     uw, u = xp.modf(u)

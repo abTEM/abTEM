@@ -56,7 +56,7 @@ def _polar_regions(gpts: Tuple[int, int], angular_sampling: Tuple[float, float],
     angles = (np.arctan2(alpha_x[:, None], alpha_y[None]) + rotation) % (2 * np.pi)
 
     angular_bins = np.floor(nbins_azimuthal * (angles / (2 * np.pi)))
-    angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(np.int)
+    angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(int)
 
     bins = -np.ones(gpts, dtype=int)
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
@@ -257,7 +257,7 @@ class _PolarDetector(AbstractDetector):
         """
 
         waves.grid.check_is_defined()
-        array = np.full(waves.gpts, -1, dtype=np.int)
+        array = np.full(waves.gpts, -1, dtype=int)
 
         for i, indices in enumerate(self._get_regions(waves.gpts,
                                                       waves.angular_sampling,

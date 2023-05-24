@@ -65,7 +65,7 @@ def merge_close_points(points, distance):
 
     clusters = fcluster(linkage(pdist(points), method='complete'), distance, criterion='distance')
     new_points = np.zeros_like(points)
-    indices = np.zeros(len(points), dtype=np.int)
+    indices = np.zeros(len(points), dtype=int)
     k = 0
     for i, cluster in enumerate(label_to_index_generator(clusters, 1)):
         new_points[i] = np.mean(points[cluster], axis=0)

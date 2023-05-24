@@ -120,8 +120,8 @@ def periodic_crop(array, corners, new_shape: Tuple[int, int]):
         array = array[..., corners[0]:corners[0] + new_shape[0], corners[1]:corners[1] + new_shape[1]]
         return array
 
-    x = xp.arange(corners[0], corners[0] + new_shape[0], dtype=xp.int) % array.shape[-2]
-    y = xp.arange(corners[1], corners[1] + new_shape[1], dtype=xp.int) % array.shape[-1]
+    x = xp.arange(corners[0], corners[0] + new_shape[0], dtype=xp.int64) % array.shape[-2]
+    y = xp.arange(corners[1], corners[1] + new_shape[1], dtype=xp.int64) % array.shape[-1]
 
     x, y = xp.meshgrid(x, y, indexing='ij')
     array = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + new_shape)

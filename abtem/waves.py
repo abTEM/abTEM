@@ -1331,7 +1331,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
 
     def _get_requisite_crop(self, positions: Sequence[float], return_per_position: bool = False):
         offset = (self.interpolated_gpts[0] // 2, self.interpolated_gpts[1] // 2)
-        corners = np.rint(np.array(positions) / self.sampling - offset).astype(np.int)
+        corners = np.rint(np.array(positions) / self.sampling - offset).astype(int)
         upper_corners = corners + np.asarray(self.interpolated_gpts)
         crop_corner = (np.min(corners[:, 0]).item(), np.min(corners[:, 1]).item())
         size = (np.max(upper_corners[:, 0]).item() - crop_corner[0],
@@ -1680,7 +1680,7 @@ class PartitionedSMatrix(_Scanable):
             weights = self.get_beamlet_weights() * self._fourier_translation_operator(positions)
             return np.fft.ifft2(weights, axes=(1, 2))
         else:
-            positions = np.round(positions).astype(np.int)
+            positions = np.round(positions).astype(int)
             weights = np.roll(self.get_beamlet_basis(), positions, axis=(1, 2))
             return weights
 
