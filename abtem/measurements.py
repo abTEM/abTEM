@@ -794,7 +794,6 @@ def _validate_axes(
     if isinstance(measurements, BaseMeasurement2D) and len(measurements.shape) == 2 and ax is None:
         fig, ax = plt.subplots()
 
-
     num_ensemble_axes = len(measurements.ensemble_shape)
 
     if axes_types is None:
@@ -819,10 +818,10 @@ def _validate_axes(
         if isinstance(measurements, _BaseMeasurement1d):
             validated_axes_types = ["overlay"] * num_ensemble_axes
         else:
-            validated_axes_types = ["index"] * num_ensemble_axes
+            validated_axes_types = axes_types
 
         for i, axis_type in enumerate(axes_types):
-
+            validated_axes_types = list(validated_axes_types)
             if i in explode:
                 validated_axes_types[i] = "explode"
 
@@ -830,7 +829,6 @@ def _validate_axes(
                 validated_axes_types[i] = "overlay"
 
         axes_types = validated_axes_types
-
 
         #axes = np.zeros((1,1), dtype=object)
 
@@ -873,6 +871,8 @@ def _validate_axes(
         else:
             fig = plt.figure(figsize=figsize)
 
+    if ax is None and ("explode" in axes_types):
+
         ncols, nrows = _axes_grid_cols_and_rows(measurements, axes_types)
 
         axes = AxesGrid(
@@ -885,11 +885,14 @@ def _validate_axes(
             sharex=sharex,
             sharey=sharey,
         )
+    elif ax is None:
+        ax = fig.add_subplot()
+        axes = np.array([[ax]])
+
     else:
         if explode:
             raise NotImplementedError("`ax` not implemented with `explode = True`.")
-        # axes_types = ()
-        # print(axes_types)
+
         axes = np.array([[ax]])
 
     return axes, axes_types

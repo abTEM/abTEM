@@ -62,7 +62,9 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
 
     @property
     def _max_semiangle_cutoff(self):
+
         if isinstance(self._semiangle_cutoff, BaseDistribution):
+
             return max(self._semiangle_cutoff.values)
         else:
             return self._semiangle_cutoff
@@ -953,6 +955,8 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
         semiangle_cutoff: float = np.inf,
         **kwargs,
     ):
+
+        semiangle_cutoff = _validate_distribution(semiangle_cutoff)
 
         super().__init__(
             distributions=polar_symbols,

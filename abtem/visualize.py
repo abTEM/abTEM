@@ -296,6 +296,7 @@ def _make_indexing_sliders(
             label = axes_metadata.format_label()
 
         if axes_type == "range":
+
             sliders.append(
                 widgets.SelectionRangeSlider(
                     description=label,
@@ -312,6 +313,8 @@ def _make_indexing_sliders(
                     continuous_update=continuous_update,
                 )
             )
+
+    _set_update_indices_callback(sliders, visualization, callbacks)
 
     return sliders
 
@@ -514,13 +517,26 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         indexed = self.measurements.get_items(self._indices, keep_dims=keepdims)
 
-        indexed = indexed.sum(
-            axes=tuple(
+
+        if keepdims:
+            summed_axes = tuple(
                 i
                 for i, axes_type in enumerate(self._axes_types)
                 if axes_type == "range"
             )
+        else:
+            i = 0
+            summed_axes = ()
+            for axes_type in self._axes_types:
+                if axes_type == "range":
+                    summed_axes += (i,)
+                    i += 1
+
+        indexed = indexed.sum(
+            axes=summed_axes,
+            keepdims=keepdims
         )
+
         return indexed
 
     def set_column_titles(
@@ -1296,6 +1312,18 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
         for image in self._artists.ravel():
             image.set_extent(extent)
+
+    def adjust_tight_bbox(self):
+        x_extent = self.measurements._plot_extent_x(self._x_units)
+        y_extent = self.measurements._plot_extent_y(self._y_units)
+
+        aspect = (y_extent[1] - y_extent[0]) / (x_extent[1] - x_extent[0])
+
+        size_x = self.fig.get_size_inches()[0]
+        size_y = size_x * aspect
+
+        self.fig.set_size_inches((size_x, size_y))
+        self.fig.subplots_adjust(left=0, bottom=0, right=1, top=1)
 
     def _add_domain_coloring_imshow(self, ax, array, norm):
         abs_array = np.abs(array)

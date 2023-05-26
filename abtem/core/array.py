@@ -350,7 +350,7 @@ class HasArray(HasAxes, CopyMixin):
     def max(self, axes=None, **kwargs) -> "T":
         return self._reduction("max", axes=axes, **kwargs)
 
-    def _reduction(self, reduction_func, axes, split_every: int = 2) -> "T":
+    def _reduction(self, reduction_func, axes, keepdims:bool=False, split_every: int = 2) -> "T":
         xp = get_array_module(self.array)
 
         if axes is None:
@@ -368,19 +368,20 @@ class HasArray(HasAxes, CopyMixin):
             raise RuntimeError("base axes cannot be reduced")
 
         ensemble_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
-        ensemble_axes_metadata = [
-            axis_metadata
-            for axis_metadata, axis in zip(ensemble_axes_metadata, self.ensemble_axes)
-            if axis not in axes
-        ]
+        if not keepdims:
+            ensemble_axes_metadata = [
+                axis_metadata
+                for axis_metadata, axis in zip(ensemble_axes_metadata, self.ensemble_axes)
+                if axis not in axes
+            ]
 
         kwargs = self._copy_kwargs(exclude=("array",))
         if self.is_lazy:
             kwargs["array"] = getattr(da, reduction_func)(
-                self.array, axes, split_every=split_every
+                self.array, axes, split_every=split_every, keepdims=keepdims
             )
         else:
-            kwargs["array"] = getattr(xp, reduction_func)(self.array, axes)
+            kwargs["array"] = getattr(xp, reduction_func)(self.array, axes, keepdims=keepdims)
 
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
