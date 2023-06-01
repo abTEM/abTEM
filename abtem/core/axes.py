@@ -88,7 +88,7 @@ class AxisMetadata:
     _events: bool = False
     label: str = ""
     _tex_label: str = None
-    _default_type: str = "index"
+    _default_type: str = None
     units: str = None
 
     def _tabular_repr_data(self, n):
@@ -472,22 +472,3 @@ class HasAxes:
         The size of each axis.
         """
         return self.ensemble_shape + self.base_shape
-
-    def _check_axes_metadata(self):
-        if len(self.shape) != self.num_axes:
-            raise RuntimeError(
-                f"number of dimensions ({len(self.shape)}) does not match number of axis metadata items "
-                f"({self.num_axes})"
-            )
-
-        for n, axis in zip(self.shape, self.axes_metadata):
-            if isinstance(axis, OrdinalAxis) and len(axis) != n:
-                raise RuntimeError(
-                    f"number of values for ordinal axis ({len(axis)}), does not match size of dimension "
-                    f"({n})"
-                )
-
-    def _is_base_axis(self, axis: Union[int, Tuple[int, ...]]) -> bool:
-        if isinstance(axis, Number):
-            axis = (axis,)
-        return len(set(axis).intersection(self.base_axes)) > 0

@@ -43,6 +43,12 @@ def validate_tilt(tilt):
 
     return tilt
 
+def _get_tilt_axes(waves):
+    return tuple(
+        i
+        for i, axis in enumerate(waves.ensemble_axes_metadata)
+        if hasattr(axis, "tilt")
+    )
 
 def precession_tilts(
         precession_angle: float,
@@ -122,7 +128,7 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
                 )
             ]
 
-    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
+    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
         """Apply tilt(s) to (an ensamble of) wave function(s)."""
         xp = get_array_module(waves.device)
 
@@ -199,7 +205,7 @@ class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
         else:
             return []
 
-    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
+    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
         """Apply tilt(s) to (an ensamble of) wave function(s)."""
         xp = get_array_module(waves.device)
 

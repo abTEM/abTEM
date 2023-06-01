@@ -1,12 +1,10 @@
-from __future__ import annotations
-
 import ast
 import os
 import sys
 import threading
 import warnings
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 import yaml
 from dask.config import deserialize, update, canonical_name, collect
@@ -51,7 +49,7 @@ config_lock = threading.Lock()
 defaults: list[Mapping] = []
 
 
-def _load_config_file(path: str) -> dict | None:
+def _load_config_file(path: str) -> Union[dict, None]:
     """A helper for loading a config file from a path, and erroring
     appropriately if the file is malformed."""
     try:
@@ -73,7 +71,7 @@ def _load_config_file(path: str) -> dict | None:
     return config
 
 
-def collect_env(env: Mapping[str, str] | None = None) -> dict:
+def collect_env(env: Union[Mapping[str, str], None] = None) -> dict:
     """Collect config from environment variables
 
     This grabs environment variables of the form "ABTEM_FOO__BAR_BAZ=123" and
@@ -151,7 +149,7 @@ class set:
 
     def __init__(
             self,
-            arg: Mapping | None = None,
+            arg: Union[Mapping, None] = None,
             config: dict = config,
             lock: threading.Lock = config_lock,
             **kwargs,
@@ -271,7 +269,7 @@ def get(
         key: str,
         default: Any = no_default,
         config: dict = config,
-        override_with: Any | None = None,
+        override_with: Any = None,
 ) -> Any:
     """
     Get elements from global config

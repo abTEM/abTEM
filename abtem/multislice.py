@@ -1,4 +1,5 @@
 """Module for running the multislice algorithm."""
+from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 
@@ -16,12 +17,13 @@ from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_match
 from abtem.detectors import BaseDetector
 from abtem.inelastic.plasmons import _update_plasmon_axes
-from abtem.measurements import BaseMeasurement
+from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
     BasePotential,
     TransmissionFunction,
     PotentialArray,
 )
+from abtem.tilt import _get_tilt_axes
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -89,7 +91,7 @@ class FresnelPropagator:
         self._key = None
         self._cached_fftw_convolution = CachedFFTWConvolution()
 
-    def get_array(self, waves: "Waves", thickness: float) -> np.ndarray:
+    def get_array(self, waves: Waves, thickness: float) -> np.ndarray:
 
         key = (
             waves.gpts,
@@ -100,8 +102,10 @@ class FresnelPropagator:
             waves.device,
         )
 
-        if waves.tilt_axes:
-            key += (copy.deepcopy(waves.tilt_axes_metadata),)
+        tilt_axes = _get_tilt_axes(waves)
+        tilt_axes_metadata = [waves.ensemble_axes_metadata[i] for i in tilt_axes]
+        if tilt_axes:
+            key += (copy.deepcopy(tilt_axes_metadata),)
 
         if key == self._key:
             return self._array
@@ -137,7 +141,9 @@ class FresnelPropagator:
 
         xp = get_array_module(waves.device)
 
-        if not waves.tilt_axes:
+        tilt_axes = _get_tilt_axes(waves)
+
+        if not tilt_axes:
             return array
 
         for axis in waves.ensemble_axes_metadata:
@@ -234,7 +240,7 @@ def allocate_multislice_measurements(
     detectors: List[BaseDetector],
     extra_ensemble_axes_shape: tuple,
     extra_ensemble_axes_metadata: List[AxisMetadata],
-) -> Dict[BaseDetector, BaseMeasurement]:
+) -> Dict[BaseDetector, BaseMeasurements]:
     """
     Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved
     numerical efficiency.
@@ -377,7 +383,7 @@ def multislice_and_detect(
     detectors: List[BaseDetector] = None,
     conjugate: bool = False,
     transpose: bool = False,
-) -> Union[Tuple[Union[BaseMeasurement, "Waves"], ...], BaseMeasurement, "Waves"]:
+) -> Union[Tuple[Union[BaseMeasurements, "Waves"], ...], BaseMeasurements, "Waves"]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
@@ -480,7 +486,7 @@ def transition_potential_multislice_and_detect(
     transition_potentials,
     conjugate: bool = False,
     transpose: bool = False,
-) -> Union[Tuple[Union[BaseMeasurement, "Waves"], ...], BaseMeasurement, "Waves"]:
+) -> Union[Tuple[Union[BaseMeasurements, "Waves"], ...], BaseMeasurements, "Waves"]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.

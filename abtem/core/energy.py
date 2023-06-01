@@ -1,14 +1,15 @@
-import copy
-from copy import copy
-from typing import Optional
+from __future__ import annotations
+from typing import Optional, TYPE_CHECKING
 
 import numpy as np
 from ase import units
-from abtem.core.utils import EqualityMixin, CopyMixin
 
+from abtem.core.utils import EqualityMixin, CopyMixin
+if TYPE_CHECKING:
+    from abtem.waves import Waves
 
 def relativistic_mass_correction(energy: float) -> float:
-    return 1 + units._e * energy / (units._me * units._c ** 2)
+    return 1 + units._e * energy / (units._me * units._c**2)
 
 
 def energy2mass(energy: float) -> float:
@@ -44,8 +45,13 @@ def energy2wavelength(energy: float) -> float:
         Relativistic de Broglie wavelength [Å].
     """
 
-    return units._hplanck * units._c / np.sqrt(
-        energy * (2 * units._me * units._c ** 2 / units._e + energy)) / units._e * 1.e10
+    return (
+        units._hplanck
+        * units._c
+        / np.sqrt(energy * (2 * units._me * units._c**2 / units._e + energy))
+        / units._e
+        * 1.0e10
+    )
 
 
 def energy2sigma(energy: float) -> float:
@@ -63,8 +69,16 @@ def energy2sigma(energy: float) -> float:
         Interaction parameter [1 / (Å * eV)].
     """
 
-    return (2 * np.pi * energy2mass(energy) * units.kg * units._e * units.C * energy2wavelength(energy) / (
-            units._hplanck * units.s * units.J) ** 2)
+    return (
+        2
+        * np.pi
+        * energy2mass(energy)
+        * units.kg
+        * units._e
+        * units.C
+        * energy2wavelength(energy)
+        / (units._hplanck * units.s * units.J) ** 2
+    )
 
 
 def reciprocal_space_sampling_to_angular_sampling(reciprocal_space_sampling, energy):
@@ -89,7 +103,7 @@ class Accelerator(EqualityMixin, CopyMixin):
         Acceleration energy [eV].
     """
 
-    def __init__(self, energy: Optional[float] = None, lock_energy=False):
+    def __init__(self, energy: float = None, lock_energy: bool = False):
         if energy is not None:
             energy = float(energy)
 
@@ -106,7 +120,7 @@ class Accelerator(EqualityMixin, CopyMixin):
     @energy.setter
     def energy(self, value: float):
         if self._lock_energy:
-            raise RuntimeError('Energy cannot be modified')
+            raise RuntimeError("Energy cannot be modified")
 
         if value is not None:
             value = float(value)
@@ -122,7 +136,7 @@ class Accelerator(EqualityMixin, CopyMixin):
 
     @property
     def sigma(self) -> float:
-        """ Interaction parameter. """
+        """Interaction parameter."""
         self.check_is_defined()
         return energy2sigma(self.energy)
 
@@ -131,9 +145,9 @@ class Accelerator(EqualityMixin, CopyMixin):
         Raise error if the energy is not defined.
         """
         if self.energy is None:
-            raise EnergyUndefinedError('Energy is not defined')
+            raise EnergyUndefinedError("Energy is not defined")
 
-    def check_match(self, other: 'Accelerator'):
+    def check_match(self, other: Accelerator | HasAcceleratorMixin):
         """
         Raise error if the accelerator of another object is different from this object.
 
@@ -142,10 +156,14 @@ class Accelerator(EqualityMixin, CopyMixin):
         other: Accelerator object
             The accelerator that should be checked.
         """
-        if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
-            raise RuntimeError('Inconsistent energies')
+        if (
+            (self.energy is not None)
+            & (other.energy is not None)
+            & (self.energy != other.energy)
+        ):
+            raise RuntimeError("Inconsistent energies")
 
-    def match(self, other, check_match=False):
+    def match(self, other: Accelerator | HasAcceleratorMixin, check_match:bool=False):
         """
         Set the parameters of this accelerator to match another accelerator.
 

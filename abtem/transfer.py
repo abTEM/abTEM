@@ -1078,9 +1078,9 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
 
         return array
 
-    def apply(self, waves, overwrite_x: bool = False):
+    def apply(self, waves, in_place: bool = False):
         if self.has_aberrations:
-            return super().apply(waves, overwrite_x=overwrite_x)
+            return super().apply(waves, in_place=in_place)
         else:
             return waves
 

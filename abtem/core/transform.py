@@ -1,8 +1,9 @@
-"""Module to describe the contrast transfer function."""
+"""Module to describe wave function transformations."""
+from __future__ import annotations
 import itertools
 from abc import abstractmethod
 from functools import partial, reduce
-from typing import TYPE_CHECKING, List, Union, Tuple
+from typing import TYPE_CHECKING
 import dask
 import numpy as np
 import dask.array as da
@@ -29,19 +30,22 @@ if TYPE_CHECKING:
 class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
     @property
     def metadata(self):
+        """Metadata added to the waves when applying the transform."""
         return {}
 
     @property
     @abstractmethod
     def ensemble_shape(self):
+        """The shape of the ensemble axes added to the waves when applying the transform."""
         pass
 
     @property
     @abstractmethod
     def ensemble_axes_metadata(self):
+        """Axes metadata describing the ensemble axes added to the waves when applying the transform."""
         pass
 
-    def __add__(self, other: "WaveTransform") -> "CompositeWaveTransform":
+    def __add__(self, other: WaveTransform) -> CompositeWaveTransform:
         wave_transforms = []
 
         for wave_transform in (self, other):
@@ -55,13 +59,27 @@ class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
 
     @abstractmethod
     def apply(
-        self, waves: "Waves", overwrite_x: bool = False, **kwargs
-    ) -> "Waves":
+        self, waves: Waves, **kwargs
+    ) -> Waves:
+        """
+        Apply the transform to the given waves.
+
+        Parameters
+        ----------
+        waves : Waves
+            The waves to transform.
+        kwargs :
+            Optional keyword arguments used by the transform.
+
+        Returns
+        -------
+        transformed_waves : Waves
+        """
         pass
 
 
 class CompositeWaveTransform(WaveTransform):
-    def __init__(self, wave_transforms: List[WaveTransform] = None):
+    def __init__(self, wave_transforms: list[WaveTransform] = None):
 
         if wave_transforms is None:
             wave_transforms = []
@@ -110,11 +128,11 @@ class CompositeWaveTransform(WaveTransform):
         ]
         return tuple(itertools.chain(*ensemble_shape))
 
-    def apply(self, waves: "BaseWaves", overwrite_x: bool = False):
+    def apply(self, waves: BaseWaves, in_place: bool = False):
         waves.grid.check_is_defined()
 
         for wave_transform in reversed(self.wave_transforms):
-            waves = wave_transform.apply(waves, overwrite_x=overwrite_x)
+            waves = wave_transform.apply(waves, in_place=in_place)
 
         return waves
 
@@ -172,18 +190,15 @@ class EnsembleTransform(_EnsembleFromDistributionsMixin, WaveTransform):
     ):
         pass
 
-
-
-
 class FourierSpaceConvolution(
     WaveTransform, HasAcceleratorMixin, HasGridMixin, HasDeviceMixin
 ):
     def __init__(
         self,
         energy: float,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
         device: str = "cpu",
         **kwargs
     ):
@@ -211,7 +226,21 @@ class FourierSpaceConvolution(
         alpha, phi = self._angular_grid()
         return self._evaluate_with_alpha_and_phi(alpha, phi)
 
-    def evaluate(self, waves: "Waves" = None, lazy: bool = False) -> np.ndarray:
+    def evaluate(self, waves: Waves = None, lazy: bool = False) -> np.ndarray:
+        """
+        Evaluate the array to be multiplied with the waves in reciprocal space.
+
+        Parameters
+        ----------
+        waves : Waves, optional
+            If given, the array will be evaluated to match the provided waves.
+        lazy : bool, optional
+            If True, the array is lazily evaluated, a Dask array is returned.
+
+        Returns
+        -------
+        kernel : np.ndarray or dask.array.Array
+        """
         if waves is not None:
             self.accelerator.match(waves)
             self.grid.match(waves)
@@ -225,7 +254,20 @@ class FourierSpaceConvolution(
         else:
             return self._evaluate()
 
-    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
+    def apply(self, waves: Waves, in_place: bool = False, **kwargs) -> Waves:
+        """
+        Transform the waves using Fourier space convolution.
+
+        Parameters
+        ----------
+        waves : Waves
+            The waves to transform.
+        in_place : bool, optional
+            If True, the array representing the waves may be modified in-place.
+        Returns
+        -------
+        transformed_waves : Waves
+        """
         axes_metadata = self.ensemble_axes_metadata
         array = self.evaluate(waves)
-        return waves.convolve(array, axes_metadata, overwrite_x=overwrite_x)
+        return waves.convolve(array, axes_metadata, in_place=in_place)

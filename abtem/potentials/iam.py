@@ -1,4 +1,6 @@
 """Module to calculate electrostatic potentials using the independent atom model."""
+from __future__ import annotations
+
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial
@@ -6,7 +8,7 @@ from functools import reduce
 from numbers import Number
 from operator import mul
 from typing import Sequence, TYPE_CHECKING
-from typing import Tuple, List, Union
+from typing import Union
 
 import dask
 import dask.array as da
@@ -15,22 +17,30 @@ from ase import Atoms
 from ase.cell import Cell
 from ase.data import chemical_symbols
 
-from abtem.core.array import HasArray, validate_lazy
+from abtem.atoms import (
+    is_cell_orthogonal,
+    orthogonalize_cell,
+    best_orthogonal_cell,
+    cut_cell,
+    pad_atoms,
+    plane_to_axes,
+    rotate_atoms_to_plane,
+)
+from abtem.core.array import ArrayObject, _validate_lazy
 from abtem.core.axes import (
-    HasAxes,
     RealSpaceAxis,
     _find_axes_type,
+    AxesMetadataList,
 )
 from abtem.core.axes import ThicknessAxis, FrozenPhononsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import chunk_shape, generate_chunks
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.complex import complex_exponential
-from abtem.core.device import HasDeviceMixin
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.integrals.base import ProjectionIntegrator
+from abtem.core.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
 from abtem.core.integrals.gaussians import GaussianProjectionIntegrals
 from abtem.core.integrals.infinite import InfinitePotentialProjections
 from abtem.core.integrals.quadrature import ProjectionQuadratureRule
@@ -41,24 +51,11 @@ from abtem.inelastic.phonons import (
     _validate_seeds,
     MDFrozenPhonons,
 )
-from abtem.inelastic.phonons import FrozenPhonons
 from abtem.measurements import Images
 from abtem.slicing import (
     _validate_slice_thickness,
     SliceIndexedAtoms,
-    SlicedAtoms,
-    unpack_item,
-)
-from abtem.atoms import (
-    is_cell_orthogonal,
-    orthogonalize_cell,
-    best_orthogonal_cell,
-    cut_cell,
-    rotation_matrix_from_plane,
-    pad_atoms,
-    plane_to_axes,
-    standardize_cell,
-    rotate_atoms_to_plane,
+    SlicedAtoms, BaseSlicedAtoms,
 )
 
 if TYPE_CHECKING:
@@ -68,46 +65,51 @@ if TYPE_CHECKING:
 
 class BasePotential(
     Ensemble,
-    HasAxes,
     HasGridMixin,
     EqualityMixin,
     CopyMixin,
-    HasDeviceMixin,
     metaclass=ABCMeta,
 ):
     """Base class of all potentials. Documented in the subclasses."""
 
-    # def generate_blocks(self, chunks: Chunks = 1):
-    #     if self.ensemble_shape:
-    #         potential_generator = super().generate_blocks()
-    #     else:
-    #         potential_generator = ((0, (0, 1), self) for _ in range(1))
-
     @property
     @abstractmethod
     def ensemble_shape(self):
+        """Shape of the ensemble axes of the potential."""
         pass
 
     @property
     @abstractmethod
     def ensemble_axes_metadata(self):
+        """List of AxisMetadata of the ensemble axes."""
         pass
 
     @property
     def base_shape(self):
+        """Shape of the base axes of the potential."""
         return (self.num_slices,) + self.gpts
+
+    @property
+    def shape(self):
+        """Shape of the potential."""
+        return self.ensemble_shape + self.base_shape
+
+    @property
+    def axes_metadata(self) -> AxesMetadataList:
+        """List of AxisMetadata."""
+        return AxesMetadataList(
+            self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
+        )
 
     @property
     @abstractmethod
     def num_frozen_phonons(self):
+        """Number of frozen phonons in the ensemble of potentials."""
         pass
 
     @property
-    def exit_planes_axes_metadata(self):
-        return ThicknessAxis(label="z", values=tuple(self.exit_thicknesses))
-
-    @property
     def base_axes_metadata(self):
+        """List of AxisMetadata for the base axes."""
         return [
             ThicknessAxis(
                 label="z", values=tuple(np.cumsum(self.slice_thickness)), units="Å"
@@ -122,11 +124,12 @@ class BasePotential(
 
     @property
     @abstractmethod
-    def exit_planes(self) -> Tuple[int]:
+    def exit_planes(self) -> tuple[int]:
+        """The "exit planes" of the potential. The indices of slices where a measurement is returned."""
         pass
 
     @property
-    def exit_plane_after(self):
+    def _exit_plane_after(self):
         exit_plane_index = 0
         exit_planes = self.exit_planes
 
@@ -142,7 +145,8 @@ class BasePotential(
         return is_exit_plane
 
     @property
-    def exit_thicknesses(self) -> Tuple[float]:
+    def exit_thicknesses(self) -> tuple[float]:
+        """The "exit thicknesses" of the potential. The thicknesses in the potential where a measurement is returned."""
         thicknesses = np.cumsum(self.slice_thickness)
 
         if self.exit_planes[0] == -1:
@@ -155,15 +159,9 @@ class BasePotential(
         else:
             return tuple(thicknesses[np.array(self.exit_planes, dtype=int)])
 
-        # return tuple(thicknesses[list(exit_planes)])
-        # else:
-        #    return tuple(thicknesses[list(self.exit_planes)])
-
     @property
     def num_exit_planes(self) -> int:
-        """
-        Number of exit planes.
-        """
+        """Number of exit planes."""
         return len(self.exit_planes)
 
     @abstractmethod
@@ -185,21 +183,18 @@ class BasePotential(
 
     @property
     def num_slices(self) -> int:
-        """
-        Number of projected potential slices.
-        """
+        """Number of projected potential slices."""
         return len(self.slice_thickness)
 
     @property
     @abstractmethod
     def slice_thickness(self) -> np.ndarray:
+        """Slice thicknesses for each slice."""
         pass
 
     @property
-    def slice_limits(self) -> List[Tuple[float, float]]:
-        """
-        The entrance and exit depths of each slice [Å].
-        """
+    def slice_limits(self) -> list[tuple[float, float]]:
+        """The entrance and exit thicknesses of each slice [Å]."""
         cumulative_thickness = np.cumsum(np.concatenate(((0,), self.slice_thickness)))
         return [
             (cumulative_thickness[i], cumulative_thickness[i + 1])
@@ -208,23 +203,37 @@ class BasePotential(
 
     @property
     def thickness(self) -> float:
-        """
-        The thickness of the potential [Å].
-        """
+        """Thickness of the potential [Å]."""
         return sum(self.slice_thickness)
 
     def __iter__(self):
         for slic in self.generate_slices():
             yield slic
 
-    def project(self) -> "Images":
+    def project(self) -> Images:
+        """
+        Sum of the potential slices as an image.
+
+        Returns
+        -------
+        projected : Images
+            The projected potential.
+        """
         return self.build().project()
 
     @property
-    def _default_ensemble_chunks(self) -> Tuple:
+    def _default_ensemble_chunks(self) -> tuple:
         return validate_chunks(self.ensemble_shape, (1,))
 
-    def images(self):
+    def to_images(self):
+        """
+        Converts the potential to an ensemble of images.
+
+        Returns
+        -------
+        image_ensemble : Images
+            The potential slices as images.
+        """
         return self.build().complex_images()
 
     def show(self, project: bool = True, **kwargs):
@@ -245,7 +254,7 @@ class BasePotential(
             if "explode" not in kwargs.keys():
                 kwargs["explode"] = True
 
-            return self.images().show(**kwargs)
+            return self.to_images().show(**kwargs)
 
 
 def _validate_potential(
@@ -278,20 +287,19 @@ def _validate_exit_planes(exit_planes, num_slices):
 
     return exit_planes
 
-
 class _PotentialBuilder(BasePotential):
     def __init__(
         self,
-        slice_thickness: Union[float, Tuple[float, ...]],
-        exit_planes: Union[int, Tuple[int, ...]],
+        slice_thickness: Union[float, tuple[float, ...]],
+        exit_planes: Union[int, tuple[int, ...]],
         cell: Union[np.ndarray, Cell],
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        box: Tuple[float, float, float] = None,
+        gpts: Union[int, tuple[int, int]] = None,
+        sampling: Union[float, tuple[float, float]] = None,
+        box: tuple[float, float, float] = None,
         plane: Union[
-            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+            str, tuple[tuple[float, float, float], tuple[float, float, float]]
         ] = "xy",
-        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         periodic: bool = True,
         device: str = None,
     ):
@@ -322,37 +330,37 @@ class _PotentialBuilder(BasePotential):
         )
 
     @property
-    def slice_thickness(self) -> Tuple[float, ...]:
-        """
-        Thickness of each slice [Å].
-        """
+    def slice_thickness(self) -> tuple[float, ...]:
         return self._slice_thickness
 
     @property
-    def exit_planes(self) -> Tuple[int]:
+    def exit_planes(self) -> tuple[int]:
         return self._exit_planes
 
     @property
     def device(self) -> str:
+        """The device where the potential is created."""
         return self._device
 
     @property
     def periodic(self) -> bool:
-        """
-        Specify whether the potential is periodic.
-        """
+        """Specifies whether the potential is periodic."""
         return self._periodic
 
     @property
     def plane(self) -> str:
+        """The plane relative to the atoms mapped to `xy` plane of the potential, i.e. the plane is perpendicular to the
+        propagation direction."""
         return self._plane
 
     @property
-    def box(self) -> Tuple[float, float, float]:
+    def box(self) -> tuple[float, float, float]:
+        """The extent of the potential in `x`, `y` and `z`."""
         return self._box
 
     @property
-    def origin(self) -> Tuple[float, float, float]:
+    def origin(self) -> tuple[float, float, float]:
+        """The origin relative to the provided atoms mapped to the origin of the potential."""
         return self._origin
 
     def _require_cell_transform(self, cell, box, plane, origin):
@@ -389,7 +397,7 @@ class _PotentialBuilder(BasePotential):
         last_slice: int = None,
         max_batch: Union[int, str] = 1,
         lazy: bool = None,
-    ) -> "PotentialArray":
+    ) -> PotentialArray:
         """
         Build the potential.
 
@@ -408,10 +416,10 @@ class _PotentialBuilder(BasePotential):
         Returns
         -------
         potential_array : PotentialArray
-            Object representing the potential.
+            The built potential as an array.
         """
 
-        lazy = validate_lazy(lazy)
+        lazy = _validate_lazy(lazy)
 
         self.grid.check_is_defined()
 
@@ -463,7 +471,7 @@ class _PotentialBuilder(BasePotential):
 
         potential = PotentialArray(
             array,
-            sampling=self.sampling,
+            sampling=(self.sampling[0], self.sampling[1]),
             slice_thickness=self.slice_thickness[first_slice:last_slice],
             exit_planes=self.exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
@@ -519,8 +527,8 @@ class Potential(_PotentialBuilder):
         the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
         ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     origin : three float, optional
-        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating
-        the atoms. The default is (0., 0., 0.).
+        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to
+        translating the atoms. The default is (0., 0., 0.).
     box : three float, optional
         The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
         If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
@@ -541,20 +549,20 @@ class Potential(_PotentialBuilder):
     def __init__(
         self,
         atoms: Union[Atoms, BaseFrozenPhonons] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        slice_thickness: Union[float, Tuple[float, ...]] = 1,
+        gpts: Union[int, tuple[int, int]] = None,
+        sampling: Union[float, tuple[float, float]] = None,
+        slice_thickness: Union[float, tuple[float, ...]] = 1,
         parametrization: Union[str, "Parametrization"] = "lobato",
         projection: str = "infinite",
         integral_method: str = None,
-        exit_planes: Union[int, Tuple[int, ...]] = None,
+        exit_planes: Union[int, tuple[int, ...]] = None,
         plane: Union[
-            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+            str, tuple[tuple[float, float, float], tuple[float, float, float]]
         ] = "xy",
-        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        box: Tuple[float, float, float] = None,
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: tuple[float, float, float] = None,
         periodic: bool = True,
-        integrator: ProjectionIntegrator = None,
+        integrator: ProjectionIntegratorPlan = None,
         device: str = None,
     ):
 
@@ -566,10 +574,10 @@ class Potential(_PotentialBuilder):
 
             if isinstance(atoms, (list, tuple)):
                 self._frozen_phonons = MDFrozenPhonons(atoms)
-            elif isinstance(atoms, str):
-                self._frozen_phonons = MDFrozenPhonons(atoms)
-            else:
+            elif isinstance(atoms, Atoms):
                 self._frozen_phonons = DummyFrozenPhonons(atoms)
+            else:
+                raise ValueError()
         else:
 
             self._frozen_phonons = atoms
@@ -612,14 +620,17 @@ class Potential(_PotentialBuilder):
 
     @property
     def frozen_phonons(self) -> BaseFrozenPhonons:
+        """Ensemble of atomic configurations representing frozen phonons."""
         return self._frozen_phonons
 
     @property
     def num_frozen_phonons(self) -> int:
+        """Size of the ensemble of atomic configurations representing frozen phonons."""
         return len(self.frozen_phonons)
 
     @property
-    def integrator(self):
+    def integrator(self) -> ProjectionIntegratorPlan:
+        """The integrator determining how the projection integrals for each slice is calculated."""
         return self._integrator
 
     def _cutoffs(self):
@@ -627,10 +638,16 @@ class Potential(_PotentialBuilder):
         unique_numbers = np.unique(atoms.numbers)
         return tuple(self._integrator.cutoff(number) for number in unique_numbers)
 
-    def transformed_atoms(self):
-        atoms = self.frozen_phonons.atoms
+    def get_transformed_atoms(self):
+        """
+        The atoms used in the multislice algorithm, transformed to the given plane, origin and box.
 
-        cutoffs = self._cutoffs()
+        Returns
+        -------
+        transformed_atoms : Atoms
+            Transformed atoms.
+        """
+        atoms = self.frozen_phonons.atoms
 
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
@@ -647,6 +664,7 @@ class Potential(_PotentialBuilder):
                 )
                 return atoms
             else:
+                cutoffs = self._cutoffs()
                 atoms = cut_cell(
                     atoms,
                     cell=self.box,
@@ -659,10 +677,10 @@ class Potential(_PotentialBuilder):
 
     def _prepare_atoms(self):
 
-        atoms = self.transformed_atoms()
-        cutoffs = self._cutoffs()
+        atoms = self.get_transformed_atoms()
 
         if self.integrator.finite:
+            cutoffs = self._cutoffs()
             margins = max(cutoffs) if len(cutoffs) else 0.0
         else:
             margins = 0.0
@@ -690,8 +708,14 @@ class Potential(_PotentialBuilder):
 
         return sliced_atoms
 
-    @property
-    def sliced_atoms(self):
+    def get_sliced_atoms(self) -> BaseSlicedAtoms:
+        """
+        The atoms grouped into the slices given by the slice thicknesses.
+
+        Returns
+        -------
+        sliced_atoms : BaseSlicedAtoms
+        """
         if self._sliced_atoms is not None:
             return self._sliced_atoms
 
@@ -711,8 +735,11 @@ class Potential(_PotentialBuilder):
             Index of the first slice of the generated potential.
         last_slice : int, optional
             Index of the last slice of the generated potential.
-        Returns
-        -------
+        return_depth : bool
+            If True, return the depth of each generated slice.
+
+        Yields
+        ------
         slices : generator of np.ndarray
             Generator for the array of slices.
         """
@@ -721,7 +748,7 @@ class Potential(_PotentialBuilder):
 
         xp = get_array_module(self.device)
 
-        sliced_atoms = self.sliced_atoms
+        sliced_atoms = self.get_sliced_atoms()
 
         numbers = np.unique(sliced_atoms.atoms.numbers)
 
@@ -735,7 +762,7 @@ class Potential(_PotentialBuilder):
             for number in numbers
         }
 
-        exit_plane_after = self.exit_plane_after
+        exit_plane_after = self._exit_plane_after
 
         cum_thickness = np.cumsum(self.slice_thickness)
 
@@ -792,7 +819,7 @@ class Potential(_PotentialBuilder):
         return self.frozen_phonons.ensemble_axes_metadata
 
     @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
+    def ensemble_shape(self) -> tuple[int, ...]:
         return self.frozen_phonons.ensemble_shape
 
     @staticmethod
@@ -812,7 +839,7 @@ class Potential(_PotentialBuilder):
         return self.frozen_phonons._partition_args(chunks, lazy=lazy)
 
 
-class PotentialArray(BasePotential, HasArray):
+class PotentialArray(BasePotential, ArrayObject):
     """
     The potential array represents slices of the electrostatic potential as an array. All other potentials build
     potential arrays.
@@ -846,11 +873,11 @@ class PotentialArray(BasePotential, HasArray):
     def __init__(
         self,
         array: Union[np.ndarray, da.core.Array],
-        slice_thickness: Union[float, Tuple[float, ...]] = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        exit_planes: Union[int, Tuple[int, ...]] = None,
-        ensemble_axes_metadata: List[AxisMetadata] = None,
+        slice_thickness: Union[float, tuple[float, ...]] = None,
+        extent: Union[float, tuple[float, float]] = None,
+        sampling: Union[float, tuple[float, float]] = None,
+        exit_planes: Union[int, tuple[int, ...]] = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
 
@@ -875,7 +902,7 @@ class PotentialArray(BasePotential, HasArray):
         self._metadata = {} if metadata is None else metadata
 
     @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
+    def ensemble_shape(self) -> tuple[int, ...]:
         return self.array.shape[: -self._base_dims]
 
     @property
@@ -891,11 +918,11 @@ class PotentialArray(BasePotential, HasArray):
             return 1
 
     @property
-    def slice_thickness(self) -> Tuple[float, ...]:
+    def slice_thickness(self) -> tuple[float, ...]:
         return self._slice_thickness
 
     @property
-    def exit_planes(self) -> Tuple[int, ...]:
+    def exit_planes(self) -> tuple[int, ...]:
         return self._exit_planes
 
     def __getitem__(self, items):
@@ -1040,15 +1067,16 @@ class PotentialArray(BasePotential, HasArray):
             Index of the first slice of the generated potential.
         last_slice : int, optional
             Index of the last slice of the generated potential.
-        Returns
-        -------
+
+        Yields
+        ------
         slices : generator of np.ndarray
             Generator for the array of slices.
         """
         if last_slice is None:
             last_slice = len(self)
 
-        exit_plane_after = self.exit_plane_after
+        exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
         start = first_slice
         stop = first_slice + 1
@@ -1107,7 +1135,7 @@ class PotentialArray(BasePotential, HasArray):
         )
         return t
 
-    def tile(self, multiples: Union[Tuple[int, int], Tuple[int, int, int]]):
+    def tile(self, multiples: Union[tuple[int, int], tuple[int, int, int]]):
         """
         Tile the potential.
 
@@ -1142,7 +1170,7 @@ class PotentialArray(BasePotential, HasArray):
         return self._metadata
 
     def to_hyperspy(self):
-        return self.images().to_hyperspy()
+        return self.to_images().to_hyperspy()
 
     def transmit(self, waves: "Waves", conjugate: bool = False) -> "Waves":
         """
@@ -1165,13 +1193,13 @@ class PotentialArray(BasePotential, HasArray):
 
         return transmission_function.transmit(waves, conjugate=conjugate)
 
-    def images(self):
+    def to_images(self):
         """Convert slices of the potential to a stack of images."""
         metadata = {"label": "potential", "units": "eV / e"}
 
         return Images(
             array=self._array,
-            sampling=self.sampling,
+            sampling=(self.sampling[0], self.sampling[1]),
             metadata=metadata,
             ensemble_axes_metadata=self.axes_metadata[:-2],
         )
@@ -1220,8 +1248,8 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self,
         array: np.ndarray,
         slice_thickness: Union[float, Sequence[float]],
-        extent: Union[float, Tuple[float, float]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: Union[float, tuple[float, float]] = None,
+        sampling: Union[float, tuple[float, float]] = None,
         energy: float = None,
     ):
 
@@ -1257,7 +1285,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             raise RuntimeError()
         return self
 
-    def transmit(self, waves: "Waves", conjugate: bool = False) -> "Waves":
+    def transmit(self, waves: Waves, conjugate: bool = False) -> Waves:
         """
         Transmit a wave function through a potential slice.
 
@@ -1270,7 +1298,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
         Returns
         -------
-        transmissionfunction : TransmissionFunction
+        transmission_function : Waves
             Transmission function for the wave function through the potential slice.
         """
         self.accelerator.check_match(waves)
@@ -1315,10 +1343,10 @@ class CrystalPotential(_PotentialBuilder):
     def __init__(
         self,
         potential_unit: BasePotential,
-        repetitions: Tuple[int, int, int],
+        repetitions: tuple[int, int, int],
         num_frozen_phonons: int = None,
         exit_planes: int = None,
-        seeds: Union[int, Tuple[int, ...]] = None,
+        seeds: Union[int, tuple[int, ...]] = None,
     ):
 
         if num_frozen_phonons is None and seeds is None:
@@ -1372,7 +1400,7 @@ class CrystalPotential(_PotentialBuilder):
         self._repetitions = repetitions
 
     @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
+    def ensemble_shape(self) -> tuple[int, ...]:
         if self._seeds is None:
             return ()
         else:
@@ -1414,7 +1442,7 @@ class CrystalPotential(_PotentialBuilder):
         self._potential_unit.sampling = sampling
 
     @property
-    def repetitions(self) -> Tuple[int, int, int]:
+    def repetitions(self) -> tuple[int, int, int]:
         return self._repetitions
 
     @property
@@ -1422,7 +1450,7 @@ class CrystalPotential(_PotentialBuilder):
         return self._potential_unit.num_slices * self.repetitions[2]
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         if self.seeds is None:
             return []
         else:
@@ -1516,8 +1544,11 @@ class CrystalPotential(_PotentialBuilder):
             Index of the first slice of the generated potential.
         last_slice : int, optional
             Index of the last slice of the generated potential.
-        Returns
-        -------
+        return_depth : bool
+            If True, return the depth of each generated slice.
+
+        Yields
+        ------
         slices : generator of np.ndarray
             Generator for the array of slices.
         """
@@ -1534,7 +1565,7 @@ class CrystalPotential(_PotentialBuilder):
         else:
             rng = np.random.default_rng(self.seeds[0])
 
-        exit_plane_after = self.exit_plane_after
+        exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
         start = first_slice
         stop = first_slice + 1

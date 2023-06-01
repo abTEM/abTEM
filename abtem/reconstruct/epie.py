@@ -185,6 +185,20 @@ def _equivalent_real_space_sampling(diffraction_patterns):
     )
 
 
+
+def scan_positions(self) -> Tuple[np.ndarray, ...]:
+    positions = ()
+    for n, metadata in zip(_scan_shape(self), _scan_axes_metadata(self)):
+        positions += (
+            np.linspace(
+                metadata.offset,
+                metadata.offset + metadata.sampling * n,
+                n,
+                endpoint=metadata.endpoint,
+            ),
+        )
+    return positions
+
 def epie(
     diffraction_patterns: DiffractionPatterns,
     probe_guess: Probe,

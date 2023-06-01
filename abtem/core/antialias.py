@@ -1,17 +1,18 @@
+from typing import Tuple
+
 import numpy as np
 
 from abtem.core import config
 from abtem.core.backend import get_array_module
-from abtem.core.fft import fft2, ifft2, fft2_convolve
+from abtem.core.fft import fft2_convolve
 from abtem.core.grid import HasGridMixin, spatial_frequencies
 from abtem.core.utils import EqualityMixin, CopyMixin
 
 
-def antialias_aperture(gpts, sampling, xp):
+def antialias_aperture(gpts:Tuple[int,int], sampling:Tuple[float,float], xp=None):
 
     cutoff = config.get("antialias.cutoff") / max(sampling) / 2
     taper = config.get("antialias.taper") / max(sampling)
-    #taper = 0.0 / max(sampling)
 
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
     r = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)

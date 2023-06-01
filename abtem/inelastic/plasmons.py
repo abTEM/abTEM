@@ -458,7 +458,7 @@ class PlasmonScatteringEvents(WaveTransform):
 
         return (array,)
 
-    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
+    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
         xp = get_array_module(waves.device)
 
         array = waves.array[(None,) * len(self.ensemble_shape)]

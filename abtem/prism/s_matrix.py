@@ -11,7 +11,7 @@ import numpy as np
 from ase import Atoms
 from dask.graph_manipulation import wait_on
 
-from abtem.core.array import validate_lazy, HasArray
+from abtem.core.array import _validate_lazy, ArrayObject
 from abtem.core.axes import OrdinalAxis, AxisMetadata, ScanAxis, UnknownAxis, WaveVectorAxis
 from abtem.core.backend import get_array_module, cp, validate_device, copy_to_device
 from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks, Chunks
@@ -26,7 +26,7 @@ from abtem.detectors import (
     WavesDetector,
     FlexibleAnnularDetector,
 )
-from abtem.measurements import BaseMeasurement
+from abtem.measurements import BaseMeasurements
 from abtem.multislice import (
     allocate_multislice_measurements,
     multislice_and_detect,
@@ -52,6 +52,11 @@ def _round_gpts_to_multiple_of_interpolation(
 
 class BaseSMatrix(BaseWaves):
     """Base class for scattering matrices. Documented in subclasses"""
+    _device: str
+
+    @property
+    def device(self):
+        return self._device
 
     @property
     @abstractmethod
@@ -313,8 +318,8 @@ def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_red
         tuple(((cc[0]) * d, (cc[1]) * d) for cc in c)
         for c, d in zip(chunk_ranges(partitions), s_matrix_array.sampling)
     )
-
-    scan, scan_chunks = scan.sort_into_extents(chunk_extents)
+    print(chunk_extents)
+    scan, scan_chunks = scan._sort_into_extents(chunk_extents)
 
     scans = [(indices, scan) for indices, _, scan in scan.generate_blocks(scan_chunks)]
 
@@ -331,17 +336,17 @@ def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_red
     ) = _chunks_for_multiple_rechunk_reduce(partitions)
 
     chunks_1 = (
-        s_matrix_array.chunks[:-3]
+        s_matrix_array.array.chunks[:-3]
         + (-1,)
         + _tuple_from_indices(chunked_axis, chunks_1, nochunks_axis, -1)
     )
     chunks_2 = (
-        s_matrix_array.chunks[:-3]
+        s_matrix_array.array.chunks[:-3]
         + (-1,)
         + _tuple_from_indices(chunked_axis, chunks_2, nochunks_axis, -1)
     )
     chunks_3 = (
-        s_matrix_array.chunks[:-3]
+        s_matrix_array.array.chunks[:-3]
         + (-1,)
         + _tuple_from_indices(chunked_axis, chunks_3, nochunks_axis, -1)
     )
@@ -350,7 +355,7 @@ def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_red
     blocks = np.zeros(shape, dtype=object)
 
     kwargs = {
-        "waves_partial": s_matrix_array.waves.from_partitioned_args(),
+        "waves_partial": s_matrix_array.waves._from_partitioned_args(),
         "ensemble_axes_metadata": s_matrix_array.waves.ensemble_axes_metadata,
         "from_waves_kwargs": s_matrix_array._copy_kwargs(exclude=("array", "extent")),
         "ctf": ctf,
@@ -487,7 +492,7 @@ def _single_rechunk_reduce(
         for c, d in zip(chunk_ranges(array.chunks[-2:]), s_matrix_array.sampling)
     )
 
-    scan, scan_chunks = scan.sort_into_extents(chunk_extents)
+    scan, scan_chunks = scan._sort_into_extents(chunk_extents)
 
     ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
     chunks = array.chunks[:-3] + ctf_chunks
@@ -496,7 +501,7 @@ def _single_rechunk_reduce(
     blocks = np.zeros((1,) * len(array.shape[:-3]) + shape, dtype=object)
 
     kwargs = {
-        "waves_partial": s_matrix_array.waves.from_partitioned_args(),
+        "waves_partial": s_matrix_array.waves._from_partitioned_args(),
         "ensemble_axes_metadata": s_matrix_array.waves.ensemble_axes_metadata,
         "from_waves_kwargs": s_matrix_array._copy_kwargs(exclude=("array", "extent")),
         "ctf": ctf,
@@ -576,10 +581,10 @@ def _no_chunks_reduce(
     ctf: CTF,
     max_batch_reduction: int,
 ):
-    array = s_matrix_array._array.rechunk(s_matrix_array.chunks[:-3] + (-1, -1, -1))
+    array = s_matrix_array._array.rechunk(s_matrix_array.array.chunks[:-3] + (-1, -1, -1))
 
     kwargs = {
-        "waves_partial": s_matrix_array.waves.from_partitioned_args(),
+        "waves_partial": s_matrix_array.waves._from_partitioned_args(),
         "ensemble_axes_metadata": s_matrix_array.waves.ensemble_axes_metadata,
         "from_waves_kwargs": s_matrix_array._copy_kwargs(exclude=("array", "extent")),
         "ctf": ctf,
@@ -619,7 +624,7 @@ def _no_chunks_reduce(
     return measurements
 
 
-class SMatrixArray(HasArray, BaseSMatrix):
+class SMatrixArray(BaseSMatrix, ArrayObject):
     """
     A scattering matrix defined by a given array of dimension 3, where the first indexes the probe plane waves and the
     latter two are the `y` and `x` scan directions.
@@ -912,7 +917,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         ctf: CTF,
         detectors: List[BaseDetector],
         max_batch_reduction: int,
-    ) -> Tuple[Union[BaseMeasurement, Waves], ...]:
+    ) -> Tuple[Union[BaseMeasurements, Waves], ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
@@ -1071,7 +1076,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         max_batch_reduction: Union[int, str] = "auto",
         reduction_scheme: str = "auto",
         # rechunk: Union[Tuple[int, int], str] = "auto",
-    ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
+    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
 
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -1184,7 +1189,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
 
         Returns
         -------
-        detected_waves : BaseMeasurement or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
@@ -1637,7 +1642,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         s_matrix_array : SMatrixArray
             The built scattering matrix.
         """
-        lazy = validate_lazy(lazy)
+        lazy = _validate_lazy(lazy)
 
         downsampled_gpts = self.downsampled_gpts
 
@@ -1747,7 +1752,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         reduction_scheme: str = "auto",
         disable_s_matrix_chunks: bool = "auto",
         lazy: bool = None,
-    ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
+    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
 
         """
         Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
@@ -1785,7 +1790,7 @@ class SMatrix(BaseSMatrix, Ensemble):
 
         Returns
         -------
-        detected_waves : BaseMeasurement or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
@@ -1830,7 +1835,7 @@ class SMatrix(BaseSMatrix, Ensemble):
                 len(self.potential.exit_planes),
             )
             extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-                self.potential.exit_planes_axes_metadata
+                self.potential.base_axes_metadata[0]
             ]
 
         detectors = _validate_detectors(detectors)
@@ -1898,7 +1903,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         max_batch_reduction: Union[str, int] = "auto",
         disable_s_matrix_chunks: bool = "auto",
         lazy: bool = None,
-    ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
+    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
 
         """
         Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
@@ -1936,7 +1941,7 @@ class SMatrix(BaseSMatrix, Ensemble):
 
         Returns
         -------
-        detected_waves : BaseMeasurement or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
@@ -1947,7 +1952,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         if scan is None:
             scan = (self.extent[0] / 2, self.extent[1] / 2)
 
-        lazy = validate_lazy(lazy)
+        lazy = _validate_lazy(lazy)
 
         if self.device == "gpu" and disable_s_matrix_chunks == "auto":
             disable_s_matrix_chunks = True

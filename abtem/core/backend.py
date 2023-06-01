@@ -52,9 +52,8 @@ def get_array_module(x):
         if x.lower() in ("numpy", "cpu"):
             return np
 
-        check_cupy_is_installed()
-
         if x.lower() in ("cupy", "gpu"):
+            check_cupy_is_installed()
             return cp
 
     if isinstance(x, np.ndarray):
@@ -66,13 +65,12 @@ def get_array_module(x):
     if isinstance(x, Number):
         return np
 
-    check_cupy_is_installed()
+    if cp is not None:
+        if isinstance(x, cp.ndarray):
+            return cp
 
-    if isinstance(x, cp.ndarray):
-        return cp
-
-    if x is cp:
-        return cp
+        if x is cp:
+            return cp
 
     raise ValueError(f"array module specification {x} not recognized")
 
@@ -140,11 +138,3 @@ def copy_to_device(array, device):
         return cp.asarray(array)
 
     raise RuntimeError()
-
-
-class HasDevice:
-    _device: str
-
-    @property
-    def device(self):
-        return self._device

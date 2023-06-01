@@ -1,6 +1,7 @@
+from __future__ import annotations
 import warnings
 from copy import copy
-from typing import Union, Sequence, Tuple, Iterable
+from typing import Union, Sequence, Iterable, Any
 
 import numpy as np
 
@@ -15,10 +16,10 @@ def validate_gpts(gpts):
 
 
 def adjusted_gpts(
-    target_sampling: Tuple[float, ...],
-    old_sampling: Tuple[float, ...],
-    old_gpts: Tuple[int, ...],
-) -> Tuple[Tuple[float, ...], Tuple[int, ...]]:
+    target_sampling: tuple[float, ...],
+    old_sampling: tuple[float, ...],
+    old_gpts: tuple[int, ...],
+) -> tuple[tuple[float, ...], tuple[int, ...]]:
     new_sampling = ()
     new_gpts = ()
     for d_target, d, n in zip(target_sampling, old_sampling, old_gpts):
@@ -61,11 +62,11 @@ class Grid(CopyMixin, EqualityMixin):
 
     def __init__(
         self,
-        extent: Union[float, Sequence[float]] = None,
-        gpts: Union[int, Sequence[int]] = None,
-        sampling: Union[float, Sequence[float]] = None,
+        extent: float | Sequence[float] = None,
+        gpts: int | Sequence[int] = None,
+        sampling: float | Sequence[float] = None,
         dimensions: int = 2,
-        endpoint: Union[bool, Sequence[bool]] = False,
+        endpoint: bool | Sequence[bool] = False,
         lock_extent: bool = False,
         lock_gpts: bool = False,
         lock_sampling: bool = False,
@@ -111,7 +112,7 @@ class Grid(CopyMixin, EqualityMixin):
         if sampling is None or extent is not None:
             self._adjust_sampling(self.extent, self.gpts)
 
-    def _validate(self, value, dtype):
+    def _validate(self, value: Any, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
             if len(value) != self.dimensions:
                 raise RuntimeError(
@@ -131,7 +132,7 @@ class Grid(CopyMixin, EqualityMixin):
         return self.dimensions
 
     @property
-    def endpoint(self) -> Tuple[bool, ...]:
+    def endpoint(self) -> tuple[bool] | tuple[bool, bool] | tuple[bool, ...]:
         """Include the grid endpoint."""
         return self._endpoint
 
@@ -141,12 +142,12 @@ class Grid(CopyMixin, EqualityMixin):
         return self._dimensions
 
     @property
-    def extent(self) -> Tuple[float, ...]:
+    def extent(self) -> tuple[float, ...]:
         """Grid extent in each dimension [Å]."""
         return self._extent
 
     @extent.setter
-    def extent(self, extent: Union[float, Sequence[float]]):
+    def extent(self, extent: float | Sequence[float]):
         if self._lock_extent:
             raise RuntimeError("Extent cannot be modified")
 
@@ -161,12 +162,12 @@ class Grid(CopyMixin, EqualityMixin):
         self._extent = extent
 
     @property
-    def gpts(self) -> Tuple[int, ...]:
+    def gpts(self) -> tuple[int, ...]:
         """Number of grid points in each dimension."""
         return self._gpts
 
     @gpts.setter
-    def gpts(self, gpts: Union[int, Sequence[int]]):
+    def gpts(self, gpts: int | Sequence[int]):
         if self._lock_gpts:
             raise RuntimeError("Grid gpts cannot be modified")
 
@@ -182,8 +183,8 @@ class Grid(CopyMixin, EqualityMixin):
         self._gpts = gpts
 
     @property
-    def sampling(self) -> Tuple[float, ...]:
-        """Grid sampling in each dimension [1 / Å]."""
+    def sampling(self) -> tuple[float, ...]:
+        """Grid sampling in each dimension [Å]."""
         return self._sampling
 
     @sampling.setter
@@ -206,7 +207,7 @@ class Grid(CopyMixin, EqualityMixin):
             self._adjust_sampling(self.extent, self.gpts)
 
     @property
-    def reciprocal_space_sampling(self) -> Tuple[float, float]:
+    def reciprocal_space_sampling(self) -> tuple[float, float]:
         self.check_is_defined()
         return (
             1 / (self.gpts[0] * self.sampling[0]),
@@ -255,7 +256,7 @@ class Grid(CopyMixin, EqualityMixin):
 
         return is_defined
 
-    def match(self, other: Union["Grid", "HasGridMixin"], check_match: bool = False):
+    def match(self, other: Grid | HasGridMixin, check_match: bool = False):
         """
         Set the parameters of this grid to match another grid.
 
@@ -295,7 +296,7 @@ class Grid(CopyMixin, EqualityMixin):
         ):
             self.sampling = other.sampling
 
-    def check_match(self, other: "Grid"):
+    def check_match(self, other: Grid | HasGridMixin):
         """
         Raise error if the grid of another object is different from this object.
 
@@ -319,14 +320,14 @@ class Grid(CopyMixin, EqualityMixin):
                     "Inconsistent grid gpts ({} != {})".format(self.gpts, other.gpts)
                 )
 
-    def round_to_power(self, powers=(2, 3, 5, 7)):
+    def round_to_power(self, powers: int | tuple[int, ...] = (2, 3, 5, 7)):
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
         whose size can be factored into small primes (2, 3, 5 and 7).
 
         Parameters
         ----------
-        power : int
+        powers : int
             The gpts will be a power of this number.
         """
 
@@ -354,34 +355,34 @@ class HasGridMixin:
         return self._grid
 
     @property
-    def extent(self) -> Tuple[float, ...]:
+    def extent(self) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
         """Extent of grid for each dimension in Ångstrom."""
         return self.grid.extent
 
     @extent.setter
-    def extent(self, extent: Tuple[float, ...]):
+    def extent(self, extent: tuple[float, ...]):
         self.grid.extent = extent
 
     @property
-    def gpts(self) -> Tuple[int, ...]:
+    def gpts(self) -> tuple[int] | tuple[int, int] | tuple[int, ...]:
         """Number of grid points for each dimension."""
         return self.grid.gpts
 
     @gpts.setter
-    def gpts(self, gpts: Tuple[int, ...]):
+    def gpts(self, gpts: tuple[int, ...]):
         self.grid.gpts = gpts
 
     @property
-    def sampling(self) -> Tuple[float, ...]:
+    def sampling(self) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
         """Grid sampling for each dimension in Ångstrom per grid point."""
         return self.grid.sampling
 
     @sampling.setter
-    def sampling(self, sampling: Tuple[float, ...]):
+    def sampling(self, sampling: tuple[float, ...]):
         self.grid.sampling = sampling
 
     @property
-    def reciprocal_space_sampling(self) -> Tuple[float, ...]:
+    def reciprocal_space_sampling(self) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
         """Reciprocal-space sampling in reciprocal Ångstrom."""
         return self.grid.reciprocal_space_sampling
 
@@ -392,7 +393,7 @@ class HasGridMixin:
 
 
 def spatial_frequencies(
-    gpts: Tuple[int, ...], sampling: Tuple[float, ...], return_grid: bool = False, xp=np
+    gpts: tuple[int, ...], sampling: tuple[float, ...], return_grid: bool = False, xp=np
 ):
     """
     Calculate spatial frequencies of a grid.
@@ -421,7 +422,9 @@ def spatial_frequencies(
         return out
 
 
-def polar_spatial_frequencies(gpts, sampling, xp=np):
+def polar_spatial_frequencies(
+    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np
+) -> tuple[np.ndarray, np.ndarray]:
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
@@ -429,8 +432,19 @@ def polar_spatial_frequencies(gpts, sampling, xp=np):
     return k, phi
 
 
-def disc_meshgrid(r):
-    """Return all indices inside a disk with a given radius."""
+def disc_meshgrid(r: int) -> np.ndarray:
+    """
+    Return all indices inside a disk with a given radius.
+
+    Parameters
+    ----------
+    r : int
+        Radius of disc in pixels.
+
+    Returns
+    -------
+    disc_indices : np.ndarray
+    """
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T

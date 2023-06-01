@@ -1,4 +1,5 @@
 """Module for describing wave functions of the incoming electron beam and the exit wave."""
+from __future__ import annotations
 import itertools
 import numbers
 import warnings
@@ -6,18 +7,20 @@ from abc import abstractmethod
 from copy import copy
 from functools import partial
 from typing import Sequence, Dict
-from typing import Union, Tuple, List
+from typing import Union, List
 
 import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.core.array import HasArray, validate_lazy, ComputableList, expand_dims
-from abtem.core.axes import HasAxes
-from abtem.core.axes import RealSpaceAxis, ReciprocalSpaceAxis, AxisMetadata
-from abtem.core.backend import HasDevice
+from abtem.core.array import ArrayObject, _validate_lazy, ComputableList, expand_dims
+from abtem.core.axes import (
+    RealSpaceAxis,
+    ReciprocalSpaceAxis,
+    AxisMetadata,
+    AxesMetadataList,
+)
 from abtem.core.backend import get_array_module, validate_device
-from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator
 from abtem.core.energy import HasAcceleratorMixin
@@ -38,7 +41,7 @@ from abtem.inelastic.core_loss import transition_potential_multislice_and_detect
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
-    BaseMeasurement,
+    BaseMeasurements,
     RealSpaceLineProfiles,
 )
 from abtem.multislice import multislice_and_detect
@@ -147,21 +150,14 @@ def _antialias_cutoff_gpts(gpts, sampling):
     return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
 
 
-class BaseWaves(
-    HasGridMixin, HasAcceleratorMixin, HasAxes, HasDevice, CopyMixin, EqualityMixin
-):
+class BaseWaves(HasGridMixin, HasAcceleratorMixin, CopyMixin, EqualityMixin):
     """Base class of all wave functions. Documented in the subclasses."""
 
     _base_axes = (-2, -1)
 
     @property
     @abstractmethod
-    def ensemble_shape(self):
-        pass
-
-    @property
-    @abstractmethod
-    def ensemble_axes_metadata(self):
+    def device(self):
         pass
 
     @property
@@ -171,11 +167,8 @@ class BaseWaves(
         pass
 
     @property
-    def base_shape(self) -> Tuple[int, int]:
-        return self.gpts
-
-    @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
+        """List of AxisMetadata for the base axes in real space."""
         self.grid.check_is_defined()
         return [
             RealSpaceAxis(
@@ -188,7 +181,7 @@ class BaseWaves(
 
     @property
     def reciprocal_space_axes_metadata(self) -> List[AxisMetadata]:
-
+        """List of AxisMetadata for base axes in reciprocal space."""
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         return [
@@ -205,24 +198,21 @@ class BaseWaves(
         ]
 
     @property
-    def antialias_cutoff_gpts(self) -> Tuple[int, int]:
+    def antialias_cutoff_gpts(self) -> tuple[int, int]:
         """
         The number of grid points along the x and y direction in the simulation grid at the antialiasing cutoff
         scattering angle.
         """
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
-            return tuple(
-                min(n, m)
-                for n, m in zip(
-                    self.metadata["adjusted_antialias_cutoff_gpts"], self.gpts
-                )
-            )
+            n = min(self.metadata["adjusted_antialias_cutoff_gpts"][0], self.gpts[0])
+            m = min(self.metadata["adjusted_antialias_cutoff_gpts"][1], self.gpts[1])
+            return n, m
 
         self.grid.check_is_defined()
         return _antialias_cutoff_gpts(self.gpts, self.sampling)
 
     @property
-    def antialias_valid_gpts(self) -> Tuple[int, int]:
+    def antialias_valid_gpts(self) -> tuple[int, int]:
         """
         The number of grid points along the x and y direction in the simulation grid for the largest rectangle that fits
         within antialiasing cutoff scattering angle.
@@ -236,18 +226,15 @@ class BaseWaves(
         valid_gpts = _ensure_parity_of_gpts(valid_gpts, self.gpts, parity="same")
 
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
-            return tuple(
-                min(n, m)
-                for n, m in zip(
-                    self.metadata["adjusted_antialias_cutoff_gpts"], valid_gpts
-                )
-            )
+            n = min(self.metadata["adjusted_antialias_cutoff_gpts"][0], valid_gpts[0])
+            m = min(self.metadata["adjusted_antialias_cutoff_gpts"][1], valid_gpts[1])
+            return n, m
 
         return valid_gpts
 
     def _gpts_within_angle(
         self, angle: Union[None, float, str], parity: str = "same"
-    ) -> Tuple[int, int]:
+    ) -> tuple[int, int]:
 
         if angle is None or angle == "full":
             return self.gpts
@@ -272,7 +259,7 @@ class BaseWaves(
         return _ensure_parity_of_gpts(gpts, self.gpts, parity=parity)
 
     @property
-    def cutoff_angles(self) -> Tuple[float, float]:
+    def cutoff_angles(self) -> tuple[float, float]:
         """Scattering angles at the antialias cutoff [mrad]."""
         return (
             self.antialias_cutoff_gpts[0] // 2 * self.angular_sampling[0],
@@ -280,7 +267,7 @@ class BaseWaves(
         )
 
     @property
-    def rectangle_cutoff_angles(self) -> Tuple[float, float]:
+    def rectangle_cutoff_angles(self) -> tuple[float, float]:
         """Scattering angles corresponding to the sides of the largest rectangle within the antialias cutoff [mrad]."""
         return (
             self.antialias_valid_gpts[0] // 2 * self.angular_sampling[0],
@@ -288,7 +275,7 @@ class BaseWaves(
         )
 
     @property
-    def full_cutoff_angles(self) -> Tuple[float, float]:
+    def full_cutoff_angles(self) -> tuple[float, float]:
         """Scattering angles corresponding to the full wave function size [mrad]."""
         return (
             self.gpts[0] // 2 * self.angular_sampling[0],
@@ -296,7 +283,7 @@ class BaseWaves(
         )
 
     @property
-    def angular_sampling(self) -> Tuple[float, float]:
+    def angular_sampling(self) -> tuple[float, float]:
         """Reciprocal-space sampling in units of scattering angles [mrad]."""
         self.accelerator.check_is_defined()
         fourier_space_sampling = self.reciprocal_space_sampling
@@ -306,18 +293,18 @@ class BaseWaves(
         )
 
     def _angular_grid(self):
-        xp = get_array_module(self._device)
+        xp = get_array_module(self.device)
         alpha, phi = polar_spatial_frequencies(self.gpts, self.sampling, xp=xp)
         alpha *= self.wavelength
         return alpha, phi
 
 
 class _WaveRenormalization(EmptyEnsemble, WaveTransform):
-    def apply(self, waves, overwrite_x: bool = False):
-        return waves.normalize(overwrite_x=overwrite_x)
+    def apply(self, waves, in_place: bool = False):
+        return waves.normalize(overwrite_x=in_place)
 
 
-class Waves(HasArray, BaseWaves):
+class Waves(BaseWaves, ArrayObject):
     """
     Waves define a batch of arbitrary 2D wave functions defined by a complex array.
 
@@ -333,7 +320,8 @@ class Waves(HasArray, BaseWaves):
     sampling : one or two float
         Sampling of wave functions in `x` and `y` [1 / Å].
     reciprocal_space : bool, optional
-        If True, the wave functions are assumed to be represented in reciprocal space instead of real space (default is False).
+        If True, the wave functions are assumed to be represented in reciprocal space instead of real space (default is
+        False).
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
     metadata : dict
@@ -341,14 +329,14 @@ class Waves(HasArray, BaseWaves):
         from the waves.
     """
 
-    _base_dims = 2  # The dimension of waves is assumed to be 2D.
+    _base_dims = 2
 
     def __init__(
         self,
         array: np.ndarray,
         energy: float,
-        extent: Union[float, Tuple[float, float]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: Union[float, tuple[float, float]] = None,
+        sampling: Union[float, tuple[float, float]] = None,
         reciprocal_space: bool = False,
         ensemble_axes_metadata: List[AxisMetadata] = None,
         metadata: Dict = None,
@@ -374,22 +362,14 @@ class Waves(HasArray, BaseWaves):
 
     @property
     def base_tilt(self):
+        """
+        The base small-angle beam tilt (i.e. the beam tilt not associated with an ensemble axis) applied to the Fresnel
+        propagator [mrad].
+        """
         return (
             self.metadata.get("base_tilt_x", 0.0),
             self.metadata.get("base_tilt_y", 0.0),
         )
-
-    @property
-    def tilt_axes(self):
-        return tuple(
-            i
-            for i, axis in enumerate(self.ensemble_axes_metadata)
-            if hasattr(axis, "tilt")
-        )
-
-    @property
-    def tilt_axes_metadata(self):
-        return [self.ensemble_axes_metadata[i] for i in self.tilt_axes]
 
     @property
     def ensemble_axes_metadata(self):
@@ -397,6 +377,7 @@ class Waves(HasArray, BaseWaves):
 
     @property
     def reciprocal_space(self):
+        """True if the waves are represented in reciprocal space."""
         return self._reciprocal_space
 
     @property
@@ -404,7 +385,7 @@ class Waves(HasArray, BaseWaves):
         self._metadata["energy"] = self.energy
         return self._metadata
 
-    def from_partitioned_args(self):
+    def _from_partitioned_args(self):
         d = self._copy_kwargs(exclude=("array", "extent", "ensemble_axes_metadata"))
         cls = self.__class__
         return partial(lambda *args, **kwargs: cls(args[0], **kwargs), **d)
@@ -426,8 +407,8 @@ class Waves(HasArray, BaseWaves):
             Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
             axes must be RealSpaceAxis.
         metadata :
-            A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived from
-            the waves. The metadata must contain the electron energy [eV].
+            A dictionary defining wave function metadata. All items will be added to the metadata of measurements
+            derived from the waves. The metadata must contain the electron energy [eV].
 
         Returns
         -------
@@ -456,7 +437,7 @@ class Waves(HasArray, BaseWaves):
         kernel: np.ndarray,
         axes_metadata: List[AxisMetadata] = None,
         out_space: str = "in_space",
-        overwrite_x: bool = False,
+        in_place: bool = False,
     ):
         """
         Convolve the wave-function array with a given array.
@@ -468,7 +449,10 @@ class Waves(HasArray, BaseWaves):
         axes_metadata : list of AxisMetadata, optional
             Metadata for the resulting convolved array. Needed only if the given array has more than two dimensions.
         out_space : str, optional
-            Space in which the convolved array is represented. Options are 'reciprocal_space' and 'real_space' (default is the space of the wave functions).
+            Space in which the convolved array is represented. Options are 'reciprocal_space' and 'real_space' (default
+            is the space of the wave functions).
+        in_place : bool, optional
+            If True, the array representing the waves may be modified in-place.
 
         Returns
         -------
@@ -489,7 +473,7 @@ class Waves(HasArray, BaseWaves):
         if (len(kernel.shape) - 2) != len(axes_metadata):
             raise ValueError("provide axes metadata for each ensemble axis")
 
-        waves = self.ensure_reciprocal_space(overwrite_x=overwrite_x)
+        waves = self.ensure_reciprocal_space(overwrite_x=in_place)
         waves_dims = tuple(range(len(kernel.shape) - 2))
         kernel_dims = tuple(
             range(
@@ -505,13 +489,13 @@ class Waves(HasArray, BaseWaves):
 
         kernel = xp.array(kernel)
 
-        if overwrite_x and (array.shape == kernel.shape):
+        if in_place and (array.shape == kernel.shape):
             array *= kernel
         else:
             array = array * kernel
 
         if not fourier_space_out:
-            array = ifft2(array, overwrite_x=overwrite_x)
+            array = ifft2(array, overwrite_x=in_place)
 
         d = waves._copy_kwargs(exclude=("array",))
         d["reciprocal_space"] = fourier_space_out
@@ -560,7 +544,7 @@ class Waves(HasArray, BaseWaves):
 
         return waves
 
-    def tile(self, repetitions: Tuple[int, int], renormalize: bool = False) -> "Waves":
+    def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> "Waves":
         """
         Tile the wave functions. Can only be applied in real space.
 
@@ -606,7 +590,7 @@ class Waves(HasArray, BaseWaves):
 
         Parameters
         ----------
-        in_place : bool, optional
+        overwrite_x : bool, optional
             If True, modify the array in place; otherwise a copy is created (default is False).
 
         Returns
@@ -629,7 +613,7 @@ class Waves(HasArray, BaseWaves):
 
         Parameters
         ----------
-        in_place : bool, optional
+        overwrite_x : bool, optional
             If True, modify the array in place; otherwise a copy is created (default is False).
 
         Returns
@@ -725,7 +709,7 @@ class Waves(HasArray, BaseWaves):
     def downsample(
         self,
         max_angle: Union[str, float] = "cutoff",
-        gpts: Tuple[int, int] = None,
+        gpts: tuple[int, int] = None,
         normalization: str = "values",
     ) -> "Waves":
         """
@@ -740,8 +724,8 @@ class Waves(HasArray, BaseWaves):
                     Downsample to the antialias cutoff scattering angle (default).
 
                 ``valid`` :
-                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias
-                    cutoff scattering angle.
+                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the
+                    antialias cutoff scattering angle.
 
                 float :
                     Downsample to a maximum scattering angle specified by a float [mrad].
@@ -811,8 +795,8 @@ class Waves(HasArray, BaseWaves):
                     Downsample to the antialias cutoff scattering angle (default).
 
                 ``valid`` :
-                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias
-                    cutoff scattering angle.
+                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the
+                    antialias cutoff scattering angle.
 
                 ``full`` :
                     The diffraction patterns are not cropped, and hence the antialiased region is included.
@@ -898,7 +882,10 @@ class Waves(HasArray, BaseWaves):
 
         diffraction_patterns = DiffractionPatterns(
             pattern,
-            sampling=self.reciprocal_space_sampling,
+            sampling=(
+                self.reciprocal_space_sampling[0],
+                self.reciprocal_space_sampling[1],
+            ),
             fftshift=fftshift,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=metadata,
@@ -910,8 +897,6 @@ class Waves(HasArray, BaseWaves):
             )
 
         return diffraction_patterns
-
-
 
     def apply_ctf(
         self, ctf: CTF = None, max_batch: Union[int, str] = "auto", **kwargs
@@ -987,7 +972,7 @@ class Waves(HasArray, BaseWaves):
 
         Returns
         -------
-        detected_waves : BaseMeasurement or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
@@ -1009,7 +994,7 @@ class Waves(HasArray, BaseWaves):
                 new_axes = {num_new_symbols: (potential.num_exit_planes,)}
                 num_new_symbols += 1
                 extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-                    potential.exit_planes_axes_metadata
+                    potential.base_axes_metadata[0]
                 ]
             else:
                 new_axes = None
@@ -1032,14 +1017,16 @@ class Waves(HasArray, BaseWaves):
                 *axes_blocks,
                 self.array,
                 tuple(range(num_new_symbols, num_new_symbols + len(self.shape))),
-                potential_partial=potential._from_partitioned_args(),
                 new_axes=new_axes,
-                detectors=detectors,  # noqa
-                conjugate=conjugate,  # noqa
-                transpose=transpose,  # noqa
-                waves_partial=self.from_partitioned_args(),  # noqa
                 concatenate=True,
                 meta=np.array((), dtype=np.complex64)
+                ** {
+                    "detectors": detectors,
+                    "potential_partial": potential._from_partitioned_args(),
+                    "conjugate": conjugate,
+                    "transpose": transpose,
+                    "waves_partial": self._from_partitioned_args(),
+                }
             )
 
             measurements = _finalize_lazy_measurements(
@@ -1074,20 +1061,51 @@ class Waves(HasArray, BaseWaves):
         """
         return self.intensity().show(**kwargs)
 
-    def interact(self, **kwargs):
-        return self.complex_images().interact(**kwargs)
-
 
 class _WavesFactory(BaseWaves):
-    def __init__(self, transforms: List[WaveTransform]):
+    def __init__(self, transforms: List[WaveTransform], device: str):
 
         if transforms is None:
             transforms = []
 
         self._transforms = transforms
+        self._device = device
+
+    @property
+    def device(self):
+        """The device where the waves are created."""
+        return self._device
+
+    @property
+    def shape(self):
+        """Shape of the waves."""
+        return self.ensemble_shape + self.base_shape
+
+    @property
+    def base_shape(self) -> tuple[int, int]:
+        """Shape of the base axes of the waves."""
+        return self.gpts
+
+    @property
+    def ensemble_shape(self):
+        """Shape of the ensemble axes of the waves."""
+        return CompositeWaveTransform(self.transforms).ensemble_shape
+
+    @property
+    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+        """List of AxisMetadata of the ensemble axes."""
+        return CompositeWaveTransform(self.transforms).ensemble_axes_metadata
+
+    @property
+    def axes_metadata(self) -> AxesMetadataList:
+        """List of AxisMetadata."""
+        return AxesMetadataList(
+            self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
+        )
 
     @property
     def tilt(self):
+        """The small-angle tilt of applied to the Fresnel propagator [mrad]."""
         return self._tilt
 
     @tilt.setter
@@ -1102,14 +1120,24 @@ class _WavesFactory(BaseWaves):
 
     @abstractmethod
     def metadata(self):
+        """Metadata describing the waves."""
         pass
 
     @abstractmethod
     def _base_waves_partial(self):
         pass
 
-    def insert_transform(self, transform, index=None):
+    def insert_transform(self, transform: WaveTransform, index: int = None) -> _WavesFactory:
+        """
+        Insert a wave function transformation applied during the creation of the waves.
 
+        Parameters
+        ----------
+        transform : WaveTransform
+            Wave transform to apply during creation.
+        index : int
+            The position in the order of the applied transformations.
+        """
         if index is None:
             index = len(self._transforms)
 
@@ -1118,15 +1146,8 @@ class _WavesFactory(BaseWaves):
 
     @property
     def transforms(self):
+        """The transforms applied during creation of the waves."""
         return self._transforms
-
-    @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        return CompositeWaveTransform(self.transforms).ensemble_axes_metadata
-
-    @property
-    def ensemble_shape(self):
-        return CompositeWaveTransform(self.transforms).ensemble_shape
 
     @staticmethod
     def _build_waves_multislice_detect(*args, partials, multislice_func, detectors):
@@ -1197,7 +1218,7 @@ class _WavesFactory(BaseWaves):
                     range(max(potential_symbols) + 1, max(potential_symbols) + 2)
                 )
                 new_axes[1] = (len(potential.exit_planes),)
-                extra_ensemble_axes_metadata += [potential.exit_planes_axes_metadata]
+                extra_ensemble_axes_metadata += [potential.base_axes_metadata[0]]
                 max_symbol += 1
 
         transforms = CompositeWaveTransform(self.transforms)
@@ -1286,12 +1307,12 @@ class PlaneWave(_WavesFactory):
 
     def __init__(
         self,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: Union[float, tuple[float, float]] = None,
+        gpts: Union[int, tuple[int, int]] = None,
+        sampling: Union[float, tuple[float, float]] = None,
         energy: float = None,
         normalize: bool = False,
-        tilt: Tuple[float, float] = (0.0, 0.0),
+        tilt: tuple[float, float] = (0.0, 0.0),
         device: str = None,
         transforms: List[WaveTransform] = None,
     ):
@@ -1300,13 +1321,13 @@ class PlaneWave(_WavesFactory):
         self._accelerator = Accelerator(energy=energy)
         self._tilt = validate_tilt(tilt=tilt)
         self._normalize = normalize
-        self._device = validate_device(device)
+        device = validate_device(device)
 
         transforms = [] if transforms is None else transforms
 
         transforms = transforms + [self._tilt]
 
-        super().__init__(transforms=transforms)
+        super().__init__(transforms=transforms, device=device)
 
     @property
     def metadata(self):
@@ -1319,6 +1340,7 @@ class PlaneWave(_WavesFactory):
 
     @property
     def normalize(self):
+        """True if the created waves are normalized in reciprocal space."""
         return self._normalize
 
     def _base_waves_partial(self):
@@ -1348,7 +1370,7 @@ class PlaneWave(_WavesFactory):
     def build(
         self,
         lazy: bool = None,
-        max_batch="auto",
+        max_batch: Union[int, str] = "auto",
     ) -> Waves:
         """
         Build plane-wave wave functions.
@@ -1358,7 +1380,7 @@ class PlaneWave(_WavesFactory):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
             setting in the user configuration file.
-        max_batch : int, optional
+        max_batch : int or str, optional
             The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
             automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
@@ -1371,7 +1393,7 @@ class PlaneWave(_WavesFactory):
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        lazy = validate_lazy(lazy)
+        lazy = _validate_lazy(lazy)
 
         if lazy:
             detectors = [WavesDetector()]
@@ -1419,13 +1441,13 @@ class PlaneWave(_WavesFactory):
 
         Returns
         -------
-        detected_waves : BaseMeasurement or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
         potential = _validate_potential(potential)
-        lazy = validate_lazy(lazy)
+        lazy = _validate_lazy(lazy)
         detectors = _validate_detectors(detectors)
 
         self.grid.match(potential)
@@ -1480,7 +1502,8 @@ class Probe(_WavesFactory):
     tilt : two float, two 1D :class:`.BaseDistribution`, 2D :class:`.BaseDistribution`, optional
         Small-angle beam tilt [mrad]. This value should generally not exceed one degree.
     device : str, optional
-        The probe wave functions will be build and stored on this device ('cpu' or 'gpu'). The default is determined by the user configuration.
+        The probe wave functions will be build and stored on this device ('cpu' or 'gpu'). The default is determined by
+        the user configuration.
     aperture : BaseAperture, optional
         An optional custom aperture. The provided aperture should be a subtype of :class:`.BaseAperture`.
     aberrations : dict or Aberrations
@@ -1494,13 +1517,13 @@ class Probe(_WavesFactory):
     def __init__(
         self,
         semiangle_cutoff: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: Union[float, tuple[float, float]] = None,
+        gpts: Union[int, tuple[int, int]] = None,
+        sampling: Union[float, tuple[float, float]] = None,
         energy: float = None,
         soft: bool = True,
         tilt: Union[
-            Tuple[Union[float, BaseDistribution], Union[float, BaseDistribution]],
+            tuple[Union[float, BaseDistribution], Union[float, BaseDistribution]],
             BaseDistribution,
         ] = (
             0.0,
@@ -1509,15 +1532,14 @@ class Probe(_WavesFactory):
         device: str = None,
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
-        ctf=None,
         transforms: List[WaveTransform] = None,
         metadata: dict = None,
         **kwargs
     ):
-        if ctf is not None:
-            aperture = ctf._aperture
-            aberrations = ctf._aberrations
-            energy = ctf.energy
+        # if ctf is not None:
+        #     aperture = ctf._aperture
+        #     aberrations = ctf._aberrations
+        #     energy = ctf.energy
 
         self._accelerator = Accelerator(energy=energy)
 
@@ -1550,13 +1572,13 @@ class Probe(_WavesFactory):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
-        self._device = validate_device(device)
+        device = validate_device(device)
         self._metadata = {} if metadata is None else metadata
 
         transforms = [] if transforms is None else transforms
         transforms = transforms + [self.tilt] + [self.aperture] + [self.aberrations]
 
-        super().__init__(transforms=transforms)
+        super().__init__(transforms=transforms, device=device)
 
         self.accelerator.match(self.aperture)
 
@@ -1571,12 +1593,16 @@ class Probe(_WavesFactory):
 
     @property
     def ctf(self):
-        return CTF(aberration_coefficients=self.aberrations.aberration_coefficients,
-                   semiangle_cutoff=self.semiangle_cutoff,
-                   energy=self.energy)
+        """Contrast transfer function describing the probe."""
+        return CTF(
+            aberration_coefficients=self.aberrations.aberration_coefficients,
+            semiangle_cutoff=self.semiangle_cutoff,
+            energy=self.energy,
+        )
 
     @property
     def semiangle_cutoff(self):
+        """The semiangle cutoff [mrad]."""
         return self.aperture.semiangle_cutoff
 
     @property
@@ -1661,7 +1687,7 @@ class Probe(_WavesFactory):
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        lazy = validate_lazy(lazy)
+        lazy = _validate_lazy(lazy)
 
         if not isinstance(scan, BaseScan):
             squeeze = (-3,)
@@ -1693,7 +1719,7 @@ class Probe(_WavesFactory):
             waves = probe._base_waves_partial()()
 
             waves = CompositeWaveTransform(probe.transforms).apply(
-                waves, overwrite_x=True
+                waves, in_place=True
             )
 
             waves = waves.ensure_real_space(overwrite_x=True)
@@ -1710,7 +1736,7 @@ class Probe(_WavesFactory):
         max_batch: Union[int, str] = "auto",
         lazy: bool = None,
         transition_potentials=None,
-    ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
+    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
         """
         Run the multislice algorithm for probe wave functions at the provided positions.
 
@@ -1735,7 +1761,7 @@ class Probe(_WavesFactory):
 
         Returns
         -------
-        measurements : BaseMeasurement or Waves or list of BaseMeasurement
+        measurements : BaseMeasurements or Waves or list of BaseMeasurement
         """
         potential = _validate_potential(potential)
         self.grid.match(potential)
@@ -1753,7 +1779,7 @@ class Probe(_WavesFactory):
         if detectors is None:
             detectors = [WavesDetector()]
 
-        lazy = validate_lazy(lazy)
+        lazy = _validate_lazy(lazy)
 
         detectors = _validate_detectors(detectors)
 
@@ -1802,7 +1828,7 @@ class Probe(_WavesFactory):
         max_batch: Union[int, str] = "auto",
         transition_potentials=None,
         lazy: bool = None,
-    ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
+    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
         """
         Run the multislice algorithm from probe wave functions over the provided scan.
 
@@ -1825,7 +1851,7 @@ class Probe(_WavesFactory):
 
         Returns
         -------
-        detected_waves : BaseMeasurement or list of BaseMeasurement
+        detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
@@ -1880,7 +1906,7 @@ class Probe(_WavesFactory):
 
             return intersect0, intersect1
 
-        point1 = np.array((self.extent[0] / 2, self.extent[1] / 2))
+        point1 = (self.extent[0] / 2, self.extent[1] / 2)
 
         measurement = self.build(point1).intensity()
 

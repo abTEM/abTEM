@@ -255,7 +255,7 @@ def _generate_slices(
         )
         potential_generators.append(potential.generate_slices())
 
-    transformed_atoms = potential.transformed_atoms()
+    transformed_atoms = potential.get_transformed_atoms()
 
     if np.allclose(transformed_atoms.cell, atoms.cell):
         transform_valence_potential = False
@@ -268,7 +268,7 @@ def _generate_slices(
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
 
-        a, b = potential.sliced_atoms.slice_limits[slice_idx]
+        a, b = potential.get_sliced_atoms().slice_limits[slice_idx]
 
         for potential_generator in potential_generators[1:]:
             slic.array[:] += next(potential_generator).array

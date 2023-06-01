@@ -184,7 +184,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
 
 def _validate_seeds(
-    seeds: Union[int, Tuple[int, ...]], num_seeds: int = None
+    seeds: Union[int, Tuple[int, ...], None], num_seeds: int = None
 ) -> Tuple[int, ...]:
     if seeds is None or np.isscalar(seeds):
         if num_seeds is None:

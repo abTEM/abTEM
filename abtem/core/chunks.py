@@ -1,8 +1,9 @@
+from __future__ import annotations
 import itertools
 from functools import reduce
 from itertools import accumulate
 from operator import mul
-from typing import Union, Tuple
+from typing import Union
 
 import numpy as np
 from dask.utils import parse_bytes
@@ -32,6 +33,7 @@ def iterate_chunk_ranges(chunks):
 
 
 def config_chunk_size(device):
+
     if device == "gpu":
         return parse_bytes(config.get("dask.chunk-size-gpu"))
 
@@ -41,14 +43,14 @@ def config_chunk_size(device):
     return parse_bytes(config.get("dask.chunk-size"))
 
 
-Chunks = Union[int, str, Tuple[Union[int, str, Tuple[int, ...]], ...]]
-ValidatedChunks = Tuple[Tuple[int, ...], ...]
+Chunks = Union[int, str, tuple[Union[int, str, tuple[int, ...]], ...]]
+ValidatedChunks = tuple[tuple[int, ...], ...]
 
 
 def validate_chunks(
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     chunks: Chunks,
-    limit: Union[int, str] = "auto",
+    limit: int | str = "auto",
     dtype: np.dtype.base = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
@@ -95,9 +97,9 @@ def validate_chunks(
 
 
 def auto_chunks(
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     chunks: Chunks,
-    limit: Union[str, int] = "auto",
+    limit: str | int = "auto",
     dtype: np.dtype.base = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
@@ -156,9 +158,9 @@ def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = Non
 
     Parameters
     ----------
-    n: int
+    num_items: int
         The integer to split.
-    m: int
+    num_chunks: int
         The number integers n will be split into.
 
     Returns

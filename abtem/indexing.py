@@ -266,8 +266,11 @@ def _index_diffraction_patterns(
 
         positions.append(k[indices][min_index])
 
-    # print(np.array(intensities).shape)
     intensities = np.array(intensities)
+
+    if intensities.size == 0:
+        raise RuntimeError("no diffraction spots found within provided threshold")
+
     intensities = np.moveaxis(intensities, 0, -1)
 
     return np.array(selected_hkl), intensities, np.array(positions)

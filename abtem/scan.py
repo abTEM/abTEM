@@ -1,12 +1,13 @@
 """Module for describing different types of scans."""
+from __future__ import annotations
+
 import itertools
 from abc import ABCMeta, abstractmethod
-from numbers import Number
-from typing import Union, Tuple, TYPE_CHECKING
+from typing import Union, TYPE_CHECKING
 
 import dask.array as da
 import numpy as np
-from ase import Atom
+from ase import Atom, Atoms
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
@@ -21,7 +22,8 @@ from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves
+    from abtem.waves import Waves, Probe
+    from abtem.prism.s_matrix import BaseSMatrix
 
 
 def _validate_scan(scan, probe=None):
@@ -54,21 +56,22 @@ def _validate_scan_sampling(scan, probe):
 class BaseScan(WaveTransform, metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.num_positions
 
     @property
-    def num_positions(self):
+    def num_positions(self) -> int:
+        """Number of probe positions in the scan."""
         return len(self.get_positions())
 
     @property
     @abstractmethod
-    def shape(self) -> tuple:
+    def shape(self) -> tuple[int, ...]:
         """The shape the scan."""
         pass
 
     @property
-    def ensemble_shape(self):
+    def ensemble_shape(self) -> tuple[int, ...]:
         return self.shape
 
     @property
@@ -76,33 +79,41 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
         return ("auto",) * len(self.ensemble_shape)
 
     @abstractmethod
-    def get_positions(self, *args, **kwargs):
+    def get_positions(self, *args, **kwargs) -> np.ndarray:
         """Get the scan positions as numpy array."""
         pass
 
-    def get_weights(self):
+    def _get_weights(self):
         raise NotImplementedError
 
     @property
     @abstractmethod
     def limits(self):
+        """Lower left and upper right corner of the bounding box containing all positions in the scan."""
         pass
 
     @abstractmethod
-    def sort_into_extents(self, extents):
+    def _sort_into_extents(
+        self,
+        extents: tuple[
+            tuple[tuple[float, float], ...], tuple[tuple[float, float], ...]
+        ],
+    ):
         pass
 
-    @property
-    def metadata(self):
-        return {}
+    def evaluate(self, waves: Waves) -> np.ndarray:
+        """
+        Evaluate the array to be multiplied with the waves in reciprocal space.
 
-    def generate_blocks_by_extents(self, extents):
-        scan, chunks = self.sort_into_extents(extents)
+        Parameters
+        ----------
+        waves : Waves, optional
+            If given, the array will be evaluated to match the provided waves.
 
-        for sub_scan in self.generate_blocks(chunks):
-            yield sub_scan
-
-    def evaluate(self, waves):
+        Returns
+        -------
+        kernel : np.ndarray or dask.array.Array
+        """
         device = validate_device(waves.device)
         xp = get_array_module(device)
 
@@ -115,19 +126,32 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
         kernel = fft_shift_kernel(positions, shape=waves.gpts)
 
         try:
-            kernel *= self.get_weights()[..., None, None]
+            kernel *= self._get_weights()[..., None, None]
         except NotImplementedError:
             pass
 
         return kernel
 
-    def apply(self, waves: "Waves", overwrite_x: bool = False) -> "Waves":
+    def apply(self, waves: Waves, in_place: bool = False) -> "Waves":
+        """
+        Shift the waves by convolving them with a phase term in reciprocal space.
+
+        Parameters
+        ----------
+        waves : Waves
+            The waves to shift.
+        in_place : bool, optional
+            If True, the array representing the waves may be modified in-place.
+        Returns
+        -------
+        shifted_waves : Waves
+        """
         array = self.evaluate(waves)
         axes_metadata = self.ensemble_axes_metadata
-        return waves.convolve(array, axes_metadata, overwrite_x=overwrite_x)
+        return waves.convolve(array, axes_metadata, in_place=in_place)
 
 
-class SourceOffset(BaseScan):
+class SourceDistribution(BaseScan):
     """
     Distribution of electron source offsets.
 
@@ -148,7 +172,7 @@ class SourceOffset(BaseScan):
         xi = [factor.values for factor in self._distribution.factors]
         return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
 
-    def get_weights(self):
+    def _get_weights(self):
         return self._distribution.weights
 
     @property
@@ -170,7 +194,7 @@ class SourceOffset(BaseScan):
     def ensemble_partial(self):
         def distribution(*args):
             factors = [arg.item() for arg in args]
-            dist = SourceOffset(_AxisAlignedDistributionND(factors))
+            dist = SourceDistribution(_AxisAlignedDistributionND(factors))
             arr = np.empty((1,) * len(args), dtype=object)
             arr.itemset(dist)
             return arr
@@ -189,7 +213,7 @@ class CustomScan(BaseScan):
     Parameters
     ----------
     positions : np.ndarray, optional
-        Probe positions. Anything that can be converted to an ndarray of shape (n, 3) is accepted. Default is
+        Scan positions [Å]. Anything that can be converted to an ndarray of shape (n, 3) is accepted. Default is
         (0., 0.).
     """
 
@@ -203,7 +227,15 @@ class CustomScan(BaseScan):
 
         super().__init__()
 
-    def match_probe(self, probe):
+    def match_probe(self, probe : Probe | BaseSMatrix):
+        """
+        Sets the positions to a single position in the center of the probe extent.
+
+        Parameters
+        ----------
+        probe : Probe or BaseSMatrix
+            The matched probe or s-matrix.
+        """
         if len(self.positions) == 0:
             self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.0
 
@@ -238,7 +270,7 @@ class CustomScan(BaseScan):
 
         return (positions,)
 
-    def sort_into_extents(self, extents):
+    def _sort_into_extents(self, extents):
         new_positions = np.zeros_like(self.positions)
         chunks = ()
         start = 0
@@ -265,6 +297,7 @@ class CustomScan(BaseScan):
 
     @property
     def positions(self):
+        """Scan positions [Å]."""
         return self._positions
 
     @property
@@ -327,28 +360,32 @@ class LineScan(BaseScan):
 
     Parameters
     ----------
-    start : two float
+    start : two float, optional
         Start point of the scan [Å]. Default is (0., 0.).
-    end : two float
+    end : two float, optional
         End point of the scan [Å]. Default is None, the scan end point will match the extent of the potential.
-    gpts: int
+    gpts : int, optional
         Number of scan positions. Default is None. Provide one of gpts or sampling.
-    sampling: float
+    sampling : float, optional
         Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
         match the Nyquist sampling of the Probe in a multislice simulation.
-    endpoint: bool
+    endpoint : bool, optional
         If True, end is the last position. Otherwise, it is not included. Default is True.
+    fractional : bool, optional
+        If True, use fractional coordinates with respect to the given potential for `start` and `end`.
+    potential : BasePotential or Atoms, optional
+        Potential defining the grid with respect to which the fractional coordinates should be given.
     """
 
     def __init__(
         self,
-        start: Union[Tuple[float, float], None] = (0.0, 0.0),
-        end: Union[Tuple[float, float], None] = None,
+        start: tuple[float, float] = (0.0, 0.0),
+        end: tuple[float, float] = None,
         gpts: int = None,
         sampling: float = None,
         endpoint: bool = True,
         fractional: bool = False,
-        potential: BasePotential = None,
+        potential: BasePotential | Atoms = None,
     ):
 
         super().__init__()
@@ -363,88 +400,91 @@ class LineScan(BaseScan):
         self._adjust_gpts()
         self._adjust_sampling()
 
-    @classmethod
-    def from_fractional_coordinates(
-        cls,
-        potential: BasePotential,
-        start: Tuple[float, float] = (0.0, 0.0),
-        end: Tuple[float, float] = (1.0, 1.0),
-        sampling: Union[float, Tuple[float, float]] = None,
-        endpoint: Union[bool, Tuple[bool, bool]] = False,
-    ) -> "LineScan":
-        """
-        Create grid scan using fractional coordinates.
-
-        Parameters
-        ----------
-        potential : BasePotential
-            Potential defining the grid with respect to which the fractional coordinates should be given.
-        start : two float, optional
-            Scan start as a fraction of the extent of the potential.
-        end : two float, optional
-            Scan end as a fraction of the extent of the potential.
-        sampling : float or two float
-            Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
-            match the Nyquist sampling of the probe in a multislice simulation.
-        endpoint : bool or two bool
-            If True, end is the last positions. Otherwise, it those positions are not included. Default is False.
-        Returns
-        -------
-        grid_scan : GridScan
-        """
-
-        return cls(
-            start=start,
-            end=end,
-            sampling=sampling,
-            endpoint=endpoint,
-            potential=potential,
-            fractional=True,
-        )
-
     @property
     def direction(self):
+        """Normal vector pointing from `start` to `end`."""
         direction = np.array(self.end) - np.array(self.start)
         return direction / np.linalg.norm(direction)
 
     @property
     def angle(self):
+        """Angle of the line from `start` to `end` and the x-axis [deg.]."""
         direction = self.direction
-        return np.arctan2(direction[1], direction[1])
+        return np.arctan2(direction[1], direction[0])
 
-    def add_margin(self, margin: Union[float, Tuple[float, float]]):
-        if isinstance(margin, Number):
+    def add_margin(self, margin: float | tuple[float, float]):
+        """
+        Extend the line scan by adding a margin to the start and end of the line scan.
+
+        Parameters
+        ----------
+        margin : float or tuple of float
+            The margin added to the start and end of the linescan [Å]. If float the same margin is added.
+        """
+        if not np.isscalar(margin):
             margin = (margin,) * 2
 
         direction = self.direction
 
         self.start = tuple(np.array(self.start) - direction * margin[0])
         self.end = tuple(np.array(self.end) + direction * margin[1])
+        return self
 
     @classmethod
     def at_position(
         cls,
-        position: Union[Tuple[float, float], Atom],
+        center: tuple[float, float] | Atom,
         extent: float = 1.0,
         angle: float = 0.0,
         gpts: int = None,
         sampling: float = None,
         endpoint: bool = True,
     ):
+        """
+        Make a line scan centered at a given position.
 
-        if isinstance(position, Atom):
-            position = (position.x, position.y)
+        Parameters
+        ----------
+        center : two float
+            Center position of the line [Å]. May be given as an Atom.
+        angle : float
+            Angle of the line [deg.].
+        extent : float
+            Extent of the line [Å].
+        gpts : int
+            Number of grid points along the line.
+        sampling : float
+            Sampling of grid points along the line [Å].
+        endpoint : bool
+            Sets whether the ending position is included or not.
+
+        Returns
+        -------
+        line_scan : LineScan
+        """
+
+        if isinstance(center, Atom):
+            position = (center.x, center.y)
 
         direction = np.array((np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))))
 
-        start = tuple(np.array(position) - extent / 2 * direction)
-        end = tuple(np.array(position) + extent / 2 * direction)
+        start = tuple(np.array(center) - extent / 2 * direction)
+        end = tuple(np.array(center) + extent / 2 * direction)
 
         return cls(
             start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
         )
 
-    def match_probe(self, probe):
+    def match_probe(self, probe : Probe | BaseSMatrix):
+        """
+        Sets sampling to the Nyquist frequency. If the start and end point of the scan is not given, set them to the
+        lower and upper left corners of the probe extent.
+
+        Parameters
+        ----------
+        probe : Probe or BaseSMatrix
+            The matched probe or s-matrix.
+        """
         if self.start is None:
             self.start = (0.0, 0.0)
 
@@ -455,6 +495,7 @@ class LineScan(BaseScan):
 
     @property
     def extent(self) -> Union[float, None]:
+        """Grid extent [Å]."""
         if self._start is None or self._end is None:
             return None
 
@@ -480,14 +521,16 @@ class LineScan(BaseScan):
 
     @property
     def endpoint(self) -> bool:
+        """True if the scan endpoint is the last position. Otherwise, the endpoint is not included."""
         return self._endpoint
 
     @property
-    def limits(self) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    def limits(self) -> tuple[tuple[float, float], tuple[float, float]]:
         return self.start, self.end
 
     @property
     def gpts(self) -> int:
+        """Number of grid points."""
         return self._gpts
 
     @gpts.setter
@@ -497,6 +540,7 @@ class LineScan(BaseScan):
 
     @property
     def sampling(self) -> float:
+        """Grid sampling [Å]."""
         return self._sampling
 
     @sampling.setter
@@ -505,7 +549,7 @@ class LineScan(BaseScan):
         self._adjust_gpts()
 
     @property
-    def shape(self) -> Tuple[int]:
+    def shape(self) -> tuple[int]:
         return (self._gpts,)
 
     @property
@@ -513,7 +557,7 @@ class LineScan(BaseScan):
         return {"start": self.start, "end": self.end}
 
     @property
-    def axes_metadata(self):
+    def ensemble_axes_metadata(self):
 
         return [
             ScanAxis(
@@ -526,14 +570,14 @@ class LineScan(BaseScan):
         ]
 
     @property
-    def start(self) -> Union[Tuple[float, float], None]:
+    def start(self) -> tuple[float, float] | None:
         """
         Start point of the scan [Å].
         """
         return self._start
 
     @start.setter
-    def start(self, start: Tuple[float, float]):
+    def start(self, start: tuple[float, float]):
         if start is not None:
             start = (float(start[0]), float(start[1]))
 
@@ -541,14 +585,14 @@ class LineScan(BaseScan):
         self._adjust_gpts()
 
     @property
-    def end(self) -> Union[Tuple[float, float], None]:
+    def end(self) -> tuple[float, float] | None:
         """
         End point of the scan [Å].
         """
         return self._end
 
     @end.setter
-    def end(self, end: Tuple[float, float]):
+    def end(self, end: tuple[float, float]):
         if end is not None:
             end = (float(end[0]), float(end[1]))
         self._end = end
@@ -574,7 +618,7 @@ class LineScan(BaseScan):
     def _default_ensemble_chunks(self):
         return ("auto",)
 
-    def sort_into_extents(self, extents):
+    def _sort_into_extents(self, extents):
         raise NotImplementedError
 
     @staticmethod
@@ -637,11 +681,7 @@ class LineScan(BaseScan):
 
         if width:
             rect = Rectangle(
-                tuple(self.start),
-                self.extent,
-                width,
-                angle=self.angle,
-                **kwargs
+                tuple(self.start), self.extent, width, angle=self.angle, **kwargs
             )
             ax.add_patch(rect)
         else:
@@ -656,28 +696,32 @@ class GridScan(HasGridMixin, BaseScan):
 
     Parameters
     ----------
-    start : two float
+    start : two float, optional
         Start corner of the scan [Å]. Default is (0., 0.).
-    end : two float
+    end : two float, optional
         End corner of the scan [Å]. Default is None, the scan end point will match the extent of the potential.
-    gpts : two int
+    gpts : two int, optional
         Number of scan positions in the `x`- and `y`-direction of the scan. Provide one of gpts or sampling.
-    sampling : two float
+    sampling : two float, optional
         Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
         match the Nyquist sampling of the  Probe in a multislice simulation.
-    endpoint : bool
+    endpoint : bool, optional
         If True, end is the last position. Otherwise, it is not included. Default is False.
+    fractional : bool, optional
+        If True, use fractional coordinates with respect to the given potential for `start` and `end`.
+    potential : BasePotential or Atoms, optional
+        Potential defining the grid with respect to which the fractional coordinates should be given.
     """
 
     def __init__(
         self,
-        start: Tuple[float, float] = (0.0, 0.0),
-        end: Tuple[float, float] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        endpoint: Union[bool, Tuple[bool, bool]] = False,
+        start: tuple[float, float] = (0.0, 0.0),
+        end: tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
+        endpoint: bool | tuple[bool, bool] = False,
         fractional: bool = False,
-        potential: BasePotential = None,
+        potential: BasePotential | Atoms = None,
     ):
 
         super().__init__()
@@ -713,77 +757,36 @@ class GridScan(HasGridMixin, BaseScan):
     def __len__(self):
         return self.gpts[0] * self.gpts[1]
 
-    @classmethod
-    def from_fractional_coordinates(
-        cls,
-        potential: BasePotential,
-        start: Tuple[float, float] = (0.0, 0.0),
-        end: Tuple[float, float] = (1.0, 1.0),
-        sampling: Union[float, Tuple[float, float]] = None,
-        endpoint: Union[bool, Tuple[bool, bool]] = False,
-    ) -> "GridScan":
-        """
-        Create grid scan using fractional coordinates.
-
-        Parameters
-        ----------
-        potential : BasePotential
-            Potential defining the grid with respect to which the fractional coordinates should be given.
-        start : two float, optional
-            Scan start as a fraction of the extent of the potential.
-        end : two float, optional
-            Scan end as a fraction of the extent of the potential.
-        sampling : float or two float
-
-        endpoint : bool or two bool
-
-        Returns
-        -------
-        grid_scan : GridScan
-        """
-
-        return cls(
-            start=start,
-            end=end,
-            sampling=sampling,
-            endpoint=endpoint,
-            potential=potential,
-            fractional=True,
-        )
-
-    @property
-    def dimensions(self):
-        return self.grid.dimensions
-
     @property
     def limits(self):
         return [self.start, self.end]
 
     @property
-    def endpoint(self) -> Tuple[bool, ...]:
+    def endpoint(self) -> tuple[bool, bool]:
+        """True if the scan endpoint is the last position. Otherwise, the endpoint is not included."""
         return self.grid.endpoint
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, int]:
         return self.gpts
 
     @property
-    def start(self) -> Union[Tuple[float, ...], None]:
+    def start(self) -> tuple[float, float] | None:
         """Start corner of the scan [Å]."""
         return self._start
 
     @start.setter
-    def start(self, start: Tuple[float, ...]):
+    def start(self, start: tuple[float, float]):
         self._start = start
         self._adjust_extent()
 
     @property
-    def end(self) -> Union[Tuple[float, ...], None]:
+    def end(self) -> tuple[float, float] | None:
         """End corner of the scan [Å]."""
         return self._end
 
     @end.setter
-    def end(self, end: Tuple[float, ...]):
+    def end(self, end: tuple[float, float]):
         self._end = end
         self._adjust_extent()
 
@@ -793,7 +796,16 @@ class GridScan(HasGridMixin, BaseScan):
 
         self.extent = np.array(self.end) - self.start
 
-    def match_probe(self, probe):
+    def match_probe(self, probe: Probe | BaseSMatrix):
+        """
+        Sets sampling to the Nyquist frequency. If the start and end point of the scan is not given, set them to the
+        lower left and upper right corners of the probe extent.
+
+        Parameters
+        ----------
+        probe : Probe or BaseSMatrix
+            The matched probe or s-matrix.
+        """
         if self.start is None:
             self.start = (0.0, 0.0)
 
@@ -834,7 +846,7 @@ class GridScan(HasGridMixin, BaseScan):
 
         return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
 
-    def sort_into_extents(self, extents):
+    def _sort_into_extents(self, extents):
 
         x = np.linspace(
             self.start[0], self.end[0], self.gpts[0], endpoint=self.endpoint[0]
@@ -874,9 +886,8 @@ class GridScan(HasGridMixin, BaseScan):
     @property
     def ensemble_axes_metadata(self):
         axes_metadata = []
-        labels = ("x", "y", "z")
         for label, sampling, offset, endpoint in zip(
-            labels, self.sampling, self.start, self.endpoint
+            ("x", "y"), self.sampling, self.start, self.endpoint
         ):
             axes_metadata.append(
                 ScanAxis(
@@ -940,7 +951,7 @@ class GridScan(HasGridMixin, BaseScan):
         alpha: float = 0.33,
         facecolor: str = "r",
         edgecolor: str = "r",
-        **kwargs
+        **kwargs,
     ):
         """
         Add a visualization of the scan area to a matplotlib plot.
@@ -964,6 +975,6 @@ class GridScan(HasGridMixin, BaseScan):
             alpha=alpha,
             facecolor=facecolor,
             edgecolor=edgecolor,
-            **kwargs
+            **kwargs,
         )
         ax.add_patch(rect)

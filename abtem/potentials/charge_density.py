@@ -226,7 +226,7 @@ def _generate_slices(
     if ewald_potential.plane != "xy":
         axes = plane_to_axes(ewald_potential.plane)
         charge = np.moveaxis(charge, axes[:2], (0, 1))
-        atoms = ewald_potential.transformed_atoms()
+        atoms = ewald_potential.get_transformed_atoms()
     else:
         atoms = ewald_potential.frozen_phonons.atoms
 

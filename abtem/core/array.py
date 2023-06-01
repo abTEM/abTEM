@@ -1,3 +1,4 @@
+from __future__ import annotations
 import copy
 import inspect
 import itertools
@@ -5,9 +6,7 @@ import json
 import warnings
 from abc import abstractmethod
 from contextlib import nullcontext, contextmanager
-from functools import reduce
 from numbers import Number
-from operator import mul
 from typing import Tuple, Union, TypeVar, List, Sequence
 
 import dask
@@ -16,20 +15,16 @@ import numpy as np
 import zarr
 from dask.array.utils import validate_axis
 from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
-from dask.utils import format_bytes
-from dask.distributed import get_client
-from tabulate import tabulate
 
-import abtem
+from abtem._version import __version__
 from abtem.core import config
 from abtem.core.axes import (
-    HasAxes,
     UnknownAxis,
     axis_to_dict,
     axis_from_dict,
     AxisMetadata,
     OrdinalAxis,
-    format_axes_metadata,
+    AxesMetadataList,
 )
 from abtem.core.backend import (
     get_array_module,
@@ -40,7 +35,6 @@ from abtem.core.backend import (
 )
 from abtem.core.chunks import Chunks, validate_chunks
 from abtem.core.utils import normalize_axes, CopyMixin
-from abtem._version import __version__
 
 try:
     import tifffile
@@ -49,13 +43,17 @@ except ImportError:
 
 
 class ComputableList(list):
+    """
+    A list with methods for conveniently computing its items.
+    """
+
     def to_zarr(
-            self,
-            url: str,
-            compute: bool = True,
-            overwrite: bool = False,
-            progress_bar: bool = None,
-            **kwargs,
+        self,
+        url: str,
+        compute: bool = True,
+        overwrite: bool = False,
+        progress_bar: bool = None,
+        **kwargs,
     ):
 
         computables = []
@@ -65,7 +63,11 @@ class ComputableList(list):
 
                 array = has_array.copy_to_device("cpu").array
 
-                computables.append(array.to_zarr(url, compute=compute, component=f"array{i}", overwrite=overwrite))
+                computables.append(
+                    array.to_zarr(
+                        url, compute=compute, component=f"array{i}", overwrite=overwrite
+                    )
+                )
                 kwargs = has_array._copy_kwargs(exclude=("array",))
 
                 packed_kwargs = has_array._pack_kwargs(kwargs)
@@ -77,7 +79,7 @@ class ComputableList(list):
             return computables
 
         with _compute_context(
-                progress_bar, profiler=False, resource_profiler=False
+            progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler, _):
             output = dask.compute(computables, **kwargs)[0]
 
@@ -104,7 +106,7 @@ class ComputableList(list):
 
 @contextmanager
 def _compute_context(
-        progress_bar: bool = None, profiler=False, resource_profiler=False
+    progress_bar: bool = None, profiler=False, resource_profiler=False
 ):
     if progress_bar is None:
         progress_bar = config.get("local_diagnostics.progress_bar")
@@ -124,19 +126,6 @@ def _compute_context(
     else:
         resource_profiler = nullcontext()
 
-    # try:
-    #     client = get_client()
-    #     client.run(config.set, *config.config)
-    #     worker_saturation = config.get("dask.worker-saturation")
-    #     client.run(
-    #         dask.config.set(
-    #             {"distributed.scheduler.worker-saturation": worker_saturation}
-    #         )
-    #     )
-    #
-    # except ValueError:
-    #     pass
-
     dask_configuration = {
         "optimization.fuse.active": config.get("dask.fuse"),
     }
@@ -151,28 +140,24 @@ def _compute_context(
 
 
 def _compute(
-        dask_array_wrappers,
-        progress_bar: bool = None,
-        profiler: bool = False,
-        resource_profiler: bool = False,
-        **kwargs,
+    dask_array_wrappers,
+    progress_bar: bool = None,
+    profiler: bool = False,
+    resource_profiler: bool = False,
+    **kwargs,
 ):
-    # if cp is not None:
-    #     cache = cp.fft.config.get_plan_cache()
-    #     cache_size = parse_bytes(config.get('cupy.fft-cache-size'))
-    #     cache.set_size(cache_size)
 
     if config.get("device") == "gpu":
         check_cupy_is_installed()
 
-        if not "num_workers" in kwargs:
+        if "num_workers" not in kwargs:
             kwargs["num_workers"] = cp.cuda.runtime.getDeviceCount()
 
-        if not "threads_per_worker" in kwargs:
+        if "threads_per_worker" not in kwargs:
             kwargs["threads_per_worker"] = cp.cuda.runtime.getDeviceCount()
 
     with _compute_context(
-            progress_bar, profiler=profiler, resource_profiler=resource_profiler
+        progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler, _):
         arrays = dask.compute(
             [wrapper.array for wrapper in dask_array_wrappers], **kwargs
@@ -191,54 +176,14 @@ def _compute(
     return dask_array_wrappers, profilers
 
 
-def computable(func):
-    def wrapper(*args, compute=False, **kwargs):
-        result = func(*args, **kwargs)
-
-        if isinstance(result, tuple) and compute:
-            return _compute(result)
-
-        if compute:
-            return result.compute()
-
-        return result
-
-    return wrapper
-
-
-def validate_lazy(lazy):
+def _validate_lazy(lazy):
     if lazy is None:
         return config.get("dask.lazy")
 
     return lazy
 
 
-T = TypeVar("T", bound="HasArray")
-
-
-def format_array(array):
-    is_lazy = isinstance(array, da.core.Array)
-
-    nbytes = format_bytes(array.nbytes)
-    cbytes = (
-        format_bytes(np.prod(array.chunksize) * array.dtype.itemsize)
-        if is_lazy
-        else "-"
-    )
-    chunksize = str(array.chunksize) if is_lazy else "-"
-    nchunks = reduce(mul, (len(chunks) for chunks in array.chunks)) if is_lazy else "-"
-    meta = array._meta if is_lazy else array
-    array_type = f'{type(meta).__module__.split(".")[0]}.{type(meta).__name__}'
-
-    ntasks = f"{len(array.dask)} tasks" if is_lazy else "-"
-
-    data = [
-        ["array", nbytes, str(array.shape), ntasks, array.dtype.name],
-        ["chunks", cbytes, chunksize, f"{str(nchunks)} chunks", array_type],
-    ]
-    return tabulate(
-        data, headers=["", "bytes", "shape", "count", "type"], tablefmt="simple"
-    )
+T = TypeVar("T", bound="ArrayObject")
 
 
 def format_type(x):
@@ -248,22 +193,73 @@ def format_type(x):
     return f'{text}\n{"-" * len(text)}'
 
 
-class HasArray(HasAxes, CopyMixin):
+class ArrayObject(CopyMixin):
+    """
+    A base class for simulation objects described by an array and associated metadata.
+    """
+
     _array: Union[np.ndarray, da.core.Array]
     _base_dims: int
+    _ensemble_axes_metadata: List[AxisMetadata]
 
     @abstractmethod
     def __init__(self, *args, **kwargs):
         pass
 
-    def __repr__(self):
-        if config.get("extended_repr"):
-            formatted_type = format_type(self.__class__)
-            axes_table = format_axes_metadata(self.axes_metadata, self.shape)
-            array_table = format_array(self.array)
-            return "\n\n".join([formatted_type, axes_table, array_table])
-        else:
-            return super().__repr__()
+    @property
+    @abstractmethod
+    def base_axes_metadata(self) -> List[AxisMetadata]:
+        pass
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        """Shape of the underlying array."""
+        return self.array.shape
+
+    @property
+    def base_shape(self) -> Tuple[int, ...]:
+        """Shape of the base axes of the underlying array."""
+        return self.shape[-self._base_dims :]
+
+    @property
+    def ensemble_shape(self) -> Tuple[int, ...]:
+        """Shape of the ensemble axes of the underlying array."""
+        return self.shape[: -self._base_dims]
+
+    @property
+    def ensemble_axes_metadata(self):
+        """List of AxisMetadata of the ensemble axes."""
+        return self._ensemble_axes_metadata
+
+    @property
+    def axes_metadata(self) -> AxesMetadataList:
+        """
+        List of AxisMetadata.
+        """
+        return AxesMetadataList(
+            self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
+        )
+
+    def _check_axes_metadata(self):
+        if len(self.shape) != len(self.shape):
+            raise RuntimeError(
+                f"number of dimensions ({len(self.shape)}) does not match number of axis metadata items "
+                f"({len(self.shape)})"
+            )
+
+        for n, axis in zip(self.shape, self.axes_metadata):
+            if isinstance(axis, OrdinalAxis) and len(axis) != n:
+                raise RuntimeError(
+                    f"number of values for ordinal axis ({len(axis)}), does not match size of dimension "
+                    f"({n})"
+                )
+
+    def _is_base_axis(self, axis: Union[int, Tuple[int, ...]]) -> bool:
+        if isinstance(axis, Number):
+            axis = (axis,)
+
+        base_axes = tuple(range(len(self.base_shape)))
+        return len(set(axis).intersection(base_axes)) > 0
 
     @classmethod
     def from_array_and_metadata(cls, array, axes_metadata, metadata):
@@ -273,51 +269,48 @@ class HasArray(HasAxes, CopyMixin):
     def metadata(self):
         raise NotImplementedError
 
-    @property
-    def base_shape(self) -> Tuple[int, ...]:
-        return self.array.shape[-self._base_dims:]
-
-    @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
-        return self.array.shape[: -self._base_dims]
-
     def __len__(self) -> int:
         return len(self.array)
 
     @property
-    def chunks(self):
-        return self.array.chunks
-
-    def rechunk(self, *args, **kwargs):
-        return self.array.rechunk(*args, **kwargs)
-
-    @property
     def array(self) -> Union[np.ndarray, da.core.Array]:
+        """
+        Underlying array describing the array object.
+        """
         return self._array
 
     @property
     def dtype(self) -> np.dtype.base:
+        """
+        Datatype of array.
+        """
         return self._array.dtype
 
     @property
     def device(self) -> str:
+        """The device where the array is stored."""
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
     def is_lazy(self) -> bool:
+        """
+        True if array is lazy.
+        """
         return isinstance(self.array, da.core.Array)
 
     @classmethod
     def _to_delayed_func(cls, array, **kwargs):
         kwargs["array"] = array
-
         return cls(**kwargs)
 
     @property
     def is_complex(self) -> bool:
+        """
+        True if array is complex.
+        """
         return np.iscomplexobj(self.array)
 
-    def check_is_compatible(self, other: "HasArray"):
+    def _check_is_compatible(self, other: ArrayObject):
         if not isinstance(other, self.__class__):
             raise RuntimeError(
                 f"incompatible types ({self.__class__} != {other.__class__})"
@@ -327,30 +320,179 @@ class HasArray(HasAxes, CopyMixin):
             raise RuntimeError(f"incompatible shapes ({self.shape} != {other.shape})")
 
         for (key, value), (other_key, other_value) in zip(
-                self._copy_kwargs(exclude=("array", "metadata")).items(),
-                other._copy_kwargs(exclude=("array", "metadata")).items(),
+            self._copy_kwargs(exclude=("array", "metadata")).items(),
+            other._copy_kwargs(exclude=("array", "metadata")).items(),
         ):
             if np.any(value != other_value):
                 raise RuntimeError(
                     f"incompatible values for {key} ({value} != {other_value})"
                 )
 
-    def mean(self, axes=None, **kwargs) -> "T":
-        return self._reduction("mean", axes=axes, **kwargs)
+    def generate_ensemble(self, keepdims: bool = False):
+        """
+        Generate every member of the ensemble.
 
-    def sum(self, axes=None, **kwargs) -> "T":
-        return self._reduction("sum", axes=axes, **kwargs)
+        Parameters
+        ----------
+        keepdims : bool, opptional
+            If True, all ensemble axes are left in the result as dimensions with size one. Default is False.
 
-    def std(self, axes=None, **kwargs) -> "T":
-        return self._reduction("std", axes=axes, **kwargs)
+        Yields
+        ------
+        ArrayObject or subclass of ArrayObject
+            Member of the ensemble.
+        """
+        for i in np.ndindex(*self.ensemble_shape):
+            yield i, self.get_items(i, keepdims=keepdims)
 
-    def min(self, axes=None, **kwargs) -> "T":
-        return self._reduction("min", axes=axes, **kwargs)
+    def mean(
+        self,
+        axis: int | Tuple[int, ...] = None,
+        keepdims: bool = False,
+        split_every: int = 2,
+    ) -> T:
+        """
+        Mean of array object over one or more axes. Only ensemble axes can be reduced.
 
-    def max(self, axes=None, **kwargs) -> "T":
-        return self._reduction("max", axes=axes, **kwargs)
+        Parameters
+        ----------
+        axis : int or tuple of ints, optional
+            Axis or axes along which a means are calculated. The default is to compute the mean of the flattened array.
+            If this is a tuple of ints, the mean is calculated over multiple axes. The indicated axes must be ensemble
+            axes.
+        keepdims : bool, optional
+            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+        split_every : int
+            Only used for lazy arrays. See `dask.array.reductions`.
 
-    def _reduction(self, reduction_func, axes, keepdims:bool=False, split_every: int = 2) -> "T":
+        Returns
+        -------
+        reduced_array : ArrayObject or subclass of ArrayObject
+            The reduced array object.
+        """
+        return self._reduction(
+            "mean", axes=axis, keepdims=keepdims, split_every=split_every
+        )
+
+    def sum(
+        self,
+        axis: int | Tuple[int, ...] = None,
+        keepdims: bool = False,
+        split_every: int = 2,
+    ) -> T:
+        """
+        Sum of array object over one or more axes. Only ensemble axes can be reduced.
+
+        Parameters
+        ----------
+        axis : int or tuple of ints, optional
+            Axis or axes along which a sums are performed. The default is to compute the mean of the flattened array.
+            If this is a tuple of ints, the sum is performed over multiple axes. The indicated axes must be ensemble
+            axes.
+        keepdims : bool, optional
+            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+        split_every : int
+            Only used for lazy arrays. See `dask.array.reductions`.
+
+        Returns
+        -------
+        reduced_array : ArrayObject or subclass of ArrayObject
+            The reduced array object.
+        """
+        return self._reduction(
+            "sum", axes=axis, keepdims=keepdims, split_every=split_every
+        )
+
+    def std(
+        self,
+        axis: int | Tuple[int, ...] = None,
+        keepdims: bool = False,
+        split_every: int = 2,
+    ) -> T:
+        """
+        Standard deviation of array object over one or more axes. Only ensemble axes can be reduced.
+
+        Parameters
+        ----------
+        axis : int or tuple of ints, optional
+            Axis or axes along which a standard deviations are calculated. The default is to compute the mean of the
+            flattened array. If this is a tuple of ints, the standard deviations are calculated over multiple axes.
+            The indicated axes must be ensemble axes.
+        keepdims : bool, optional
+            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+        split_every : int
+            Only used for lazy arrays. See `dask.array.reductions`.
+
+        Returns
+        -------
+        reduced_array : ArrayObject or subclass of ArrayObject
+            The reduced array object.
+        """
+        return self._reduction(
+            "std", axes=axis, keepdims=keepdims, split_every=split_every
+        )
+
+    def min(
+        self,
+        axis: int | Tuple[int, ...] = None,
+        keepdims: bool = False,
+        split_every: int = 2,
+    ) -> T:
+        """
+        Minmimum of array object over one or more axes. Only ensemble axes can be reduced.
+
+        Parameters
+        ----------
+        axis : int or tuple of ints, optional
+            Axis or axes along which a minima are calculated. The default is to compute the mean of the flattened array.
+            If this is a tuple of ints, the minima are calculated over multiple axes. The indicated axes must be
+            ensemble axes.
+        keepdims : bool, optional
+            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+        split_every : int
+            Only used for lazy arrays. See `dask.array.reductions`.
+
+        Returns
+        -------
+        reduced_array : ArrayObject or subclass of ArrayObject
+            The reduced array object.
+        """
+        return self._reduction(
+            "min", axes=axis, keepdims=keepdims, split_every=split_every
+        )
+
+    def max(
+        self,
+        axis: int | Tuple[int, ...] = None,
+        keepdims: bool = False,
+        split_every: int = 2,
+    ) -> T:
+        """
+        Maximum of array object over one or more axes. Only ensemble axes can be reduced.
+
+        Parameters
+        ----------
+        axis : int or tuple of ints, optional
+            Axis or axes along which a maxima are calculated. The default is to compute the mean of the flattened array.
+            If this is a tuple of ints, the maxima are calculated over multiple axes. The indicated axes must be
+            ensemble axes.
+        keepdims : bool, optional
+            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+        split_every : int
+            Only used for lazy arrays. See `dask.array.reductions`.
+
+        Returns
+        -------
+        reduced_array : ArrayObject or subclass of ArrayObject
+            The reduced array object.
+        """
+        return self._reduction(
+            "max", axes=axis, keepdims=keepdims, split_every=split_every
+        )
+
+    def _reduction(
+        self, reduction_func, axes, keepdims: bool = False, split_every: int = 2
+    ) -> T:
         xp = get_array_module(self.array)
 
         if axes is None:
@@ -369,9 +511,10 @@ class HasArray(HasAxes, CopyMixin):
 
         ensemble_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
         if not keepdims:
+            ensemble_axes = tuple(range(len(self.ensemble_shape)))
             ensemble_axes_metadata = [
                 axis_metadata
-                for axis_metadata, axis in zip(ensemble_axes_metadata, self.ensemble_axes)
+                for axis_metadata, axis in zip(ensemble_axes_metadata, ensemble_axes)
                 if axis not in axes
             ]
 
@@ -381,26 +524,23 @@ class HasArray(HasAxes, CopyMixin):
                 self.array, axes, split_every=split_every, keepdims=keepdims
             )
         else:
-            kwargs["array"] = getattr(xp, reduction_func)(self.array, axes, keepdims=keepdims)
+            kwargs["array"] = getattr(xp, reduction_func)(
+                self.array, axes, keepdims=keepdims
+            )
 
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
-    def _arithmetic(self, other, func) -> "T":
+    def _arithmetic(self, other, func) -> T:
         if hasattr(other, "array"):
-            self.check_is_compatible(other)
+            self._check_is_compatible(other)
             other = other.array
-        # else:
-        #     try:
-        #         other = other.item()
-        #     except AttributeError:
-        #         pass
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = getattr(self.array, func)(other)
         return self.__class__(**kwargs)
 
-    def _in_place_arithmetic(self, other, func) -> "T":
+    def _in_place_arithmetic(self, other, func) -> T:
         # if hasattr(other, 'array'):
         #    self.check_is_compatible(other)
         #    other = other.array
@@ -411,37 +551,52 @@ class HasArray(HasAxes, CopyMixin):
             )
         return self._arithmetic(other, func)
 
-    def __mul__(self, other) -> "T":
+    def __mul__(self, other) -> T:
         return self._arithmetic(other, "__mul__")
 
-    def __imul__(self, other) -> "T":
+    def __imul__(self, other) -> T:
         return self._in_place_arithmetic(other, "__imul__")
 
-    def __truediv__(self, other) -> "T":
+    def __truediv__(self, other) -> T:
         return self._arithmetic(other, "__truediv__")
 
-    def __itruediv__(self, other) -> "T":
+    def __itruediv__(self, other) -> T:
         return self._arithmetic(other, "__itruediv__")
 
-    def __sub__(self, other) -> "T":
+    def __sub__(self, other) -> T:
         return self._arithmetic(other, "__sub__")
 
-    def __isub__(self, other) -> "T":
+    def __isub__(self, other) -> T:
         return self._in_place_arithmetic(other, "__isub__")
 
-    def __add__(self, other) -> "T":
+    def __add__(self, other) -> T:
         return self._arithmetic(other, "__add__")
 
-    def __iadd__(self, other) -> "T":
+    def __iadd__(self, other) -> T:
         return self._in_place_arithmetic(other, "__iadd__")
 
-    def __pow__(self, other) -> "T":
+    def __pow__(self, other) -> T:
         return self._arithmetic(other, "__pow__")
 
     __rmul__ = __mul__
     __rtruediv__ = __truediv__
 
-    def get_items(self, items, keep_dims: bool = False) -> "T":
+    def get_items(self, items: int | tuple[int, ...] | slice, keepdims: bool = False) -> T:
+        """
+        Index the array and the corresponding axes metadata. Only ensemble axes can be indexed.
+
+        Parameters
+        ----------
+        items : int or tuple of int or slice
+            The array is indexed according to this.
+        keepdims : bool, optional
+            If True, all ensemble axes are left in the result as dimensions with size one. Default is False.
+
+        Returns
+        -------
+        indexed_array : ArrayObject or subclass of ArrayObject
+            The indexed array object.
+        """
         if isinstance(items, (Number, slice, type(None))):
             items = (items,)
 
@@ -450,7 +605,7 @@ class HasArray(HasAxes, CopyMixin):
                 "indices must be integers or slices or a tuple of integers or slices or None"
             )
 
-        if keep_dims:
+        if keepdims:
             items = tuple(
                 slice(item, item + 1) if isinstance(item, int) else item
                 for item in items
@@ -493,17 +648,27 @@ class HasArray(HasAxes, CopyMixin):
         d["metadata"] = {**self.metadata, **metadata}
         return self.__class__(**d)
 
-    def __getitem__(self, items) -> "T":
+    def __getitem__(self, items) -> T:
         return self.get_items(items)
 
-    def to_delayed(self):
-        return dask.delayed(self._to_delayed_func)(
-            self.array, self._copy_kwargs(exclude=("array",))
-        )
-
     def expand_dims(
-            self, axis: Tuple[int, ...] = None, axis_metadata: List[AxisMetadata] = None
-    ) -> "T":
+        self, axis: Tuple[int, ...] = None, axis_metadata: List[AxisMetadata] = None
+    ) -> T:
+        """
+        Expand the shape of the array object.
+
+        Parameters
+        ----------
+        axis : int or tuple of ints
+            Position in the expanded axes where the new axis (or axes) is placed.
+        axis_metadata : AxisMetadata or List of AxisMetadata, optional
+            The axis metadata describing the expanded axes. Default is UnknownAxis.
+
+        Returns
+        -------
+        expanded : ArrayObject or subclass of ArrayObject
+            View of array object with the number of dimensions increased.
+        """
         if axis is None:
             axis = (0,)
 
@@ -528,7 +693,20 @@ class HasArray(HasAxes, CopyMixin):
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
-    def squeeze(self, axis: Tuple[int, ...] = None) -> "T":
+    def squeeze(self, axis: Tuple[int, ...] = None) -> T:
+        """
+        Remove axes of length one from array object.
+
+        Parameters
+        ----------
+        axis : int or tuple of ints, optional
+            Selects a subset of the entries of length one in the shape.
+
+        Returns
+        -------
+        squeezed : ArrayObject or subclass of ArrayObject
+            The input array object, but with all or a subset of the dimensions of length 1 removed.
+        """
         if len(self.array.shape) < len(self.base_shape):
             return self
 
@@ -556,7 +734,20 @@ class HasArray(HasAxes, CopyMixin):
 
         return self.__class__(**kwargs)
 
-    def ensure_lazy(self, chunks="auto") -> "T":
+    def ensure_lazy(self, chunks: str = "auto") -> T:
+        """
+        Creates an equivalent lazy version of the array object.
+
+        Parameters
+        ----------
+        chunks : int or tuple or str
+            How to chunk the array. See `dask.array.from_array`.
+
+        Returns
+        -------
+        lazy_array_object : ArrayObject or subclass of ArrayObject
+            Lazy version of the array object.
+        """
 
         if self.is_lazy:
             return self
@@ -569,14 +760,14 @@ class HasArray(HasAxes, CopyMixin):
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
 
     def compute(
-            self,
-            progress_bar: bool = None,
-            profiler: bool = False,
-            resource_profiler=False,
-            **kwargs,
+        self,
+        progress_bar: bool = None,
+        profiler: bool = False,
+        resource_profiler: bool = False,
+        **kwargs,
     ):
         """
-        This turns a lazy abTEM object into its in-memory equivalent.
+        Turn a lazy abTEM object into its in-memory equivalent.
 
         Parameters
         ----------
@@ -609,23 +800,36 @@ class HasArray(HasAxes, CopyMixin):
 
         return output
 
-    def visualize_graph(self, **kwargs):
-        return self.array.visualize(**kwargs)
+    def copy_to_device(self, device: str) -> T:
+        """
+        Copy array to specified device.
 
-    def copy_to_device(self, device: str) -> "T":
-        """Copy array to specified device."""
+        Parameters
+        ----------
+        device : str
+
+        Returns
+        -------
+        object_on_device : T
+        """
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = copy_to_device(self.array, device)
         return self.__class__(**kwargs)
 
-    def to_cpu(self) -> "T":
+    def to_cpu(self) -> T:
+        """
+        Move the array to the host memory from an arbitrary source array.
+        """
         return self.copy_to_device("cpu")
 
-    def to_gpu(self) -> "T":
-        return self.copy_to_device("gpu")
+    def to_gpu(self, device: str = "gpu") -> T:
+        """
+        Move the array from the host memory to a gpu.
+        """
+        return self.copy_to_device(device)
 
     def to_zarr(
-            self, url: str, compute: bool = True, overwrite: bool = False, **kwargs
+        self, url: str, compute: bool = True, overwrite: bool = False, **kwargs
     ):
         """
         Write data to a zarr file.
@@ -641,31 +845,12 @@ class HasArray(HasAxes, CopyMixin):
             If given array already exists, overwrite=False will cause an error, where overwrite=True will replace the
             existing data.
         kwargs :
-            Keyword arguments passed to dask.array.to_zarr.
+            Keyword arguments passed to `dask.array.to_zarr`.
         """
 
-        return ComputableList([self]).to_zarr(url=url, compute=compute, overwrite=overwrite, **kwargs)
-
-        # with zarr.open(url, mode="w") as root:
-        #     has_array = self.ensure_lazy()
-        #
-        #     array = has_array.copy_to_device("cpu").array
-        #
-        #     stored = array.to_zarr(
-        #         url, compute=False, component="array", overwrite=overwrite, **kwargs
-        #     )
-        #
-        #     #kwargs = has_array._copy_kwargs(exclude=("array",))
-        #
-        #     #self._pack_kwargs(root.attrs, kwargs)
-        #
-        #     root.attrs["metadata"] = self.__class__.__name__
-        #
-        # if compute:
-        #     with _compute_context():
-        #         stored = stored.compute()
-        #
-        # return stored
+        return ComputableList([self]).to_zarr(
+            url=url, compute=compute, overwrite=overwrite, **kwargs
+        )
 
     @classmethod
     def _pack_kwargs(cls, kwargs):
@@ -679,7 +864,7 @@ class HasArray(HasAxes, CopyMixin):
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
-        kwargs = {}
+        kwargs = dict()
         kwargs["ensemble_axes_metadata"] = []
         for key, value in attrs.items():
             if key == "ensemble_axes_metadata":
@@ -703,8 +888,8 @@ class HasArray(HasAxes, CopyMixin):
     def _metadata_to_json_string(self):
         return json.dumps(self._metadata_to_dict())
 
-    @classmethod
-    def _metadata_from_json_string(self, json_string):
+    @staticmethod
+    def _metadata_from_json_string(json_string):
         import abtem
 
         metadata = json.loads(json_string)
@@ -736,7 +921,7 @@ class HasArray(HasAxes, CopyMixin):
         filename : str
             The filename of the file to write.
         kwargs :
-            Keyword arguments passed to tifffile.imwrite.
+            Keyword arguments passed to `tifffile.imwrite`.
         """
         if tifffile is None:
             raise RuntimeError(
@@ -752,50 +937,26 @@ class HasArray(HasAxes, CopyMixin):
             filename, array, description=self._metadata_to_json(), **kwargs
         )
 
-    # @classmethod
-    # def _unpack_kwargs(cls, attrs):
-    #     kwargs = {}
-    #     kwargs["ensemble_axes_metadata"] = []
-    #     for key, value in attrs.items():
-    #         if key == "ensemble_axes_metadata":
-    #             kwargs["ensemble_axes_metadata"] = [axis_from_dict(d) for d in value]
-    #         elif key == "type":
-    #             pass
-    #         else:
-    #             kwargs[key] = value
-    #
-    #     return kwargs
-
     @classmethod
-    def from_zarr(cls, url, chunks: int = "auto") -> "T":
+    def from_zarr(cls, url, chunks: int = "auto") -> T:
         """
         Read wave functions from a hdf5 file.
 
         url : str
             Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
             s3:// for remote data.
-        chunks : int, optional
-            aaaa
+        chunks :  tuple of ints or tuples of ints
+            Passed to dask.array.from_array(), allows setting the chunks on initialisation, if the chunking scheme in
+            the on-disc dataset is not optimal for the calculations to follow.
         """
-
         return from_zarr(url, chunks=chunks)
-
-        # with zarr.open(url, mode="r") as f:
-        #     kwargs = cls._unpack_kwargs(f.attrs)
-        #
-        # num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
-        #
-        # if chunks == "auto":
-        #     chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
-        # sss
-        # array = da.from_zarr(url, component="array", chunks=chunks)
-        #
-        # with config.set({"warnings.overspecified-grid": False}):
-        #     return cls(array, **kwargs)
 
     @staticmethod
     def _apply_wave_transform(
-        *args, waves_partial, transform_partial, transform_ensemble_shape,
+        *args,
+        waves_partial,
+        transform_partial,
+        transform_ensemble_shape,
     ):
         transform = transform_partial(
             *(arg.item() for arg in args[: len(transform_ensemble_shape)])
@@ -815,9 +976,7 @@ class HasArray(HasAxes, CopyMixin):
 
         return waves.array
 
-    def apply_transform(
-        self, transform, max_batch: Union[int, str] = "auto"
-    ):
+    def apply_transform(self, transform, max_batch: Union[int, str] = "auto"):
         """
         Transform the wave functions by a given transformation.
 
@@ -900,7 +1059,7 @@ class HasArray(HasAxes, CopyMixin):
                     transform_ensemble_shape=transform.ensemble_shape,
                     waves_partial=self.from_partitioned_args(),  # noqa
                     meta=xp.array((), dtype=self.array.dtype),
-                    align_arrays=False
+                    align_arrays=False,
                 )
 
             kwargs = self._copy_kwargs(exclude=("array",))
@@ -914,13 +1073,41 @@ class HasArray(HasAxes, CopyMixin):
         else:
             return transform.apply(self)
 
-    def set_ensemble_axes_metadata(self, axes_metadata, axis):
+    def set_ensemble_axes_metadata(self, axes_metadata: AxisMetadata, axis: int):
+        """
+        Sets the axes metadata of an ensemble axis.
+
+        Parameters
+        ----------
+        axes_metadata : AxisMetadata
+            The new axis metadata.
+        axis : int
+            The axis to set.
+        """
 
         self.ensemble_axes_metadata[axis] = axes_metadata
 
         self._check_axes_metadata()
-
         return self
+
+    def _stack(self, arrays, axis_metadata, axis):
+        xp = get_array_module(arrays[0].array)
+
+        if arrays[0].is_lazy:
+            array = da.stack([measurement.array for measurement in arrays], axis=axis)
+        else:
+            array = xp.stack([measurement.array for measurement in arrays], axis=axis)
+
+        cls = arrays[0].__class__
+        kwargs = arrays[0]._copy_kwargs(exclude=("array",))
+
+        kwargs["array"] = array
+        ensemble_axes_metadata = [
+            axis_metadata.copy() for axis_metadata in kwargs["ensemble_axes_metadata"]
+        ]
+        ensemble_axes_metadata.insert(axis, axis_metadata)
+        kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
+        return cls(**kwargs)
 
 
 def expand_dims(a, axis):
@@ -982,43 +1169,29 @@ def from_zarr(url: str, chunks: Chunks = None):
     return imported
 
 
-# def from_zarr(url: str, chunks: Chunks = None):
-#     """
-#     Read abTEM data from zarr.
-#
-#     Parameters
-#     ----------
-#     url : str
-#         Location of the data. A URL can include a protocol specifier like s3:// for remote data.
-#     chunks :  tuple of ints or tuples of ints
-#         Passed to dask.array.from_array(), allows setting the chunks on initialisation, if the chunking scheme in the
-#         on-disc dataset is not optimal for the calculations to follow.
-#
-#     """
-#     has_arrays = []
-#     with zarr.open(url, mode="r") as f:
-#         for (key, json_string), component in zip(f.attrs.items(), f.array_keys()):
-#             cls, axes_metadata, metadata = HasArray._metadata_from_json_string(json_string)
-#
-#             num_ensemble_axes = len(axes_metadata) - cls._base_dims
-#             if chunks == "auto":
-#                 chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
-#
-#             array = da.from_zarr(url, component=component, chunks=chunks)
-#             has_array = cls.from_array_and_metadata(
-#                 array=array, axes_metadata=axes_metadata, metadata=metadata
-#             )
-#             has_arrays.append(has_array)
-#
-#     if len(has_arrays) == 1:
-#         return has_arrays[0]
-#     else:
-#         return ComputableList(has_arrays)
-
-
 def stack(
-        has_arrays: Sequence[HasArray], axis_metadata: AxisMetadata = None, axis: int = 0
-) -> "T":
+    arrays: Sequence[ArrayObject], axis_metadata: AxisMetadata | Sequence[str] = None, axis: int = 0
+) -> T:
+    """
+    Join multiple array objects (e.g. Waves and BaseMeasurement) along a new ensemble axis.
+
+    Parameters
+    ----------
+    arrays : sequence of array objects
+        Each abTEM array object must have the same type and shape.
+    axis_metadata : AxisMetadata
+        The axis metadata describing the new axis.
+    axis : int
+        The ensemble axis in the resulting array object along which the input arrays are stacked.
+    Returns
+    -------
+    array_object : ArrayObject
+        The stacked array object of the same type as the input.
+    """
+
+    assert axis <= len(arrays[0].ensemble_shape)
+    assert axis >= 0
+
     if axis_metadata is None:
         axis_metadata = UnknownAxis()
 
@@ -1027,59 +1200,45 @@ def stack(
             raise ValueError()
         axis_metadata = OrdinalAxis(values=axis_metadata)
 
-    xp = get_array_module(has_arrays[0].array)
-
-    assert axis <= len(has_arrays[0].ensemble_shape)
+    return arrays[0]._stack(arrays, axis_metadata, axis)
 
 
-
-    if has_arrays[0].is_lazy:
-        array = da.stack([measurement.array for measurement in has_arrays], axis=axis)
-    else:
-        array = xp.stack([measurement.array for measurement in has_arrays], axis=axis)
-
-    cls = has_arrays[0].__class__
-    kwargs = has_arrays[0]._copy_kwargs(exclude=("array",))
-
-    kwargs["array"] = array
-    kwargs["ensemble_axes_metadata"] = [axis_metadata] + kwargs[
-        "ensemble_axes_metadata"
-    ]
-    return cls(**kwargs)
-
-
-def concatenate(has_arrays: Sequence[HasArray], axis: bool = 0) -> "T":
+def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> T:
     """
     Join a sequence of abTEM array classes along an existing axis.
 
     Parameters
     ----------
-    has_arrays : list of
-    axis :
+    arrays : sequence of array objects
+        Each abTEM array object must have the same type and shape, except in the dimension corresponding to axis. The
+        axis metadata along the concatenated axis must be compatible for concatenation.
+    axis : int, optional
+        The axis along which the arrays will be joined. Default is 0.
 
     Returns
     -------
-
+    array_object : ArrayObject
+        The concatenated array object of the same type as the input.
     """
 
-    xp = get_array_module(has_arrays[0].array)
+    xp = get_array_module(arrays[0].array)
 
-    if has_arrays[0].is_lazy:
-        array = da.concatenate([has_array.array for has_array in has_arrays], axis=axis)
+    if arrays[0].is_lazy:
+        array = da.concatenate([has_array.array for has_array in arrays], axis=axis)
     else:
-        array = xp.concatenate([has_array.array for has_array in has_arrays], axis=axis)
+        array = xp.concatenate([has_array.array for has_array in arrays], axis=axis)
 
-    cls = has_arrays[0].__class__
+    cls = arrays[0].__class__
 
-    concatenated_axes_metadata = has_arrays[0].axes_metadata[axis]
-    for has_array in has_arrays[1:]:
+    concatenated_axes_metadata = arrays[0].axes_metadata[axis]
+    for has_array in arrays[1:]:
         concatenated_axes_metadata = concatenated_axes_metadata.concatenate(
             has_array.axes_metadata[axis]
         )
 
-    axes_metadata = copy.deepcopy(has_arrays[0].axes_metadata)
+    axes_metadata = copy.deepcopy(arrays[0].axes_metadata)
     axes_metadata[axis] = concatenated_axes_metadata
 
     return cls.from_array_and_metadata(
-        array=array, axes_metadata=axes_metadata, metadata=has_arrays[0].metadata
+        array=array, axes_metadata=axes_metadata, metadata=arrays[0].metadata
     )
