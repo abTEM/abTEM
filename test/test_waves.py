@@ -165,13 +165,13 @@ def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
 
 
 @given(data=st.data(), potential=abtem_st.potential())
-@pytest.mark.parametrize("lazy", [False])
+@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
     "waves_builder",
     [
         abtem_st.probe,
-        #abtem_st.plane_wave,
-        #abtem_st.s_matrix,
+        abtem_st.plane_wave,
+        abtem_st.s_matrix,
     ],
 )
 def test_multislice_scatter(data, potential, waves_builder, lazy):
@@ -184,27 +184,25 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
 
     waves = waves_builder.build().compute()
 
-    old_sum = waves.diffraction_patterns(max_angle="full").array.sum()
+    #old_sum = waves.diffraction_patterns(max_angle="full").array.sum()
 
     waves = waves.multislice(potential).compute()
 
-    # try:
-    #     waves = waves.reduce()
-    # except AttributeError:
-    #     pass
+    try:
+        waves = waves.reduce()
+    except AttributeError:
+        pass
 
-    new_sum = waves.diffraction_patterns(max_angle="full").array.sum()
+    #new_sum = waves.diffraction_patterns(max_angle="full").array.sum()
 
-    print(old_sum, new_sum, old_sum > new_sum, potential.array)
-
-
+    #print(old_sum, new_sum, old_sum > new_sum, potential.array)
     # print(waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)))
     #
-    # assert np.all(
-    #     waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0001
-    # ) or np.allclose(
-    #     waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)), 1.00002
-    # )
+    assert np.all(
+        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0001
+    ) or np.allclose(
+        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)), 1.00002
+    )
 
 
 @given(data=st.data(), potential=abtem_st.potential())

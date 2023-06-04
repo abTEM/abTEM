@@ -2832,7 +2832,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         x, y = xp.asarray(x), xp.asarray(y)
 
         if self.is_lazy:
-            base_axes = tuple(range(len(self.base_shape)))
+            base_axes = tuple(range(len(self.ensemble_shape), len(self.base_shape) + len(self.ensemble_shape)))
             array = self.array.map_blocks(
                 self._com, x=x, y=y, drop_axis=base_axes, dtype=np.complex64
             )

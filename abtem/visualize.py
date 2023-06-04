@@ -419,7 +419,7 @@ def discrete_cmap(num_colors, base_cmap):
     if isinstance(base_cmap, str):
         base_cmap = plt.get_cmap(base_cmap)
     colors = base_cmap(range(0, num_colors))
-    return matplotlib.colors.LinearSegmentedColormap.from_list(None, colors, num_colors)
+    return matplotlib.colors.LinearSegmentedColormap.from_list("", colors, num_colors)
 
 
 def _make_indexing_sliders(
@@ -1826,7 +1826,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             self._xunits, self._get_default_xunits()
         )
         positions[:, 1] *= _get_conversion_factor(
-            self._yunits, self._get_default_y_units()
+            self._yunits, self._get_default_yunits()
         )
         return positions
 
@@ -1906,7 +1906,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     def _get_default_xunits(self):
         return self._reciprocal_space_axes[-1].units
 
-    _get_default_y_units = _get_default_xunits
+    def _get_default_yunits(self):
+        return self._reciprocal_space_axes[-1].units
 
     def set_xlim(self):
         for i, measurement in self.generate_measurements():

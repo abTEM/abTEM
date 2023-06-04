@@ -97,7 +97,7 @@ def test_inplace_add_subtract(data, measurement, method, device):
 
 @given(data=st.data())
 @pytest.mark.parametrize("method", ["sum", "mean", "std"])
-@pytest.mark.parametrize("device", [gpu])
+@pytest.mark.parametrize("device", [gpu, "cpu"])
 @pytest.mark.parametrize(
     "measurement",
     [
@@ -111,17 +111,17 @@ def test_reduce(data, measurement, method, device):
     measurement = data.draw(measurement(lazy=True, device=device))
 
     axes_indices = st.integers(
-        min_value=0, max_value=max(len(measurement.ensemble_axes) - 1, 0)
+        min_value=0, max_value=max(len(measurement.ensemble_shape) - 1, 0)
     )
     axes_indices = st.lists(
         elements=axes_indices,
         min_size=0,
-        max_size=len(measurement.ensemble_axes),
+        max_size=len(measurement.ensemble_shape),
         unique=True,
     )
     axes_indices = data.draw(axes_indices)
 
-    axes = tuple(measurement.ensemble_axes[i] for i in axes_indices)
+    axes = tuple(axes_indices)
     num_lost_dims = len(axes)
 
     new_measurement = getattr(measurement.compute(), method)(axes)
@@ -330,6 +330,9 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
         )
     )
     assume(len(_scan_sampling(measurement)) > 0)
+
+    print(measurement.shape, measurement.axes_metadata)
+
     measurement.center_of_mass().compute()
 
 

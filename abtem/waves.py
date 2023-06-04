@@ -931,12 +931,14 @@ class Waves(BaseWaves, ArrayObject):
         return self.apply_transform(ctf, max_batch=max_batch)
 
     @staticmethod
-    def _lazy_multislice(*args, potential_partial, waves_partial, detectors, **kwargs):
+    def _lazy_multislice(*args, waves_partial, potential_partial, **kwargs):
+
         potential = potential_partial(*(arg.item() for arg in args[:1]))
         ensemble_axes_metadata = [axis.item() for axis in args[1:-1]]
+
         waves = waves_partial(*args[-1:], ensemble_axes_metadata=ensemble_axes_metadata)
 
-        measurements = waves.multislice(potential, detectors=detectors, **kwargs)
+        measurements = waves.multislice(potential, **kwargs)
         measurements = (
             (measurements,) if hasattr(measurements, "array") else measurements
         )
@@ -1017,13 +1019,13 @@ class Waves(BaseWaves, ArrayObject):
                 tuple(range(num_new_symbols, num_new_symbols + len(self.shape))),
                 new_axes=new_axes,
                 concatenate=True,
-                meta=np.array((), dtype=np.complex64)
+                meta=np.array((), dtype=np.complex64),
+                waves_partial = self._from_partitioned_args(), # noqa
+                potential_partial=potential._from_partitioned_args(),  # noqa
                 ** {
                     "detectors": detectors,
-                    "potential_partial": potential._from_partitioned_args(),
                     "conjugate": conjugate,
                     "transpose": transpose,
-                    "waves_partial": self._from_partitioned_args(),
                 }
             )
 
