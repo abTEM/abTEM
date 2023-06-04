@@ -1,6 +1,8 @@
 """Module to describe the contrast transfer function (CTF) and the related apertures."""
+from __future__ import annotations
 import copy
 import re
+from abc import abstractmethod
 from collections import defaultdict
 from functools import reduce
 from typing import Dict, Tuple, TYPE_CHECKING, Union, List
@@ -9,14 +11,13 @@ import dask
 import dask.array as da
 import numpy as np
 
-from abtem import stack
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, energy2wavelength
 from abtem.core.fft import fft_crop
-from abtem.core.grid import HasGridMixin, GridUndefinedError
+from abtem.core.grid import HasGridMixin
 from abtem.core.transform import FourierSpaceConvolution
 from abtem.core.utils import expand_dims_to_match
 from abtem.distributions import (
@@ -28,7 +29,7 @@ from abtem.distributions import (
 from abtem.measurements import ReciprocalSpaceLineProfiles
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves
+    from abtem.waves import Waves, BaseWaves
 
 
 class BaseAperture(FourierSpaceConvolution, HasGridMixin):
@@ -48,6 +49,10 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
         super().__init__(
             energy=energy, extent=extent, gpts=gpts, sampling=sampling, **kwargs
         )
+
+    @abstractmethod
+    def _evaluate_with_alpha_and_phi(self, alpha, phi):
+        pass
 
     @property
     def metadata(self):
@@ -71,10 +76,12 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
 
     @property
     def nyquist_sampling(self) -> float:
+        """Nyquist sampling corresponding to the semiangle cutoff of the aperture [Å]."""
         return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
 
     @property
     def semiangle_cutoff(self):
+        """Semiangle cutoff of the aperture [mrad]."""
         return self._semiangle_cutoff
 
     def _cropped_aperture(self):
@@ -96,7 +103,7 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
         array = fft_crop(array, gpts)
         return array
 
-    def evaluate(self, waves: "Waves" = None, lazy: bool = False) -> np.ndarray:
+    def evaluate(self, waves: BaseWaves = None, lazy: bool = False) -> np.ndarray:
         if waves is not None:
             self.accelerator.match(waves)
             self.grid.match(waves)
@@ -111,7 +118,31 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
             return self._evaluate_from_cropped(gpts=self.gpts)
 
 
-def soft_aperture(alpha, phi, semiangle_cutoff, angular_sampling):
+def soft_aperture(
+    alpha: np.ndarray,
+    phi: np.ndarray,
+    semiangle_cutoff: float | np.ndarray,
+    angular_sampling: tuple[float, float],
+):
+    """
+    Calculates an array with a disk of ones and a soft edge.
+
+    Parameters
+    ----------
+    alpha : 2D array
+        Array of radial angles [mrad].
+    phi : 2D array
+        Array of azimuthal angles [rad].
+    semiangle_cutoff : float or 1D array
+        Semiangle cutoff(s) of the aperture(s). If given as an array, a 3D array is returned where the first dimension
+        represents a different aperture for each item in the array of semiangle cutoffs.
+    angular_sampling : tuple of float
+        Reciprocal-space sampling in units of scattering angles [mrad].
+
+    Returns
+    -------
+    soft_aperture_array : 2D or 3D np.ndarray
+    """
     xp = get_array_module(alpha)
 
     if np.isscalar(semiangle_cutoff):
@@ -139,7 +170,6 @@ def soft_aperture(alpha, phi, semiangle_cutoff, angular_sampling):
         (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
     )
     array[zeros] = 1.0
-
     return array
 
 
@@ -208,14 +238,14 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
             return []
 
     @property
-    def soft(self):
+    def soft(self) -> bool:
+        """True if the aperture has a soft edge."""
         return self._soft
 
     def _evaluate_with_alpha_and_phi(
         self, alpha: Union[float, np.ndarray], phi
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
-
 
         unpacked, _ = _unpack_distributions(
             self.semiangle_cutoff, shape=alpha.shape, xp=xp
@@ -225,7 +255,6 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         semiangle_cutoff = semiangle_cutoff * 1e-3
 
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
-
 
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
@@ -265,7 +294,7 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
     num_spokes : int
         Number of spokes.
     spoke_width : float
-        Width of spokes [degree].
+        Width of spokes [deg].
     num_rings : int
         Number of rings.
     ring_width : float
@@ -308,18 +337,22 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def num_spokes(self) -> int:
+        """Number of spokes."""
         return self._spoke_num
 
     @property
     def spoke_width(self) -> float:
+        """Width of spokes [deg]."""
         return self._spoke_width
 
     @property
     def num_rings(self) -> int:
+        """Number of rings."""
         return self._num_rings
 
     @property
     def ring_width(self) -> float:
+        """Width of rings [mrad]."""
         return self._ring_width
 
     @property
@@ -395,6 +428,7 @@ class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def quantum_number(self):
+        """Quantum number of vortex beam."""
         return self._quantum_number
 
     @property
@@ -421,7 +455,7 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
 
     Parameters
     ----------
-    focal_spread: float or BaseDistribution
+    focal_spread: float or 1D array or BaseDistribution
         The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å].
         Alternatively, a distribution of values may be provided.
     energy : float, optional
@@ -455,6 +489,7 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
 
     @property
     def focal_spread(self):
+        """The standard deviation of the focal spread [Å]."""
         return self._focal_spread
 
     @focal_spread.setter
@@ -494,17 +529,17 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
 
 
 def _aberration_property(name, key):
-    def getter(self):
+    def _getter(self):
         try:
             return getattr(self, name)[key]
         except KeyError:
             return 0.0
 
-    def setter(self, value):
+    def _setter(self, value):
         value = _validate_distribution(value)
         getattr(self, name)[key] = value
 
-    return property(getter, setter)
+    return property(_getter, _setter)
 
 
 class _HasAberrations:
@@ -607,6 +642,7 @@ class _HasAberrations:
 
     @property
     def defocus(self) -> Union[float, BaseDistribution]:
+        """Defocus equivalent to negative C10."""
         return -self.C10
 
     @defocus.setter
@@ -637,8 +673,8 @@ class _HasAberrations:
     def _symbols(cls):
         return cls._coefficient_symbols() + cls._angular_symbols()
 
-    @classmethod
-    def _aliases(self):
+    @staticmethod
+    def _aliases():
         return {
             "defocus": "C10",
             "astigmatism": "C12",
@@ -652,7 +688,8 @@ class _HasAberrations:
     def _default_aberration_coefficients(self):
         return {symbol: 0.0 for symbol in self._symbols()}
 
-    def _check_is_valid_aberrations(self, aberrations):
+    @staticmethod
+    def _check_is_valid_aberrations(aberrations):
         for key in aberrations.keys():
             if (key not in polar_symbols) and (key not in polar_aliases.keys()):
                 raise ValueError("{} not a recognized phase aberration".format(key))
@@ -676,28 +713,28 @@ class _HasAberrations:
         return axes_metadata
 
     @property
-    def aberration_coefficients(self) -> Dict[str, Union[float, BaseDistribution]]:
-        """The parameters."""
+    def aberration_coefficients(self) -> dict[str, float | BaseDistribution]:
+        """The aberration coefficients as a dictionary."""
         return copy.deepcopy(self._aberration_coefficients)
 
     @property
-    def has_aberrations(self):
+    def _has_aberrations(self) -> bool:
         if np.all(np.array(list(self._aberration_coefficients.values())) == 0.0):
             return False
         else:
             return True
 
-    def set_aberrations(self, parameters: Dict[str, Union[float, BaseDistribution]]):
+    def set_aberrations(self, aberration_coefficients: dict[str, float | BaseDistribution]):
         """
         Set the phase of the phase aberration.
 
         Parameters
         ----------
-        parameters : dict
+        aberration_coefficients : dict
             Mapping from aberration symbols to their corresponding values.
         """
 
-        for symbol, value in parameters.items():
+        for symbol, value in aberration_coefficients.items():
             value = _validate_distribution(value)
 
             if symbol in self._symbols():
@@ -709,7 +746,7 @@ class _HasAberrations:
             else:
                 raise ValueError("{} not a recognized parameter".format(symbol))
 
-        for symbol, value in parameters.items():
+        for symbol, value in aberration_coefficients.items():
             if symbol in ("defocus", "C10"):
                 value = _validate_distribution(value)
 
@@ -742,9 +779,9 @@ class SpatialEnvelope(
 
     Parameters
     ----------
-    angular_spread: float or BaseDistribution
-        The standard deviation of the angular deviations due to source size [Å]. Alternatively, a distribution of angles
-        may be provided.
+    angular_spread: float or 1D array or BaseDistribution
+        The standard deviation of the angular deviations due to source size [mrad]. Alternatively, a distribution of
+        standard deviations may be provided.
     aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
         [Å] and angles should be given in [radian].
@@ -803,6 +840,7 @@ class SpatialEnvelope(
 
     @property
     def angular_spread(self):
+        """The standard deviation of the angular deviations due to source size [mrad]."""
         return self._angular_spread
 
     @angular_spread.setter
@@ -993,7 +1031,7 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        if not self.has_aberrations:
+        if not self._has_aberrations:
             return xp.ones(self.ensemble_shape + alpha.shape, dtype=xp.complex64)
 
         parameters, weights = _unpack_distributions(
@@ -1068,8 +1106,6 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
                 )
             )
 
-
-
         array *= np.float32(2 * xp.pi / self.wavelength)
         array = complex_exponential(-array)
 
@@ -1078,8 +1114,8 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
 
         return array
 
-    def apply(self, waves, in_place: bool = False):
-        if self.has_aberrations:
+    def apply(self, waves: Waves, in_place: bool = False) -> Waves:
+        if self._has_aberrations:
             return super().apply(waves, in_place=in_place)
         else:
             return waves
@@ -1187,6 +1223,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def scherzer_defocus(self):
+        """The Scherzer defocus [Å]."""
         self.accelerator.check_is_defined()
 
         if self.Cs == 0.0:
@@ -1196,10 +1233,12 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def crossover_angle(self):
+        """The first zero-crossing of the phase at Scherzer defocus [mrad]."""
         return 1e3 * energy2wavelength(self.energy) / self.point_resolution
 
     @property
     def point_resolution(self):
+        """The Scherzer point resolution [Å]."""
         return point_resolution(self.Cs, self.energy)
 
     @property
@@ -1246,6 +1285,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def soft(self) -> float:
+        """True if the aperture has a soft edge."""
         return self._soft
 
     @property
@@ -1259,16 +1299,16 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def focal_spread(self) -> float:
-        """The focal spread [Å]."""
+        """The standard deviation of the focal spread [Å]."""
         return self._focal_spread
 
     @focal_spread.setter
     def focal_spread(self, value: float):
-        """The angular spread [mrad]."""
         self._focal_spread = value
 
     @property
     def angular_spread(self) -> float:
+        """The standard deviation of the angular deviations due to source size [mrad]."""
         return self._angular_spread
 
     @angular_spread.setter
@@ -1277,6 +1317,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def flip_phase(self) -> bool:
+        """If true the signs of all negative parts of the CTF are changed to positive."""
         return self._flip_phase
 
     @flip_phase.setter
@@ -1285,6 +1326,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def wiener_snr(self) -> float:
+        """If true a Wiener filter is applied to the CTF."""
         return self._wiener_snr
 
     @wiener_snr.setter
@@ -1341,16 +1383,36 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             array = array * new_array
 
         if self._wiener_snr != 0.0:
-            return (1 + 1/self._wiener_snr) * array**2 / (array**2 + 1/self._wiener_snr)
+            return (
+                (1 + 1 / self._wiener_snr)
+                * array**2
+                / (array**2 + 1 / self._wiener_snr)
+            )
 
         elif self._flip_phase:
-            return (array.real - (1j) * np.abs(array.imag))
+            return array.real - 1j * np.abs(array.imag)
 
         else:
             return array
 
     def profiles(self, max_angle: float = None, phi: float = 0.0):
+        """
+        Calculate radial line profiles for each included component (phase aberrations, aperture, temporal and spatial
+        envelopes) of the contrast transfer function.
 
+        Parameters
+        ----------
+        max_angle : float
+            The maximum scattering angle included in the radial line profiles [mrad]. The default is 1.5 times the
+            semiangle cutoff or 50 mrad if no semiangle cutoff is set.
+        phi : float
+            The azimuthal angle of the radial line profiles [rad]. Default is 0.
+
+        Returns
+        -------
+        ctf_profiles : ReciprocalSpaceLineProfiles
+            Ensemble of reciprocal space line profiles. The first ensemble dimension represents the different
+        """
         if max_angle is None:
             if self.semiangle_cutoff == np.inf:
                 max_angle = 50
@@ -1360,7 +1422,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         sampling = max_angle / 1000.0 / 1000.0
         alpha = np.arange(0, max_angle / 1000.0, sampling).astype(np.float32)
 
-        components = {}
+        components = dict()
 
         components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
 
@@ -1377,7 +1439,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         if self._aperture.semiangle_cutoff != np.inf:
             components["aperture"] = self._evaluate_to_match(self._aperture, alpha, phi)
 
-        components["ctf"] = reduce(lambda x, y: x*y, tuple(components.values()))
+        components["ctf"] = reduce(lambda x, y: x * y, tuple(components.values()))
         ensemble_axes_metadata = self.ensemble_axes_metadata
 
         if len(components) > 1:
@@ -1387,7 +1449,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             )
 
             component_metadata = [
-                OrdinalAxis(label="", values=tuple(components.keys()))
+                OrdinalAxis(label="", values=tuple(components.keys()), _default_type="overlay")
             ]
 
             ensemble_axes_metadata = ensemble_axes_metadata + component_metadata
@@ -1404,88 +1466,6 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         )
 
         return profiles
-
-        # print(aberrations.shape, spatial_envelope.shape, temporal_envelope.shape, aperture.shape, envelope.shape)
-        # sss
-        # aberrations, spatial_envelope = expand_dims_to_match(aperture, aberrations, match_dims)
-        #
-        # #array =
-        #
-        # # temporal_envelope = self._temporal_envelope._evaluate_with_alpha_and_phi(
-        # #     alpha, phi
-        # # )
-        # aperture = self._aperture._evaluate_with_alpha_and_phi(alpha, phi)
-        #
-        # match_dims = [(-1,), (-1,)]
-        #
-        # arr1 = aberrations
-        # arr2 = aperture
-        #
-        #
-        #
-        # print(arr1.shape, arr2.shape)
-        #
-        # array = aberrations * aperture
-
-        # envelope = aperture * temporal_envelope * spatial_envelope
-        #
-        # sampling = alpha[1] / energy2wavelength(self.energy)
-        #
-        # axis_metadata = ["ctf"]
-        # metadata = {"energy": self.energy}
-        # profiles = [
-        #     ReciprocalSpaceLineProfiles(
-        #         -aberrations.imag * envelope,
-        #         sampling=sampling,
-        #         metadata=metadata,
-        #         ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,
-        #     )
-        # ]
-        #
-        # if self._aperture.semiangle_cutoff != np.inf:
-        #     profiles += [
-        #         ReciprocalSpaceLineProfiles(
-        #             aperture, sampling=sampling, metadata=metadata
-        #         )
-        #     ]
-        #     axis_metadata += ["aperture"]
-        #
-        # if (
-        #     self._temporal_envelope.focal_spread > 0.0
-        #     and self._spatial_envelope.angular_spread > 0.0
-        # ):
-        #     profiles += [
-        #         ReciprocalSpaceLineProfiles(
-        #             envelope, sampling=sampling, metadata=metadata
-        #         )
-        #     ]
-        #     axis_metadata += ["envelope"]
-        #
-        # if self._temporal_envelope.focal_spread > 0.0:
-        #     profiles += [
-        #         ReciprocalSpaceLineProfiles(
-        #             temporal_envelope, sampling=sampling, metadata=metadata
-        #         )
-        #     ]
-        #     axis_metadata += ["temporal"]
-        #
-        # if self._spatial_envelope.angular_spread > 0.0:
-        #     profiles += [
-        #         ReciprocalSpaceLineProfiles(
-        #             spatial_envelope,
-        #             sampling=sampling,
-        #             metadata=metadata,
-        #             ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,
-        #         )
-        #     ]
-        #     axis_metadata += ["spatial"]
-        #
-        # if len(profiles) > 1:
-        #     return stack(
-        #         profiles, axis_metadata=OrdinalAxis(values=tuple(axis_metadata))
-        #     )
-        # else:
-        #     return profiles[0]
 
 
 def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
@@ -1560,14 +1540,14 @@ def polar2cartesian(polar):
     cartesian["C32a"] = -polar["C32"] * np.cos(2 * polar["phi32"])
     cartesian["C32b"] = polar["C32"] * np.cos(np.pi / 2 - 2 * polar["phi32"])
     cartesian["C34a"] = polar["C34"] * np.cos(-4 * polar["phi34"])
-    K = np.sqrt(3 + np.sqrt(8.0))
+    k = np.sqrt(3 + np.sqrt(8.0))
     cartesian["C34b"] = (
         1
         / 4.0
-        * (1 + K**2) ** 2
-        / (K**3 - K)
+        * (1 + k**2) ** 2
+        / (k**3 - k)
         * polar["C34"]
-        * np.cos(4 * np.arctan(1 / K) - 4 * polar["phi34"])
+        * np.cos(4 * np.arctan(1 / k) - 4 * polar["phi34"])
     )
 
     return cartesian

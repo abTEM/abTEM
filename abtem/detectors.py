@@ -1,10 +1,14 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from __future__ import annotations
 from abc import ABCMeta, abstractmethod
+from copy import copy
 from typing import TYPE_CHECKING, Type, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+from abtem.visualize import discrete_cmap
+
 from numpy.typing import NDArray
 from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
@@ -17,7 +21,7 @@ from abtem.measurements import (
     _scanned_measurement_type,
     _polar_detector_bins,
 )
-
+import matplotlib
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
     from abtem.measurements import BaseMeasurements
@@ -132,7 +136,7 @@ class BaseDetector(CopyMixin, metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def measurement_type(self, waves: BaseWaves) -> Type[BaseMeasurements]:
+    def measurement_type(self, waves: BaseWaves) -> type[BaseMeasurements]:
         """
         The type of the created measurements when detecting the given waves.
 
@@ -143,7 +147,7 @@ class BaseDetector(CopyMixin, metaclass=ABCMeta):
 
         Returns
         -------
-        measurement_type : type of BaseMeasurements
+        measurement_type : type of :class:`BaseMeasurements`
         """
         pass
 
@@ -159,7 +163,7 @@ class BaseDetector(CopyMixin, metaclass=ABCMeta):
 
         Returns
         -------
-        axes_metadata : list of AxisMetadata
+        axes_metadata : list of :class:`AxisMetadata`
         """
         pass
 
@@ -322,24 +326,10 @@ class AnnularDetector(BaseDetector):
     # def add_to_plot(self, ax):
     #     pass
 
-    def get_detector_region(
+    def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
-    ) -> NDArray[Any, bool]:
-        """
-        Get the annular detector region as a boolean array.
+    ) -> np.ndarray:
 
-        Parameters
-        ----------
-        waves : BaseWaves
-            The waves to derive the annular detector region from.
-        fftshift : bool, optional
-            If True, the zero-frequency of the detector region if shifted to the center of the array, otherwise the
-            center is at (0, 0).
-
-        Returns
-        -------
-        detector_region : np.ndarray
-        """
         array = _polar_detector_bins(
             gpts=waves.gpts,
             sampling=waves.angular_sampling,
@@ -354,31 +344,29 @@ class AnnularDetector(BaseDetector):
         )
         return array >= 0
 
-    def show(self, waves: BaseWaves, **kwargs):
+    def get_detector_region(self, waves: BaseWaves, fftshift: bool = True):
         """
-        Show the annular detector region.
+        Get the annular detector region as a diffraction pattern.
 
         Parameters
         ----------
         waves : BaseWaves
             The waves to derive the annular detector region from.
-        kwargs :
-            Optional keyword arguments for DiffractionPatterns.show
+        fftshift : bool, optional
+            If True, the zero-frequency of the detector region if shifted to the center of the array, otherwise the
+            center is at (0, 0).
 
         Returns
         -------
-        visualization : MeasurementVisualization2D
+        detector_region : DiffractionPatterns
         """
 
-        if "units" not in kwargs:
-            kwargs.update({"units": "mrad"})
-
-        array = self.get_detector_region(waves, fftshift=True)
-        metadata = {"energy": waves.energy}
+        array = self._get_detector_region_array(waves, fftshift=fftshift)
+        metadata = {"energy": waves.energy, "label": "detector efficiency"}
         diffraction_patterns = DiffractionPatterns(
             array, metadata=metadata, sampling=waves.reciprocal_space_sampling
         )
-        return diffraction_patterns.show(**kwargs)
+        return diffraction_patterns
 
 
 class _AbstractRadialDetector(BaseDetector):
@@ -522,6 +510,46 @@ class _AbstractRadialDetector(BaseDetector):
 
         return measurement
 
+    def get_detector_regions(self, waves: BaseWaves=None):
+        """
+        Get the polar detector regions as a polar measurement.
+
+        Parameters
+        ----------
+        waves : BaseWaves
+            The waves to derive the polar detector regions from.
+
+        Returns
+        -------
+        detector_region : PolarMeasurements
+        """
+
+        bins = np.arange(
+            0,
+            self._calculate_nbins_radial(waves)
+            * self._calculate_nbins_azimuthal(waves),
+        )
+        bins = bins.reshape(
+            (
+                self._calculate_nbins_radial(waves),
+                self._calculate_nbins_azimuthal(waves),
+            )
+        )
+
+        metadata = copy(waves.metadata)
+        metadata.update({"label":"detector regions", "units":""})
+
+        polar_measurements = PolarMeasurements(
+            bins,
+            radial_sampling=self.radial_sampling,
+            azimuthal_sampling=self.azimuthal_sampling,
+            radial_offset=self.inner,
+            metadata=metadata,
+            azimuthal_offset=self._rotation,
+        )
+
+        return polar_measurements
+
     def show(self, waves: BaseWaves = None, **kwargs):
         """
         Show the segmented detector regions as a polar plot.
@@ -537,40 +565,29 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         visualization : MeasurementVisualization2D
         """
+
+        num_colors = self._calculate_nbins_radial(waves) * self._calculate_nbins_azimuthal(waves)
+
         if "cmap" not in kwargs:
-            kwargs.update({"cmap": "tab20"})
+            if num_colors <= 10:
+                kwargs["cmap"] = "tab10"
+            else:
+                kwargs["cmap"] = "tab20"
 
-        cmap = kwargs["cmap"]
+        kwargs["cmap"] = discrete_cmap(num_colors=num_colors, base_cmap=kwargs["cmap"])
 
-        bins = np.arange(
-            0,
-            self._calculate_nbins_radial(waves)
-            * self._calculate_nbins_azimuthal(waves),
-        )
-        bins = bins.reshape(
-            (
-                self._calculate_nbins_radial(waves),
-                self._calculate_nbins_azimuthal(waves),
-            )
-        )
+        if "vmin" not in kwargs:
+            kwargs["vmin"] = -.5
 
-        vmin = -0.5
-        vmax = np.max(bins) + 0.5
-        cmap = plt.get_cmap(cmap, np.nanmax(bins) + 1)
-        cmap.set_under(color="white")
-        polar_measurements = PolarMeasurements(
-            bins,
-            radial_sampling=self.radial_sampling,
-            azimuthal_sampling=self.azimuthal_sampling,
-            radial_offset=self.inner,
-            azimuthal_offset=self._rotation,
-        )
+        if "vmax" not in kwargs:
+            kwargs["vmax"] = num_colors - .5
 
-        ax, im = polar_measurements.show(cmap=cmap, vmin=vmin, vmax=vmax, **kwargs)
+        if "units" not in kwargs:
+            kwargs["units"] = "mrad"
 
-        plt.colorbar(im, extend="min", label="Detector region")
-        # ax.set_rlim([-0, min(waves.cutoff_angles) * 1.1])
-        return ax, im
+        segmented_regions = self.get_detector_regions(waves).to_diffraction_patterns(waves.gpts)
+
+        return segmented_regions.show(**kwargs)
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):

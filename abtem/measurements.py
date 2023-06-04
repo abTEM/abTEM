@@ -6,7 +6,6 @@ from abc import ABCMeta, abstractmethod
 from collections import defaultdict
 from functools import partial
 from typing import (
-    Union,
     TypeVar,
     Dict,
     Sequence,
@@ -113,7 +112,7 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
 
 
 def _scanned_measurement_type(
-    measurement: Union["BaseMeasurements", "BaseWaves"]
+    measurement: BaseMeasurements | BaseWaves,
 ) -> Type["BaseMeasurements"]:
 
     if len(_scan_shape(measurement)) == 1:
@@ -133,7 +132,7 @@ def _reduced_scanned_images_or_line_profiles(
     new_array,
     old_measurement,
     metadata=None,
-) -> Union["RealSpaceLineProfiles", "Images", np.ndarray]:
+) -> RealSpaceLineProfiles | Images | np.ndarray:
     if metadata is None:
         metadata = {}
 
@@ -224,7 +223,7 @@ def _annular_detector_mask(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     xp=np,
-) -> Union[np.ndarray, list[np.ndarray]]:
+) -> np.ndarray | list[np.ndarray]:
 
     kx, ky = spatial_frequencies(
         gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
@@ -262,7 +261,7 @@ def _polar_detector_bins(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     return_indices: bool = False,
-) -> Union[np.ndarray, list[np.ndarray]]:
+) -> np.ndarray | list[np.ndarray]:
     alpha, phi = polar_spatial_frequencies(
         gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
     )
@@ -334,9 +333,9 @@ def _interpolate_stack(array, positions, mode, order, **kwargs):
 class _NoiseTransform(EnsembleTransform):
     def __init__(
         self,
-        dose: Union[float, np.ndarray, BaseDistribution],
+        dose: float | np.ndarray | BaseDistribution,
         samples: int = None,
-        seeds: Union[int, tuple[int, ...]] = None,
+        seeds: int | tuple[int, ...] = None,
     ):
 
         self._dose = _validate_distribution(dose)
@@ -434,12 +433,6 @@ class _NoiseTransform(EnsembleTransform):
         return measurement
 
 
-def _get_from_metadata(metadata, key):
-    if not key in metadata.keys():
-        raise RuntimeError(f"{key} not in measurement metadata.")
-    return metadata[key]
-
-
 class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     Parent class common to all measurement types.
@@ -501,6 +494,11 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def metadata(self) -> dict:
         """Metadata describing the measurement."""
         return self._metadata
+
+    def _get_from_metadata(self, key):
+        if not key in self.metadata.keys():
+            raise RuntimeError(f"{key} not in measurement metadata.")
+        return self.metadata[key]
 
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
@@ -565,7 +563,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         difference.metadata["units"] = "%"
         return difference
 
-    def normalize_ensemble(self, scale:str="max", shift:str="mean"):
+    def normalize_ensemble(self, scale: str = "max", shift: str = "mean"):
         """
         Normalize the ensemble by shifting ad scaling each member.
 
@@ -587,6 +585,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         kwargs = self._copy_kwargs(exclude=("array",))
         return self.__class__(array, **kwargs)
 
+    @classmethod
     @abstractmethod
     def from_array_and_metadata(
         self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
@@ -614,8 +613,8 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
     def poisson_noise(
         self,
-        dose_per_area: Union[float, Sequence[float]] = None,
-        total_dose: Union[float, Sequence[float]] = None,
+        dose_per_area: float | Sequence[float] = None,
+        total_dose: float | Sequence[float] = None,
         samples: int = 1,
         seed: int = None,
     ):
@@ -719,7 +718,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         return s
 
     @abstractmethod
-    def show(self):
+    def show(self, *args, **kwargs):
         pass
 
 
@@ -754,8 +753,8 @@ class _BaseMeasurement2D(BaseMeasurements):
 
     def interpolate_line(
         self,
-        start: Union[tuple[float, float], Atom] = None,
-        end: Union[tuple[float, float], Atom] = None,
+        start: tuple[float, float] | Atom = None,
+        end: tuple[float, float] | Atom = None,
         sampling: float = None,
         gpts: int = None,
         width: float = 0.0,
@@ -875,7 +874,7 @@ class _BaseMeasurement2D(BaseMeasurements):
 
     def gaussian_filter(
         self,
-        sigma: Union[float, tuple[float, float]],
+        sigma: float | tuple[float, float],
         boundary: str = "periodic",
         cval: float = 0.0,
     ):
@@ -951,7 +950,7 @@ class _BaseMeasurement2D(BaseMeasurements):
 
     def interpolate_line_at_position(
         self,
-        center: Union[tuple[float, float], Atom],
+        center: tuple[float, float] | Atom,
         angle: float,
         extent: float,
         gpts: int = None,
@@ -1011,9 +1010,9 @@ class _BaseMeasurement2D(BaseMeasurements):
         vmax: float = None,
         power: float = 1.0,
         common_color_scale: bool = False,
-        explode: bool = None,
+        explode: bool | Sequence[bool] = (),
         figsize: tuple[int, int] = None,
-        title: Union[bool, str] = True,
+        title: bool | str = True,
         units: str = None,
         interact: bool = False,
         display: bool = True,
@@ -1042,7 +1041,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             it is requested). Default is False.
         explode : bool, optional
             If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
-            ensemble item is shown.
+            ensemble item is shown. May be given as a sequence of axis indices to create a grid of images from
+            the specified axes. The default is determined by the axis metadata.
         figsize : two int, optional
             The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
         title : bool or str, optional
@@ -1078,8 +1078,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             visualization.set_column_titles(title)
 
         if units is not None:
-            visualization.set_x_units(units)
-            visualization.set_y_units(units)
+            visualization.set_xunits(units)
+            visualization.set_yunits(units)
 
         if not display and not interact:
             plt.close()
@@ -1111,8 +1111,8 @@ class Images(_BaseMeasurement2D):
 
     def __init__(
         self,
-        array: Union[da.core.Array, np.array],
-        sampling: Union[float, tuple[float, float]],
+        array: da.core.Array | np.array,
+        sampling: float | tuple[float, float],
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: Dict = None,
     ):
@@ -1282,8 +1282,8 @@ class Images(_BaseMeasurement2D):
 
     def interpolate(
         self,
-        sampling: Union[float, tuple[float, float]] = None,
-        gpts: Union[int, tuple[int, int]] = None,
+        sampling: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
         method: str = "fft",
         boundary: str = "periodic",
         order: int = 3,
@@ -1579,7 +1579,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
     @property
     @abstractmethod
-    def base_axes_metadata(self) -> list[Union[RealSpaceAxis, ReciprocalSpaceAxis]]:
+    def base_axes_metadata(self) -> list[RealSpaceAxis | ReciprocalSpaceAxis]:
         pass
 
     def _line_scan(self, sampling=None):
@@ -1713,10 +1713,10 @@ class _BaseMeasurement1D(BaseMeasurements):
     def show(
         self,
         ax: Axes = None,
-        explode: Union[bool, Sequence[str]] = None,
-        overlay: Union[bool, Sequence[str]] = None,
-        figsize: tuple[int, int] = None,
         common_scale: bool = True,
+        explode: bool | Sequence[int] = None,
+        overlay: bool | Sequence[int] = None,
+        figsize: tuple[int, int] = None,
         title: str = None,
         units: str = None,
         legend: bool = False,
@@ -1731,23 +1731,33 @@ class _BaseMeasurement1D(BaseMeasurements):
         ----------
         ax : matplotlib Axes, optional
             If given the plots are added to the Axes. This is not available for image grids.
+        common_scale : bool
+            If True all plots are shown with a common y-axis. Default is False.
+        explode : bool or sequence of bool, optional
+            If True, a grid of plots is created for all the items of the last two ensemble axes. If False, only the
+            one plot is created. May be given as a sequence of axis indices to create a grid of plots from the specified
+            axes. The default is determined by the axis metadata.
+        overlay : bool or sequence of int, optional
+            If True, all line profiles in the ensemble are shown in a single plot. If False, only the first ensemble
+            item is shown. May be given as a sequence of axis indices to specify which line profiles in the ensemble to
+            show together. The default is determined by the axis metadata.
         figsize : two int, optional
             The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
         title : bool or str, optional
-            Add a title to the figure. If True is given instead of a string the title will be given by the value
-            corresponding to the "name" key of the metadata dictionary, if this item exists.
-        x_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
-        y_label : bool or str, optional
-            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
-            metadata. A string may be given to override this.
+            Set the column title of the plots. If True is given instead of a string the title will be given by the value
+            corresponding to the "name" key of the axes metadata dictionary, if this item exists.
+        legend : bool
+            Add a legend to the plot. The labels will be derived from
         units : str, optional
-            The units of the reciprocal line profile can be either 'reciprocal' (resulting in [1 / Å]), or 'mrad'.
+            The units used for the x-axis. The given units must be compatible.
+        interact : bool
+            If True, create an interactive visualization. This requires enabling the ipympl Matplotlib backend.
+        display : bool, optional
+            If True (default) the figure is displayed immediately.
 
         Returns
         -------
-        MeasurementVisualization1D
+        visualization : MeasurementVisualization1D
         """
 
         visualization = MeasurementVisualization1D(
@@ -1764,8 +1774,8 @@ class _BaseMeasurement1D(BaseMeasurements):
             visualization.set_column_titles(title)
 
         if units is not None:
-            visualization.set_x_units(units)
-            visualization.set_y_units(units)
+            visualization.set_xunits(units)
+            visualization.set_yunits(units)
 
         if legend:
             visualization.set_legends()
@@ -1893,7 +1903,7 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
 
     @property
     def angular_extent(self):
-        wavelength = energy2wavelength(_get_from_metadata(self.metadata, "energy"))
+        wavelength = energy2wavelength(self._get_from_metadata("energy"))
         return self.extent * wavelength * 1e3
 
     def _plot_x_label(self, units=None):
@@ -1962,7 +1972,7 @@ def _fourier_space_bilinear_nodes_and_weight(
     return v, u, vw, uw
 
 
-def _gaussian_source_size(measurements, sigma: Union[float, tuple[float, float]]):
+def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
     if len(_scan_axes(measurements)) < 2:
         raise RuntimeError(
             "Gaussian source size not implemented for diffraction patterns with less than two scan axes."
@@ -2097,8 +2107,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def __init__(
         self,
-        array: Union[np.ndarray, da.core.Array],
-        sampling: Union[float, tuple[float, float]],
+        array: np.ndarray | da.core.Array,
+        sampling: float | tuple[float, float],
         fftshift: bool = False,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
@@ -2234,7 +2244,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def index_diffraction_spots(
         self,
-        cell: Union[Cell, float, tuple[float, float, float]],
+        cell: Cell | float | tuple[float, float, float],
         threshold: float = 0.001,
         distance_threshold: float = 0.15,
         min_distance: float = 0.0,
@@ -2304,7 +2314,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         Angular sampling of diffraction patterns in `x` and `y` [mrad].
         """
-        wavelength = energy2wavelength(_get_from_metadata(self.metadata, "energy"))
+        wavelength = energy2wavelength(self._get_from_metadata("energy"))
         return (
             self.sampling[0] * wavelength * 1e3,
             self.sampling[1] * wavelength * 1e3,
@@ -2344,7 +2354,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """Lowest and highest scattering angle in `x` and `y` [mrad]."""
 
         limits = self.limits
-        wavelength = energy2wavelength(_get_from_metadata(self.metadata, "energy"))
+        wavelength = energy2wavelength(self._get_from_metadata("energy"))
         limits[0] = (
             limits[0][0] * wavelength * 1e3,
             limits[0][1] * wavelength * 1e3,
@@ -2482,8 +2492,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
 
     def gaussian_source_size(
-        self, sigma: Union[float, tuple[float, float]]
-    ) -> "DiffractionPatterns":
+        self, sigma: float | tuple[float, float]
+    ) -> DiffractionPatterns:
         """
         Simulate the effect of a finite source size on diffraction pattern(s) using a Gaussian filter.
 
@@ -2797,9 +2807,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         com = com_x + 1.0j * com_y
         return com
 
-    def center_of_mass(
-        self, units: str = "1/Å"
-    ) -> Union[Images, RealSpaceLineProfiles]:
+    def center_of_mass(self, units: str = "1/Å") -> Images | RealSpaceLineProfiles:
         """
         Calculate center-of-mass images or line profiles from diffraction patterns. The results are of type `complex`
         where the real and imaginary part represents the `x` and `y` component.
@@ -3171,7 +3179,7 @@ class PolarMeasurements(BaseMeasurements):
 
     def integrate_radial(
         self, inner: float, outer: float
-    ) -> Union[Images, RealSpaceLineProfiles]:
+    ) -> Images | RealSpaceLineProfiles:
         """
         Create images by integrating the polar measurements over an annulus defined by an inner and outer integration
         angle.
@@ -3197,7 +3205,7 @@ class PolarMeasurements(BaseMeasurements):
         radial_limits: tuple[float, float] = None,
         azimuthal_limits: tuple[float, float] = None,
         detector_regions: int | Sequence[int] = None,
-    ) -> Union[Images, RealSpaceLineProfiles]:
+    ) -> Images | RealSpaceLineProfiles:
         """
         Integrate polar regions to produce an image or line profiles.
 
@@ -3277,10 +3285,61 @@ class PolarMeasurements(BaseMeasurements):
 
         return _gaussian_source_size(self, sigma)
 
+    def to_diffraction_patterns(
+        self, gpts: int | tuple[int, int], margin: float | tuple[float, float] = 0.1
+    ):
+
+        if np.isscalar(gpts):
+            gpts = (gpts,) * 2
+
+        if np.isscalar(margin):
+            margin = (margin,) * 2
+
+        angular_sampling = (
+            (1 + margin[0]) * self.outer_angle / gpts[0] * 2,
+            (1 + margin[1]) * self.outer_angle / gpts[1] * 2,
+        )
+
+        nbins_radial, nbins_azimuthal = self.base_shape
+
+        regions = _polar_detector_bins(
+            gpts=gpts,
+            sampling=angular_sampling,
+            inner=self.radial_offset,
+            outer=self.outer_angle,
+            nbins_radial=nbins_radial,
+            nbins_azimuthal=nbins_azimuthal,
+            fftshift=True,
+            rotation=self.azimuthal_offset,
+            offset=(0.0, 0.0),
+            return_indices=False,
+        )
+
+        new_array = np.zeros(self.ensemble_shape + regions.shape, dtype=np.float32)
+        for i, indices in enumerate(label_to_index(regions)):
+            x, y = np.unravel_index(indices, regions.shape)
+            radial, azimuthal = np.unravel_index(i, (nbins_radial, nbins_azimuthal))
+            new_array[..., x, y] = self.array[..., radial, azimuthal][..., None]
+
+        new_array[..., regions < 0] = np.nan
+
+        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        sampling = (
+            angular_sampling[0] / (wavelength * 1e3),
+            angular_sampling[1] / (wavelength * 1e3),
+        )
+
+        return DiffractionPatterns(
+            new_array,
+            sampling=sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+        )
+
     def differentials(
         self,
-        direction_1 : tuple[int | tuple[int, ...], int | tuple[int, ...]],
-        direction_2 : tuple[int | tuple[int, ...], int | tuple[int, ...]],
+        direction_1: tuple[int | tuple[int, ...], int | tuple[int, ...]],
+        direction_2: tuple[int | tuple[int, ...], int | tuple[int, ...]],
         return_complex: bool = True,
     ):
         """
@@ -3314,7 +3373,9 @@ class PolarMeasurements(BaseMeasurements):
         ) - self.integrate(detector_regions=direction_2[0])
 
         if not return_complex:
-            stacked = stack((differential_1, differential_2), ("direction_1", "direction_2"))
+            stacked = stack(
+                (differential_1, differential_2), ("direction_1", "direction_2")
+            )
             return stacked
 
         xp = get_array_module(self.device)
@@ -3359,90 +3420,84 @@ class PolarMeasurements(BaseMeasurements):
             metadata=self.metadata,
         )
 
-    # TODO: to be documented.
     def show(
         self,
+        gpts: int | tuple[int, int] = (512, 512),
         ax: Axes = None,
-        title: str = None,
-        min_azimuthal_division: float = np.pi / 20,
-        grid: bool = True,
-        figsize=None,
-        radial_ticks=None,
-        azimuthal_ticks=None,
-        cbar=False,
-        **kwargs,
-    ):
+        cbar: bool = False,
+        cmap: str = None,
+        vmin: float = None,
+        vmax: float = None,
+        power: float = 1.0,
+        common_color_scale: bool = False,
+        explode: bool | Sequence[bool] = (),
+        figsize: tuple[int, int] = None,
+        title: bool | str = True,
+        units: str = None,
+        interact: bool = False,
+        display: bool = True,
+    ) -> MeasurementVisualization2D:
         """
-
+        Show the image(s) using matplotlib.
 
         Parameters
         ----------
-        ax :
-        title :
-        min_azimuthal_division :
-        grid :
-        figsize :
-        radial_ticks :
-        azimuthal_ticks :
-        cbar :
-        kwargs :
+        gpts : int or tuple of int, optional
+        ax : matplotlib.axes.Axes, optional
+            If given the plots are added to the axis. This is not available for exploded plots.
+        cbar : bool, optional
+            Add colorbar(s) to the image(s). The size and padding of the colorbars may be adjusted using the
+            `set_cbar_size` and `set_cbar_padding` methods.
+        cmap : str, optional
+            Matplotlib colormap name used to map scalar data to colors. If the measurement is complex the colormap
+            must be one of 'hsv' or 'hsluv'.
+        vmin : float, optional
+            Minimum of the intensity color scale. Default is the minimum of the array values.
+        vmax : float, optional
+            Maximum of the intensity color scale. Default is the maximum of the array values.
+        power : float
+            Show image on a power scale.
+        common_color_scale : bool, optional
+            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
+            it is requested). Default is False.
+        explode : bool, optional
+            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
+            ensemble item is shown. May be given as a sequence of axis indices to create a grid of images from
+            the specified axes. The default is determined by the axis metadata.
+        figsize : two int, optional
+            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+        title : bool or str, optional
+            Set the column title of the images. If True is given instead of a string the title will be given by the value
+            corresponding to the "name" key of the axes metadata dictionary, if this item exists.
+        units : str
+            The units used for the x and y axes. The given units must be compatible with the axes of the images.
+        interact : bool
+            If True, create an interactive visualization. This requires enabling the ipympl Matplotlib backend.
+        display : bool, optional
+            If True (default) the figure is displayed immediately.
 
         Returns
         -------
-
+        measurement_visualization_2d : MeasurementVisualization2D
         """
-        import matplotlib.patheffects as pe
 
-        fig = plt.figure(figsize=figsize)
+        diffraction_patterns = self.to_diffraction_patterns(gpts=gpts)
 
-        if ax is None:
-            ax = fig.add_subplot(projection="polar")
-
-        if title is not None:
-            ax.set_title(title)
-
-        array = self.array[(0,) * (len(self.shape) - 2)]
-
-        array = array[..., ::-1]
-
-        repeat = int(self.azimuthal_sampling / min_azimuthal_division)
-        r = np.pi / (4 * repeat) + self.azimuthal_offset + np.pi / 2
-        azimuthal_grid = np.linspace(
-            r, 2 * np.pi + r, self.shape[-1] * repeat, endpoint=False
+        return diffraction_patterns.show(
+            ax=ax,
+            cbar=cbar,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            power=power,
+            common_color_scale=common_color_scale,
+            explode=explode,
+            figsize=figsize,
+            title=title,
+            units=units,
+            interact=interact,
+            display=display,
         )
-
-        d = (self.outer_angle - self.radial_offset) / 2 / self.shape[-2]
-        radial_grid = np.linspace(
-            self.radial_offset + d, self.outer_angle - d, self.shape[-2]
-        )
-
-        z = np.repeat(array, repeat, axis=-1)
-        r, th = np.meshgrid(radial_grid, azimuthal_grid)
-
-        im = ax.pcolormesh(th, r, z.T, shading="auto", **kwargs)
-        ax.set_rlim([0, self.outer_angle * 1.1])
-
-        if radial_ticks is None:
-            radial_ticks = ax.get_yticks()
-
-        if azimuthal_ticks is None:
-            azimuthal_ticks = ax.get_xticks()
-
-        ax.set_rgrids(
-            radial_ticks, path_effects=[pe.withStroke(linewidth=4, foreground="white")]
-        )
-        ax.set_xticks(azimuthal_ticks)
-
-        if cbar:
-            label = self.metadata["label"]
-            units = self.metadata["units"]
-            label = f"{label} [{units}]"
-            fig.colorbar(im, label=label)
-
-        if grid:
-            ax.grid(linewidth=2, color="white")
-
-        return ax, im
 
 
 class IndexedDiffractionPatterns(BaseMeasurements):
@@ -3529,7 +3584,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         Scattering angles of the diffraction spots.
         """
-        wavelength = energy2wavelength(_get_from_metadata(self._metadata, "energy"))
+        wavelength = energy2wavelength(self._get_from_metadata("energy"))
         return self.positions * wavelength * 1e3
 
     @property
@@ -3599,7 +3654,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         if criterion == "distance":
             criterion = -np.linalg.norm(self.positions, axis=1)
-        elif criterion == "intensities":
+        elif criterion == "intensity":
             criterion = -self.intensities
         else:
             raise ValueError()
@@ -3767,9 +3822,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         power: float = 1.0,
         common_color_scale: bool = False,
         scale: float = 1,
-        explode: bool = False,
+        explode: bool | Sequence[bool] = (),
         figsize: tuple[int, int] = None,
-        title: Union[bool, str] = True,
+        title: bool | str = True,
         units: str = None,
         interact: bool = False,
         display: bool = True,
@@ -3798,9 +3853,10 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             it is requested). Default is False.
         scale : float, optional
             Scale the radii of the circles representing the diffraction spots.
-        explode : bool, optional
-            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
-            ensemble item is shown.
+        explode : bool or sequence of bool, optional
+            If True, a grid of plots is created for all the items of the last two ensemble axes. If False, the first
+            ensemble item is shown. May be given as a sequence of axis indices to create a grid of plots from
+            the specified axes. The default is determined by the axis metadata.
         figsize : two int, optional
             The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
         title : bool or str, optional
@@ -3834,8 +3890,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             visualization.set_column_titles(title)
 
         if units is not None:
-            visualization.set_x_units(units)
-            visualization.set_y_units(units)
+            visualization.set_xunits(units)
+            visualization.set_yunits(units)
 
         if not display and not interact:
             plt.close()

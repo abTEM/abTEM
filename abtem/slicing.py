@@ -1,7 +1,7 @@
 """Module for slicing atoms for the multislice algorithm."""
 from __future__ import annotations
 from abc import abstractmethod
-from typing import Tuple, Union, Sequence
+from typing import Sequence
 
 import numpy as np
 from ase import Atoms
@@ -89,7 +89,7 @@ class BaseSlicedAtoms:
         return self._atoms
 
     @property
-    def box(self) -> Tuple[float, float, float]:
+    def box(self) -> tuple[float, float, float]:
         return tuple(np.diag(self._atoms.cell))
 
     @property
@@ -104,7 +104,7 @@ class BaseSlicedAtoms:
     def slice_limits(self) -> list[tuple[float, float]]:
         return _slice_limits(self.slice_thickness)
 
-    def check_slice_idx(self, index : int):
+    def check_slice_idx(self, index: int):
         """Raises an error if index is greater than the number of slices."""
         if index >= self.num_slices:
             raise RuntimeError(
@@ -114,10 +114,12 @@ class BaseSlicedAtoms:
             )
 
     @abstractmethod
-    def get_atoms_in_slices(self, first_slice: int, last_slice: int, **kwargs):
+    def get_atoms_in_slices(
+        self, first_slice: int, last_slice: int = None, atomic_number: int = None
+    ):
         pass
 
-    def __getitem__(self, item:int | slice) -> Atoms:
+    def __getitem__(self, item: int | slice) -> Atoms:
         return self.get_atoms_in_slices(*_unpack_item(item, len(self)))
 
 

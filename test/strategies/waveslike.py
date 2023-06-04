@@ -30,7 +30,7 @@ def probe(
     aberrations = draw(transfer_st.aberrations(allow_distribution=allow_distribution))
     aperture = draw(transfer_st.aperture(allow_distribution=allow_distribution))
     return Probe(
-        semiangle_cutoff=30,
+        #semiangle_cutoff=30,
         gpts=gpts,
         extent=extent,
         energy=energy,

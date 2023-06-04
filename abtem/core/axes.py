@@ -85,7 +85,7 @@ def format_title(
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     _concatenate: bool = True
-    _events: bool = False
+    #_events: bool = False
     label: str = ""
     _tex_label: str = None
     _default_type: str = None
@@ -182,6 +182,14 @@ class LinearAxis(AxisMetadata):
 
         return self
 
+    def to_nonlinear_axis(self, n):
+        values = tuple(self.coordinates(n))
+        return NonLinearAxis(label=self.label,
+                           _tex_label=self._tex_label,
+                           units=self.units,
+                           values=values,
+                           _concatenate=self._concatenate)
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class RealSpaceAxis(LinearAxis):
@@ -200,8 +208,7 @@ class ReciprocalSpaceAxis(LinearAxis):
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ScanAxis(RealSpaceAxis):
-    start: Tuple[float, float] = None
-    end: Tuple[float, float] = None
+    pass
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

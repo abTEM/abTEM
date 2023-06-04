@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, List, Sequence
 from typing import Union, Tuple
 
 import ipywidgets as widgets
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
@@ -382,7 +383,7 @@ def _validate_axes(
         else:
             fig = plt.figure(figsize=figsize)
 
-    if ax is None and ("explode" in axes_types):
+    if ax is None: # and ("explode" in axes_types):
 
         ncols, nrows = _axes_grid_cols_and_rows(measurements, axes_types)
 
@@ -396,9 +397,9 @@ def _validate_axes(
             sharex=sharex,
             sharey=sharey,
         )
-    elif ax is None:
-        ax = fig.add_subplot()
-        axes = np.array([[ax]])
+    #elif ax is None:
+    #    ax = fig.add_subplot()
+    #    axes = np.array([[ax]])
     else:
         if explode:
             raise NotImplementedError("`ax` not implemented with `explode = True`.")
@@ -412,6 +413,13 @@ def _format_options(options):
     return [
         f"{option:.3f}" if isinstance(option, float) else option for option in options
     ]
+
+
+def discrete_cmap(num_colors, base_cmap):
+    if isinstance(base_cmap, str):
+        base_cmap = plt.get_cmap(base_cmap)
+    colors = base_cmap(range(0, num_colors))
+    return matplotlib.colors.LinearSegmentedColormap.from_list(None, colors, num_colors)
 
 
 def _make_indexing_sliders(
@@ -585,18 +593,11 @@ def _get_joined_titles(measurement, formatting):
     return "\n".join(titles)
 
 
-def _get_axes_from_axes_types(axes_types, axes_type):
-    return tuple(
-        i
-        for i, checked_axes_type in enumerate(axes_types)
-        if checked_axes_type == axes_type
-    )
-
 class MeasurementVisualization(metaclass=ABCMeta):
     def __init__(
         self,
-        measurements: "BaseMeasurements",
-        axes: Union[AxesGrid, np.ndarray],
+        measurements: BaseMeasurements,
+        axes: AxesGrid | np.ndarray,
         axes_types: Sequence[str] = (),
     ):
         self._measurements = measurements.to_cpu()
@@ -607,8 +608,11 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self._row_titles = []
         self._panel_labels = []
         self._metadata_labels = np.array([])
-        self._x_units = None
-        self._y_units = None
+        self._xunits = None
+        self._yunits = None
+
+        for ax in np.array(self.axes).ravel():
+            ax.ticklabel_format(style='sci', scilimits=(-3, 3), axis='both', useMathText=True)
 
     @property
     def fig(self):
@@ -656,6 +660,13 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def set_axes_padding(self, padding: Tuple[float, float] = (0.0, 0.0)):
         self._axes.set_axes_padding(padding)
 
+    def _get_axes_from_axes_types(self, axes_type):
+        return tuple(
+            i
+            for i, checked_axes_type in enumerate(self.axes_types)
+            if checked_axes_type == axes_type
+        )
+
     def _get_indexed_measurements(self, keepdims: bool = True):
 
         indexed = self.measurements.get_items(self._indices, keepdims=keepdims)
@@ -695,6 +706,10 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 return
 
             axes_metadata = indexed_measurements.ensemble_axes_metadata[0]
+
+            if hasattr(axes_metadata, "to_nonlinear_axis"):
+                axes_metadata = axes_metadata.to_nonlinear_axis(indexed_measurements.ensemble_shape[0])
+
             titles = []
             for i, axis_metadata in enumerate(axes_metadata):
                 titles.append(
@@ -734,23 +749,23 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self._column_titles = column_titles
 
     @abstractmethod
-    def _get_default_x_label(self, units=None):
+    def _get_default_xlabel(self, units=None):
         pass
 
     @abstractmethod
-    def _get_default_y_label(self, units=None):
+    def _get_default_ylabel(self, units=None):
         pass
 
-    def set_x_labels(self, label: str = None):
+    def set_xlabels(self, label: str = None):
         if label is None:
-            label = self._get_default_x_label(units=self._x_units)
+            label = self._get_default_xlabel(units=self._xunits)
 
         for ax in np.array(self.axes).ravel():
             ax.set_xlabel(label)
 
-    def set_y_labels(self, label: str = None):
+    def set_ylabels(self, label: str = None):
         if label is None:
-            label = self._get_default_y_label(units=self._y_units)
+            label = self._get_default_ylabel(units=self._yunits)
 
         for i, ax in enumerate(np.array(self.axes).ravel()):
             # print(self.axes.shape[0], i, i % self.axes.shape[0])
@@ -767,29 +782,29 @@ class MeasurementVisualization(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def _get_default_x_units(self):
+    def _get_default_xunits(self):
         pass
 
     @abstractmethod
-    def _get_default_y_units(self):
+    def _get_default_yunits(self):
         pass
 
-    def set_x_units(self, units=None):
+    def set_xunits(self, units=None):
         if units is None:
-            self._x_units = self._get_default_x_units()
+            self._xunits = self._get_default_xunits()
         else:
-            self._x_units = units
+            self._xunits = units
 
-        self.set_x_labels()
+        self.set_xlabels()
         self.set_xlim()
 
-    def set_y_units(self, units=None):
+    def set_yunits(self, units=None):
         if units is None:
-            self._y_units = self._get_default_y_units()
+            self._yunits = self._get_default_yunits()
         else:
-            self._y_units = units
+            self._yunits = units
 
-        self.set_y_labels()
+        self.set_ylabels()
         self.set_ylim()
 
     def set_row_titles(
@@ -868,8 +883,8 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
     def _validate_indices(self, indices: tuple = ()):
         num_ensemble_dims = len(self.measurements.ensemble_shape)
-        explode_axes = _get_axes_from_axes_types(self.axes_types, "explode")
-        overlay_axes = _get_axes_from_axes_types(self.axes_types, "overlay")
+        explode_axes = self._get_axes_from_axes_types("explode")
+        overlay_axes = self._get_axes_from_axes_types("overlay")
         num_indexing_axes = (
             num_ensemble_dims - len(explode_axes) - len(overlay_axes)
         )
@@ -1009,7 +1024,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 class BaseMeasurementVisualization2D(MeasurementVisualization):
     def __init__(
         self,
-        measurements: "_BaseMeasurement2D",
+        measurements: _BaseMeasurement2D | IndexedDiffractionPatterns,
         ax: Axes = None,
         common_scale: bool = False,
         cbar: bool = False,
@@ -1039,11 +1054,11 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
         super().__init__(measurements=measurements, axes=axes, axes_types=axes_types)
 
-        self._x_units = None
-        self._y_units = None
+        self._xunits = None
+        self._yunits = None
         self._scale_units = None
-        self._x_label = None
-        self._y_label = None
+        self._xlabel = None
+        self._ylabel = None
         self._column_titles = []
         self._row_titles = []
         self._artists = None
@@ -1102,7 +1117,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             if measurement.is_complex:
                 measurement = measurement.abs()
 
-            norm.autoscale_None(measurement.array)
+            norm.autoscale_None(measurement.array[np.isnan(measurement.array) == 0])
 
             self._normalization[i] = norm
 
@@ -1113,10 +1128,10 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             measurements = measurements.abs()
 
         if vmin is None:
-            vmin = float(measurements.array.min())
+            vmin = float(np.nanmin(measurements.array))
 
         if vmax is None:
-            vmax = float(measurements.array.max())
+            vmax = float(np.nanmax(measurements.array))
 
         return vmin, vmax
 
@@ -1124,6 +1139,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         for norm, measurement in zip(
             self._normalization.ravel(), self.generate_measurements(keepdims=False)
         ):
+
             norm.vmin = vmin
             norm.vmax = vmax
 
@@ -1248,7 +1264,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
     ):
 
         conversion = _get_conversion_factor(
-            self._x_units, self.measurements.axes_metadata[-2].units
+            self._xunits, self.measurements.axes_metadata[-2].units
         )
 
         if size is None:
@@ -1269,7 +1285,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         size_vertical = conversion * size_vertical
 
         if label is None:
-            label = f"{size:>{formatting}} {self._x_units}"
+            label = f"{size:>{formatting}} {self._xunits}"
 
         for size_bar in self._size_bars:
             size_bar.remove()
@@ -1313,11 +1329,8 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     Parameters
     ----------
     measurements : _BaseMeasurement2D
-    axes : matplotlib.axes.Axes, optional
+    ax : matplotlib.axes.Axes, optional
         If given the plots are added to the axis. This is not available for image grids.
-    title : bool or str, optional
-        Add a title to the figure. If True is given instead of a string the title will be given by the value
-        corresponding to the "name" key of the metadata dictionary, if this item exists.
     cmap : str, optional
         Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
     power : float
@@ -1372,10 +1385,10 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             self.set_cbar_labels()
 
         self.set_extent()
-        self.set_x_units()
-        self.set_y_units()
-        self.set_x_labels()
-        self.set_y_labels()
+        self.set_xunits()
+        self.set_yunits()
+        self.set_xlabels()
+        self.set_ylabels()
         self.set_column_titles()
 
     @property
@@ -1406,16 +1419,16 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         else:
             super().set_cbar_labels(label, **kwargs)
 
-    def _get_default_x_label(self, units: str = None):
+    def _get_default_xlabel(self, units: str = None):
         return self.measurements.axes_metadata[-2].format_label(units=units)
 
-    def _get_default_y_label(self, units: str = None):
+    def _get_default_ylabel(self, units: str = None):
         return self.measurements.axes_metadata[-1].format_label(units=units)
 
-    def _get_default_x_units(self):
+    def _get_default_xunits(self):
         return self.measurements.axes_metadata[-2].units
 
-    def _get_default_y_units(self):
+    def _get_default_yunits(self):
         return self.measurements.axes_metadata[-1].units
 
     def set_xlim(self):
@@ -1427,16 +1440,16 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     def set_extent(self, extent=None):
 
         if extent is None:
-            x_extent = self.measurements._plot_extent_x(self._x_units)
-            y_extent = self.measurements._plot_extent_y(self._y_units)
+            x_extent = self.measurements._plot_extent_x(self._xunits)
+            y_extent = self.measurements._plot_extent_y(self._yunits)
             extent = x_extent + y_extent
 
         for image in self._artists.ravel():
             image.set_extent(extent)
 
     def adjust_tight_bbox(self):
-        x_extent = self.measurements._plot_extent_x(self._x_units)
-        y_extent = self.measurements._plot_extent_y(self._y_units)
+        x_extent = self.measurements._plot_extent_x(self._xunits)
+        y_extent = self.measurements._plot_extent_y(self._yunits)
 
         aspect = (y_extent[1] - y_extent[0]) / (x_extent[1] - x_extent[0])
 
@@ -1613,8 +1626,8 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self._lines = np.array([[]])
         self._common_scale = common_scale
         self.set_artists()
-        self.set_x_units()
-        self.set_y_units()
+        self.set_xunits()
+        self.set_yunits()
 
         if self.ncols > 1:
             self.set_column_titles()
@@ -1635,17 +1648,17 @@ class MeasurementVisualization1D(MeasurementVisualization):
     def artists(self):
         return self._artists
 
-    def _get_default_x_label(self, units: str = None):
+    def _get_default_xlabel(self, units: str = None):
         return self.measurements.axes_metadata[-1].format_label(units)
 
-    def _get_default_y_label(self, units: str = None):
+    def _get_default_ylabel(self, units: str = None):
         axes = LinearAxis(label=self.measurements.metadata.get("label", ""))
         return format_label(axes, units)
 
-    def _get_default_x_units(self):
+    def _get_default_xunits(self):
         return self.measurements.axes_metadata[-1].units
 
-    def _get_default_y_units(self):
+    def _get_default_yunits(self):
         return self.measurements.metadata.get("units", "")
 
     def set_xlim(self):
@@ -1734,7 +1747,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         Diffraction pattern to be displayed.
     scale : float
         Size of the circles representing the diffraction spots.
-    axes : matplotlib.axes.Axes, optional
+    ax : matplotlib.axes.Axes, optional
         If given the plots are added to the axis.
     Returns
     -------
@@ -1757,7 +1770,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         interact: bool = False,
     ):
 
-        measurements = measurements.order()
+        measurements = measurements.sort(criterion="intensity")
 
         super().__init__(
             measurements,
@@ -1793,13 +1806,13 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             self.set_scale_units()
             self.set_cbar_labels()
 
-        self.set_x_units()
-        self.set_y_units()
-        self.set_x_labels()
-        self.set_y_labels()
+        self.set_xunits()
+        self.set_yunits()
+        self.set_xlabels()
+        self.set_ylabels()
 
     def _get_scales(self, indexed_diffraction_spots, norm):
-        conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
+        conversion = _get_conversion_factor(self._xunits, self._get_default_xunits())
         return (
             norm(indexed_diffraction_spots.intensities) ** 0.5
             * self._scale
@@ -1810,10 +1823,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     def _get_positions(self, indexed_diffraction_spots):
         positions = indexed_diffraction_spots.positions[:, :2].copy()
         positions[:, 0] *= _get_conversion_factor(
-            self._x_units, self._get_default_x_units()
+            self._xunits, self._get_default_xunits()
         )
         positions[:, 1] *= _get_conversion_factor(
-            self._y_units, self._get_default_y_units()
+            self._yunits, self._get_default_y_units()
         )
         return positions
 
@@ -1884,22 +1897,22 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             ),
         ]
 
-    def _get_default_x_label(self, units: str = None):
+    def _get_default_xlabel(self, units: str = None):
         return self._reciprocal_space_axes[-2].format_label(units)
 
-    def _get_default_y_label(self, units: str = None):
+    def _get_default_ylabel(self, units: str = None):
         return self._reciprocal_space_axes[-1].format_label(units)
 
-    def _get_default_x_units(self):
+    def _get_default_xunits(self):
         return self._reciprocal_space_axes[-1].units
 
-    _get_default_y_units = _get_default_x_units
+    _get_default_y_units = _get_default_xunits
 
     def set_xlim(self):
         for i, measurement in self.generate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
-                _get_conversion_factor(self._x_units, self._get_default_x_units())
+                _get_conversion_factor(self._xunits, self._get_default_xunits())
                 * x_lim
             )
             self.axes[i].set_xlim([-x_lim, x_lim])
@@ -1908,17 +1921,17 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         for i, measurement in self.generate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
-                _get_conversion_factor(self._x_units, self._get_default_x_units())
+                _get_conversion_factor(self._xunits, self._get_default_xunits())
                 * x_lim
             )
             self.axes[i].set_xlim([-x_lim, x_lim])
 
-    def set_x_units(self, units: str = None):
-        super().set_x_units(units)
+    def set_xunits(self, units: str = None):
+        super().set_xunits(units)
         self.set_artists()
 
-    def set_y_units(self, units: str = None):
-        super().set_y_units(units)
+    def set_yunits(self, units: str = None):
+        super().set_yunits(units)
         self.set_artists()
 
         # for i, measurement in self.iterate_measurements():
@@ -2195,6 +2208,8 @@ def show_atoms(
         If True, add a legend indicating the color of the atomic species.
     merge: float
         To speed up plotting large numbers of atoms, those closer than the given value [Å] are merged.
+    tight_limits : bool
+        If True the limits of the plot are adjusted
     kwargs : Keyword arguments for matplotlib.collections.PatchCollection.
 
     Returns

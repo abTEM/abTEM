@@ -11,7 +11,7 @@ from ase import Atom, Atoms
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
-from abtem.core.axes import ScanAxis, PositionsAxis
+from abtem.core.axes import ScanAxis, PositionsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.fft import fft_shift_kernel
@@ -227,7 +227,7 @@ class CustomScan(BaseScan):
 
         super().__init__()
 
-    def match_probe(self, probe : Probe | BaseSMatrix):
+    def match_probe(self, probe: Probe | BaseSMatrix):
         """
         Sets the positions to a single position in the center of the probe extent.
 
@@ -240,8 +240,8 @@ class CustomScan(BaseScan):
             self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.0
 
     @property
-    def ensemble_axes_metadata(self):
-        a = [
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        return [
             PositionsAxis(
                 values=tuple(
                     (float(position[0]), float(position[1]))
@@ -249,7 +249,6 @@ class CustomScan(BaseScan):
                 )
             )
         ]
-        return a
 
     @staticmethod
     def _from_partitioned_args_func(*args, **kwargs):
@@ -311,7 +310,11 @@ class CustomScan(BaseScan):
         return self._positions
 
 
-def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
+def _validate_coordinate(
+    coordinate: tuple[float, float] | Atom,
+    potential: BasePotential | Atoms = None,
+    fractional: bool = False,
+) -> tuple[float, float]:
     if isinstance(coordinate, Atom):
         if fractional:
             raise ValueError()
@@ -340,9 +343,15 @@ def _validate_coordinate(coordinate, potential=None, fractional: bool = False):
     return coordinate
 
 
-def _validate_coordinates(start, end, potential, fractional):
+def _validate_coordinates(
+    start: tuple[float, float] | Atom,
+    end: tuple[float, float] | Atom,
+    potential: BasePotential | Atoms,
+    fractional: bool,
+) -> tuple[tuple[float, float], tuple[float, float]]:
 
-    potential = _validate_potential(potential)
+    if fractional:
+        potential = _validate_potential(potential)
 
     start = _validate_coordinate(start, potential, fractional)
     end = _validate_coordinate(end, potential, fractional)
@@ -360,10 +369,11 @@ class LineScan(BaseScan):
 
     Parameters
     ----------
-    start : two float, optional
-        Start point of the scan [Å]. Default is (0., 0.).
-    end : two float, optional
-        End point of the scan [Å]. Default is None, the scan end point will match the extent of the potential.
+    start : two float or Atom, optional
+        Start point of the scan [Å]. May be given as fractional coordinate if ``fractional=True. Default is (0., 0.).
+    end : two float or Atom, optional
+        End point of the scan [Å]. May be given as fractional coordinate if ``fractional=True.
+        Default is None, the scan end point will match the extent of the potential.
     gpts : int, optional
         Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling : float, optional
@@ -379,8 +389,8 @@ class LineScan(BaseScan):
 
     def __init__(
         self,
-        start: tuple[float, float] = (0.0, 0.0),
-        end: tuple[float, float] = None,
+        start: tuple[float, float] | Atom = (0.0, 0.0),
+        end: tuple[float, float] | Atom = None,
         gpts: int = None,
         sampling: float = None,
         endpoint: bool = True,
@@ -475,7 +485,7 @@ class LineScan(BaseScan):
             start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
         )
 
-    def match_probe(self, probe : Probe | BaseSMatrix):
+    def match_probe(self, probe: Probe | BaseSMatrix):
         """
         Sets sampling to the Nyquist frequency. If the start and end point of the scan is not given, set them to the
         lower and upper left corners of the probe extent.
@@ -557,19 +567,6 @@ class LineScan(BaseScan):
         return {"start": self.start, "end": self.end}
 
     @property
-    def ensemble_axes_metadata(self):
-
-        return [
-            ScanAxis(
-                label="x",
-                sampling=float(self.sampling),
-                units="Å",
-                start=self.start,
-                end=self.end,
-            )
-        ]
-
-    @property
     def start(self) -> tuple[float, float] | None:
         """
         Start point of the scan [Å].
@@ -599,7 +596,7 @@ class LineScan(BaseScan):
         self._adjust_gpts()
 
     @property
-    def ensemble_axes_metadata(self):
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return [
             ScanAxis(
                 label="x",
@@ -696,10 +693,11 @@ class GridScan(HasGridMixin, BaseScan):
 
     Parameters
     ----------
-    start : two float, optional
-        Start corner of the scan [Å]. Default is (0., 0.).
-    end : two float, optional
-        End corner of the scan [Å]. Default is None, the scan end point will match the extent of the potential.
+    start : two float or Atom, optional
+        Start corner of the scan [Å]. May be given as fractional coordinate if ``fractional=True. Default is (0., 0.).
+    end : two float or Atom, optional
+        End corner of the scan [Å]. May be given as fractional coordinate if ``fractional=True.
+        Default is None, the scan end point will match the extent of the potential.
     gpts : two int, optional
         Number of scan positions in the `x`- and `y`-direction of the scan. Provide one of gpts or sampling.
     sampling : two float, optional
@@ -715,8 +713,8 @@ class GridScan(HasGridMixin, BaseScan):
 
     def __init__(
         self,
-        start: tuple[float, float] = (0.0, 0.0),
-        end: tuple[float, float] = None,
+        start: tuple[float, float] | Atom = (0.0, 0.0),
+        end: tuple[float, float] | Atom = None,
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
         endpoint: bool | tuple[bool, bool] = False,

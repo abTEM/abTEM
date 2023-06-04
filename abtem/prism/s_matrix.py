@@ -1,10 +1,10 @@
 """Module describing the scattering matrix used in the PRISM algorithm."""
+from __future__ import annotations
 import inspect
 import operator
 import warnings
 from abc import abstractmethod
 from functools import partial, reduce
-from typing import Union, Tuple, Dict, List
 
 import dask.array as da
 import numpy as np
@@ -12,7 +12,13 @@ from ase import Atoms
 from dask.graph_manipulation import wait_on
 
 from abtem.core.array import _validate_lazy, ArrayObject
-from abtem.core.axes import OrdinalAxis, AxisMetadata, ScanAxis, UnknownAxis, WaveVectorAxis
+from abtem.core.axes import (
+    OrdinalAxis,
+    AxisMetadata,
+    ScanAxis,
+    UnknownAxis,
+    WaveVectorAxis,
+)
 from abtem.core.backend import get_array_module, cp, validate_device, copy_to_device
 from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks, Chunks
 from abtem.core.complex import complex_exponential
@@ -45,62 +51,73 @@ from abtem.waves import Waves, Probe, _finalize_lazy_measurements, _wrap_measure
 
 
 def _round_gpts_to_multiple_of_interpolation(
-    gpts: Tuple[int, int], interpolation: Tuple[int, int]
-) -> Tuple[int, int]:
+    gpts: tuple[int, int], interpolation: tuple[int, int]
+) -> tuple[int, int]:
     return tuple(n + (-n) % f for f, n in zip(interpolation, gpts))  # noqa
 
 
 class BaseSMatrix(BaseWaves):
-    """Base class for scattering matrices. Documented in subclasses"""
-    _device: str
+    """Base class for scattering matrices."""
 
+    _device: str
+    ensemble_axes_metadata: list[AxisMetadata]
+    ensemble_shape: tuple[int, ...]
     @property
     def device(self):
+        """The device where the S-Matrix is created and reduced."""
         return self._device
 
     @property
     @abstractmethod
-    def wave_vectors(self):
+    def interpolation(self):
+        """Interpolation factor in the `x` and `y` directions"""
         pass
 
     @property
     @abstractmethod
-    def semiangle_cutoff(self):
+    def wave_vectors(self) -> np.ndarray:
+        """The wave vectors corresponding to each plane wave."""
+        pass
+
+    @property
+    @abstractmethod
+    def semiangle_cutoff(self) -> float:
+        """The radial cutoff of the plane-wave expansion [mrad]."""
         pass
 
     @property
     @abstractmethod
     def window_extent(self):
+        """The cropping window extent of the waves."""
         pass
 
     @property
     @abstractmethod
     def window_gpts(self):
+        """The number of grid points describing the cropping window of the wave functions."""
         pass
 
     def __len__(self) -> int:
         return len(self.wave_vectors)
 
     @property
-    def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [WaveVectorAxis(label="q", values=tuple(tuple(value) for value in self.wave_vectors),)] + super().base_axes_metadata
-        # return [
-        #     OrdinalAxis(
-        #         label="(n, m)",
-        #         values=self.wave_vectors,
-        #     )
-        # ] + super().base_axes_metadata  # noqa
-
-    @property
-    def base_shape(self):
-        return (len(self),) + super().base_shape
+    def base_axes_metadata(self) -> list[AxisMetadata]:
+        wave_axes_metadata = super().base_axes_metadata
+        return [
+            WaveVectorAxis(
+                label="q",
+                values=tuple(tuple(value) for value in self.wave_vectors),
+            ),
+            wave_axes_metadata[0],
+            wave_axes_metadata[1],
+        ]
 
     def dummy_probes(
         self, scan: BaseScan = None, ctf: CTF = None, plane: str = "entrance"
     ) -> Probe:
+        # TODO
         """
-        A probe or an ensemble of probes equivalent reducing the SMatrix at a single positions, assuming an empty
-        potential.
+        A probe or an ensemble of probes equivalent reducing the SMatrix at a single position.
 
         Parameters
         ----------
@@ -146,7 +163,7 @@ class BaseSMatrix(BaseWaves):
         return probes
 
 
-def _validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
+def _validate_interpolation(interpolation: int | tuple[int, int]):
     if isinstance(interpolation, int):
         interpolation = (interpolation,) * 2
     elif not len(interpolation) == 2:
@@ -179,7 +196,7 @@ def _chunked_axis(s_matrix_array):
 
 
 def _chunks_for_multiple_rechunk_reduce(partitions):
-    
+
     chunks_1 = ()
     chunk_indices_1 = ()
     for i in range(1, len(partitions) - 1, 3):
@@ -227,7 +244,7 @@ def _lazy_reduce(
     max_batch_reduction,
 ):
     waves = waves_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
-    s_matrix = SMatrixArray.from_waves(waves, **from_waves_kwargs)
+    s_matrix = SMatrixArray._from_waves(waves, **from_waves_kwargs)
 
     measurements = s_matrix._batch_reduce_to_measurements(
         scan, ctf, detectors, max_batch_reduction
@@ -282,12 +299,12 @@ def _map_blocks(array, scans, block_indices, window_offset=(0, 0), **kwargs):
 
 
 def _tuple_from_indices(*args):
-    l = [None] * (len(args) // 2)
+    temp_list = [None] * (len(args) // 2)
 
     for arg1, arg2 in zip(args[::2], args[1::2]):
-        l[arg1] = arg2
+        temp_list[arg1] = arg2
 
-    return tuple(l)
+    return tuple(temp_list)
 
 
 def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_reduction):
@@ -460,7 +477,7 @@ def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_red
 def _single_rechunk_reduce(
     s_matrix_array: "SMatrixArray",
     scan: BaseScan,
-    detectors: List[BaseDetector],
+    detectors: list[BaseDetector],
     ctf: CTF,
     max_batch_reduction: int,
 ):
@@ -487,11 +504,20 @@ def _single_rechunk_reduce(
 
     assert all(s_matrix_array.periodic)
 
-    chunk_extents = tuple(
-        tuple(((cc[0]) * d, (cc[1]) * d) for cc in c)
-        for c, d in zip(chunk_ranges(array.chunks[-2:]), s_matrix_array.sampling)
+    # chunk_extents = tuple(
+    #     tuple(((cc[0]) * d, (cc[1]) * d) for cc in c)
+    #     for c, d in zip(chunk_ranges(array.chunks[-2:]), s_matrix_array.sampling)
+    # )
+    chunk_extents_x = tuple(
+        ((cc[0]) * s_matrix_array.sampling[0], (cc[1]) * s_matrix_array.sampling[0])
+        for cc in array.chunks[-2]
+    )
+    chunk_extents_y = tuple(
+        ((cc[0]) * s_matrix_array.sampling[1], (cc[1]) * s_matrix_array.sampling[1])
+        for cc in array.chunks[-1]
     )
 
+    chunk_extents = (chunk_extents_x, chunk_extents_y)
     scan, scan_chunks = scan._sort_into_extents(chunk_extents)
 
     ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
@@ -577,11 +603,13 @@ def _single_rechunk_reduce(
 def _no_chunks_reduce(
     s_matrix_array: "SMatrixArray",
     scan: BaseScan,
-    detectors: List[BaseDetector],
+    detectors: list[BaseDetector],
     ctf: CTF,
     max_batch_reduction: int,
 ):
-    array = s_matrix_array._array.rechunk(s_matrix_array.array.chunks[:-3] + (-1, -1, -1))
+    array = s_matrix_array._array.rechunk(
+        s_matrix_array.array.chunks[:-3] + (-1, -1, -1)
+    )
 
     kwargs = {
         "waves_partial": s_matrix_array.waves._from_partitioned_args(),
@@ -655,8 +683,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     window_offset : tuple of int
         The number of grid points from the origin the cropping windows of the wave functions is displaced.
     periodic: tuple of bool
+        Specifies whether the SMatrix should be assumed to be periodic along the x and y-axis.
     device : str, optional
-        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is determined by the user configuration.
+        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is
+        determined by the user configuration.
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
     metadata : dict
@@ -672,15 +702,15 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         wave_vectors: np.ndarray,
         semiangle_cutoff: float,
         energy: float = None,
-        interpolation: Union[int, Tuple[int, int]] = (1, 1),
-        sampling: Union[float, Tuple[float, float]] = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        window_gpts: Tuple[int, int] = (0, 0),
-        window_offset: Tuple[int, int] = (0, 0),
-        periodic: Tuple[bool, bool] = (True, True),
+        interpolation: int | tuple[int, int] = (1, 1),
+        sampling: float | tuple[float, float] = None,
+        extent: float | tuple[float, float] = None,
+        window_gpts: tuple[int, int] = (0, 0),
+        window_offset: tuple[int, int] = (0, 0),
+        periodic: tuple[bool, bool] = (True, True),
         device: str = None,
-        ensemble_axes_metadata: List[AxisMetadata] = None,
-        metadata: Dict = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
+        metadata: dict = None,
     ):
 
         if len(array.shape) < 2:
@@ -742,7 +772,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         return super().device
 
     @classmethod
-    def from_waves(cls, waves: Waves, **kwargs):
+    def _from_waves(cls, waves: Waves, **kwargs):
         kwargs.update({key: getattr(waves, key) for key in _common_kwargs(cls, Waves)})
         kwargs["ensemble_axes_metadata"] = kwargs["ensemble_axes_metadata"][:-1]
         return cls(**kwargs)
@@ -763,28 +793,30 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             inspect.signature(self.__class__).parameters.keys()
         ) - _common_kwargs(self.__class__, Waves)
         kwargs = {key: getattr(self, key) for key in keys}
-        return self.from_waves(waves, **kwargs)
+        return self._from_waves(waves, **kwargs)
 
     @property
-    def periodic(self) -> Tuple[bool, bool]:
+    def periodic(self) -> tuple[bool, bool]:
+        """If True the SMatrix is assumed to be periodic along corresponding axis."""
         return self._periodic
 
     @property
-    def metadata(self) -> Dict:
+    def metadata(self) -> dict:
         self._metadata["energy"] = self.energy
         return self._metadata
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         """Axis metadata for each ensemble axis."""
         return self._ensemble_axes_metadata
 
     @property
-    def ensemble_shape(self) -> Tuple[int, int]:
+    def ensemble_shape(self) -> tuple[int, int]:
         return self.array.shape[:-3]
 
     @property
-    def interpolation(self) -> Tuple[int, int]:
+    def interpolation(self) -> tuple[int, int]:
+
         return self._interpolation
 
     def rechunk(self, chunks: Chunks, in_place: bool = True):
@@ -808,20 +840,18 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         return self._wave_vectors
 
     @property
-    def window_gpts(self) -> Tuple[int, int]:
-        """The number of grid points describing the cropping window of the wave functions."""
+    def window_gpts(self) -> tuple[int, int]:
         return self._window_gpts
 
     @property
-    def window_extent(self) -> Tuple[float, float]:
-        """The cropping window extent of the wave functions."""
+    def window_extent(self) -> tuple[float, float]:
         return (
             self.window_gpts[0] * self.sampling[0],
             self.window_gpts[1] * self.sampling[1],
         )
 
     @property
-    def window_offset(self) -> Tuple[float, float]:
+    def window_offset(self) -> tuple[float, float]:
         """The number of grid points from the origin the cropping windows of the wave functions is displaced."""
         return self._window_offset
 
@@ -915,9 +945,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         self,
         scan: BaseScan,
         ctf: CTF,
-        detectors: List[BaseDetector],
+        detectors: list[BaseDetector],
         max_batch_reduction: int,
-    ) -> Tuple[Union[BaseMeasurements, Waves], ...]:
+    ) -> tuple[BaseMeasurements | Waves, ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
@@ -960,9 +990,15 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 else:
                     coefficients = positions_coefficients
 
-                ensemble_axes_metadata = [UnknownAxis()] * (
-                    len(array.shape[:-3]) + len(sub_ctf.ensemble_shape)
-                ) + [ScanAxis() for _ in range(len(scan.shape))]
+                ensemble_shape = len(array.shape[:-3]) + len(sub_ctf.ensemble_shape)
+
+                ensemble_axes_metadata = []
+                ensemble_axes_metadata.extend(
+                    [UnknownAxis() for _ in range(ensemble_shape)]
+                )
+                ensemble_axes_metadata.extend(
+                    [ScanAxis() for _ in range(len(scan.shape))]
+                )
 
                 waves_array = self._reduce_to_waves(array, positions, coefficients)
 
@@ -1041,14 +1077,14 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         )
 
         if chunks is None:
-            chunks = self.chunks[-2:]
+            chunks = self.array.chunks[-2:]
         else:
             chunks = validate_chunks(self.shape[-2:], chunks)
 
         return chunks
 
     def _validate_max_batch_reduction(
-        self, scan, max_batch_reduction: Union[int, str] = "auto"
+        self, scan, max_batch_reduction: int | str = "auto"
     ):
 
         shape = (len(scan),) + self.window_gpts
@@ -1072,18 +1108,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         self,
         scan: BaseScan = None,
         ctf: CTF = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        max_batch_reduction: Union[int, str] = "auto",
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
         reduction_scheme: str = "auto",
-        # rechunk: Union[Tuple[int, int], str] = "auto",
-    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
 
         """
         Scan the probe across the potential and record a measurement for each detector.
 
         Parameters
         ----------
-        detectors : List of Detector objects
+        detectors : list of Detector objects
             The detectors recording the measurements.
         scan : Scan object
             Scan defining the positions of the probe wave functions.
@@ -1158,10 +1193,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     def scan(
         self,
         scan: BaseScan = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
         ctf: CTF = None,
-        max_batch_reduction: Union[int, str] = "auto",
-        rechunk: Union[Tuple[int, int], str] = "auto",
+        max_batch_reduction: int | str = "auto",
+        rechunk: tuple[int, int] | str = "auto",
     ):
         """
         Reduce the SMatrix using coefficients calculated by a BaseScan and a CTF, to obtain the exit wave functions
@@ -1220,9 +1255,9 @@ class SMatrix(BaseSMatrix, Ensemble):
     energy : float
         Electron energy [eV].
     potential : Atoms or AbstractPotential, optional
-        Atoms or a potential that the scattering matrix represents. If given as atoms, a default potential will be created.
-        If nothing is provided the scattering matrix will represent a vacuum potential, in which case the sampling and extent
-        must be provided.
+        Atoms or a potential that the scattering matrix represents. If given as atoms, a default potential will be
+        created. If nothing is provided the scattering matrix will represent a vacuum potential, in which case the
+        sampling and extent must be provided.
     gpts : one or two int, optional
         Number of grid points describing the scattering matrix. Provide only if potential is not given.
     sampling : one or two float, optional
@@ -1233,39 +1268,36 @@ class SMatrix(BaseSMatrix, Ensemble):
     interpolation : one or two int, optional
         Interpolation factor in the `x` and `y` directions (default is 1, ie. no interpolation). If a single value is
         provided, assumed to be the same for both directions.
-    normalize : {'probe', 'planewaves'}
-        Normalization of the scattering matrix. The default 'probe' is standard S matrix formalism, whereby the sum of
-        all waves in the PRISM expansion is equal to 1; 'planewaves' is needed for core-loss calculations.
     downsample : {'cutoff', 'valid'} or float or bool
-        Controls whether to downsample the scattering matrix after each run of the multislice algorithm.
+        Controls whether to downsample the scattering matrix after running the multislice algorithm.
 
             ``cutoff`` :
                 Downsample to the antialias cutoff scattering angle (default).
 
             ``valid`` :
-                Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias cutoff
-                scattering angle.
+                Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias
+                cutoff scattering angle.
 
             float :
                 Downsample to a specified maximum scattering angle [mrad].
     device : str, optional
-        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is determined by the user configuration.
+        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is
+        determined by the user configuration.
     store_on_host : bool, optional
-        If True, store the scattering matrix in host (cpu) memory so that the necessary memory is transferred as chunks to
-        the device to run calculations (default is False).
+        If True, store the scattering matrix in host (cpu) memory so that the necessary memory is transferred as chunks
+        to the device to run calculations (default is False).
     """
 
     def __init__(
         self,
         semiangle_cutoff: float,
         energy: float,
-        potential: Union[Atoms, BasePotential] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        interpolation: Union[int, Tuple[int, int]] = 1,
-        normalize: str = "probe",
-        downsample: Union[bool, str] = "cutoff",
+        potential: Atoms | BasePotential = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
+        extent: float | tuple[float, float] = None,
+        interpolation: int | tuple[int, int] = 1,
+        downsample: bool | str = "cutoff",
         # tilt: Tuple[float, float] = (0.0, 0.0),
         device: str = None,
         store_on_host: bool = False,
@@ -1277,8 +1309,17 @@ class SMatrix(BaseSMatrix, Ensemble):
         self._device = validate_device(device)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
-        self.set_potential(potential)
+        if potential is None:
+            try:
+                self.grid.check_is_defined()
+            except GridUndefinedError:
+                raise ValueError("Provide a potential or provide 'extent' and 'gpts'.")
+        else:
+            potential = _validate_potential(potential)
+            self.grid.match(potential)
+            self._grid = potential.grid
 
+        self._potential = potential
         self._interpolation = _validate_interpolation(interpolation)
         self._semiangle_cutoff = semiangle_cutoff
         self._downsample = downsample
@@ -1286,7 +1327,6 @@ class SMatrix(BaseSMatrix, Ensemble):
         self._accelerator = Accelerator(energy=energy)
         # self._beam_tilt = BeamTilt(tilt=tilt)
 
-        self._normalize = normalize
         self._store_on_host = store_on_host
 
         assert semiangle_cutoff > 0.0
@@ -1296,30 +1336,17 @@ class SMatrix(BaseSMatrix, Ensemble):
                 "The interpolation factor does not exactly divide 'gpts', normalization may not be exactly preserved."
             )
 
-    def set_potential(self, potential):
-        self._potential = _validate_potential(potential)
-
-        if self._potential is not None:
-            self.grid.match(self._potential)
-            self._grid = self._potential.grid
-        else:
-            try:
-                self.grid.check_is_defined()
-            except GridUndefinedError:
-                raise ValueError("Provide a potential or provide 'extent' and 'gpts'.")
+    @property
+    def base_shape(self) -> tuple[int, int, int]:
+        """Shape of the base axes of the SMatrix."""
+        return len(self), self.gpts[0], self.gpts[1]
 
     @property
     def tilt(self):
+        """The small-angle tilt of applied to the Fresnel propagator [mrad]."""
         return 0.0, 0.0
 
-    @property
-    def thickness(self):
-        if self.potential is not None:
-            return self.potential.thickness
-        else:
-            return 0.0
-
-    def round_gpts_to_interpolation(self) -> "SMatrix":
+    def round_gpts_to_interpolation(self) -> SMatrix:
         """
         Round the gpts of the SMatrix to the closest multiple of the interpolation factor.
 
@@ -1338,11 +1365,13 @@ class SMatrix(BaseSMatrix, Ensemble):
         return self
 
     @property
-    def downsample(self) -> Union[str, bool]:
+    def downsample(self) -> str | bool:
+        """How to downsample the scattering matrix after running the multislice algorithm."""
         return self._downsample
 
     @property
     def store_on_host(self) -> bool:
+        """Store the SMatrix in host memory. The reduction may still be calculated on the device."""
         return self._store_on_host
 
     @property
@@ -1350,12 +1379,12 @@ class SMatrix(BaseSMatrix, Ensemble):
         return {"energy": self.energy}
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Shape of the SMatrix."""
         return self.ensemble_shape + (len(self),) + self.gpts
 
     @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
+    def ensemble_shape(self) -> tuple[int, ...]:
         """Shape of the SMatrix ensemble axes."""
         if self.potential is None:
             return ()
@@ -1403,16 +1432,13 @@ class SMatrix(BaseSMatrix, Ensemble):
 
     @property
     def potential(self) -> BasePotential:
+        """The potential described by the SMatrix."""
         return self._potential
 
     @potential.setter
-    def potential(self, potential):
+    def potential(self, potential: BasePotential):
         self._potential = potential
         self._grid = potential.grid
-
-    @property
-    def normalize(self) -> bool:
-        return self._normalize
 
     @property
     def semiangle_cutoff(self) -> float:
@@ -1424,16 +1450,8 @@ class SMatrix(BaseSMatrix, Ensemble):
         self._semiangle_cutoff = value
 
     @property
-    def interpolation(self) -> Tuple[int, int]:
-        """Interpolation factor."""
+    def interpolation(self) -> tuple[int, int]:
         return self._interpolation
-
-    @property
-    def interpolated_gpts(self) -> Tuple[int, int]:
-        return (
-            self.gpts[0] // self.interpolation[0],
-            self.gpts[1] // self.interpolation[0],
-        )
 
     def _wave_vector_chunks(self, max_batch):
         if isinstance(max_batch, int):
@@ -1449,7 +1467,8 @@ class SMatrix(BaseSMatrix, Ensemble):
         return chunks
 
     @property
-    def downsampled_gpts(self) -> Tuple[int, int]:
+    def downsampled_gpts(self) -> tuple[int, int]:
+        """The gpts of the SMatrix after downsampling."""
         if self.downsample:
             downsampled_gpts = self._gpts_within_angle(self.downsample)
             rounded = _round_gpts_to_multiple_of_interpolation(
@@ -1509,7 +1528,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         self,
         potential=None,
         lazy: bool = None,
-        max_batch: Union[int, str] = "auto",
+        max_batch: int | str = "auto",
     ):
         """
 
@@ -1562,7 +1581,8 @@ class SMatrix(BaseSMatrix, Ensemble):
         kwargs = self._copy_kwargs(exclude=exclude)
         return partial(self._s_matrix, potential_partial=potential_partial, **kwargs)
 
-    def _wave_vector_blocks(self, wave_vector_chunks, lazy: bool = True):
+    @staticmethod
+    def _wave_vector_blocks(wave_vector_chunks, lazy: bool = True):
 
         wave_vector_blocks = chunk_ranges(wave_vector_chunks)[0]
 
@@ -1623,7 +1643,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         return waves.array
 
     def build(
-        self, lazy: bool = None, max_batch: Union[int, str] = "auto", bound=None
+        self, lazy: bool = None, max_batch: int | str = "auto", bound: bool = None
     ) -> SMatrixArray:
         """
         Build the plane waves of the scattering matrix and propagate them through the potential using the
@@ -1728,10 +1748,10 @@ class SMatrix(BaseSMatrix, Ensemble):
 
         if self.downsampled_gpts != self.gpts:
             waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
-                self.interpolated_gpts, self.sampling
+                self.window_gpts, self.sampling
             )
 
-        s_matrix_array = SMatrixArray.from_waves(
+        s_matrix_array = SMatrixArray._from_waves(
             waves,
             wave_vectors=self.wave_vectors,
             interpolation=self.interpolation,
@@ -1744,15 +1764,15 @@ class SMatrix(BaseSMatrix, Ensemble):
 
     def scan(
         self,
-        scan: Union[np.ndarray, BaseScan] = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        ctf: Union[CTF, Dict] = None,
-        max_batch_multislice: Union[str, int] = "auto",
-        max_batch_reduction: Union[str, int] = "auto",
+        scan: np.ndarray | BaseScan = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        ctf: CTF | dict = None,
+        max_batch_multislice: str | int = "auto",
+        max_batch_reduction: str | int = "auto",
         reduction_scheme: str = "auto",
         disable_s_matrix_chunks: bool = "auto",
         lazy: bool = None,
-    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
 
         """
         Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
@@ -1895,15 +1915,15 @@ class SMatrix(BaseSMatrix, Ensemble):
 
     def reduce(
         self,
-        scan: Union[np.ndarray, BaseScan] = None,
-        detectors: Union[BaseDetector, List[BaseDetector]] = None,
-        ctf: Union[CTF, Dict] = None,
+        scan: np.ndarray | BaseScan = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        ctf: CTF | dict = None,
         reduction_scheme: str = "auto",
-        max_batch_multislice: Union[str, int] = "auto",
-        max_batch_reduction: Union[str, int] = "auto",
+        max_batch_multislice: str | int = "auto",
+        max_batch_reduction: str | int = "auto",
         disable_s_matrix_chunks: bool = "auto",
         lazy: bool = None,
-    ) -> Union[BaseMeasurements, Waves, List[Union[BaseMeasurements, Waves]]]:
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
 
         """
         Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
@@ -1941,10 +1961,8 @@ class SMatrix(BaseSMatrix, Ensemble):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
+        measurements : BaseMeasurements or Waves or list of BaseMeasurements or list of Waves
             The detected measurement (if detector(s) given).
-        exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
 
         detectors = _validate_detectors(detectors)
@@ -2002,7 +2020,9 @@ class SMatrix(BaseSMatrix, Ensemble):
 
             return _wrap_measurements(measurements)
 
-        return self.build(max_batch=max_batch_multislice, lazy=lazy).reduce(
+        s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
+
+        return s_matrix_array.reduce(
             scan=scan,
             detectors=detectors,
             reduction_scheme=reduction_scheme,

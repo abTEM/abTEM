@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from utils import ROOT_DIR, _test_notebook
+from notebook_utils import _test_notebook, ROOT_DIR
 
 
 @pytest.mark.slow

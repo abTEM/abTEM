@@ -12,7 +12,7 @@ from abtem.core.integrals.base import ProjectionIntegrator, ProjectionIntegrator
 from abtem.core.parametrizations import validate_parametrization
 
 if cp is not None:
-    from abtem.core.cuda import (
+    from abtem.core._cuda import (
         interpolate_radial_functions as interpolate_radial_functions_cuda,
     )
 else:

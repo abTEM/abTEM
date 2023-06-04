@@ -1,4 +1,6 @@
+from __future__ import annotations
 from abc import ABCMeta, abstractmethod
+from typing import Sequence
 
 import numpy as np
 from ase.data import chemical_symbols
@@ -6,6 +8,7 @@ from ase.data import chemical_symbols
 from abtem.core.axes import OrdinalAxis
 from abtem.core.utils import EqualityMixin
 from abtem.measurements import ReciprocalSpaceLineProfiles, RealSpaceLineProfiles
+from abtem.core.array import concatenate
 
 real_space_funcs = "potential", "projected_potential", "charge"
 fourier_space_funcs = "scattering_factor", "projected_scattering_factor"
@@ -25,10 +28,10 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     def scaled_parameters(self, symbol):
         pass
 
-    def potential(self, symbol, charge=0.0):
+    def potential(self, symbol, charge:float=0.0):
         return self.get_function("potential", symbol, charge)
 
-    def scattering_factor(self, symbol, charge=0.0):
+    def scattering_factor(self, symbol, charge:float=0.0):
         return self.get_function("scattering_factor", symbol, charge)
 
     def projected_potential(self, symbol, charge=0.0):
@@ -78,30 +81,45 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
     def line_profiles(
         self,
-        symbol: str,
+        symbol: str | Sequence[str],
         cutoff: float,
         sampling: float = 0.001,
         name: str = "potential",
     ):
 
+        if not isinstance(symbol, str):
+            return concatenate(
+                [
+                    self.line_profiles(
+                        s,
+                        cutoff=cutoff,
+                        sampling=sampling,
+                        name=name,
+                    )
+                    for s in symbol
+                ]
+            )
+
         func = self.get_function(name, symbol)
 
-        ensemble_axes_metadata = [OrdinalAxis(label="", values=(symbol,))]
+        ensemble_axes_metadata = [OrdinalAxis(label="", values=(symbol,), _default_type="overlay")]
 
         if name in real_space_funcs:
             r = np.arange(sampling, cutoff, sampling)
-            metadata = {"label":"potential", "units":"eV/e"}
+            metadata = {"label": "potential", "units": "eV/e"}
             return RealSpaceLineProfiles(
                 func(r)[None],
                 sampling=sampling,
                 ensemble_axes_metadata=ensemble_axes_metadata,
-                metadata=metadata
+                metadata=metadata,
             )
 
         elif name in fourier_space_funcs:
-            k = np.arange(0.0, cutoff, sampling)
+            k2 = np.arange(0.0, cutoff, sampling) ** 2
+            metadata = {"label": "scattering factor", "units": "Å"}
             return ReciprocalSpaceLineProfiles(
-                func(k)[None],
+                func(k2)[None],
                 sampling=sampling,
                 ensemble_axes_metadata=ensemble_axes_metadata,
+                metadata=metadata
             )

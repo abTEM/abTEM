@@ -154,11 +154,9 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin, CopyMixin, EqualityMixin):
     """Base class of all wave functions. Documented in the subclasses."""
 
     _base_axes = (-2, -1)
-
-    @property
-    @abstractmethod
-    def device(self):
-        pass
+    ensemble_axes_metadata: list[AxisMetadata]
+    ensemble_shape: tuple[int, ...]
+    device: str
 
     @property
     @abstractmethod
@@ -645,12 +643,12 @@ class Waves(BaseWaves, ArrayObject):
             The shifted wave functions.
         """
 
-        def phase_shift(array):
+        def _phase_shift(array):
             xp = get_array_module(self.array)
             return xp.exp(1.0j * amount) * array
 
         d = self._copy_kwargs(exclude=("array",))
-        d["array"] = phase_shift(self.array)
+        d["array"] = _phase_shift(self.array)
         d["reciprocal_space"] = False
         return self.__class__(**d)
 
@@ -664,7 +662,7 @@ class Waves(BaseWaves, ArrayObject):
             The intensity of the wave functions.
         """
 
-        def intensity(array):
+        def _intensity(array):
             return abs2(array)
 
         metadata = copy(self.metadata)
@@ -674,9 +672,9 @@ class Waves(BaseWaves, ArrayObject):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.map_blocks(intensity, dtype=xp.float32)
+            array = self.array.map_blocks(_intensity, dtype=xp.float32)
         else:
-            array = intensity(self.array)
+            array = _intensity(self.array)
 
         return Images(
             array,
@@ -708,10 +706,10 @@ class Waves(BaseWaves, ArrayObject):
 
     def downsample(
         self,
-        max_angle: Union[str, float] = "cutoff",
+        max_angle: str | float = "cutoff",
         gpts: tuple[int, int] = None,
         normalization: str = "values",
-    ) -> "Waves":
+    ) -> Waves:
         """
         Downsample the wave functions to a lower maximum scattering angle.
 
@@ -776,8 +774,8 @@ class Waves(BaseWaves, ArrayObject):
 
     def diffraction_patterns(
         self,
-        max_angle: Union[str, float, None] = "cutoff",
-        block_direct: Union[bool, float] = False,
+        max_angle: str | float = "cutoff",
+        block_direct: bool | float = False,
         fftshift: bool = True,
         parity: str = "odd",
         return_complex: bool = False,
@@ -954,8 +952,8 @@ class Waves(BaseWaves, ArrayObject):
         transpose: bool = False,
     ) -> "Waves":
         """
-        Propagate and transmit wave function through the provided potential using the multislice algorithm. When detector(s)
-        are given, output will be the corresponding measurement.
+        Propagate and transmit wave function through the provided potential using the multislice algorithm. When
+        detector(s) are given, output will be the corresponding measurement.
 
         Parameters
         ----------
@@ -963,8 +961,8 @@ class Waves(BaseWaves, ArrayObject):
             The potential through which to propagate the wave function. Optionally atoms can be directly given.
         detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See `abtem.measurements.detect` for a list of implemented detectors. If not
-            given, returns the wave functions themselves.
+            running the multislice algorithm. See `abtem.measurements.detect` for a list of implemented detectors. If
+            not given, returns the wave functions themselves.
         conjugate : bool, optional
             If True, use the conjugate of the transmission function (default is False).
         transpose : bool, optional
@@ -994,7 +992,7 @@ class Waves(BaseWaves, ArrayObject):
                 new_axes = {num_new_symbols: (potential.num_exit_planes,)}
                 num_new_symbols += 1
                 extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-                    potential.base_axes_metadata[0]
+                    potential._get_exit_planes_axes_metadata()
                 ]
             else:
                 new_axes = None
@@ -1218,7 +1216,7 @@ class _WavesFactory(BaseWaves):
                     range(max(potential_symbols) + 1, max(potential_symbols) + 2)
                 )
                 new_axes[1] = (len(potential.exit_planes),)
-                extra_ensemble_axes_metadata += [potential.base_axes_metadata[0]]
+                extra_ensemble_axes_metadata += [potential._get_exit_planes_axes_metadata()]
                 max_symbol += 1
 
         transforms = CompositeWaveTransform(self.transforms)
@@ -1300,7 +1298,8 @@ class PlaneWave(_WavesFactory):
     tilt : two float, optional
         Small-angle beam tilt [mrad] (default is (0., 0.)). Implemented by shifting the wave functions at every slice.
     device : str, optional
-        The wave functions are stored on this device ('cpu' or 'gpu'). The default is determined by the user configuration.
+        The wave functions are stored on this device ('cpu' or 'gpu'). The default is determined by the user
+        configuration.
     transforms : list of WaveTransform, optional
         Can apply any transformation to the wave functions (e.g. to describe a phase plate).
     """
@@ -1536,15 +1535,11 @@ class Probe(_WavesFactory):
         metadata: dict = None,
         **kwargs
     ):
-        # if ctf is not None:
-        #     aperture = ctf._aperture
-        #     aberrations = ctf._aberrations
-        #     energy = ctf.energy
 
         self._accelerator = Accelerator(energy=energy)
 
-        if semiangle_cutoff is None and aperture is None:
-            raise ValueError()
+        if not ((semiangle_cutoff is None) + (aperture is None) == 1):
+            raise ValueError("provide exactly one of `semiangle_cutoff` or `aperture`")
         elif semiangle_cutoff is None:
             semiangle_cutoff = 30.0
 

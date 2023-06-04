@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -9,10 +10,11 @@ from scipy.ndimage import maximum_filter
 
 import abtem
 from abtem.atoms import is_cell_orthogonal
+from abtem.core.energy import energy2wavelength
 from abtem.core.utils import label_to_index
 
 if TYPE_CHECKING:
-    pass
+    from abtem.measurements import DiffractionPatterns
 
 
 def _get_frequency_bin_edges(diffraction_patterns):
@@ -37,7 +39,9 @@ def _get_frequency_bin_edges(diffraction_patterns):
     return bin_edge_x, bin_edge_y
 
 
-def _sphere_of_miller_index_grid_points(diffraction_patterns, cell=None, max_index=None):
+def _sphere_of_miller_index_grid_points(
+    diffraction_patterns, cell=None, max_index=None
+):
     if max_index is None:
         if cell is None:
             raise RuntimeError()
@@ -87,12 +91,15 @@ def _k_space_distances_to_ewald_sphere(k_grid, wavelength):
     return ewald_z - k_grid[:, 2]
 
 
-def _validate_cell(cell):
+def _validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> Cell:
     if isinstance(cell, Atoms):
         cell = cell.cell
 
-    if isinstance(cell, float):
-        return Cell(np.diag([cell] * 3))
+    if np.isscalar(cell):
+        cell = [cell] * 3
+
+    if not isinstance(cell, Cell):
+        cell = Cell(np.diag(cell))
 
     if not is_cell_orthogonal(cell):
         cell = Atoms(cell=cell)
@@ -101,11 +108,11 @@ def _validate_cell(cell):
     return cell
 
 
-def _disk(width, height):
-    H = np.linspace(-1 + 1 / width, 1 - 1 / width, width)
-    W = np.linspace(-1 + 1 / height, 1 - 1 / height, height)
-    X, Y = np.meshgrid(H, W, indexing="ij")
-    return np.array((X**2 + Y**2) <= 1.0, dtype=bool)
+def _disk(width: int, height: int) -> np.ndarray:
+    h = np.linspace(-1 + 1 / width, 1 - 1 / width, width)
+    w = np.linspace(-1 + 1 / height, 1 - 1 / height, height)
+    x, y = np.meshgrid(h, w, indexing="ij")
+    return np.array((x**2 + y**2) <= 1.0, dtype=bool)
 
 
 def _hkl_tuples_to_str(miller_indices):
@@ -143,10 +150,10 @@ def _integrate_disk(array, center, footprint):
 
 
 def _index_diffraction_patterns(
-    diffraction_patterns,
-    cell,
-    threshold,
-    distance_threshold,
+    diffraction_patterns: DiffractionPatterns,
+    cell: Atoms | Cell | float | tuple[float, float, float],
+    threshold: float,
+    distance_threshold: float,
     min_distance: float = 0.0,
     integration_radius: float = 0.0,
     max_index: int = None,
@@ -193,7 +200,8 @@ def _index_diffraction_patterns(
 
     labels = np.ravel_multi_index(nm.T, shape)
 
-    d_ewald = _k_space_distances_to_ewald_sphere(k, diffraction_patterns.wavelength)
+    wavelength = energy2wavelength(diffraction_patterns._get_from_metadata("energy"))
+    d_ewald = _k_space_distances_to_ewald_sphere(k, wavelength)
 
     ensemble_indices = tuple(range(len(diffraction_patterns.ensemble_shape)))
     max_intensities = diffraction_patterns.array.max(axis=ensemble_indices)

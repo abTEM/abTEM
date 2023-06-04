@@ -44,7 +44,7 @@ axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
 
 def plane_to_axes(plane: str) -> tuple:
     """
-    Convert string representation of Carterian axes to numerical.
+    Convert string representation of Cartesian axes to numerical.
 
     Parameters
     ----------
@@ -239,9 +239,9 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-
     angles : tuple
         Euler angles corresponding to the given rotation matrix.
     """
-    firstaxis, parity, repetition, frame = _axes2tuple[axes.lower()]
+    first_axis, parity, repetition, frame = _axes2tuple[axes.lower()]
 
-    i = firstaxis
+    i = first_axis
     j = [1, 2, 0, 1][i + parity]
     k = [1, 2, 0, 1][i - parity + 1]
 
@@ -288,7 +288,8 @@ def decompose_affine_transform(
     Returns
     -------
     decomposition : {(3,), (3,), (3,)} tuple
-        Decomposition of the affine transformation into a tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.
+        Decomposition of the affine transformation into a tuple of length 3 whose items are arrays of dimension 3
+        representing rotation, scale and shear.
     """
     ZS = np.linalg.cholesky(np.dot(affine_transform.T, affine_transform)).T
 
@@ -570,16 +571,16 @@ def best_orthogonal_cell(
     if isinstance(max_repetitions, int):
         max_repetitions = (max_repetitions,) * 3
 
-    k = np.arange(-max_repetitions[0], max_repetitions[0] + 1)
-    l = np.arange(-max_repetitions[1], max_repetitions[1] + 1)
-    m = np.arange(-max_repetitions[2], max_repetitions[2] + 1)
+    nx = np.arange(-max_repetitions[0], max_repetitions[0] + 1)
+    ny = np.arange(-max_repetitions[1], max_repetitions[1] + 1)
+    nz = np.arange(-max_repetitions[2], max_repetitions[2] + 1)
 
     a, b, c = cell
     vectors = np.abs(
         (
-            (k[:, None] * a[None])[:, None, None]
-            + (l[:, None] * b[None])[None, :, None]
-            + (m[:, None] * c[None])[None, None, :]
+            (nx[:, None] * a[None])[:, None, None]
+            + (ny[:, None] * b[None])[None, :, None]
+            + (nz[:, None] * c[None])[None, None, :]
         )
     )
 
@@ -599,9 +600,9 @@ def best_orthogonal_cell(
 
         new_vector = np.array(
             [
-                k[small_angles[0][shortest_small_angles]],
-                l[small_angles[1][shortest_small_angles]],
-                m[small_angles[2][shortest_small_angles]],
+                nx[small_angles[0][shortest_small_angles]],
+                ny[small_angles[1][shortest_small_angles]],
+                nz[small_angles[2][shortest_small_angles]],
             ]
         )
 
@@ -641,23 +642,23 @@ def orthogonalize_cell(
         If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
         plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
-        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
-        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        perpendicular to the propagation direction. If given as a string, it must be a concatenation of two of `x`, `y`
+        and `z`; the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
         The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
         the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
         the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
         ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     plane : str or two tuples of three float, optional
         The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
-        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
-        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        perpendicular to the propagation direction. If given as a string, it must be a concatenation of two of `x`, `y`
+        and `z`; the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
         The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
         the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
         the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
         ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     origin : three float, optional
-        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating
-        the atoms. The default is (0., 0., 0.).
+        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to
+        translating the atoms. The default is (0., 0., 0.).
     box : three float, optional
         The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
         If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
@@ -722,7 +723,7 @@ def atoms_in_cell(
     margin: Union[float, Tuple[float, float, float]] = 0.0,
 ) -> Atoms:
     """
-    Crop atoms that are outside of their cell.
+    Crop atoms outside the cell.
 
     Parameters
     ----------
@@ -760,7 +761,8 @@ def cut_cell(
     margin: Union[float, Tuple[float, float, float]] = 0.0,
 ) -> Atoms:
     """
-    Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity. If the given atoms do not originally fill the cell, they are first repeated until they do.
+    Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity. If the
+    given atoms do not originally fill the cell, they are first repeated until they do.
 
     Parameters
     ----------
@@ -769,7 +771,8 @@ def cut_cell(
     cell : tuple of floats
         Cell to be fit into.
     plane : str or tuple of tuples
-        Plane to be rotated into given as either a string or two tuples (by default `xy` which results in no rotation for a standardized cell).
+        Plane to be rotated into given as either a string or two tuples (by default `xy` which results in no rotation
+        for a standardized cell).
     origin : tuple of floats
         Offset of the origin for the given cell with respect to the original cell.
     margin : float or tuple of three floats
@@ -835,7 +838,8 @@ def pad_atoms(
     directions: str = "xyz",
 ) -> Atoms:
     """
-    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms within the margin distance from the cell boundary.
+    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms within the margin distance from
+    the cell boundary.
 
     Parameters
     ----------
@@ -843,6 +847,9 @@ def pad_atoms(
         The atoms that should be padded.
     margins: one or tuple of three floats
         The padding margin. Can be specified either as a single value for all directions, or three separate values.
+    directions : str
+        The directions to pad the atoms as a concatenation of one or more of `x`, `y` and `z` for each of the principal
+        directions.
 
     Returns
     -------

@@ -16,7 +16,7 @@ from utils import gpu
 
 #@reproduce_failure('6.61.0', b'AXicY2AAgwMGDCiA0aIBSAIAF6sBqg==')
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [False])
+@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize(
     "detector",
@@ -32,7 +32,7 @@ def test_detect(data, detector, lazy, device):
     detector = data.draw(detector())
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
-    measurement = detector.detect(waves)
+    measurement = detector.detect(waves).compute()
     assert measurement.ensemble_shape == waves.ensemble_shape
     assert measurement.dtype == detector.measurement_dtype
     assert measurement.base_shape == detector.measurement_shape(waves)

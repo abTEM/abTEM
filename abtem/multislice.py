@@ -1,7 +1,7 @@
 """Module for running the multislice algorithm."""
 from __future__ import annotations
 import copy
-from typing import TYPE_CHECKING, Union, Tuple, List, Dict
+from typing import TYPE_CHECKING, Union
 
 import numpy as np
 
@@ -26,14 +26,13 @@ from abtem.potentials.iam import (
 from abtem.tilt import _get_tilt_axes
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves
-    from abtem.waves import BaseWaves
+    from abtem.waves import Waves, BaseWaves
 
 
 def _fresnel_propagator_array(
     thickness: float,
-    gpts: Tuple[int, int],
-    sampling: Tuple[float, float],
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
     energy: float,
     device: str,
 ):
@@ -50,9 +49,9 @@ def _fresnel_propagator_array(
 
 def _apply_tilt_to_fresnel_propagator_array(
     array: np.ndarray,
-    sampling: Tuple[float, float],
+    sampling: tuple[float, float],
     thickness: float,
-    tilt: Union[Tuple[float, float], Tuple[Tuple[float, float], ...]],
+    tilt: Union[tuple[float, float], tuple[tuple[float, float], ...]],
 ):
     xp = get_array_module(array)
     tilt = xp.array(tilt)
@@ -160,8 +159,8 @@ class FresnelPropagator:
         return array
 
     def propagate(
-        self, waves: "Waves", thickness: float, overwrite_x: bool = False
-    ) -> "Waves":
+        self, waves: Waves, thickness: float, in_place: bool = False
+    ) -> Waves:
         """
         Propagate wave functions through free space.
 
@@ -171,8 +170,8 @@ class FresnelPropagator:
             The wave functions to propagate.
         thickness : float
             Distance in free space to propagate.
-        overwrite_x : bool
-            If True, the wave functions may be overwritten.
+        in_place : bool
+            If True, the waves are overwritten.
 
         Returns
         -------
@@ -182,18 +181,27 @@ class FresnelPropagator:
         kernel = self.get_array(waves, thickness)
 
         if (config.get("fft") == "fftw") and isinstance(waves._array, np.ndarray):
-            waves._array = self._cached_fftw_convolution(
-                waves._array, kernel, overwrite_x=overwrite_x
+            array = self._cached_fftw_convolution(
+                waves._array, kernel, overwrite_x=in_place
             )
         else:
-            waves._array = fft2_convolve(waves._array, kernel, overwrite_x=overwrite_x)
+            array = fft2_convolve(waves._array, kernel, overwrite_x=in_place)
+
+        if in_place:
+            waves._array = array
+        else:
+            kwargs = waves._copy_kwargs(exclude=("array",))
+            waves = waves.__class__(array, **kwargs)
 
         return waves
 
 
-def allocate_measurement(
-    waves, detector, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
-):
+def _allocate_measurement(
+    waves: BaseWaves,
+    detector: BaseDetector,
+    extra_ensemble_axes_shape: tuple[int, ...],
+    extra_ensemble_axes_metadata: list[AxisMetadata],
+) -> BaseMeasurements:
     xp = get_array_module(detector.measurement_meta(waves))
 
     measurement_type = detector.measurement_type(waves)
@@ -213,7 +221,7 @@ def allocate_measurement(
 
     array = xp.zeros(shape, dtype=detector.measurement_dtype)
     return measurement_type.from_array_and_metadata(
-        array, axes_metadata=axes_metadata, metadata=metadata
+        array=array, axes_metadata=axes_metadata, metadata=metadata
     )
 
 
@@ -229,48 +237,44 @@ def _potential_ensemble_shape_and_metadata(potential):
             len(potential.exit_planes),
         )
         extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-            potential.exit_planes_axes_metadata
+            potential._get_exit_planes_axes_metadata()
         ]
 
     return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
 
 def allocate_multislice_measurements(
-    waves: "BaseWaves",
-    detectors: List[BaseDetector],
-    extra_ensemble_axes_shape: tuple,
-    extra_ensemble_axes_metadata: List[AxisMetadata],
-) -> Dict[BaseDetector, BaseMeasurements]:
+    waves: BaseWaves,
+    detectors: list[BaseDetector],
+    extra_ensemble_axes_shape: tuple[int, ...],
+    extra_ensemble_axes_metadata: list[AxisMetadata],
+) -> dict[BaseDetector, BaseMeasurements]:
     """
-    Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved
-    numerical efficiency.
+    Allocate the multislice measurements that would be produced by detecting the given set of wave functions with the
+    given set of detectors.
 
     Parameters
     ----------
     waves : Waves
-        Wave functions.
-    detectors : (list of) BaseDetector
-        Detector or list of multiple detectors.
-    extra_ensemble_axes_shape : tuple of int
-        Optional extra ensemble axes to be added to the allocated measurements.
-    extra_ensemble_axes_metadata : AxisMetadata
-        Metadata corresponding to the extra ensemble axes.
+        The waves to derive the allocated measurement from.
+    detectors : list of BaseDetector
+        The detectors to derive the allocated measurement from.
+    extra_ensemble_axes_shape : tuple of int, optional
+        The shape of additional ensemble axes not in the waves.
+    extra_ensemble_axes_metadata : list of AxisMetadata
+        The axes metadata of additional ensemble axes not in the waves.
 
     Returns
     -------
-    mapping : dict
+    allocated_measurements : dict
         Mapping of detectors to measurements.
     """
 
-    # if len(extra_ensemble_axes_shape) > 0:
-
     measurements = {}
     for detector in detectors:
-        measurements[detector] = allocate_measurement(
+        measurements[detector] = _allocate_measurement(
             waves, detector, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
         )
-    # else:
-    #     measurements = {}
 
     return measurements
 
@@ -328,11 +332,11 @@ def multislice_step(
         thickness = -thickness
 
     if transpose:
-        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
+        waves = propagator.propagate(waves, thickness=thickness, in_place=True)
         waves = transmission_function.transmit(waves, conjugate=conjugate)
     else:
         waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves, thickness=thickness, overwrite_x=True)
+        waves = propagator.propagate(waves, thickness=thickness, in_place=True)
 
     return waves
 
@@ -341,7 +345,7 @@ def _update_measurements(
     waves,
     detectors,
     measurements,
-    measurement_index: Tuple[int, ...],
+    measurement_index: tuple[int, ...],
     additive: bool = False,
 ):
     if measurements is None:
@@ -380,10 +384,10 @@ def _validate_potential_ensemble_indices(potential_index, exit_plane_index, pote
 def multislice_and_detect(
     waves: "Waves",
     potential: BasePotential,
-    detectors: List[BaseDetector] = None,
+    detectors: list[BaseDetector] = None,
     conjugate: bool = False,
     transpose: bool = False,
-) -> Union[Tuple[Union[BaseMeasurements, "Waves"], ...], BaseMeasurements, "Waves"]:
+) -> Union[tuple[Union[BaseMeasurements, "Waves"], ...], BaseMeasurements, "Waves"]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
@@ -481,12 +485,12 @@ def multislice_and_detect(
 def transition_potential_multislice_and_detect(
     waves: "Waves",
     potential: BasePotential,
-    detectors: List[BaseDetector],
+    detectors: list[BaseDetector],
     sites,
     transition_potentials,
     conjugate: bool = False,
     transpose: bool = False,
-) -> Union[Tuple[Union[BaseMeasurements, "Waves"], ...], BaseMeasurements, "Waves"]:
+) -> Union[tuple[Union[BaseMeasurements, "Waves"], ...], BaseMeasurements, "Waves"]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.

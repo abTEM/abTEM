@@ -40,7 +40,7 @@ from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
+from abtem.core.integrals.base import ProjectionIntegratorPlan
 from abtem.core.integrals.gaussians import GaussianProjectionIntegrals
 from abtem.core.integrals.infinite import InfinitePotentialProjections
 from abtem.core.integrals.quadrature import ProjectionQuadratureRule
@@ -59,7 +59,7 @@ from abtem.slicing import (
 )
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves
+    from abtem.waves import Waves, BaseWaves
     from abtem.core.parametrizations.base import Parametrization
 
 
@@ -121,6 +121,9 @@ class BasePotential(
                 label="y", sampling=self.sampling[1], units="Å", endpoint=False
             ),
         ]
+
+    def _get_exit_planes_axes_metadata(self):
+        return ThicknessAxis(label="z", values=tuple(self.exit_thicknesses))
 
     @property
     @abstractmethod
@@ -243,8 +246,8 @@ class BasePotential(
         Parameters
         ----------
         project : bool, optional
-            Show the projected potential (True, default) or show all potential slices. It is recommended to index a subset
-            of the potential slices when this keyword set to False.
+            Show the projected potential (True, default) or show all potential slices. It is recommended to index a
+            subset of the potential slices when this keyword set to False.
         kwargs :
             Additional keyword arguments for the show method of :class:`.Images`.
         """
@@ -258,7 +261,7 @@ class BasePotential(
 
 
 def _validate_potential(
-    potential: Union[Atoms, BasePotential], waves: "Waves" = None
+    potential: Atoms | BasePotential, waves: BaseWaves = None
 ) -> BasePotential:
     if isinstance(potential, (Atoms, BaseFrozenPhonons)):
         device = None
@@ -266,6 +269,8 @@ def _validate_potential(
             device = waves.device
 
         potential = Potential(potential, device=device)
+    elif not isinstance(potential, BasePotential):
+        raise ValueError()
 
     if waves is not None and potential is not None:
         potential.grid.match(waves)
@@ -500,9 +505,9 @@ class Potential(_PotentialBuilder):
         Sampling of the potential in `x` and `y` [1 / Å]. Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
         Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
-        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of supercell.
-        The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown
-        if the sum of slice thicknesses is not equal to the height of the atoms.
+        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
+        supercell. The slice thickness may be given as a sequence of values for each slice, in which case an error will
+        be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential for each element. Two of the
         most accurate parametrizations are available (by Lobato et al. and Kirkland; default is 'lobato').
@@ -511,8 +516,9 @@ class Potential(_PotentialBuilder):
         If 'finite' the 3D potential is numerically integrated between the slice boundaries. If 'infinite' (default),
         the infinite potential projection of each atom will be assigned to a single slice.
     integral_method : {'quadrature', 'analytic'}, optional
-        Specifies whether to perform projection integrals in real space or reciprocal space. By default, finite projection
-        integrals are computed in real space and infinite projection integrals are performed in reciprocal space.
+        Specifies whether to perform projection integrals in real space or reciprocal space. By default, finite
+        projection integrals are computed in real space and infinite projection integrals are performed in reciprocal
+        space.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
@@ -541,7 +547,8 @@ class Potential(_PotentialBuilder):
     integrator : ProjectionIntegrator, optional
         Provide a custom integrator for the projection integrals of the potential slicing.
     device : str, optional
-        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user configuration file.
+        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
+        configuration file.
     """
 
     _exclude_from_copy = ("parametrization", "projection", "integral_method")
@@ -1135,28 +1142,28 @@ class PotentialArray(BasePotential, ArrayObject):
         )
         return t
 
-    def tile(self, multiples: Union[tuple[int, int], tuple[int, int, int]]):
+    def tile(self, repetitions: Union[tuple[int, int], tuple[int, int, int]]):
         """
         Tile the potential.
 
         Parameters
         ----------
         multiples: two or three int
-            The number of repetitions of the potential along each axis. NOTE: if three integers are given, the first represents
-            the number of repetitions along the `z`-axis.
+            The number of repetitions of the potential along each axis. NOTE: if three integers are given, the first
+            represents the number of repetitions along the `z`-axis.
 
         Returns
         -------
         PotentialArray object
             The tiled potential.
         """
-        if len(multiples) == 2:
-            multiples = tuple(multiples) + (1,)
+        if len(repetitions) == 2:
+            repetitions = tuple(repetitions) + (1,)
 
-        new_array = np.tile(self.array, (multiples[2], multiples[0], multiples[1]))
+        new_array = np.tile(self.array, (repetitions[2], repetitions[0], repetitions[1]))
 
-        new_extent = (self.extent[0] * multiples[0], self.extent[1] * multiples[1])
-        new_slice_thickness = tuple(np.tile(self.slice_thickness, multiples[2]))
+        new_extent = (self.extent[0] * repetitions[0], self.extent[1] * repetitions[1])
+        new_slice_thickness = tuple(np.tile(self.slice_thickness, repetitions[2]))
 
         return self.__class__(
             array=new_array,

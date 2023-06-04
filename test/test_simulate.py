@@ -163,7 +163,7 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
         )
 
 
-#
+
 # # @given(data=st.data(),
 # #        gpts=core_st.gpts(min_value=32, max_value=64),
 # #        planewave_cutoff=st.floats(5, 10),

@@ -258,7 +258,7 @@ class ArrayObject(CopyMixin):
         if isinstance(axis, Number):
             axis = (axis,)
 
-        base_axes = tuple(range(len(self.base_shape)))
+        base_axes = tuple(range(len(self.ensemble_shape), len(self.shape)))
         return len(set(axis).intersection(base_axes)) > 0
 
     @classmethod
@@ -581,7 +581,9 @@ class ArrayObject(CopyMixin):
     __rmul__ = __mul__
     __rtruediv__ = __truediv__
 
-    def get_items(self, items: int | tuple[int, ...] | slice, keepdims: bool = False) -> T:
+    def get_items(
+        self, items: int | tuple[int, ...] | slice, keepdims: bool = False
+    ) -> T:
         """
         Index the array and the corresponding axes metadata. Only ensemble axes can be indexed.
 
@@ -1057,7 +1059,7 @@ class ArrayObject(CopyMixin):
                     adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                     transform_partial=transform._from_partitioned_args(),
                     transform_ensemble_shape=transform.ensemble_shape,
-                    waves_partial=self.from_partitioned_args(),  # noqa
+                    waves_partial=self._from_partitioned_args(),
                     meta=xp.array((), dtype=self.array.dtype),
                     align_arrays=False,
                 )
@@ -1170,7 +1172,9 @@ def from_zarr(url: str, chunks: Chunks = None):
 
 
 def stack(
-    arrays: Sequence[ArrayObject], axis_metadata: AxisMetadata | Sequence[str] = None, axis: int = 0
+    arrays: Sequence[ArrayObject],
+    axis_metadata: AxisMetadata | Sequence[str] = None,
+    axis: int = 0,
 ) -> T:
     """
     Join multiple array objects (e.g. Waves and BaseMeasurement) along a new ensemble axis.

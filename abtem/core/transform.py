@@ -9,7 +9,6 @@ import numpy as np
 import dask.array as da
 
 from abtem.core.backend import get_array_module
-from abtem.core.device import HasDeviceMixin
 from abtem.core.energy import (
     HasAcceleratorMixin,
     Accelerator,
@@ -191,7 +190,7 @@ class EnsembleTransform(_EnsembleFromDistributionsMixin, WaveTransform):
         pass
 
 class FourierSpaceConvolution(
-    WaveTransform, HasAcceleratorMixin, HasGridMixin, HasDeviceMixin
+    WaveTransform, HasAcceleratorMixin, HasGridMixin
 ):
     def __init__(
         self,
@@ -205,6 +204,10 @@ class FourierSpaceConvolution(
         self._accelerator = Accelerator(energy=energy, **kwargs)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._device = device
+
+    @property
+    def device(self):
+        return self._device
 
     @abstractmethod
     def _evaluate_with_alpha_and_phi(self, alpha, phi):
@@ -226,13 +229,13 @@ class FourierSpaceConvolution(
         alpha, phi = self._angular_grid()
         return self._evaluate_with_alpha_and_phi(alpha, phi)
 
-    def evaluate(self, waves: Waves = None, lazy: bool = False) -> np.ndarray:
+    def evaluate(self, waves: BaseWaves = None, lazy: bool = False) -> np.ndarray:
         """
         Evaluate the array to be multiplied with the waves in reciprocal space.
 
         Parameters
         ----------
-        waves : Waves, optional
+        waves : BaseWaves, optional
             If given, the array will be evaluated to match the provided waves.
         lazy : bool, optional
             If True, the array is lazily evaluated, a Dask array is returned.
@@ -254,7 +257,7 @@ class FourierSpaceConvolution(
         else:
             return self._evaluate()
 
-    def apply(self, waves: Waves, in_place: bool = False, **kwargs) -> Waves:
+    def apply(self, waves: Waves, in_place: bool = False) -> Waves:
         """
         Transform the waves using Fourier space convolution.
 
