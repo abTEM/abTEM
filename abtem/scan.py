@@ -370,9 +370,9 @@ class LineScan(BaseScan):
     Parameters
     ----------
     start : two float or Atom, optional
-        Start point of the scan [Å]. May be given as fractional coordinate if ``fractional=True. Default is (0., 0.).
+        Start point of the scan [Å]. May be given as fractional coordinate if `fractional=True`. Default is (0., 0.).
     end : two float or Atom, optional
-        End point of the scan [Å]. May be given as fractional coordinate if ``fractional=True.
+        End point of the scan [Å]. May be given as fractional coordinate if `fractional=True`.
         Default is None, the scan end point will match the extent of the potential.
     gpts : int, optional
         Number of scan positions. Default is None. Provide one of gpts or sampling.
@@ -694,9 +694,9 @@ class GridScan(HasGridMixin, BaseScan):
     Parameters
     ----------
     start : two float or Atom, optional
-        Start corner of the scan [Å]. May be given as fractional coordinate if ``fractional=True. Default is (0., 0.).
+        Start corner of the scan [Å]. May be given as fractional coordinate if `fractional=True`. Default is (0., 0.).
     end : two float or Atom, optional
-        End corner of the scan [Å]. May be given as fractional coordinate if ``fractional=True.
+        End corner of the scan [Å]. May be given as fractional coordinate if `fractional=True`.
         Default is None, the scan end point will match the extent of the potential.
     gpts : two int, optional
         Number of scan positions in the `x`- and `y`-direction of the scan. Provide one of gpts or sampling.
