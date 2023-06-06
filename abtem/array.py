@@ -963,16 +963,25 @@ class ArrayObject(CopyMixin):
         transform_partial,
         transform_ensemble_shape,
     ):
+        #print(args)
+
         transform = transform_partial(
             *(arg.item() for arg in args[: len(transform_ensemble_shape)])
         )
-        ensemble_axes_metadata = [
-            axis.item() for axis in args[len(transform_ensemble_shape) : -2]
-        ]
-        array = args[-2]
-        block_id = args[-1].item()
 
-        array_object = array_object_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
+        ensemble_axes_metadata = [
+            axis.item() for axis in args[len(transform_ensemble_shape) : -1]
+        ]
+        array = args[-1]#[0][0]
+        #block_id = args[-1].item()
+
+        #print(array)
+
+        array_object = array_object_partial(
+            array, ensemble_axes_metadata=ensemble_axes_metadata
+        )
+
+
 
         if "block_id" in inspect.signature(transform.apply).parameters:
             array_object = transform.apply(array_object, block_id=block_id)
@@ -981,7 +990,9 @@ class ArrayObject(CopyMixin):
 
         return array_object.array
 
-    def apply_transform(self, transform: ArrayObjectTransform, max_batch: int | str = "auto"):
+    def apply_transform(
+        self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
+    ) -> ArrayObjectTransform | T:
         """
         Transform the wave functions by a given transformation.
 
@@ -1004,13 +1015,24 @@ class ArrayObject(CopyMixin):
             if isinstance(max_batch, int):
                 max_batch = max_batch * np.prod(self.base_shape)
 
-            chunks = validate_chunks(
-                transform.ensemble_shape + self.shape,
-                transform._default_ensemble_chunks
-                + tuple(max(chunk) for chunk in self.array.chunks),
-                limit=max_batch,
-                dtype=np.dtype("complex64"),
+            in_shape = transform.ensemble_shape + self.shape
+            out_shape = transform._out_ensemble_shape(self) + transform._out_base_shape(
+                self
             )
+
+            chunks = transform._default_ensemble_chunks + self.array.chunks
+            # chunks = [:len(self.ensemble_shape)] + transform._out_base_shape(self)
+
+            chunks = validate_chunks(
+                in_shape,
+                chunks,
+                limit=max_batch,
+                dtype=self.dtype,
+            )
+
+            chunks = chunks[
+                : len(transform.ensemble_shape) + len(self.ensemble_shape)
+            ] + transform._out_base_shape(self)
 
             transform_blocks = tuple(
                 (arg, (i,))
@@ -1031,27 +1053,28 @@ class ArrayObject(CopyMixin):
                     (len(transform.ensemble_shape) + i,),
                 )
 
-            symbols = tuple(range(len(transform.ensemble_shape) + len(self.shape)))
+            symbols = tuple(range(len(out_shape)))
 
             array_blocks = (
                 self.array,
                 tuple(
                     range(
                         len(transform.ensemble_shape),
-                        len(transform.ensemble_shape) + len(self.shape),
+                        len(in_shape),
                     )
                 ),
             )
 
-            print(array_blocks)
+            #print({i: chunk for i, chunk in enumerate(chunks)})
 
             #block_shape = self.array.blocks.shape
+
             #block_id = np.arange(np.prod(block_shape)).reshape(block_shape)
             #block_id_blocks = (da.from_array(block_id, chunks=1), array_blocks[-1])
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Increasing number of chunks")
-                array = da.blockwise(
+                new_array = da.blockwise(
                     self._apply_transform,
                     symbols,
                     *transform_blocks,
@@ -1060,20 +1083,25 @@ class ArrayObject(CopyMixin):
                     #*block_id_blocks,
                     adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                     transform_partial=transform._from_partitioned_args(),
-                    transform_ensemble_shape=transform.ensemble_shape, # noqa
+                    transform_ensemble_shape=transform.ensemble_shape,  # noqa
                     array_object_partial=self._from_partitioned_args(),
                     meta=transform._out_meta(self),
                     align_arrays=False,
+                    concatenate=True
                 )
 
-            kwargs = self._copy_kwargs(exclude=("array",))
-            kwargs["array"] = array
-            kwargs["ensemble_axes_metadata"] = (
-                transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-            )
-            kwargs["metadata"].update(transform.metadata)
+            new_array_object = transform._pack_array(self, new_array)
 
-            return self.__class__(**kwargs)
+            return new_array_object
+
+            # kwargs = self._copy_kwargs(exclude=("array",))
+            # kwargs["array"] = array
+            # kwargs["ensemble_axes_metadata"] = (
+            #     transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+            # )
+            # kwargs["metadata"].update(transform.metadata)
+            #
+            # return self.__class__(**kwargs)
         else:
             return transform.apply(self)
 

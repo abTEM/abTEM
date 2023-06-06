@@ -6,21 +6,13 @@ from abc import abstractmethod
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Iterator, TypeVar
 
-import dask
-import dask.array as da
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.backend import get_array_module
-from abtem.core.chunks import Chunks
-from abtem.core.energy import (
-    HasAcceleratorMixin,
-    Accelerator,
-    reciprocal_space_sampling_to_angular_sampling,
-)
+from abtem.core.chunks import Chunks, validate_chunks
 from abtem.core.ensemble import Ensemble
 from abtem.core.fft import ifft2
-from abtem.core.grid import HasGridMixin, polar_spatial_frequencies, Grid
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -33,11 +25,13 @@ from abtem.distributions import (
 )
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves, BaseWaves
+    from abtem.waves import Waves
     from abtem.array import ArrayObject
 
 
-class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
+T = TypeVar("T", bound="ArrayObject")
+
+class ArrayObjectTransform(Ensemble, CopyMixin):
     @property
     def metadata(self):
         """Metadata added to the waves when applying the transform."""
@@ -53,14 +47,14 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         """Axes metadata describing the ensemble axes added to the waves when applying the transform."""
         return []
 
-    def _out_meta(self, array_object: ArrayObject) -> np.ndarray:
+    def _out_meta(self, array_object: ArrayObject | T) -> np.ndarray:
         """
         The meta describing the measurement array created when detecting the given waves.
 
         Parameters
         ----------
-        waves : Waves
-            The waves to derive the measurement meta from.
+        array_object : ArrayObject
+            The array object to derive the measurement meta from.
 
         Returns
         -------
@@ -70,14 +64,14 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         xp = get_array_module(array_object.device)
         return xp.array((), dtype=self._out_dtype(array_object))
 
-    def _out_metadata(self, array_object: ArrayObject) -> dict:
+    def _out_metadata(self, array_object: ArrayObject | T) -> dict:
         """
         Metadata added to the measurements created when detecting the given waves.
 
         Parameters
         ----------
-        waves : BaseWaves
-            The waves to derive the metadata from.
+        array_object : ArrayObject
+            The array object to derive the metadata from.
 
         Returns
         -------
@@ -85,32 +79,17 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         """
         return array_object.metadata
 
-    def _out_dtype(self, array_object: ArrayObject) -> type[np.dtype]:
+    def _out_dtype(self, array_object: ArrayObject | T) -> type[np.dtype]:
         """Datatype of the output array."""
         return array_object.dtype
 
-    def _out_shape(self, array_object: ArrayObject) -> tuple[int, ...]:
+    def _out_type(self, array_object: ArrayObject | T) -> type[ArrayObject] | type[T]:
         """
-        Shape of the measurements created when detecting the given waves.
+        The subtype of the created array object after applying the transform.
 
         Parameters
         ----------
-        waves : BaseWaves
-            The waves to derive the measurement shape from.
-
-        Returns
-        -------
-        measurement_shape : tuple of int
-        """
-        return array_object.shape
-
-    def _out_type(self, array_object: ArrayObject) -> type[ArrayObject]:
-        """
-        The type of the created measurements when detecting the given waves.
-
-        Parameters
-        ----------
-        waves : BaseWaves
+        array_object : ArrayObject
             The waves to derive the measurement shape from.
 
         Returns
@@ -119,13 +98,45 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         """
         return array_object.__class__
 
-    def _out_base_axes_metadata(self, array_object: ArrayObject) -> list[AxisMetadata]:
+    def _out_ensemble_shape(self, array_object: ArrayObject | T) -> tuple[int, ...]:
+        """
+        Shape of the measurements created when detecting the given waves.
+
+        Parameters
+        ----------
+        array_object : ArrayObject
+            The array object to derive the shape of the output array object from.
+
+        Returns
+        -------
+        measurement_shape : tuple of int
+        """
+        return array_object.ensemble_shape
+
+    def _out_base_shape(self, array_object: ArrayObject | T) -> tuple[int, ...]:
+        """
+        Shape of the array object created by the transformation.
+
+        Parameters
+        ----------
+        array_object : ArrayObject
+            The waves to derive the measurement shape from.
+
+        Returns
+        -------
+        measurement_shape : tuple of int
+        """
+        return array_object.base_shape
+
+    def _out_base_axes_metadata(
+        self, array_object: ArrayObject | T
+    ) -> list[AxisMetadata]:
         """
         Axes metadata of the created measurements when detecting the given waves.
 
         Parameters
         ----------
-        waves : BaseWaves
+        array_object: ArrayObject
             The waves to derive the measurement shape from.
 
         Returns
@@ -133,6 +144,11 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         axes_metadata : list of :class:`AxisMetadata`
         """
         return array_object.base_axes_metadata
+
+    def _out_ensemble_axes_metadata(
+        self, array_object: ArrayObject
+    ) -> list[AxisMetadata]:
+        return self.ensemble_axes_metadata + array_object.ensemble_axes_metadata
 
     def __add__(self, other: ArrayObjectTransform) -> CompositeArrayObjectTransform:
         transforms = []
@@ -146,8 +162,35 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
 
         return CompositeArrayObjectTransform(transforms)
 
-    @abstractmethod
-    def apply(self, array_object: ArrayObject) -> ArrayObject:
+    def _pack_array(
+        self,
+        array_object: ArrayObject,
+        new_array: np.ndarray,
+    ):
+
+        ensemble_axes_metadata = self._out_ensemble_axes_metadata(array_object)
+
+        base_axes_metadata = self._out_base_axes_metadata(array_object)
+
+        axes_metadata = (
+            ensemble_axes_metadata
+            + base_axes_metadata
+        )
+
+        metadata = self._out_metadata(array_object)
+
+        cls = self._out_type(array_object)
+
+        array_object = cls.from_array_and_metadata(
+            new_array, axes_metadata=axes_metadata, metadata=metadata
+        )
+
+        return array_object
+
+    def _calculate_new_array(self, array_object: ArrayObject | T) -> np.ndarray:
+        pass
+
+    def apply(self, array_object: ArrayObject | T) -> ArrayObject | T:
         """
         Apply the transform to the given waves.
 
@@ -160,10 +203,11 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         -------
         transformed_array_object : ArrayObject
         """
-        pass
 
-
-T = TypeVar("T", bound="ArrayObject")
+        # def apply(self, array_object: ArrayObject) -> ArrayObject | T:
+        new_array = self._calculate_new_array(array_object)
+        new_array_object = self._pack_array(array_object, new_array)
+        return new_array_object
 
 
 class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
@@ -194,33 +238,15 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
 
         return ensemble_axes_metadata
 
-    def _pack_array(
-        self,
-        array_object: ArrayObject,
-        new_array: np.ndarray,
-        exclude: tuple[str, ...] = (),
-    ):
-
-        kwargs = array_object._copy_kwargs(exclude=("array",) + exclude)
-        kwargs["ensemble_axes_metadata"] = (
-            self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-        )
-        kwargs["metadata"].update(self.metadata)
-        return array_object.__class__(new_array, **kwargs)
-
-    @abstractmethod
-    def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
-        pass
-
-    def apply(self, array_object: ArrayObject) -> ArrayObject | T:
-        new_array = self._calculate_new_array(array_object)
-        new_array_object = self._pack_array(array_object, new_array)
-        return new_array_object
+        # kwargs = array_object._copy_kwargs(exclude=("array",) + ())
+        # kwargs["ensemble_axes_metadata"] = (
+        #    self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+        # )
+        # kwargs["metadata"].update(self.metadata)
+        # return array_object.__class__(new_array, **kwargs)
 
 
 class WavesTransform(EnsembleTransform):
-
-
     def apply(self, waves: Waves) -> Waves:
         waves = super().apply(waves)
         return waves
@@ -236,11 +262,26 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         The array object to transform.
     """
 
-    def __init__(self, transforms: list[ArrayObjectTransform] = None):
+    def __init__(
+        self,
+        transforms: list[ArrayObjectTransform] = None,
+        base_shape: tuple[int, ...] = None,
+        ensemble_shape: tuple[int, ...] = None,
+        base_axes_metadata: list[AxisMetadata] = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
+        meta: np.ndarray = None,
+        metadata: dict = None,
+    ):
         if transforms is None:
             transforms = []
 
         self._transforms = transforms
+        self._base_shape = base_shape
+        self._ensemble_shape = ensemble_shape
+        self._base_axes_metadata = base_axes_metadata
+        self._ensemble_axes_metadata = ensemble_axes_metadata
+        self._meta = meta
+        self._metadata = metadata
         super().__init__()
 
     def insert(
@@ -269,22 +310,55 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def __iter__(self) -> Iterator[ArrayObjectTransform]:
         return iter(self.transforms)
 
-    @property
-    def metadata(self):
-        metadata = [transform.metadata for transform in self.transforms]
+    def _out_metadata(self, array_object):
+        if self._metadata is not None:
+            return self._metadata
+
+        metadata = array_object.metadata
+        metadata = metadata + [transform.metadata for transform in self.transforms]
         return reduce(lambda a, b: {**a, **b}, metadata)
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        ensemble_axes_metadata = [
+            wave_transform.ensemble_axes_metadata for i, wave_transform in enumerate(self.transforms)
+        ]
+
+        ensemble_axes_metadata = list(itertools.chain(*ensemble_axes_metadata))
+        return ensemble_axes_metadata
+
+    def _out_ensemble_axes_metadata(self, array_object) -> list[AxisMetadata]:
+        if self._ensemble_axes_metadata is not None:
+            return self._ensemble_axes_metadata
+        return self.ensemble_axes_metadata + array_object.ensemble_axes_metadata
+
+    @property
+    def ensemble_shape(self) -> tuple[int, ...]:
+        ensemble_shape = [
+            wave_transform.ensemble_shape for wave_transform in self.transforms
+        ]
+        return tuple(itertools.chain(*ensemble_shape))
+
+    def _out_ensemble_shape(self, array_object) -> tuple[int, ...]:
+        ensemble_shape = self.ensemble_shape + array_object.ensemble_shape
+        return ensemble_shape
+
+    def _out_base_shape(self, array_object):
+        if self._base_shape is not None:
+            return self._base_shape
+
+        return self._transforms[-1]._out_base_shape(array_object)
+
+    def _out_meta(self, array_object):
+        return self._transforms[-1]._out_meta(array_object)
+
+    def _out_dtype(self, array_object):
+        return self._out_meta(array_object).dtype
 
     @property
     def transforms(self) -> list[ArrayObjectTransform]:
         """The list of transforms in the composite."""
         return self._transforms
-
-    @property
-    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        ensemble_axes_metadata = [
-            wave_transform.ensemble_axes_metadata for wave_transform in self.transforms
-        ]
-        return list(itertools.chain(*ensemble_axes_metadata))
 
     @property
     def _default_ensemble_chunks(self) -> Chunks:
@@ -293,12 +367,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         ]
         return tuple(itertools.chain(*default_ensemble_chunks))
 
-    @property
-    def ensemble_shape(self) -> tuple[int, ...]:
-        ensemble_shape = [
-            wave_transform.ensemble_shape for wave_transform in self.transforms
-        ]
-        return tuple(itertools.chain(*ensemble_shape))
 
     def apply(self, array_object: ArrayObject):
         for transform in reversed(self.transforms):
@@ -309,6 +377,8 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def _partition_args(self, chunks=None, lazy: bool = True):
         if chunks is None:
             chunks = self._default_ensemble_chunks
+
+        chunks = validate_chunks(self.ensemble_shape, chunks, limit="auto")
 
         chunks = self._validate_chunks(chunks)
 
@@ -340,133 +410,46 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         return partial(self._partial, partials=partials)
 
 
-class ReciprocalSpaceMultiplication(WavesTransform, HasAcceleratorMixin, HasGridMixin):
+class ReciprocalSpaceMultiplication(WavesTransform):
     """
 
 
     Parameters
     ----------
-    energy : float, optional
-        Electron energy [eV]. If not provided, inferred from the wave functions.
-    extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
-    gpts : two ints, optional
-        Number of grid points describing the wave functions.
-    sampling : two float, optional
-        Lateral sampling of wave functions [1/Å]. If 'gpts' is also given, will be ignored.
     in_place: bool, optional
         If True, the array representing the waves may be modified in-place.
-    device : str, optional
-        The probe wave functions will be build and stored on this device ('cpu' or 'gpu'). The default is determined by
-        the user configuration.
     distributions : tuple of str, optional
         Names of properties that may be described by a distribution.
     """
 
     def __init__(
         self,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
         in_place: bool = False,
-        device: str = "cpu",
         distributions: tuple[str, ...] = (),
-        **kwargs,
     ):
-        self._accelerator = Accelerator(energy=energy, **kwargs)
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+
         self._in_place = in_place
-        self._device = device
         super().__init__(distributions=distributions)
 
     @property
     def in_place(self) -> bool:
         return self._in_place
 
-    @property
-    def device(self) -> str:
-        return self._device
-
     @abstractmethod
-    def _evaluate_from_angular_grid(self, alpha, phi):
+    def _evaluate_kernel(self, array_object):
         pass
-
-    @property
-    def angular_sampling(self) -> tuple[float, float]:
-        return reciprocal_space_sampling_to_angular_sampling(
-            self.reciprocal_space_sampling, self.energy
-        )
-
-    def _angular_grid(self) -> tuple[np.ndarray, np.ndarray]:
-        xp = get_array_module(self._device)
-        alpha, phi = polar_spatial_frequencies(self.gpts, self.sampling, xp=xp)
-        alpha *= self.wavelength
-        return alpha, phi
-
-    def _evaluate(self) -> np.ndarray:
-        alpha, phi = self._angular_grid()
-        return self._evaluate_from_angular_grid(alpha, phi)
-
-    def evaluate(self, waves: BaseWaves = None, lazy: bool = False) -> np.ndarray:
-        """
-        Evaluate the array to be multiplied with the waves in reciprocal space.
-
-        Parameters
-        ----------
-        waves : BaseWaves, optional
-            If given, the array will be evaluated to match the provided waves.
-        lazy : bool, optional
-            If True, the array is lazily evaluated, a Dask array is returned.
-
-        Returns
-        -------
-        kernel : np.ndarray or dask.array.Array
-        """
-
-        if waves is not None:
-            self.accelerator.match(waves)
-            self.grid.match(waves)
-
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
-
-        if lazy:
-            array = dask.delayed(self._evaluate)()
-            array = da.from_delayed(
-                array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts
-            )
-            return array
-        else:
-            return self._evaluate()
-
-    def to_diffraction_patterns(self):
-        from abtem.measurements import DiffractionPatterns
-
-        array = self.evaluate()
-        diffraction_patterns = DiffractionPatterns(
-            array,
-            sampling=self.reciprocal_space_sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            fftshift=False,
-        )
-        diffraction_patterns = diffraction_patterns.shift_spectrum("center")
-        return diffraction_patterns
-
-    def show(self, **kwargs):
-        return self.to_diffraction_patterns().show(**kwargs)
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         real_space_in = not waves.reciprocal_space
 
         waves = waves.ensure_reciprocal_space(overwrite_x=self.in_place)
-        kernel = self.evaluate(waves, lazy=False)
+        kernel = self._evaluate_kernel(waves)
 
         kernel, new_array = expand_dims_to_broadcast(
             kernel, waves.array, match_dims=[(-2, -1), (-2, -1)]
         )
 
-        xp = get_array_module(self.device)
+        xp = get_array_module(waves.array)
 
         kernel = xp.array(kernel)
 

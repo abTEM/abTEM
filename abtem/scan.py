@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import itertools
-from abc import ABCMeta, abstractmethod
+from abc import abstractmethod
 from typing import Union, TYPE_CHECKING
 
 import dask.array as da
@@ -16,10 +16,10 @@ from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.transform import ArrayObjectTransform
 from abtem.distributions import AxisAlignedDistributionND, BaseDistribution
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
+from abtem.transform import ReciprocalSpaceMultiplication
 
 if TYPE_CHECKING:
     from abtem.waves import Waves, Probe
@@ -53,7 +53,7 @@ def _validate_scan_sampling(scan, probe):
         scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe.energy)
 
 
-class BaseScan(ArrayObjectTransform, metaclass=ABCMeta):
+class BaseScan(ReciprocalSpaceMultiplication):
     """Abstract class to describe scans."""
 
     def __len__(self) -> int:
@@ -101,7 +101,7 @@ class BaseScan(ArrayObjectTransform, metaclass=ABCMeta):
     ):
         pass
 
-    def evaluate(self, waves: Waves) -> np.ndarray:
+    def _evaluate_kernel(self, waves: Waves) -> np.ndarray:
         """
         Evaluate the array to be multiplied with the waves in reciprocal space.
 
@@ -132,78 +132,109 @@ class BaseScan(ArrayObjectTransform, metaclass=ABCMeta):
 
         return kernel
 
-    def apply(self, waves: Waves, in_place: bool = False) -> "Waves":
-        """
-        Shift the waves by convolving them with a phase term in reciprocal space.
+    # def evaluate(self, waves: Waves) -> np.ndarray:
+    #     """
+    #     Evaluate the array to be multiplied with the waves in reciprocal space.
+    #
+    #     Parameters
+    #     ----------
+    #     waves : Waves, optional
+    #         If given, the array will be evaluated to match the provided waves.
+    #
+    #     Returns
+    #     -------
+    #     kernel : np.ndarray or dask.array.Array
+    #     """
+    #     device = validate_device(waves.device)
+    #     xp = get_array_module(device)
+    #
+    #     waves.grid.check_is_defined()
+    #
+    #     positions = xp.asarray(self.get_positions()) / xp.asarray(
+    #         waves.sampling
+    #     ).astype(np.float32)
+    #
+    #     kernel = fft_shift_kernel(positions, shape=waves.gpts)
+    #
+    #     try:
+    #         kernel *= self._get_weights()[..., None, None]
+    #     except NotImplementedError:
+    #         pass
+    #
+    #     return kernel
 
-        Parameters
-        ----------
-        waves : Waves
-            The waves to shift.
-        in_place : bool, optional
-            If True, the array representing the waves may be modified in-place.
-        Returns
-        -------
-        shifted_waves : Waves
-        """
-        array = self.evaluate(waves)
-        axes_metadata = self.ensemble_axes_metadata
-        return waves.convolve(array, axes_metadata, in_place=in_place)
+    # def apply(self, waves: Waves, in_place: bool = False) -> "Waves":
+    #     """
+    #     Shift the waves by convolving them with a phase term in reciprocal space.
+    #
+    #     Parameters
+    #     ----------
+    #     waves : Waves
+    #         The waves to shift.
+    #     in_place : bool, optional
+    #         If True, the array representing the waves may be modified in-place.
+    #     Returns
+    #     -------
+    #     shifted_waves : Waves
+    #     """
+    #     array = self.evaluate(waves)
+    #     axes_metadata = self.ensemble_axes_metadata
+    #     return waves.convolve(array, axes_metadata, in_place=in_place)
 
-
-class SourceDistribution(BaseScan):
-    """
-    Distribution of electron source offsets.
-
-    Parameters
-    ----------
-    distribution : 2D :class:`.BaseDistribution`
-        Distribution describing the positions and weights of the source offsets.
-    """
-
-    def __init__(self, distribution: BaseDistribution):
-        self._distribution = distribution
-
-    @property
-    def shape(self):
-        return self._distribution.shape
-
-    def get_positions(self):
-        xi = [factor.values for factor in self._distribution.factors]
-        return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
-
-    def _get_weights(self):
-        return self._distribution.weights
-
-    @property
-    def ensemble_axes_metadata(self):
-        return [PositionsAxis()] * len(self.shape)
-
-    def ensemble_blocks(self, chunks=None):
-        if chunks is None:
-            chunks = self._default_ensemble_chunks
-
-        chunks = validate_chunks(self.ensemble_shape, chunks, limit=None)
-
-        blocks = ()
-        for parameter, n in zip(self._distribution.factors, chunks):
-            blocks += (parameter.divide(n, lazy=True),)
-
-        return blocks
-
-    def ensemble_partial(self):
-        def distribution(*args):
-            factors = [arg.item() for arg in args]
-            dist = SourceDistribution(AxisAlignedDistributionND(factors))
-            arr = np.empty((1,) * len(args), dtype=object)
-            arr.itemset(dist)
-            return arr
-
-        return distribution
-
-    @property
-    def limits(self):
-        pass
+#
+# class SourceDistribution(BaseScan):
+#     """
+#     Distribution of electron source offsets.
+#
+#     Parameters
+#     ----------
+#     distribution : 2D :class:`.BaseDistribution`
+#         Distribution describing the positions and weights of the source offsets.
+#     """
+#
+#     def __init__(self, distribution: BaseDistribution):
+#         self._distribution = distribution
+#
+#     @property
+#     def shape(self):
+#         return self._distribution.shape
+#
+#     def get_positions(self):
+#         xi = [factor.values for factor in self._distribution.factors]
+#         return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
+#
+#     def _get_weights(self):
+#         return self._distribution.weights
+#
+#     @property
+#     def ensemble_axes_metadata(self):
+#         return [PositionsAxis()] * len(self.shape)
+#
+#     def ensemble_blocks(self, chunks=None):
+#         if chunks is None:
+#             chunks = self._default_ensemble_chunks
+#
+#         chunks = validate_chunks(self.ensemble_shape, chunks, limit=None)
+#
+#         blocks = ()
+#         for parameter, n in zip(self._distribution.factors, chunks):
+#             blocks += (parameter.divide(n, lazy=True),)
+#
+#         return blocks
+#
+#     def ensemble_partial(self):
+#         def distribution(*args):
+#             factors = [arg.item() for arg in args]
+#             dist = SourceDistribution(AxisAlignedDistributionND(factors))
+#             arr = np.empty((1,) * len(args), dtype=object)
+#             arr.itemset(dist)
+#             return arr
+#
+#         return distribution
+#
+#     @property
+#     def limits(self):
+#         pass
 
 
 class CustomScan(BaseScan):
@@ -240,7 +271,7 @@ class CustomScan(BaseScan):
             self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.0
 
     @property
-    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+    def ensemble_axes_metadata(self):
         return [
             PositionsAxis(
                 values=tuple(
@@ -398,7 +429,6 @@ class LineScan(BaseScan):
         potential: BasePotential | Atoms = None,
     ):
 
-        super().__init__()
         self._gpts = gpts
         self._sampling = sampling
 
@@ -409,6 +439,8 @@ class LineScan(BaseScan):
         self._endpoint = endpoint
         self._adjust_gpts()
         self._adjust_sampling()
+
+        super().__init__()
 
     @property
     def direction(self):

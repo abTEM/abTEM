@@ -14,8 +14,14 @@ from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
-from abtem.core.energy import Accelerator, energy2wavelength
+from abtem.core.energy import (
+    Accelerator,
+    energy2wavelength,
+    HasAcceleratorMixin,
+    reciprocal_space_sampling_to_angular_sampling,
+)
 from abtem.core.fft import fft_crop
+from abtem.core.grid import HasGridMixin, polar_spatial_frequencies, Grid
 from abtem.core.utils import expand_dims_to_broadcast
 from abtem.distributions import (
     BaseDistribution,
@@ -26,10 +32,82 @@ from abtem.measurements import ReciprocalSpaceLineProfiles
 from abtem.transform import ReciprocalSpaceMultiplication
 
 if TYPE_CHECKING:
-    pass
+    from abtem.waves import BaseWaves
 
 
-class BaseAperture(ReciprocalSpaceMultiplication):
+class BaseTransferFunction(
+    ReciprocalSpaceMultiplication, HasAcceleratorMixin, HasGridMixin
+):
+    def __init__(
+        self,
+        energy: float = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
+        distributions: tuple[str] = (),
+    ):
+        self._accelerator = Accelerator(energy=energy)
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        super().__init__(distributions=distributions)
+
+    @abstractmethod
+    def _evaluate_from_angular_grid(self, alpha, phi):
+        pass
+
+    @property
+    def angular_sampling(self) -> tuple[float, float]:
+        return reciprocal_space_sampling_to_angular_sampling(
+            self.reciprocal_space_sampling, self.energy
+        )
+
+    def _angular_grid(self, device) -> tuple[np.ndarray, np.ndarray]:
+        xp = get_array_module(device)
+        alpha, phi = polar_spatial_frequencies(self.gpts, self.sampling, xp=xp)
+        alpha *= self.wavelength
+        return alpha, phi
+
+    def _evaluate_kernel(self, waves: BaseWaves = None) -> np.ndarray:
+        """
+        Evaluate the array to be multiplied with the waves in reciprocal space.
+
+        Parameters
+        ----------
+        waves : BaseWaves, optional
+            If given, the array will be evaluated to match the provided waves.
+
+        Returns
+        -------
+        kernel : np.ndarray or dask.array.Array
+        """
+
+        if waves is not None:
+            self.accelerator.match(waves)
+            self.grid.match(waves)
+
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
+        alpha, phi = self._angular_grid(waves.device)
+        return self._evaluate_from_angular_grid(alpha, phi)
+
+    def to_diffraction_patterns(self):
+        from abtem.measurements import DiffractionPatterns
+
+        array = self._evaluate_kernel()
+        diffraction_patterns = DiffractionPatterns(
+            array,
+            sampling=self.reciprocal_space_sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            fftshift=False,
+        )
+        diffraction_patterns = diffraction_patterns.shift_spectrum("center")
+        return diffraction_patterns
+
+    def show(self, **kwargs):
+        return self.to_diffraction_patterns().show(**kwargs)
+
+
+class BaseAperture(BaseTransferFunction):
     """Base class for apertures. Documented in the subclasses."""
 
     def __init__(
@@ -39,16 +117,16 @@ class BaseAperture(ReciprocalSpaceMultiplication):
         extent: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
-        **kwargs,
+        distributions: tuple[str] = (),
     ):
         self._semiangle_cutoff = semiangle_cutoff
         super().__init__(
-            energy=energy, extent=extent, gpts=gpts, sampling=sampling, **kwargs
+            energy=energy,
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+            distributions=distributions,
         )
-
-    @abstractmethod
-    def _evaluate_from_angular_grid(self, alpha, phi):
-        pass
 
     @property
     def metadata(self):
@@ -128,7 +206,9 @@ def soft_aperture(
     semiangle_cutoff = xp.array(semiangle_cutoff)
 
     semiangle_cutoff, alpha = expand_dims_to_broadcast(semiangle_cutoff, alpha)
-    semiangle_cutoff, phi = expand_dims_to_broadcast(semiangle_cutoff, phi, match_dims=[(-2,-1),(-2,-1)])
+    semiangle_cutoff, phi = expand_dims_to_broadcast(
+        semiangle_cutoff, phi, match_dims=[(-2, -1), (-2, -1)]
+    )
 
     angular_sampling = xp.array(angular_sampling, dtype=xp.float32) * 1e-3
 
@@ -216,12 +296,14 @@ class Aperture(BaseAperture):
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         ensemble_axes_metadata = []
         if isinstance(self.semiangle_cutoff, BaseDistribution):
-            ensemble_axes_metadata = ParameterAxis(
-                label="semiangle cutoff",
-                values=self.semiangle_cutoff,
-                units="mrad",
-                _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
-            )
+            ensemble_axes_metadata += [
+                ParameterAxis(
+                    label="semiangle cutoff",
+                    values=self.semiangle_cutoff,
+                    units="mrad",
+                    _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
+                )
+            ]
         return ensemble_axes_metadata
 
     @property
@@ -234,20 +316,25 @@ class Aperture(BaseAperture):
     ) -> np.ndarray:
         xp = get_array_module(alpha)
 
-        unpacked, _ = _unpack_distributions(
-            self.semiangle_cutoff, shape=alpha.shape, xp=xp
-        )
-
-        (semiangle_cutoff,) = unpacked
-        semiangle_cutoff = semiangle_cutoff * 1e-3
-
-        alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
-
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
+        # unpacked, _ = _unpack_distributions(
+        #     self.semiangle_cutoff, shape=alpha.shape, xp=xp
+        # )
+        #
+        # (semiangle_cutoff,) = unpacked
+        semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
+        #
+        # alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
+
+
+
         if self.soft:
-            return soft_aperture(alpha, phi, semiangle_cutoff, self.angular_sampling)
+            aperture = soft_aperture(
+                alpha, phi, semiangle_cutoff, self.angular_sampling
+            )
+            return aperture
         else:
             return hard_aperture(alpha, semiangle_cutoff)
 
@@ -408,7 +495,7 @@ class Vortex(BaseAperture):
         return array
 
 
-class TemporalEnvelope(ReciprocalSpaceMultiplication):
+class TemporalEnvelope(BaseTransferFunction):
     """
     Envelope function for simulating partial temporal coherence in the quasi-coherent approximation.
 
@@ -732,7 +819,7 @@ polar_symbols = _HasAberrations._symbols()
 polar_aliases = _HasAberrations._aliases()
 
 
-class SpatialEnvelope(_HasAberrations, ReciprocalSpaceMultiplication):
+class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     """
     Envelope function for simulating partial spatial coherence in the quasi-coherent approximation.
 
@@ -921,7 +1008,7 @@ class SpatialEnvelope(_HasAberrations, ReciprocalSpaceMultiplication):
         return array
 
 
-class Aberrations(ReciprocalSpaceMultiplication, _HasAberrations):
+class Aberrations(BaseTransferFunction, _HasAberrations):
     """
     Phase aberrations.
 

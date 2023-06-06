@@ -69,11 +69,10 @@ def _finalize_lazy_measurements(
     measurements = []
     for i, detector in enumerate(detectors):
 
-        meta = detector.measurement_meta(waves)
-        shape = detector.measurement_shape(waves)
+        shape = detector._out_base_shape(waves)
+        meta = detector._out_meta(waves)
 
         new_axis = tuple(range(len(arrays.shape), len(arrays.shape) + len(shape)))
-        drop_axis = tuple(range(len(arrays.shape), len(arrays.shape)))
 
         if chunks is None:
             chunks = arrays.chunks
@@ -82,27 +81,11 @@ def _finalize_lazy_measurements(
             _extract_measurement,
             i,
             chunks=chunks + tuple((n,) for n in shape),
-            drop_axis=drop_axis,
             new_axis=new_axis,
             meta=meta,
         )
 
-        axes_metadata = []
-
-        if extra_ensemble_axes_metadata is not None:
-            axes_metadata += extra_ensemble_axes_metadata
-
-        axes_metadata += waves.ensemble_axes_metadata
-
-        axes_metadata += detector.measurement_axes_metadata(waves)
-
-        cls = detector.measurement_type(waves)
-
-        metadata = detector.measurement_metadata(waves)
-
-        measurement = cls.from_array_and_metadata(
-            array, axes_metadata=axes_metadata, metadata=metadata
-        )
+        measurement = detector._pack_array(waves, array)
 
         if hasattr(measurement, "reduce_ensemble"):
             measurement = measurement.reduce_ensemble()
@@ -157,6 +140,11 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin, CopyMixin, EqualityMixin):
     ensemble_axes_metadata: list[AxisMetadata]
     ensemble_shape: tuple[int, ...]
     device: str
+
+    @property
+    def dtype(self):
+        return np.complex64
+
 
     @property
     @abstractmethod
@@ -381,6 +369,7 @@ class Waves(BaseWaves, ArrayObject):
     @property
     def metadata(self) -> Dict:
         self._metadata["energy"] = self.energy
+        self._metadata["reciprocal_space"] = self.reciprocal_space
         return self._metadata
 
     def _from_partitioned_args(self):
@@ -414,6 +403,7 @@ class Waves(BaseWaves, ArrayObject):
             The created wave functions.
         """
         energy = metadata["energy"]
+        reciprocal_space = metadata.get("reciprocal_space", False)
 
         x_axis, y_axis = axes_metadata[-2], axes_metadata[-1]
 
@@ -426,6 +416,7 @@ class Waves(BaseWaves, ArrayObject):
             array,
             sampling=sampling,
             energy=energy,
+            reciprocal_space=reciprocal_space,
             ensemble_axes_metadata=axes_metadata[:-2],
             metadata=metadata,
         )
@@ -898,7 +889,7 @@ class Waves(BaseWaves, ArrayObject):
 
     def apply_ctf(
         self, ctf: CTF = None, max_batch: Union[int, str] = "auto", **kwargs
-    ) -> "Waves":
+    ) -> Waves:
         """
         Apply the aberrations and apertures of a contrast transfer function to the wave functions.
 
