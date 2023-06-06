@@ -1,15 +1,12 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from __future__ import annotations
+
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import TYPE_CHECKING, Type, Any
+from typing import TYPE_CHECKING, Type
 
-import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.visualize import discrete_cmap
-
-from numpy.typing import NDArray
 from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.utils import CopyMixin
@@ -21,7 +18,8 @@ from abtem.measurements import (
     _scanned_measurement_type,
     _polar_detector_bins,
 )
-import matplotlib
+from abtem.visualize import discrete_cmap
+
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
     from abtem.measurements import BaseMeasurements
@@ -323,9 +321,6 @@ class AnnularDetector(BaseDetector):
 
         return measurement
 
-    # def add_to_plot(self, ax):
-    #     pass
-
     def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
     ) -> np.ndarray:
@@ -510,7 +505,7 @@ class _AbstractRadialDetector(BaseDetector):
 
         return measurement
 
-    def get_detector_regions(self, waves: BaseWaves=None):
+    def get_detector_regions(self, waves: BaseWaves = None):
         """
         Get the polar detector regions as a polar measurement.
 
@@ -537,7 +532,7 @@ class _AbstractRadialDetector(BaseDetector):
         )
 
         metadata = copy(waves.metadata)
-        metadata.update({"label":"detector regions", "units":""})
+        metadata.update({"label": "detector regions", "units": ""})
 
         polar_measurements = PolarMeasurements(
             bins,
@@ -566,7 +561,9 @@ class _AbstractRadialDetector(BaseDetector):
         visualization : MeasurementVisualization2D
         """
 
-        num_colors = self._calculate_nbins_radial(waves) * self._calculate_nbins_azimuthal(waves)
+        num_colors = self._calculate_nbins_radial(
+            waves
+        ) * self._calculate_nbins_azimuthal(waves)
 
         if "cmap" not in kwargs:
             if num_colors <= 10:
@@ -577,15 +574,17 @@ class _AbstractRadialDetector(BaseDetector):
         kwargs["cmap"] = discrete_cmap(num_colors=num_colors, base_cmap=kwargs["cmap"])
 
         if "vmin" not in kwargs:
-            kwargs["vmin"] = -.5
+            kwargs["vmin"] = -0.5
 
         if "vmax" not in kwargs:
-            kwargs["vmax"] = num_colors - .5
+            kwargs["vmax"] = num_colors - 0.5
 
         if "units" not in kwargs:
             kwargs["units"] = "mrad"
 
-        segmented_regions = self.get_detector_regions(waves).to_diffraction_patterns(waves.gpts)
+        segmented_regions = self.get_detector_regions(waves).to_diffraction_patterns(
+            waves.gpts
+        )
 
         return segmented_regions.show(**kwargs)
 

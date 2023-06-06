@@ -515,6 +515,6 @@ hsl = [(0.86, 0.3712, 0.33999999999999997),
        (0.86, 0.3590125, 0.33999999999999997)]
 
 
-hsluv_cmap = ListedColormap(hsluv)
+hsluv_cmap = ListedColormap(hsluv[35:] + hsluv[:35])
 
 hsl_cmap = ListedColormap(hsl)

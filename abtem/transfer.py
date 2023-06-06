@@ -1,14 +1,13 @@
 """Module to describe the contrast transfer function (CTF) and the related apertures."""
 from __future__ import annotations
+
 import copy
 import re
 from abc import abstractmethod
 from collections import defaultdict
 from functools import reduce
-from typing import Dict, Tuple, TYPE_CHECKING, Union, List
+from typing import TYPE_CHECKING
 
-import dask
-import dask.array as da
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, ParameterAxis
@@ -17,32 +16,29 @@ from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, energy2wavelength
 from abtem.core.fft import fft_crop
-from abtem.core.grid import HasGridMixin
-from abtem.core.transform import FourierSpaceConvolution
-from abtem.core.utils import expand_dims_to_match
+from abtem.core.utils import expand_dims_to_broadcast
 from abtem.distributions import (
-    _EnsembleFromDistributionsMixin,
     BaseDistribution,
     _unpack_distributions,
     _validate_distribution,
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
+from abtem.transform import ReciprocalSpaceMultiplication
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves, BaseWaves
+    pass
 
 
-class BaseAperture(FourierSpaceConvolution, HasGridMixin):
+class BaseAperture(ReciprocalSpaceMultiplication):
     """Base class for apertures. Documented in the subclasses."""
 
     def __init__(
         self,
-        semiangle_cutoff: float = None,
+        semiangle_cutoff: float | BaseDistribution = None,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        *args,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
         **kwargs,
     ):
         self._semiangle_cutoff = semiangle_cutoff
@@ -51,28 +47,26 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
         )
 
     @abstractmethod
-    def _evaluate_with_alpha_and_phi(self, alpha, phi):
+    def _evaluate_from_angular_grid(self, alpha, phi):
         pass
 
     @property
     def metadata(self):
         metadata = {}
-        if not isinstance(self._semiangle_cutoff, BaseDistribution):
-            metadata["semiangle_cutoff"] = self._semiangle_cutoff
+        if not isinstance(self.semiangle_cutoff, BaseDistribution):
+            metadata["semiangle_cutoff"] = self.semiangle_cutoff
         return metadata
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return []
 
     @property
     def _max_semiangle_cutoff(self):
-
-        if isinstance(self._semiangle_cutoff, BaseDistribution):
-
-            return max(self._semiangle_cutoff.values)
+        if isinstance(self.semiangle_cutoff, BaseDistribution):
+            return max(self.semiangle_cutoff.values)
         else:
-            return self._semiangle_cutoff
+            return self.semiangle_cutoff
 
     @property
     def nyquist_sampling(self) -> float:
@@ -97,25 +91,11 @@ class BaseAperture(FourierSpaceConvolution, HasGridMixin):
         cropped_aperture.gpts = gpts
         return cropped_aperture
 
-    def _evaluate_from_cropped(self, gpts):
+    def _evaluate_from_cropped(self, gpts: tuple[int, int]):
         cropped = self._cropped_aperture()
         array = cropped._evaluate()
         array = fft_crop(array, gpts)
         return array
-
-    def evaluate(self, waves: BaseWaves = None, lazy: bool = False) -> np.ndarray:
-        if waves is not None:
-            self.accelerator.match(waves)
-            self.grid.match(waves)
-
-        if lazy:
-            array = dask.delayed(self._evaluate_from_cropped)(gpts=self.gpts)
-            array = da.from_delayed(
-                array, dtype=np.complex64, shape=self.ensemble_shape + self.gpts
-            )
-            return array
-        else:
-            return self._evaluate_from_cropped(gpts=self.gpts)
 
 
 def soft_aperture(
@@ -145,24 +125,21 @@ def soft_aperture(
     """
     xp = get_array_module(alpha)
 
-    if np.isscalar(semiangle_cutoff):
-        num_ensemble_axes = 0
-    else:
-        num_ensemble_axes = len(semiangle_cutoff.shape) - len(alpha.shape)
+    semiangle_cutoff = xp.array(semiangle_cutoff)
+
+    semiangle_cutoff, alpha = expand_dims_to_broadcast(semiangle_cutoff, alpha)
+    semiangle_cutoff, phi = expand_dims_to_broadcast(semiangle_cutoff, phi, match_dims=[(-2,-1),(-2,-1)])
 
     angular_sampling = xp.array(angular_sampling, dtype=xp.float32) * 1e-3
-
-    alpha = xp.expand_dims(alpha, axis=tuple(range(0, num_ensemble_axes)))
-    phi = xp.expand_dims(phi, axis=tuple(range(0, num_ensemble_axes)))
 
     denominator = xp.sqrt(
         (xp.cos(phi) * angular_sampling[0]) ** 2
         + (xp.sin(phi) * angular_sampling[1]) ** 2
     )
 
-    zeros = (slice(None),) * num_ensemble_axes + (0,) * (
-        len(denominator.shape) - num_ensemble_axes
-    )
+    ndims = len(alpha.shape)
+
+    zeros = (slice(None),) * (ndims - 2) + (0,) * 2
 
     denominator[zeros] = 1.0
 
@@ -173,7 +150,27 @@ def soft_aperture(
     return array
 
 
-class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
+def hard_aperture(alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution):
+    """
+    Calculates an array with a disk of ones and a soft edge.
+
+    Parameters
+    ----------
+    alpha : 2D array
+        Array of radial angles [mrad].
+    semiangle_cutoff : float or 1D array
+        Semiangle cutoff(s) of the aperture(s). If given as an array, a 3D array is returned where the first dimension
+        represents a different aperture for each item in the array of semiangle cutoffs.
+
+    Returns
+    -------
+    hard_aperture_array : 2D or 3D np.ndarray
+    """
+    xp = get_array_module(alpha)
+    return xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
+
+
+class Aperture(BaseAperture):
     """
     A circular aperture cutting off the wave function at a specified angle, employed in both STEM and HRTEM.
     The abrupt cutoff may be softened by tapering it.
@@ -196,12 +193,12 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
 
     def __init__(
         self,
-        semiangle_cutoff: Union[float, BaseDistribution],
+        semiangle_cutoff: float | BaseDistribution,
         soft: bool = True,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
     ):
         semiangle_cutoff = _validate_distribution(semiangle_cutoff)
         self._soft = soft
@@ -216,35 +213,25 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         )
 
     @property
-    def semiangle_cutoff(self) -> Union[float, BaseDistribution]:
-        return self._semiangle_cutoff
-
-    @semiangle_cutoff.setter
-    def semiangle_cutoff(self, value: Union[float, BaseDistribution]):
-        self._semiangle_cutoff = _validate_distribution(value)
-
-    @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        ensemble_axes_metadata = []
         if isinstance(self.semiangle_cutoff, BaseDistribution):
-            return [
-                ParameterAxis(
-                    label="semiangle cutoff",
-                    values=tuple(self.semiangle_cutoff.values),
-                    units="mrad",
-                    _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
-                )
-            ]
-        else:
-            return []
+            ensemble_axes_metadata = ParameterAxis(
+                label="semiangle cutoff",
+                values=self.semiangle_cutoff,
+                units="mrad",
+                _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
+            )
+        return ensemble_axes_metadata
 
     @property
     def soft(self) -> bool:
         """True if the aperture has a soft edge."""
         return self._soft
 
-    def _evaluate_with_alpha_and_phi(
-        self, alpha: Union[float, np.ndarray], phi
-    ) -> Union[float, np.ndarray]:
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
         xp = get_array_module(alpha)
 
         unpacked, _ = _unpack_distributions(
@@ -259,33 +246,13 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
-        if not self.soft or not self.grid.check_is_defined(raise_error=False):
-            return xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
-
-        angular_sampling = xp.array(self.angular_sampling, dtype=xp.float32) * 1e-3
-
-        phi = xp.expand_dims(phi, axis=tuple(range(0, self._num_ensemble_axes)))
-
-        denominator = xp.sqrt(
-            (xp.cos(phi) * angular_sampling[0]) ** 2
-            + (xp.sin(phi) * angular_sampling[1]) ** 2
-        )
-
-        zeros = (slice(None),) * len(self.ensemble_shape) + (0,) * (
-            len(denominator.shape) - len(self.ensemble_shape)
-        )
-
-        denominator[zeros] = 1.0
-
-        array = xp.clip(
-            (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
-        )
-        array[zeros] = 1.0
-
-        return array
+        if self.soft:
+            return soft_aperture(alpha, phi, semiangle_cutoff, self.angular_sampling)
+        else:
+            return hard_aperture(alpha, semiangle_cutoff)
 
 
-class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
+class Bullseye(BaseAperture):
     """
     Bullseye aperture.
 
@@ -319,9 +286,9 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
         ring_width: float,
         semiangle_cutoff: float,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
     ):
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
@@ -355,13 +322,9 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
         """Width of rings [mrad]."""
         return self._ring_width
 
-    @property
-    def semiangle_cutoff(self) -> float:
-        return self._semiangle_cutoff
-
-    def _evaluate_with_alpha_and_phi(
-        self, alpha: Union[float, np.ndarray], phi
-    ) -> Union[float, np.ndarray]:
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
 
@@ -388,7 +351,7 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
         return array
 
 
-class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
+class Vortex(BaseAperture):
     """
     Vortex-beam aperture.
 
@@ -413,9 +376,9 @@ class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
         quantum_number: int,
         semiangle_cutoff: float,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
     ):
         self._quantum_number = quantum_number
         super().__init__(
@@ -427,17 +390,13 @@ class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
         )
 
     @property
-    def quantum_number(self):
+    def quantum_number(self) -> int:
         """Quantum number of vortex beam."""
         return self._quantum_number
 
-    @property
-    def semiangle_cutoff(self) -> float:
-        return self._semiangle_cutoff
-
-    def _evaluate_with_alpha_and_phi(
-        self, alpha: Union[float, np.ndarray], phi
-    ) -> Union[float, np.ndarray]:
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
 
@@ -449,7 +408,7 @@ class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
         return array
 
 
-class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution):
+class TemporalEnvelope(ReciprocalSpaceMultiplication):
     """
     Envelope function for simulating partial temporal coherence in the quasi-coherent approximation.
 
@@ -470,11 +429,11 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
 
     def __init__(
         self,
-        focal_spread: Union[float, BaseDistribution],
+        focal_spread: float | BaseDistribution,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
     ):
 
         self._accelerator = Accelerator(energy=energy)
@@ -497,22 +456,20 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
         self._focal_spread = _validate_distribution(value)
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        ensemble_axes_metadata = []
         if isinstance(self.focal_spread, BaseDistribution):
-            return [
-                ParameterAxis(
-                    label="focal spread",
-                    values=tuple(self.focal_spread.values),
-                    units="mrad",
-                    _ensemble_mean=self.focal_spread.ensemble_mean,
-                )
-            ]
-        else:
-            return []
+            ensemble_axes_metadata = ParameterAxis(
+                label="focal spread",
+                values=self.focal_spread.values,
+                units="mrad",
+                _ensemble_mean=self.focal_spread.ensemble_mean,
+            )
+        return ensemble_axes_metadata
 
-    def _evaluate_with_alpha_and_phi(
-        self, alpha: Union[float, np.ndarray], phi
-    ) -> Union[float, np.ndarray]:
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
         xp = get_array_module(alpha)
 
         unpacked, _ = _unpack_distributions(self.focal_spread, shape=alpha.shape, xp=xp)
@@ -546,107 +503,107 @@ class _HasAberrations:
     _aberration_coefficients: dict
     energy: float
 
-    C10: Union[float, BaseDistribution] = _aberration_property(
+    C10: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C10"
     )
-    C12: Union[float, BaseDistribution] = _aberration_property(
+    C12: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C12"
     )
-    phi12: Union[float, BaseDistribution] = _aberration_property(
+    phi12: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi12"
     )
-    C21: Union[float, BaseDistribution] = _aberration_property(
+    C21: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C21"
     )
-    phi21: Union[float, BaseDistribution] = _aberration_property(
+    phi21: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi21"
     )
-    C23: Union[float, BaseDistribution] = _aberration_property(
+    C23: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C23"
     )
-    phi23: Union[float, BaseDistribution] = _aberration_property(
+    phi23: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi23"
     )
-    C30: Union[float, BaseDistribution] = _aberration_property(
+    C30: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C30"
     )
-    C32: Union[float, BaseDistribution] = _aberration_property(
+    C32: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C32"
     )
-    phi32: Union[float, BaseDistribution] = _aberration_property(
+    phi32: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi32"
     )
-    C34: Union[float, BaseDistribution] = _aberration_property(
+    C34: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C34"
     )
-    phi34: Union[float, BaseDistribution] = _aberration_property(
+    phi34: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi34"
     )
-    C41: Union[float, BaseDistribution] = _aberration_property(
+    C41: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C41"
     )
-    phi41: Union[float, BaseDistribution] = _aberration_property(
+    phi41: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi41"
     )
-    C43: Union[float, BaseDistribution] = _aberration_property(
+    C43: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C43"
     )
-    phi43: Union[float, BaseDistribution] = _aberration_property(
+    phi43: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi43"
     )
-    C45: Union[float, BaseDistribution] = _aberration_property(
+    C45: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C45"
     )
-    phi45: Union[float, BaseDistribution] = _aberration_property(
+    phi45: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi45"
     )
-    C50: Union[float, BaseDistribution] = _aberration_property(
+    C50: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C50"
     )
-    C52: Union[float, BaseDistribution] = _aberration_property(
+    C52: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C52"
     )
-    phi52: Union[float, BaseDistribution] = _aberration_property(
+    phi52: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi52"
     )
-    C54: Union[float, BaseDistribution] = _aberration_property(
+    C54: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C54"
     )
-    phi54: Union[float, BaseDistribution] = _aberration_property(
+    phi54: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi54"
     )
-    C56: Union[float, BaseDistribution] = _aberration_property(
+    C56: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C56"
     )
-    phi56: Union[float, BaseDistribution] = _aberration_property(
+    phi56: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi56"
     )
-    astigmatism: Union[float, BaseDistribution] = _aberration_property(
+    astigmatism: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C12"
     )
-    astigmatism_angle: Union[float, BaseDistribution] = _aberration_property(
+    astigmatism_angle: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi12"
     )
-    coma: Union[float, BaseDistribution] = _aberration_property(
+    coma: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C21"
     )
-    coma_angle: Union[float, BaseDistribution] = _aberration_property(
+    coma_angle: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "phi21"
     )
-    Cs: Union[float, BaseDistribution] = _aberration_property(
+    Cs: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C30"
     )
-    C5: Union[float, BaseDistribution] = _aberration_property(
+    C5: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C5"
     )
 
     @property
-    def defocus(self) -> Union[float, BaseDistribution]:
+    def defocus(self) -> float | BaseDistribution:
         """Defocus equivalent to negative C10."""
         return -self.C10
 
     @defocus.setter
-    def defocus(self, value: Union[float, BaseDistribution]):
+    def defocus(self, value: float | BaseDistribution):
         self.C10 = -value
 
     @classmethod
@@ -695,7 +652,7 @@ class _HasAberrations:
                 raise ValueError("{} not a recognized phase aberration".format(key))
 
     @property
-    def _phase_aberrations_ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def _phase_aberrations_ensemble_axes_metadata(self) -> list[AxisMetadata]:
         axes_metadata = []
         for parameter_name, value in self._aberration_coefficients.items():
             if isinstance(value, BaseDistribution):
@@ -719,12 +676,16 @@ class _HasAberrations:
 
     @property
     def _has_aberrations(self) -> bool:
-        if np.all(np.array(list(self._aberration_coefficients.values())) == 0.0):
+        if np.all(
+            [np.all(value == 0.0) for value in self._aberration_coefficients.values()]
+        ):
             return False
         else:
             return True
 
-    def set_aberrations(self, aberration_coefficients: dict[str, float | BaseDistribution]):
+    def set_aberrations(
+        self, aberration_coefficients: dict[str, float | BaseDistribution]
+    ):
         """
         Set the phase of the phase aberration.
 
@@ -771,9 +732,7 @@ polar_symbols = _HasAberrations._symbols()
 polar_aliases = _HasAberrations._aliases()
 
 
-class SpatialEnvelope(
-    _HasAberrations, _EnsembleFromDistributionsMixin, FourierSpaceConvolution
-):
+class SpatialEnvelope(_HasAberrations, ReciprocalSpaceMultiplication):
     """
     Envelope function for simulating partial spatial coherence in the quasi-coherent approximation.
 
@@ -799,12 +758,12 @@ class SpatialEnvelope(
 
     def __init__(
         self,
-        angular_spread: Union[float, BaseDistribution],
+        angular_spread: float | BaseDistribution,
         aberration_coefficients: dict = None,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
         **kwargs,
     ):
         super().__init__(
@@ -825,10 +784,10 @@ class SpatialEnvelope(
         self.set_aberrations(aberration_coefficients)
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        axes_metadata = self._phase_aberrations_ensemble_axes_metadata
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        ensemble_axes_metadata = self._phase_aberrations_ensemble_axes_metadata
         if isinstance(self.angular_spread, BaseDistribution):
-            axes_metadata = axes_metadata + [
+            ensemble_axes_metadata = ensemble_axes_metadata + [
                 ParameterAxis(
                     label="angular spread",
                     values=tuple(self.angular_spread.values),
@@ -836,7 +795,7 @@ class SpatialEnvelope(
                     _ensemble_mean=self.angular_spread.ensemble_mean,
                 )
             ]
-        return axes_metadata
+        return ensemble_axes_metadata
 
     @property
     def angular_spread(self):
@@ -847,9 +806,9 @@ class SpatialEnvelope(
     def angular_spread(self, value):
         self._angular_spread = value
 
-    def _evaluate_with_alpha_and_phi(
-        self, alpha: Union[float, np.ndarray], phi
-    ) -> Union[float, np.ndarray]:
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
         xp = get_array_module(alpha)
 
         args = tuple(self.aberration_coefficients.values()) + (self.angular_spread,)
@@ -962,7 +921,7 @@ class SpatialEnvelope(
         return array
 
 
-class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations):
+class Aberrations(ReciprocalSpaceMultiplication, _HasAberrations):
     """
     Phase aberrations.
 
@@ -978,23 +937,20 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1/Å]. If 'gpts' is also given, will be ignored.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
     """
 
     def __init__(
         self,
-        aberration_coefficients: Dict[str, Union[float, BaseDistribution]] = None,
+        aberration_coefficients: dict[str, float | BaseDistribution] = None,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        semiangle_cutoff: float = np.inf,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
         **kwargs,
     ):
-
-        semiangle_cutoff = _validate_distribution(semiangle_cutoff)
 
         super().__init__(
             distributions=polar_symbols,
@@ -1002,7 +958,6 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
             extent=extent,
             gpts=gpts,
             sampling=sampling,
-            semiangle_cutoff=semiangle_cutoff,
         )
 
         aberration_coefficients = (
@@ -1018,17 +973,17 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
         return self._phase_aberrations_ensemble_axes_metadata
 
     @property
-    def defocus(self) -> Union[float, BaseDistribution]:
+    def defocus(self) -> float | BaseDistribution:
         """The defocus [Å]."""
         return -self._aberration_coefficients["C10"]
 
     @defocus.setter
-    def defocus(self, value: Union[float, BaseDistribution]):
+    def defocus(self, value: float | BaseDistribution):
         self.C10 = -value
 
-    def _evaluate_with_alpha_and_phi(
-        self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]
-    ) -> Union[float, np.ndarray]:
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
         xp = get_array_module(alpha)
 
         if not self._has_aberrations:
@@ -1114,14 +1069,8 @@ class Aberrations(_EnsembleFromDistributionsMixin, BaseAperture, _HasAberrations
 
         return array
 
-    def apply(self, waves: Waves, in_place: bool = False) -> Waves:
-        if self._has_aberrations:
-            return super().apply(waves, in_place=in_place)
-        else:
-            return waves
 
-
-class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
+class CTF(_HasAberrations, BaseAperture):
     """
     The contrast transfer function (CTF) describes the aberrations of the objective lens in HRTEM and specifies how
     the condenser system shapes the probe in STEM.
@@ -1174,15 +1123,15 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     def __init__(
         self,
-        semiangle_cutoff: float = np.inf,
+        semiangle_cutoff: float | BaseDistribution = np.inf,
         soft: bool = True,
-        focal_spread: float = 0.0,
-        angular_spread: float = 0.0,
-        aberration_coefficients: dict = None,
+        focal_spread: float | BaseDistribution = 0.0,
+        angular_spread: float | BaseDistribution = 0.0,
+        aberration_coefficients: dict[str, float | BaseDistribution] = None,
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
         flip_phase: bool = False,
         wiener_snr: float = 0.0,
         **kwargs,
@@ -1289,7 +1238,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         return self._soft
 
     @property
-    def semiangle_cutoff(self) -> float:
+    def semiangle_cutoff(self) -> float | BaseDistribution:
         """The semiangle cutoff [mrad]."""
         return self._semiangle_cutoff
 
@@ -1298,7 +1247,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         self._semiangle_cutoff = value
 
     @property
-    def focal_spread(self) -> float:
+    def focal_spread(self) -> float | BaseDistribution:
         """The standard deviation of the focal spread [Å]."""
         return self._focal_spread
 
@@ -1307,7 +1256,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         self._focal_spread = value
 
     @property
-    def angular_spread(self) -> float:
+    def angular_spread(self) -> float | BaseDistribution:
         """The standard deviation of the angular deviations due to source size [mrad]."""
         return self._angular_spread
 
@@ -1341,15 +1290,15 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             if expand:
                 expanded_axes += (i,)
 
-        array = component._evaluate_with_alpha_and_phi(alpha, phi)
+        array = component._evaluate_from_angular_grid(alpha, phi)
 
         return np.expand_dims(array, expanded_axes)
 
-    def _evaluate_with_alpha_and_phi(self, alpha, phi, keep_all: bool = False):
+    def _evaluate_from_angular_grid(self, alpha, phi, keep_all: bool = False):
 
         match_dims = tuple(range(-len(alpha.shape), 0))
 
-        array = self._aberrations._evaluate_with_alpha_and_phi(alpha, phi)
+        array = self._aberrations._evaluate_from_angular_grid(alpha, phi)
 
         if self._spatial_envelope.angular_spread != 0.0:
             new_aberrations_dims = tuple(range(len(self._aberrations.ensemble_shape)))
@@ -1361,23 +1310,23 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
                 + match_dims
             )
 
-            new_array = self._spatial_envelope._evaluate_with_alpha_and_phi(alpha, phi)
-            array, new_array = expand_dims_to_match(
+            new_array = self._spatial_envelope._evaluate_from_angular_grid(alpha, phi)
+            array, new_array = expand_dims_to_broadcast(
                 array, new_array, match_dims=[old_match_dims, new_match_dims]
             )
 
             array = array * new_array
 
         if self._temporal_envelope.focal_spread != 0.0:
-            new_array = self._temporal_envelope._evaluate_with_alpha_and_phi(alpha, phi)
-            array, new_array = expand_dims_to_match(
+            new_array = self._temporal_envelope._evaluate_from_angular_grid(alpha, phi)
+            array, new_array = expand_dims_to_broadcast(
                 array, new_array, match_dims=2 * [match_dims]
             )
             array = array * new_array
 
         if self._aperture.semiangle_cutoff != np.inf:
-            new_array = self._aperture._evaluate_with_alpha_and_phi(alpha, phi)
-            array, new_array = expand_dims_to_match(
+            new_array = self._aperture._evaluate_from_angular_grid(alpha, phi)
+            array, new_array = expand_dims_to_broadcast(
                 array, new_array, match_dims=2 * [match_dims]
             )
             array = array * new_array
@@ -1449,7 +1398,9 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             )
 
             component_metadata = [
-                OrdinalAxis(label="", values=tuple(components.keys()), _default_type="overlay")
+                OrdinalAxis(
+                    label="", values=tuple(components.keys()), _default_type="overlay"
+                )
             ]
 
             ensemble_axes_metadata = ensemble_axes_metadata + component_metadata

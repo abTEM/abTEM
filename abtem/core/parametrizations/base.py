@@ -8,7 +8,7 @@ from ase.data import chemical_symbols
 from abtem.core.axes import OrdinalAxis
 from abtem.core.utils import EqualityMixin
 from abtem.measurements import ReciprocalSpaceLineProfiles, RealSpaceLineProfiles
-from abtem.core.array import concatenate
+from abtem.array import concatenate
 
 real_space_funcs = "potential", "projected_potential", "charge"
 fourier_space_funcs = "scattering_factor", "projected_scattering_factor"

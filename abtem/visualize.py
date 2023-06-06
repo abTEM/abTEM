@@ -219,14 +219,15 @@ class AxesGrid:
                     and (col_size is self._col_sizes["cbar"])
                     and (isinstance(row_size, Size.AxesY))
                 ):
-                    cb_ax = _cbaraxes_class_factory(Axes)(
-                        fig, self._divider.get_position(), orientation="vertical"
-                    )
-                    fig.add_axes(cb_ax)
-                    cb_ax.set_axes_locator(
-                        self._divider.new_locator(nx=nx, ny=0, ny1=-1)
-                    )
-                    caxes[axes[0]].append(cb_ax)
+                    for i in range(ncbars):
+                        cb_ax = _cbaraxes_class_factory(Axes)(
+                            fig, self._divider.get_position(), orientation="vertical"
+                        )
+                        fig.add_axes(cb_ax)
+                        cb_ax.set_axes_locator(
+                            self._divider.new_locator(nx=nx + i * 2, ny=0, ny1=-1)
+                        )
+                        caxes[axes[0]].append(cb_ax)
 
         axes = np.array(axes, dtype=object).reshape((ncols, nrows))
 
@@ -1234,6 +1235,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
                 if isinstance(images, np.ndarray):
                     for j, image in enumerate(images):
+
                         cbars[ax].append(plt.colorbar(image, cax=cax[j], **kwargs))
                 else:
                     cbars[ax].append(plt.colorbar(images, cax=cax[0], **kwargs))

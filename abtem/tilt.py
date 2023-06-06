@@ -6,12 +6,11 @@ import numpy as np
 
 from abtem.core.axes import AxisMetadata, TiltAxis, AxisAlignedTiltAxis
 from abtem.core.backend import get_array_module
-from abtem.core.transform import CompositeWaveTransform, WaveTransform
+from abtem.transform import CompositeArrayObjectTransform, ArrayObjectTransform
 from abtem.distributions import (
     BaseDistribution,
-    _AxisAlignedDistributionND,
-    _EnsembleFromDistributionsMixin,
-    _DistributionFromValues,
+    AxisAlignedDistributionND,
+    EnsembleFromDistributions,
     from_values, _validate_distribution,
 )
 
@@ -21,7 +20,7 @@ if TYPE_CHECKING:
 
 def validate_tilt(tilt):
     """Validate that the given tilt is correctly defined."""
-    if isinstance(tilt, _AxisAlignedDistributionND):
+    if isinstance(tilt, AxisAlignedDistributionND):
         raise NotImplementedError
 
     if isinstance(tilt, BaseDistribution):
@@ -36,7 +35,7 @@ def validate_tilt(tilt):
                 AxisAlignedBeamTilt(tilt=tilt_component, direction=direction)
             )
 
-        tilt = CompositeWaveTransform(transforms)
+        tilt = CompositeArrayObjectTransform(transforms)
     elif isinstance(tilt, np.ndarray):
 
         return BeamTilt(tilt)
@@ -84,7 +83,7 @@ def precession_tilts(
     return np.array([tilt_x, tilt_y], dtype=float).T
 
 
-class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
+class BeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
     """
     Class describing beam tilt.
 
@@ -148,7 +147,7 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
         return waves.__class__(**kwargs)
 
 
-class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
+class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
     """
     Class describing tilt(s) aligned with an axis.
 

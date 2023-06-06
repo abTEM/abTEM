@@ -52,7 +52,7 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
         if key in exclude:
             continue
 
-        #print(key, value, b.__dict__[key], value == b.__dict__[key])
+        # print(key, value, b.__dict__[key], value == b.__dict__[key])
 
         try:
             equal = value == b.__dict__[key]
@@ -118,12 +118,16 @@ def insert_empty_axis(match_axis1, match_axis2):
             break
 
 
-def normalize_axes(dims, shape):
+def normalize_axes(dims, shape:tuple[int, ...]):
     num_dims = len(shape)
     return tuple(dim if dim >= 0 else num_dims + dim for dim in dims)
 
 
-def _get_dims_to_broadcast(arr1, arr2, match_dims=None):
+def _get_dims_to_broadcast(
+    arr1: np.ndarray,
+    arr2: np.ndarray,
+    match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
     if match_dims is None:
         match_dims = [(), ()]
 
@@ -156,17 +160,24 @@ def _get_dims_to_broadcast(arr1, arr2, match_dims=None):
     return axis1, axis2
 
 
-def expand_dims_to_match(arr1, arr2, match_dims=None, broadcast=False):
+def expand_dims_to_broadcast(
+    arr1: np.ndarray,
+    arr2: np.ndarray,
+    match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
+    broadcast: bool = False,
+):
+
+    xp = get_array_module(arr1)
 
     axis1, axis2 = _get_dims_to_broadcast(arr1, arr2, match_dims)
 
-    arr1 = np.expand_dims(arr1, axis=axis1)
-    arr2 = np.expand_dims(arr2, axis=axis2)
+    arr1 = xp.expand_dims(arr1, axis=axis1)
+    arr2 = xp.expand_dims(arr2, axis=axis2)
 
     if broadcast:
-        s = np.broadcast_shapes(arr1.shape, arr2.shape)
-        arr1 = np.broadcast_to(arr1, s)
-        arr2 = np.broadcast_to(arr2, s)
+        s = xp.broadcast_shapes(arr1.shape, arr2.shape)
+        arr1 = xp.broadcast_to(arr1, s)
+        arr2 = xp.broadcast_to(arr2, s)
 
     return arr1, arr2
 

@@ -5,7 +5,7 @@ import numpy as np
 from abtem.core.backend import get_array_module, cp
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
-from abtem.core.utils import expand_dims_to_match
+from abtem.core.utils import expand_dims_to_broadcast
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
@@ -206,8 +206,8 @@ def prism_coefficients(positions, wave_vectors, xp, ctf=None):
         )
         phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
 
-        basis = ctf._evaluate_with_alpha_and_phi(alpha, phi)
-        basis, coefficients = expand_dims_to_match(
+        basis = ctf._evaluate_from_angular_grid(alpha, phi)
+        basis, coefficients = expand_dims_to_broadcast(
             basis, coefficients, match_dims=[(-1,), (-1,)]
         )
         coefficients = coefficients * basis

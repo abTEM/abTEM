@@ -2,14 +2,14 @@ import dataclasses
 from copy import copy
 from dataclasses import dataclass
 from numbers import Number
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Iterable, Sequence
 from tabulate import tabulate
 import numpy as np
 import dask.array as da
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core import config
 from abtem.core.utils import safe_equality
-
+from numpy.typing import ArrayLike
 from abtem.core.units import _get_conversion_factor, _format_units, _validate_units
 
 
@@ -213,7 +213,7 @@ class ScanAxis(RealSpaceAxis):
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class OrdinalAxis(AxisMetadata):
-    values: tuple = ()
+    values: Union[Sequence, ArrayLike] = ()
 
     def format_title(self, formatting, include_label: bool = True, **kwargs):
         if include_label and len(self.label) > 0:
@@ -240,8 +240,12 @@ class OrdinalAxis(AxisMetadata):
 
     def __post_init__(self):
         if not isinstance(self.values, tuple):
+            values = self.values
+            if isinstance(values, Number):
+                values = (values,)
+
             try:
-                self.values = tuple(self.values)
+                self.values = tuple(values)
             except TypeError:
                 raise ValueError()
 

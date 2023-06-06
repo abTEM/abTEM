@@ -1,4 +1,7 @@
+from __future__ import annotations
+import types
 from numbers import Number
+from typing import Union
 
 import dask.array as da
 import numpy as np
@@ -16,6 +19,7 @@ try:
 except:
     cupyx = None
 
+ArrayModule = Union[types.ModuleType, str]
 
 def check_cupy_is_installed():
     if cp is None:

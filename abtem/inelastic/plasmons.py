@@ -17,7 +17,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import validate_chunks, chunk_ranges
-from abtem.core.transform import WaveTransform
+from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -229,7 +229,7 @@ def reduce_plasmon_axes(measurement):
     return measurement.__class__(array, **kwargs)
 
 
-class PlasmonScatteringEvents(WaveTransform):
+class PlasmonScatteringEvents(ArrayObjectTransform):
     def __init__(
         self,
         depths: Tuple[Tuple[float, ...]],

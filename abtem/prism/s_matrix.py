@@ -11,7 +11,7 @@ import numpy as np
 from ase import Atoms
 from dask.graph_manipulation import wait_on
 
-from abtem.core.array import _validate_lazy, ArrayObject
+from abtem.array import _validate_lazy, ArrayObject
 from abtem.core.axes import (
     OrdinalAxis,
     AxisMetadata,
@@ -25,7 +25,7 @@ from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble
 from abtem.core.grid import Grid, GridUndefinedError
-from abtem.core.utils import safe_ceiling_int, expand_dims_to_match, ensure_list
+from abtem.core.utils import safe_ceiling_int, expand_dims_to_broadcast, ensure_list
 from abtem.detectors import (
     BaseDetector,
     _validate_detectors,
@@ -937,7 +937,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
         )
         phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
-        array = ctf._evaluate_with_alpha_and_phi(alpha, phi)
+        array = ctf._evaluate_from_angular_grid(alpha, phi)
         array = array / xp.sqrt((array**2).sum(axis=-1, keepdims=True))
         return array
 
@@ -981,7 +981,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                     (
                         expanded_ctf_coefficients,
                         positions_coefficients,
-                    ) = expand_dims_to_match(
+                    ) = expand_dims_to_broadcast(
                         ctf_coefficients,
                         positions_coefficients,
                         match_dims=[(-1,), (-1,)],

@@ -26,7 +26,7 @@ from abtem.atoms import (
     plane_to_axes,
     rotate_atoms_to_plane,
 )
-from abtem.core.array import ArrayObject, _validate_lazy
+from abtem.array import ArrayObject, _validate_lazy
 from abtem.core.axes import (
     RealSpaceAxis,
     _find_axes_type,

@@ -16,8 +16,8 @@ from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.transform import WaveTransform
-from abtem.distributions import _AxisAlignedDistributionND, BaseDistribution
+from abtem.transform import ArrayObjectTransform
+from abtem.distributions import AxisAlignedDistributionND, BaseDistribution
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 
@@ -53,7 +53,7 @@ def _validate_scan_sampling(scan, probe):
         scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe.energy)
 
 
-class BaseScan(WaveTransform, metaclass=ABCMeta):
+class BaseScan(ArrayObjectTransform, metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
     def __len__(self) -> int:
@@ -194,7 +194,7 @@ class SourceDistribution(BaseScan):
     def ensemble_partial(self):
         def distribution(*args):
             factors = [arg.item() for arg in args]
-            dist = SourceDistribution(_AxisAlignedDistributionND(factors))
+            dist = SourceDistribution(AxisAlignedDistributionND(factors))
             arr = np.empty((1,) * len(args), dtype=object)
             arr.itemset(dist)
             return arr

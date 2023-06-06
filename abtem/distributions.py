@@ -1,13 +1,15 @@
-"""Module for describing mathematical distributions of simulation parameters."""
+"""Module for describing distributions of simulation parameters."""
+from __future__ import annotations
+
 from abc import abstractmethod, ABCMeta
 from functools import partial
 from numbers import Number
-from typing import Sequence, Union, Tuple, List, Iterable
+from typing import Sequence, Iterable, Iterator
 
 import dask.array as da
 import numpy as np
 
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, ArrayModule
 from abtem.core.chunks import Chunks, equal_sized_chunks
 from abtem.core.ensemble import Ensemble
 from abtem.core.utils import EqualityMixin, CopyMixin
@@ -15,26 +17,36 @@ from abtem.core.utils import EqualityMixin, CopyMixin
 
 class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
-    Template for defining the mathematical distributions of certain simulation parameters.
+    Base object for defining distributions of simulation parameters.
     """
+
+    def __array__(self):
+        return self.values
+
+    def __iter__(self) -> Iterator[float]:
+       return iter(self.values)
 
     @property
     @abstractmethod
     def dimensions(self) -> int:
+        """The number of dimensions in the distribution."""
         pass
 
     @property
     @abstractmethod
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
+        """The shape of the distribution parameters."""
         pass
 
     @abstractmethod
     def divide(self, chunks: Chunks, lazy: bool = True):
+        """"""
         pass
 
     @property
     @abstractmethod
     def ensemble_mean(self) -> bool:
+        """"""
         pass
 
     @property
@@ -48,7 +60,7 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         pass
 
 
-class _DistributionFromValues(BaseDistribution):
+class DistributionFromValues(BaseDistribution):
     def __init__(
         self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = False
     ):
@@ -56,23 +68,23 @@ class _DistributionFromValues(BaseDistribution):
         self._weights = weights
         self._ensemble_mean = ensemble_mean
 
-    def __neg__(self):
+    def __neg__(self) -> DistributionFromValues:
         return self.__class__(
             values=-self.values, weights=self.weights, ensemble_mean=self.ensemble_mean
         )
 
     @property
-    def dimensions(self):
+    def dimensions(self) -> int:
         if len(self.shape) > 1:
             return self.shape[1]
 
         return 1
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int]:
         return (self.values.shape[0],)
 
-    def divide(self, chunks: Union[int, Tuple[int, ...]] = 1, lazy: bool = True):
+    def divide(self, chunks: int | tuple[int, ...] = 1, lazy: bool = True):
         if isinstance(chunks, int):
             chunks = equal_sized_chunks(len(self), chunks=chunks)
         elif isinstance(chunks, tuple):
@@ -95,30 +107,27 @@ class _DistributionFromValues(BaseDistribution):
 
         return blocks
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._values)
 
-    def __iter__(self):
-        return iter(zip(self._values, self._weights))
-
     @property
-    def ensemble_mean(self):
+    def ensemble_mean(self) -> bool:
         return self._ensemble_mean
 
     @property
-    def values(self):
+    def values(self) -> np.ndarray:
         return self._values
 
     @property
-    def weights(self):
+    def weights(self) -> np.ndarray:
         return self._weights
 
-    def combine(self, other: "_DistributionFromValues") -> "_AxisAlignedDistributionND":
-        return _AxisAlignedDistributionND([self, other])
+    def combine(self, other: DistributionFromValues) -> AxisAlignedDistributionND:
+        return AxisAlignedDistributionND([self, other])
 
 
-class _AxisAlignedDistributionND(BaseDistribution):
-    def __init__(self, distributions: List[BaseDistribution]):
+class AxisAlignedDistributionND(BaseDistribution):
+    def __init__(self, distributions: list[BaseDistribution]):
         for distribution in distributions:
             assert distribution.dimensions == 1
 
@@ -185,7 +194,7 @@ class _AxisAlignedDistributionND(BaseDistribution):
 
 def from_values(
     values: Sequence[Number], weights: np.ndarray = None, ensemble_mean: bool = False
-) -> _DistributionFromValues:
+) -> DistributionFromValues:
     """
     Return a distribution from user-defined values and weights.
 
@@ -196,12 +205,13 @@ def from_values(
     weights : sequence of float, optional
         The scalar values of the weights (default is None).
     ensemble_mean : bool, optional
-        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is kept.
+        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full
+        ensemble is kept.
     """
     if weights is None:
         weights = np.ones(len(values))
     values = np.array(values)
-    return _DistributionFromValues(
+    return DistributionFromValues(
         values=values, weights=weights, ensemble_mean=ensemble_mean
     )
 
@@ -212,7 +222,7 @@ def uniform(
     num_samples: int,
     endpoint: bool = True,
     ensemble_mean: bool = False,
-) -> _DistributionFromValues:
+) -> DistributionFromValues:
     """
     Return a distribution with uniformly weighted values evenly spaced over a specified interval.
     As an example, this distribution may be used for simulating a focal series.
@@ -226,28 +236,30 @@ def uniform(
         all but the last of `num_samples + 1` evenly spaced samples so that the high value is excluded.
     num_samples : int
         Number of samples in the distribution.
+    endpoint : bool
+
     ensemble_mean : bool, optional
-        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is
-        kept.
+        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full
+        ensemble is kept.
     """
 
     values = np.linspace(start=low, stop=high, num=num_samples, endpoint=endpoint)
     weights = np.ones(len(values))
     values = np.array(values)
-    return _DistributionFromValues(
+    return DistributionFromValues(
         values=values, weights=weights, ensemble_mean=ensemble_mean
     )
 
 
 def gaussian(
-    standard_deviation: Union[float, Tuple[float, ...]],
-    num_samples: Union[int, Tuple[int, ...]],
+    standard_deviation: float | tuple[float, ...],
+    num_samples: int | tuple[int, ...],
     dimension: int = 1,
-    center: Union[float, Tuple[float, ...]] = 0.0,
-    ensemble_mean: Union[bool, Tuple[bool, ...]] = True,
-    sampling_limit: Union[float, Tuple[float, ...]] = 3.0,
+    center: float | tuple[float, ...] = 0.0,
+    ensemble_mean: bool | tuple[bool, ...] = True,
+    sampling_limit: float | tuple[float, ...] = 3.0,
     normalize: str = "intensity",
-):
+) -> AxisAlignedDistributionND:
     """
     Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.
     The values are evenly spaced within a given truncation of the Gaussian distribution. As an example, this
@@ -262,13 +274,13 @@ def gaussian(
         Number of samples uniformly spaced samples. The samples may be given for each axis as a tuple, or as a
         single number, in which case it is equal for all axes.
     center : float or tuple of float
-        The center of the Gaussian distribution (default is 0.0). The center may be given for each axis as a tuple, or as a single
-        number, in which case it is equal for all axes.
+        The center of the Gaussian distribution (default is 0.0). The center may be given for each axis as a tuple, or
+        as a single number, in which case it is equal for all axes.
     dimension : int, optional
         Number of dimensions of the Gaussian distribution.
     ensemble_mean : bool, optional
-        If True, the mean of ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is
-        kept. Default is True.
+        If True, the mean of ensemble of measurements defined by the distribution is calculated, otherwise the full
+        ensemble is kept. Default is True.
     sampling_limit : float, optional
         Truncate the distribution at this many standard deviations (default is 3.0).
     normalize : str, optional
@@ -307,32 +319,36 @@ def gaussian(
             raise RuntimeError()
 
         distributions.append(
-            _DistributionFromValues(
+            DistributionFromValues(
                 values=values, weights=weights, ensemble_mean=ensemble_mean[i]
             )
         )
 
-    return _AxisAlignedDistributionND(distributions=distributions)
+    return AxisAlignedDistributionND(distributions=distributions)
 
 
-def _validate_distribution(distribution):
+def _validate_distribution(
+    distribution: BaseDistribution | Iterable | Number,
+) -> BaseDistribution | Number:
 
-    if isinstance(distribution, (BaseDistribution, Number, str)):
+    if isinstance(distribution, (BaseDistribution, Number)):
         return distribution
 
     if isinstance(distribution, np.ndarray) and len(distribution.shape) == 0:
-        return distribution
+        return distribution.item()
 
     if isinstance(distribution, (tuple, list, np.ndarray)):
         distribution = np.array(distribution)
-        return _DistributionFromValues(
+        return DistributionFromValues(
             distribution, np.ones_like(distribution, dtype=np.float32)
         )
 
     raise ValueError(f"value {distribution} is not a valid distribution")
 
 
-def _unpack_distributions(*args: Union[float, BaseDistribution], shape: tuple, xp=np):
+def _unpack_distributions(
+    *args: float | BaseDistribution, shape: tuple, xp: ArrayModule = np
+):
     if len(args) == 0:
         return (), 1.0
 
@@ -362,8 +378,16 @@ def _unpack_distributions(*args: Union[float, BaseDistribution], shape: tuple, x
     return unpacked, weights
 
 
-class _EnsembleFromDistributionsMixin(Ensemble, CopyMixin):
-    def __init__(self, distributions: Tuple[str, ...] = (), **kwargs):
+class EnsembleFromDistributions(Ensemble, CopyMixin):
+    """
+    Base object for ensembles based on distributions.
+
+    Parameters
+    ----------
+    distributions : tuple of str, optional
+        Names of properties that may be described by a distribution.
+    """
+    def __init__(self, distributions: tuple[str, ...] = (), **kwargs):
         self._distributions = distributions
         super().__init__(**kwargs)
 
@@ -405,7 +429,7 @@ class _EnsembleFromDistributionsMixin(Ensemble, CopyMixin):
         return blocks
 
     @classmethod
-    def _partial_wave_transform(cls, *args, keys, **kwargs):
+    def _partial_transform(cls, *args, keys, **kwargs):
         assert len(args) == len(keys)
         kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
         transform = cls(**kwargs)
@@ -414,7 +438,7 @@ class _EnsembleFromDistributionsMixin(Ensemble, CopyMixin):
     def _from_partitioned_args(self):
         keys = tuple(self._distribution_properties.keys())
         kwargs = self._copy_kwargs()
-        return partial(self._partial_wave_transform, keys=keys, **kwargs)
+        return partial(self._partial_transform, keys=keys, **kwargs)
 
     @property
     def _default_ensemble_chunks(self):

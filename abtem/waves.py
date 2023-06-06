@@ -13,7 +13,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.core.array import ArrayObject, _validate_lazy, ComputableList, expand_dims
+from abtem.array import ArrayObject, _validate_lazy, ComputableList, expand_dims
 from abtem.core.axes import (
     RealSpaceAxis,
     ReciprocalSpaceAxis,
@@ -28,7 +28,7 @@ from abtem.core.ensemble import EmptyEnsemble
 from abtem.core.fft import fft2, ifft2, fft_crop, fft_interpolate
 from abtem.core.grid import Grid, validate_gpts, polar_spatial_frequencies
 from abtem.core.grid import HasGridMixin
-from abtem.core.transform import CompositeWaveTransform, WaveTransform
+from abtem.transform import CompositeArrayObjectTransform, ArrayObjectTransform
 from abtem.core.utils import safe_floor_int, CopyMixin, EqualityMixin
 from abtem.detectors import (
     BaseDetector,
@@ -297,7 +297,7 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin, CopyMixin, EqualityMixin):
         return alpha, phi
 
 
-class _WaveRenormalization(EmptyEnsemble, WaveTransform):
+class _WaveRenormalization(EmptyEnsemble, ArrayObjectTransform):
     def apply(self, waves, in_place: bool = False):
         return waves.normalize(overwrite_x=in_place)
 
@@ -1020,13 +1020,13 @@ class Waves(BaseWaves, ArrayObject):
                 new_axes=new_axes,
                 concatenate=True,
                 meta=np.array((), dtype=np.complex64),
-                waves_partial = self._from_partitioned_args(), # noqa
+                waves_partial=self._from_partitioned_args(),  # noqa
                 potential_partial=potential._from_partitioned_args(),  # noqa
-                ** {
+                **{
                     "detectors": detectors,
                     "conjugate": conjugate,
                     "transpose": transpose,
-                }
+                },
             )
 
             measurements = _finalize_lazy_measurements(
@@ -1063,7 +1063,7 @@ class Waves(BaseWaves, ArrayObject):
 
 
 class _WavesFactory(BaseWaves):
-    def __init__(self, transforms: List[WaveTransform], device: str):
+    def __init__(self, transforms: List[ArrayObjectTransform], device: str):
 
         if transforms is None:
             transforms = []
@@ -1089,12 +1089,12 @@ class _WavesFactory(BaseWaves):
     @property
     def ensemble_shape(self):
         """Shape of the ensemble axes of the waves."""
-        return CompositeWaveTransform(self.transforms).ensemble_shape
+        return CompositeArrayObjectTransform(self.transforms).ensemble_shape
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
         """List of AxisMetadata of the ensemble axes."""
-        return CompositeWaveTransform(self.transforms).ensemble_axes_metadata
+        return CompositeArrayObjectTransform(self.transforms).ensemble_axes_metadata
 
     @property
     def axes_metadata(self) -> AxesMetadataList:
@@ -1127,13 +1127,15 @@ class _WavesFactory(BaseWaves):
     def _base_waves_partial(self):
         pass
 
-    def insert_transform(self, transform: WaveTransform, index: int = None) -> _WavesFactory:
+    def insert_transform(
+        self, transform: ArrayObjectTransform, index: int = None
+    ) -> _WavesFactory:
         """
         Insert a wave function transformation applied during the creation of the waves.
 
         Parameters
         ----------
-        transform : WaveTransform
+        transform : ArrayObjectTransform
             Wave transform to apply during creation.
         index : int
             The position in the order of the applied transformations.
@@ -1218,10 +1220,12 @@ class _WavesFactory(BaseWaves):
                     range(max(potential_symbols) + 1, max(potential_symbols) + 2)
                 )
                 new_axes[1] = (len(potential.exit_planes),)
-                extra_ensemble_axes_metadata += [potential._get_exit_planes_axes_metadata()]
+                extra_ensemble_axes_metadata += [
+                    potential._get_exit_planes_axes_metadata()
+                ]
                 max_symbol += 1
 
-        transforms = CompositeWaveTransform(self.transforms)
+        transforms = CompositeArrayObjectTransform(self.transforms)
 
         # add transform args
         transform_arg_indices = tuple(
@@ -1270,7 +1274,7 @@ class _WavesFactory(BaseWaves):
                 adjust_chunks=adjust_chunks,
                 new_axes=new_axes,
                 concatenate=True,
-                meta=np.array((), dtype=object)
+                meta=np.array((), dtype=object),
             )
 
         measurements = _finalize_lazy_measurements(
@@ -1315,7 +1319,7 @@ class PlaneWave(_WavesFactory):
         normalize: bool = False,
         tilt: tuple[float, float] = (0.0, 0.0),
         device: str = None,
-        transforms: List[WaveTransform] = None,
+        transforms: List[ArrayObjectTransform] = None,
     ):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -1533,9 +1537,9 @@ class Probe(_WavesFactory):
         device: str = None,
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
-        transforms: List[WaveTransform] = None,
+        transforms: List[ArrayObjectTransform] = None,
         metadata: dict = None,
-        **kwargs
+        **kwargs,
     ):
 
         self._accelerator = Accelerator(energy=energy)
@@ -1554,12 +1558,7 @@ class Probe(_WavesFactory):
             aberrations = {}
 
         if isinstance(aberrations, dict):
-            aberrations = Aberrations(
-                semiangle_cutoff=semiangle_cutoff,
-                energy=energy,
-                **aberrations,
-                **kwargs
-            )
+            aberrations = Aberrations(energy=energy, **aberrations, **kwargs)
 
         aberrations._accelerator = self._accelerator
 
@@ -1585,7 +1584,7 @@ class Probe(_WavesFactory):
             semiangle_cutoff=ctf.semiangle_cutoff,
             soft=ctf.soft,
             aberrations=ctf.aberration_coefficients,
-            **kwargs
+            **kwargs,
         )
 
     @property
@@ -1715,7 +1714,7 @@ class Probe(_WavesFactory):
         else:
             waves = probe._base_waves_partial()()
 
-            waves = CompositeWaveTransform(probe.transforms).apply(
+            waves = CompositeArrayObjectTransform(probe.transforms).apply(
                 waves, in_place=True
             )
 
@@ -1915,7 +1914,7 @@ class Probe(_WavesFactory):
         )
         return measurement.interpolate_line(point1, point2)
 
-    def show(self, **kwargs):
+    def show(self, complex_images: bool = False, **kwargs):
         """
         Show the intensity of the probe wave function.
 
@@ -1923,8 +1922,9 @@ class Probe(_WavesFactory):
         ----------
         kwargs : Keyword arguments for the :func:`.Images.show` function.
         """
-        return (
-            self.build((self.extent[0] / 2, self.extent[1] / 2))
-            .intensity()
-            .show(**kwargs)
-        )
+        wave = self.build((self.extent[0] / 2, self.extent[1] / 2))
+        if complex_images:
+            images = wave.complex_images()
+        else:
+            images = wave.intensity()
+        return images.show(**kwargs)

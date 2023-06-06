@@ -1,5 +1,6 @@
 """Module for handling measurements."""
 from __future__ import annotations
+
 import copy
 import itertools
 from abc import ABCMeta, abstractmethod
@@ -22,14 +23,13 @@ from ase.cell import Cell
 from matplotlib.axes import Axes
 from numba import prange, jit
 
-from abtem.core.array import ArrayObject, stack
+from abtem.array import ArrayObject, stack
 from abtem.core.axes import (
     RealSpaceAxis,
     AxisMetadata,
     ReciprocalSpaceAxis,
     LinearAxis,
     NonLinearAxis,
-    SampleAxis,
     ScanAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
@@ -41,12 +41,11 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
-from abtem.core.transform import EnsembleTransform
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
-from abtem.distributions import _validate_distribution, BaseDistribution
+from abtem.distributions import BaseDistribution
 from abtem.indexing import _index_diffraction_patterns, _format_miller_indices
-from abtem.inelastic.phonons import _validate_seeds
+from abtem.noise import NoiseTransform
 from abtem.visualize import (
     MeasurementVisualization2D,
     MeasurementVisualization1D,
@@ -330,108 +329,6 @@ def _interpolate_stack(array, positions, mode, order, **kwargs):
     return output
 
 
-class _NoiseTransform(EnsembleTransform):
-    def __init__(
-        self,
-        dose: float | np.ndarray | BaseDistribution,
-        samples: int = None,
-        seeds: int | tuple[int, ...] = None,
-    ):
-
-        self._dose = _validate_distribution(dose)
-
-        if samples is None and seeds is None:
-            samples = 1
-
-        if seeds is None and samples > 1:
-            seeds = _validate_seeds(seeds, samples)
-            seeds = _validate_distribution(seeds)
-
-        self._seeds = seeds
-
-        super().__init__(
-            distributions=(
-                "dose",
-                "seeds",
-            )
-        )
-
-    @property
-    def dose(self):
-        return self._dose
-
-    @property
-    def seeds(self):
-        return self._seeds
-
-    @property
-    def samples(self):
-        if hasattr(self.seeds, "__len__"):
-            return len(self.seeds)
-        else:
-            return 1
-
-    @property
-    def ensemble_axes_metadata(self):
-        ensemble_axes_metadata = []
-
-        if isinstance(self.dose, BaseDistribution):
-            ensemble_axes_metadata += [
-                NonLinearAxis(label="Dose", values=tuple(self.dose.values), units="e")
-            ]
-
-        if isinstance(self.seeds, BaseDistribution):
-            ensemble_axes_metadata += [SampleAxis()]
-
-        return ensemble_axes_metadata
-
-    @property
-    def metadata(self):
-        return {"units": "", "label": "electron counts"}
-
-    def apply(self, x, block_id=None):
-
-        if block_id is None:
-            block_id = 0
-
-        array = x.array
-        xp = get_array_module(array)
-
-        if isinstance(self.seeds, BaseDistribution):
-            array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
-
-        if isinstance(self.dose, BaseDistribution):
-            dose = xp.array(self.dose.values, dtype=xp.float32)
-            array = array[None] * xp.expand_dims(
-                dose, tuple(range(1, len(array.shape) + 1))
-            )
-        else:
-            array = array * xp.array(self.dose, dtype=xp.float32)
-
-        if isinstance(self.seeds, BaseDistribution):
-            seed = sum(self.seeds.values)
-        else:
-            seed = self.seeds
-
-        if seed is not None:
-            seed += block_id
-
-        rng = xp.random.default_rng(seed=seed)
-
-        randomized_seed = int(
-            rng.integers(np.iinfo(np.int32).max)
-        )  # fixes strange cupy bug
-
-        rng = xp.random.RandomState(seed=randomized_seed)
-
-        array = xp.clip(array, a_min=0.0, a_max=None)
-
-        array = rng.poisson(array).astype(xp.float32)
-
-        measurement = self._pack_array(x, array)
-
-        return measurement
-
 
 class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
@@ -670,7 +567,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         total_dose = np.array(total_dose, dtype=np.float32)
 
-        transform = _NoiseTransform(total_dose, samples, seeds=seed)
+        transform = NoiseTransform(total_dose, samples, seeds=seed)
         measurement = self.apply_transform(transform)
 
         if isinstance(transform.dose, BaseDistribution) and dose_axes_metadata:
@@ -2383,6 +2280,30 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.axes_metadata[-2].coordinates(self.base_shape[-2]),
             self.axes_metadata[-1].coordinates(self.base_shape[-1]),
         )
+
+    def shift_spectrum(self, position="center"):
+        if (self.fftshift and position=="center") or (not self.fftshift and position == "origin"):
+            return self
+        xp = get_array_module(self.array)
+
+        if self.fftshift:
+            shift_func = xp.fft.fftshift
+        else:
+            shift_func = xp.fft.ifftshift
+
+        array = shift_func(self.array, axes=(-2,-1))
+        kwargs = self._copy_kwargs(("array",))
+        return self.__class__(array, **kwargs)
+
+    def ensure_centered(self):
+        if not self.fftshift:
+            return self
+
+        else:
+            xp = get_array_module(self.array)
+            array = xp.fft.ifftshift(self.array, axis=(-2,-1))
+            kwargs = self._copy_kwargs(("array",))
+            return self.__class__(array, **kwargs)
 
     @property
     def angular_coordinates(self) -> tuple[np.ndarray, np.ndarray]:

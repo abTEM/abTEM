@@ -5,7 +5,7 @@ from abtem.atoms import orthogonalize_cell, standardize_cell
 from abtem.potentials.charge_density import ChargeDensityPotential
 from abtem.core import axes
 from abtem.core import config
-from abtem.core.array import concatenate, stack, from_zarr
+from abtem.array import concatenate, stack, from_zarr
 from abtem.detectors import (
     AnnularDetector,
     SegmentedDetector,

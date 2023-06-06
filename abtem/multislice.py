@@ -14,7 +14,7 @@ from abtem.core.config import config
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
 from abtem.core.grid import spatial_frequencies
-from abtem.core.utils import expand_dims_to_match
+from abtem.core.utils import expand_dims_to_broadcast
 from abtem.detectors import BaseDetector
 from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurements
@@ -69,7 +69,7 @@ def _apply_tilt_to_fresnel_propagator_array(
         -ky * xp.tan(tilt[:, 1, None, None] / 1e3) * thickness * 2 * np.pi
     )
 
-    tilt, array = expand_dims_to_match(tilt, array, match_dims=[(-2, -1), (-2, -1)])
+    tilt, array = expand_dims_to_broadcast(tilt, array, match_dims=[(-2, -1), (-2, -1)])
 
     array = tilt * array
 
