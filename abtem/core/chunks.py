@@ -108,47 +108,67 @@ def auto_chunks(
         if dtype is None:
             raise ValueError("auto selecting chunk limits requires dtype")
 
-        limit = int(np.floor(config_chunk_size(device)) / dtype.itemsize)
+        limit = int(np.floor(config_chunk_size(device)) / np.dtype(dtype).itemsize)
 
     elif isinstance(limit, str):
-        limit = int(np.floor(parse_bytes(limit) / dtype.itemsize))
+        limit = int(np.floor(parse_bytes(limit) / np.dtype(dtype).itemsize))
 
     elif not isinstance(limit, int):
         raise ValueError
 
     normalized_chunks = tuple(s if c == -1 else c for s, c in zip(shape, chunks))
 
-    minimum_chunks = tuple(
-        1 if c == "auto" else c for s, c in zip(shape, normalized_chunks)
-    )
-    maximum_chunks = tuple(
-        s if c == "auto" else c for s, c in zip(shape, normalized_chunks)
-    )
+    # minimum_chunks = tuple(
+    #     1 if c == "auto" else c for s, c in zip(shape, normalized_chunks)
+    # )
 
-    current_chunks = list(minimum_chunks)
+    current_chunks = []
+    max_chunks = []
+    for n, c in zip(shape, normalized_chunks):
+        if c == "auto":
+            current_chunks.append(1)
+            max_chunks.append(n)
+        elif isinstance(c, int):
+            current_chunks.append(c)
+            max_chunks.append(c)
+        elif isinstance(c, tuple):
+            current_chunks.append(max(c))
+            max_chunks.append(max(c))
+        else:
+            raise RuntimeError()
 
-    auto = [i for i, c in enumerate(normalized_chunks) if c == "auto"]
+    autodims = [i for i, c in enumerate(normalized_chunks) if c == "auto"]
 
     j = 0
-    while len(auto):
-        auto = [i for i in auto if current_chunks[i] != maximum_chunks[i]]
-        if len(auto) == 0:
+    while len(autodims):
+        #autodims = [i for i in autodims if current_chunks[i] != maximum_chunks[i]]
+        if len(autodims) == 0:
             break
 
-        j = j % len(auto)
+        j = j % len(autodims)
 
-        current_chunks[auto[j]] += 1
+        current_chunks[autodims[j]] = min(current_chunks[autodims[j]] + 1, shape[autodims[j]])
 
         total = reduce(mul, current_chunks)
 
         if total > limit:
-            current_chunks[auto[j]] -= 1
+            current_chunks[autodims[j]] -= 1
+            break
+
+        if current_chunks == max_chunks:
             break
 
         j += 1
 
-    current_chunks = tuple(current_chunks)
-    chunks = validate_chunks(shape, current_chunks, limit, dtype)
+    chunks = ()
+    for i, c in enumerate(normalized_chunks):
+        if c == "auto":
+            chunks += (current_chunks[i],)
+        else:
+            chunks += (c,)
+
+    #current_chunks = tuple(current_chunks)
+    chunks = validate_chunks(shape, chunks, limit, dtype)
     return chunks
 
 

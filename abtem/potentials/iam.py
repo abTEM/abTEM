@@ -831,7 +831,6 @@ class Potential(_PotentialBuilder):
 
     @staticmethod
     def _potential(*args, frozen_phonons_partial, **kwargs):
-
         frozen_phonons = frozen_phonons_partial(*args)
         return Potential(frozen_phonons, **kwargs)
 

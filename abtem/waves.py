@@ -69,10 +69,10 @@ def _finalize_lazy_measurements(
     measurements = []
     for i, detector in enumerate(detectors):
 
-        shape = detector._out_base_shape(waves)
+        base_shape = detector._out_base_shape(waves)
         meta = detector._out_meta(waves)
 
-        new_axis = tuple(range(len(arrays.shape), len(arrays.shape) + len(shape)))
+        new_axis = tuple(range(len(arrays.shape), len(arrays.shape) + len(base_shape)))
 
         if chunks is None:
             chunks = arrays.chunks
@@ -80,12 +80,12 @@ def _finalize_lazy_measurements(
         array = arrays.map_blocks(
             _extract_measurement,
             i,
-            chunks=chunks + tuple((n,) for n in shape),
+            chunks=chunks + tuple((n,) for n in base_shape),
             new_axis=new_axis,
             meta=meta,
         )
 
-        measurement = detector._pack_array(waves, array)
+        measurement = detector._pack_single_output(waves, array)
 
         if hasattr(measurement, "reduce_ensemble"):
             measurement = measurement.reduce_ensemble()
