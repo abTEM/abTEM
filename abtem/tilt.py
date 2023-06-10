@@ -1,5 +1,6 @@
 """Module for simulating beam tilt."""
-from typing import Union, TYPE_CHECKING, Tuple, List
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import dask.array as da
 import numpy as np
@@ -93,7 +94,7 @@ class BeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
         Tilt along the `x` and `y` axes [mrad] with an optional spread of values.
     """
 
-    def __init__(self, tilt: Union[Tuple[float, float], BaseDistribution, np.ndarray]):
+    def __init__(self, tilt: tuple[float, float] | BaseDistribution | np.ndarray):
 
         if isinstance(tilt, np.ndarray):
             tilt = from_values(tilt)
@@ -102,7 +103,7 @@ class BeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
         super().__init__(distributions=("tilt",))
 
     @property
-    def tilt(self) -> Union[Tuple[float, float], BaseDistribution]:
+    def tilt(self) -> tuple[float, float] | BaseDistribution:
         """Beam tilt angle [mrad]."""
         return self._tilt
 
@@ -115,7 +116,7 @@ class BeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
             return {"base_tilt_x": self.tilt[0], "base_tilt_y": self.tilt[1]}
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         """Metadata describing (an ensemble of) tilted wave function(s)."""
         if isinstance(self.tilt, BaseDistribution):
             return [
@@ -160,7 +161,7 @@ class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
     """
 
     def __init__(
-            self, tilt: Union[float, BaseDistribution] = 0.0, direction: str = "x"
+            self, tilt: float | BaseDistribution = 0.0, direction: str = "x"
     ):
 
         if isinstance(tilt, (np.ndarray, list, tuple)):
@@ -178,7 +179,7 @@ class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
         return self._direction
 
     @property
-    def tilt(self) -> Union[float, BaseDistribution]:
+    def tilt(self) -> float | BaseDistribution:
         """Beam tilt [mrad]."""
         return self._tilt
 
@@ -190,7 +191,7 @@ class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
             return {f"base_tilt_{self._direction}": self._tilt}
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         if isinstance(self.tilt, BaseDistribution):
             return [
                 AxisAlignedTiltAxis(

@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 from abc import ABCMeta, abstractmethod
-from typing import Tuple
 
 import numpy as np
 
@@ -12,8 +13,8 @@ class ProjectionIntegrator:
                           positions: np.ndarray,
                           a: np.ndarray,
                           b: np.ndarray,
-                          gpts: Tuple[int, int],
-                          sampling: Tuple[float, float],
+                          gpts: tuple[int, int],
+                          sampling: tuple[float, float],
                           device: str = 'cpu',
                           ):
         pass
@@ -34,7 +35,7 @@ class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._finite
 
     @abstractmethod
-    def build(self, symbol: str, gpts: Tuple[int, int], sampling: Tuple[float, float], device: str):
+    def build(self, symbol: str, gpts: tuple[int, int], sampling: tuple[float, float], device: str):
         pass
 
     @abstractmethod

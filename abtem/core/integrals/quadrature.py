@@ -1,4 +1,5 @@
-from typing import Tuple, Union, TYPE_CHECKING
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numba import jit
@@ -27,7 +28,7 @@ def interpolate_radial_functions(
     array: np.ndarray,
     positions: np.ndarray,
     disk_indices: np.ndarray,
-    sampling: Tuple[float, float],
+    sampling: tuple[float, float],
     radial_gpts: np.ndarray,
     radial_functions: np.ndarray,
     radial_derivative: np.ndarray,
@@ -83,7 +84,7 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         return self._values
 
     def integrate(
-        self, a: Union[float, np.ndarray], b: Union[float, np.ndarray]
+        self, a: float | np.ndarray, b: float | np.ndarray
     ) -> np.ndarray:
         f = interp1d(
             self.limits, self.values, axis=0, kind="linear", fill_value="extrapolate"
@@ -95,8 +96,8 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         positions: np.ndarray,
         a: float,
         b: float,
-        gpts: Tuple[int, int],
-        sampling: Tuple[float, float],
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
         device: str = "cpu",
     ) -> np.ndarray:
 
@@ -164,7 +165,7 @@ def cutoff(func, tolerance, a, b) -> float:
 class ProjectionQuadratureRule(ProjectionIntegratorPlan):
     def __init__(
         self,
-        parametrization: Union[str, "Parametrization"] = "lobato",
+        parametrization: str | Parametrization = "lobato",
         cutoff_tolerance: float = 1e-3,
         taper: float = 0.85,
         integration_step: float = 0.02,
@@ -278,8 +279,8 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
     def build(
         self,
         symbol: str,
-        gpts: Tuple[int, int],
-        sampling: Tuple[float, float],
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
         device: str = "cpu",
     ):
         inner_limit = min(sampling) / 2

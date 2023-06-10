@@ -329,7 +329,6 @@ def _interpolate_stack(array, positions, mode, order, **kwargs):
     return output
 
 
-
 class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     Parent class common to all measurement types.
@@ -2282,7 +2281,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
     def shift_spectrum(self, position="center"):
-        if (self.fftshift and position=="center") or (not self.fftshift and position == "origin"):
+        if (self.fftshift and position == "center") or (
+            not self.fftshift and position == "origin"
+        ):
             return self
         xp = get_array_module(self.array)
 
@@ -2291,7 +2292,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             shift_func = xp.fft.ifftshift
 
-        array = shift_func(self.array, axes=(-2,-1))
+        array = shift_func(self.array, axes=(-2, -1))
         kwargs = self._copy_kwargs(("array",))
         return self.__class__(array, **kwargs)
 
@@ -2301,7 +2302,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         else:
             xp = get_array_module(self.array)
-            array = xp.fft.ifftshift(self.array, axis=(-2,-1))
+            array = xp.fft.ifftshift(self.array, axis=(-2, -1))
             kwargs = self._copy_kwargs(("array",))
             return self.__class__(array, **kwargs)
 
@@ -2753,7 +2754,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
         x, y = xp.asarray(x), xp.asarray(y)
 
         if self.is_lazy:
-            base_axes = tuple(range(len(self.ensemble_shape), len(self.base_shape) + len(self.ensemble_shape)))
+            base_axes = tuple(
+                range(
+                    len(self.ensemble_shape),
+                    len(self.base_shape) + len(self.ensemble_shape),
+                )
+            )
             array = self.array.map_blocks(
                 self._com, x=x, y=y, drop_axis=base_axes, dtype=np.complex64
             )
@@ -3530,19 +3536,23 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     def remove_low_intensity(self, threshold: float = 1e-3):
         """
-        Remove diffraction spots with intensity below a threshold.
+        Remove diffraction spots with intensity below a threshold for all ensemble dimensions.
 
         Parameters
         ----------
         threshold : float
-            Relative intensity threshold for removing diffraction spots.
+            Intensity threshold for removing diffraction spots.
 
-
+        Returns
+        -------
+        thresholded_spots : IndexedDiffractionPatterns
+            The indexed diffraction spots with an intensity above the given threshold.
         """
-        mask = self.intensities > threshold
+        ensemble_axes = tuple(range(len(self.ensemble_shape)))
+        mask = np.max(self.intensities, axis=ensemble_axes) > threshold
 
         miller_indices = self.miller_indices[mask]
-        intensities = self.intensities[mask]
+        intensities = self.intensities[..., mask]
         positions = self.positions[mask]
 
         return self.__class__(
@@ -3571,14 +3581,17 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         Returns
         -------
-        sorted : IndexedDiffractionPatterns
+        sorted_spots : IndexedDiffractionPatterns
         """
         if criterion == "distance":
             criterion = -np.linalg.norm(self.positions, axis=1)
         elif criterion == "intensity":
-            criterion = -self.intensities
+            ensemble_axes = tuple(range(len(self.ensemble_shape)))
+            criterion = -np.max(self.intensities, axis=ensemble_axes)
         else:
             raise ValueError()
+
+        # print(criterion.shape)
 
         order = np.argsort(criterion)
         positions = self.positions[order]
@@ -3804,6 +3817,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             common_scale=common_color_scale,
             vmin=vmin,
             vmax=vmax,
+            explode=explode,
             figsize=figsize,
         )
 

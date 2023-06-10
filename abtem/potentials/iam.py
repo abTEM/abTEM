@@ -269,8 +269,8 @@ def _validate_potential(
             device = waves.device
 
         potential = Potential(potential, device=device)
-    elif not isinstance(potential, BasePotential):
-        raise ValueError()
+    #elif not isinstance(potential, BasePotential):
+    #    raise ValueError()
 
     if waves is not None and potential is not None:
         potential.grid.match(waves)
@@ -982,7 +982,6 @@ class PotentialArray(BasePotential, ArrayObject):
         return wrapped
 
     def _partition_args(self, chunks: int = None, lazy: bool = True):
-
         if chunks is None and self.is_lazy:
             chunks = self.array.chunks[: -len(self.base_shape)]
         elif chunks is None:
@@ -1476,6 +1475,7 @@ class CrystalPotential(_PotentialBuilder):
         return arr
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
+
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         if len(self.ensemble_shape) == 0:

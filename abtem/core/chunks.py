@@ -78,9 +78,7 @@ def validate_chunks(
     for s, c in zip(shape, chunks):
 
         if isinstance(c, tuple):
-            if sum(c) != s:
-                raise RuntimeError()
-
+            assert sum(c) == s
             validated_chunks += (c,)
 
         elif isinstance(c, int):
@@ -92,6 +90,8 @@ def validate_chunks(
                 validated_chunks += ((c,) * (s // c),)
         else:
             raise RuntimeError()
+
+    assert tuple(sum(c) for c in validated_chunks) == shape
 
     return validated_chunks
 

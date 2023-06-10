@@ -6,7 +6,7 @@ from abc import abstractmethod
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Iterator, TypeVar
 
-import dask.array.core
+import dask.array as da
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, ParameterAxis
@@ -16,7 +16,6 @@ from abtem.core.ensemble import Ensemble
 from abtem.core.fft import ifft2
 from abtem.core.utils import (
     CopyMixin,
-    EqualityMixin,
     expand_dims_to_broadcast,
 )
 from abtem.distributions import (
@@ -27,13 +26,12 @@ from abtem.distributions import (
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
-    from abtem.array import ArrayObject
-
-
-T = TypeVar("T", bound="ArrayObject")
+    from abtem.array import ArrayObject, T
 
 
 class ArrayObjectTransform(Ensemble, CopyMixin):
+    _allow_base_chunks: bool = False
+
     @property
     def _num_outputs(self) -> int:
         return 1
@@ -106,7 +104,7 @@ class ArrayObjectTransform(Ensemble, CopyMixin):
         """
         return array_object.__class__
 
-    def _out_ensemble_shape(self, array_object: T) -> tuple[int, ...]:
+    def _out_ensemble_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
         """
         Shape of the measurements created when detecting the given waves.
 
@@ -120,7 +118,7 @@ class ArrayObjectTransform(Ensemble, CopyMixin):
         measurement_shape : tuple of int
         """
 
-        return self.ensemble_shape + array_object.ensemble_shape
+        return *self.ensemble_shape, *array_object.ensemble_shape
 
     def _out_base_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
         """
@@ -138,7 +136,7 @@ class ArrayObjectTransform(Ensemble, CopyMixin):
         return array_object.base_shape
 
     def _out_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
-        return self._out_ensemble_shape(array_object) + self._out_base_shape(
+        return *self._out_ensemble_shape(array_object), *self._out_base_shape(
             array_object, index
         )
 
@@ -160,9 +158,9 @@ class ArrayObjectTransform(Ensemble, CopyMixin):
         return array_object.base_axes_metadata
 
     def _out_ensemble_axes_metadata(
-        self, array_object: ArrayObject | T
+        self, array_object: ArrayObject | T, index: int = 0
     ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
-        return self.ensemble_axes_metadata + array_object.ensemble_axes_metadata
+        return [*self.ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
     def __add__(self, other: ArrayObjectTransform) -> CompositeArrayObjectTransform:
         transforms = []
@@ -177,46 +175,56 @@ class ArrayObjectTransform(Ensemble, CopyMixin):
         return CompositeArrayObjectTransform(transforms)
 
     def _out_axes_metadata(self, array_object: T):
-        return self._out_ensemble_axes_metadata(
-            array_object
-        ) + self._out_base_axes_metadata(array_object)
+        return [
+            *self._out_ensemble_axes_metadata(array_object),
+            *self._out_base_axes_metadata(array_object),
+        ]
 
     @staticmethod
     def _extract(array, index):
         array = array.item()[index]
         return array
 
-    def _pack_multiple_outputs(self, array_object, new_arrays):
-        ensemble_axes_metadata = self._out_ensemble_axes_metadata(array_object)
-        ensemble_shape = self._out_ensemble_shape(array_object)
+    def _pack_multiple_outputs(
+        self, array_object: T, new_arrays: np.ndarray | da.core.Array
+    ) -> tuple[T, ...]:
 
-        is_lazy = isinstance(new_arrays, dask.array.core.Array)
-        if is_lazy:
-            assert ensemble_shape == new_arrays.shape
+        is_lazy = isinstance(new_arrays, da.core.Array)
+        # if is_lazy:
+        #    assert ensemble_shape == new_arrays.shape
 
         outputs = ()
         for output_index in range(self._num_outputs):
             base_shape = self._out_base_shape(array_object, output_index)
+            ensemble_shape = self._out_ensemble_shape(array_object, output_index)
             meta = self._out_meta(array_object, output_index)
             cls = self._out_type(array_object, output_index)
             metadata = self._out_metadata(array_object, output_index)
             base_axes_metadata = self._out_base_axes_metadata(
                 array_object, output_index
             )
+            ensemble_axes_metadata = self._out_ensemble_axes_metadata(
+                array_object, output_index
+            )
 
             if is_lazy:
-                new_axis = tuple(
-                    range(len(ensemble_shape), len(ensemble_shape) + len(base_shape))
-                )
+                shape = ensemble_shape + base_shape
 
-                ensemble_chunks = new_arrays.chunks
+                consumed_ensemble_axes = len(new_arrays.shape) - len(ensemble_shape)
 
-                base_chunks = tuple((n,) for n in base_shape)
+                new_axis = tuple(range(len(ensemble_shape), len(shape)))
+
+                chunks = new_arrays.chunks
+
+                chunks = chunks + tuple((n,) for n in base_shape)
+
+                chunks = chunks[: len(chunks) - consumed_ensemble_axes]
+                new_axis = new_axis[: len(new_axis) - consumed_ensemble_axes]
 
                 new_array = new_arrays.map_blocks(
                     self._extract,
                     output_index,
-                    chunks=ensemble_chunks + base_chunks,
+                    chunks=chunks,
                     new_axis=new_axis,
                     meta=meta,
                 )
@@ -288,10 +296,6 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
     def _validate_distribution(distribution):
         return _validate_distribution(distribution)
 
-    @property
-    def ensemble_axes_metadata(self):
-        return []
-
     def _axes_metadata_from_distributions(self, **kwargs):
         ensemble_axes_metadata = []
         for distribution_name in self._distributions:
@@ -307,13 +311,6 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
                 ]
 
         return ensemble_axes_metadata
-
-        # kwargs = array_object._copy_kwargs(exclude=("array",) + ())
-        # kwargs["ensemble_axes_metadata"] = (
-        #    self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-        # )
-        # kwargs["metadata"].update(self.metadata)
-        # return array_object.__class__(new_array, **kwargs)
 
 
 class WavesTransform(EnsembleTransform):
@@ -335,28 +332,54 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def __init__(
         self,
         transforms: list[ArrayObjectTransform] = None,
-        base_shape: tuple[int, ...] = None,
-        ensemble_shape: tuple[int, ...] = None,
-        base_axes_metadata: list[AxisMetadata] = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        meta: np.ndarray = None,
-        metadata: dict = None,
     ):
         if transforms is None:
             transforms = []
 
         self._transforms = transforms
-        self._base_shape = base_shape
-        self._ensemble_shape = ensemble_shape
-        self._base_axes_metadata = base_axes_metadata
-        self._ensemble_axes_metadata = ensemble_axes_metadata
-        self._meta = meta
-        self._metadata = metadata
+
+        self._base_shapes = None
+        self._ensemble_shapes = None
+        self._base_axes_metadata = None
+        self._ensemble_axes_metadata = None
+        self._types = None
+        self._metas = None
+        self._metadata = None
+
         super().__init__()
 
     @property
     def _num_outputs(self) -> int:
-        return self._transforms[-1]._num_outputs
+        return self._transforms[0]._num_outputs
+
+    def set_output_specification(self, array_object):
+
+        for transform in reversed(self.transforms):
+            array_object = array_object.apply_transform(transform)
+
+        if self._num_outputs == 1:
+            output = [array_object]
+        else:
+            output = array_object
+
+        self._base_shapes = ()
+        self._ensemble_shapes = ()
+        self._base_axes_metadata = ()
+        self._ensemble_axes_metadata = ()
+        self._metas = ()
+        self._types = ()
+        self._metadata = ()
+        for i in range(self._num_outputs):
+            self._base_shapes += (output[i].base_shape,)
+            self._ensemble_shapes += (output[i].ensemble_shape,)
+            self._base_axes_metadata += (output[i].base_axes_metadata,)
+            self._ensemble_axes_metadata += (output[i].ensemble_axes_metadata,)
+            xp = get_array_module(output[i].array)
+            self._metas += (xp.array((), dtype=output[i].dtype),)
+            self._types += (output[i].__class__,)
+            self._metadata += (output[i].metadata,)
+
+        return self
 
     def insert(
         self, transform: ArrayObjectTransform, index: int
@@ -386,7 +409,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
     def _out_metadata(self, array_object, index=0):
         if self._metadata is not None:
-            return self._metadata
+            return self._metadata[index]
 
         metadata = [
             transform._out_metadata(array_object, index)
@@ -397,46 +420,57 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         ensemble_axes_metadata = [
-            wave_transform.ensemble_axes_metadata
-            for i, wave_transform in enumerate(self.transforms)
+            transform.ensemble_axes_metadata
+            for i, transform in enumerate(self.transforms)
         ]
-
         ensemble_axes_metadata = list(itertools.chain(*ensemble_axes_metadata))
         return ensemble_axes_metadata
 
-    def _out_ensemble_axes_metadata(self, array_object) -> list[AxisMetadata]:
+    def _out_ensemble_axes_metadata(self, array_object, index=0) -> list[AxisMetadata]:
         if self._ensemble_axes_metadata is not None:
-            return self._ensemble_axes_metadata
+            return self._ensemble_axes_metadata[index]
+
         return self.ensemble_axes_metadata + array_object.ensemble_axes_metadata
 
     def _out_base_axes_metadata(self, array_object, index=0) -> list[AxisMetadata]:
         if self._base_axes_metadata is not None:
-            return self._base_axes_metadata
-        return self._transforms[-1]._out_base_axes_metadata(array_object, index)
+            return self._base_axes_metadata[index]
+        return self._transforms[0]._out_base_axes_metadata(array_object, index)
 
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
         ensemble_shape = [transform.ensemble_shape for transform in self.transforms]
         return tuple(itertools.chain(*ensemble_shape))
 
-    def _out_ensemble_shape(self, array_object) -> tuple[int, ...]:
+    def _out_ensemble_shape(self, array_object, index=0) -> tuple[int, ...]:
+        if self._ensemble_shapes is not None:
+            return self._ensemble_shapes[index]
+
         ensemble_shape = self.ensemble_shape + array_object.ensemble_shape
         return ensemble_shape
 
     def _out_base_shape(self, array_object, index=0):
-        if self._base_shape is not None:
-            return self._base_shape
+        if self._base_shapes is not None:
+            return self._base_shapes[index]
 
-        return self._transforms[-1]._out_base_shape(array_object, index)
+        return self._transforms[0]._out_base_shape(array_object, index)
 
     def _out_meta(self, array_object, index=0):
-        return self._transforms[-1]._out_meta(array_object, index)
+        if self._metas is not None:
+            return self._metas[index]
+        return self._transforms[0]._out_meta(array_object, index)
 
     def _out_dtype(self, array_object, index=0):
-        return self._out_meta(array_object).dtype
+        if self._metas is not None:
+            return self._metas[index].dtype
+
+        return self._out_meta(array_object, index).dtype
 
     def _out_type(self, array_object, index=0):
-        return self._transforms[-1]._out_type(array_object, index)
+        if self._types is not None:
+            return self._types[index]
+
+        return self._transforms[0]._out_type(array_object, index)
 
     @property
     def transforms(self) -> list[ArrayObjectTransform]:
@@ -454,10 +488,8 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         self, array_object: T
     ) -> np.ndarray | tuple[np.ndarray, ...]:
 
-        # for transform in reversed(self.transforms):
-        #    array_object = transform.apply(array_object)
+        for transform in reversed(self.transforms):
 
-        for transform in self.transforms:
             array_object = transform.apply(array_object)
 
         if self._num_outputs > 1:
@@ -484,20 +516,20 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
     @staticmethod
     def _partial(*args, partials):
-        wave_transfer_functions = []
-        for p in partials:
-            wave_transfer_functions += [p[0](*[args[i] for i in p[1]])]
-
-        return CompositeArrayObjectTransform(wave_transfer_functions)
+        transforms = []
+        for partial, arg_indices in partials:
+            partial_args = tuple(args[i] for i in arg_indices)
+            transforms += [partial(*partial_args)]
+        return CompositeArrayObjectTransform(transforms)
 
     def _from_partitioned_args(self):
         partials = ()
         i = 0
-        for wave_transform in self.transforms:
-            arg_indices = tuple(range(i, i + len(wave_transform.ensemble_shape)))
-            partials += ((wave_transform._from_partitioned_args(), arg_indices),)
-            i += len(arg_indices)
-
+        for transform in self.transforms:
+            num_args = len(transform._partition_args(1))
+            arg_indices = tuple(range(i, i + num_args))
+            partials += ((transform._from_partitioned_args(), arg_indices),)
+            i += num_args
         return partial(self._partial, partials=partials)
 
 

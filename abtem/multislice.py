@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -10,6 +11,7 @@ from abtem.core.antialias import AntialiasAperture
 from abtem.core.antialias import antialias_aperture
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
+from abtem.core.chunks import validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.config import config
 from abtem.core.energy import energy2wavelength
@@ -25,6 +27,7 @@ from abtem.potentials.iam import (
     PotentialArray,
 )
 from abtem.tilt import _get_tilt_axes
+from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -202,7 +205,7 @@ def _allocate_measurement(
     detector: BaseDetector,
     extra_ensemble_axes_shape: tuple[int, ...],
     extra_ensemble_axes_metadata: list[AxisMetadata],
-) -> BaseMeasurements:
+) -> BaseMeasurements | Waves:
     xp = get_array_module(detector._out_meta(waves))
 
     measurement_type = detector._out_type(waves)
@@ -232,12 +235,8 @@ def _potential_ensemble_shape_and_metadata(potential):
     extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
 
     if len(potential.exit_planes) > 1:
-        extra_ensemble_axes_shape = extra_ensemble_axes_shape + (
-            len(potential.exit_planes),
-        )
-        extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-            potential._get_exit_planes_axes_metadata()
-        ]
+        extra_ensemble_axes_shape = (*extra_ensemble_axes_shape, len(potential.exit_planes))
+        extra_ensemble_axes_metadata = [*extra_ensemble_axes_metadata, potential._get_exit_planes_axes_metadata()]
 
     return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
@@ -412,6 +411,8 @@ def multislice_and_detect(
     measurements : Waves or tuple of :class:`.BaseMeasurement`
         Exit waves or detected measurements or lists of measurements.
     """
+    waves = waves.ensure_real_space()
+
     antialias_aperture = AntialiasAperture()
 
     propagator = FresnelPropagator()
@@ -576,5 +577,130 @@ def transition_potential_multislice_and_detect(
                             ] += new_measurement.array
 
     measurements = tuple(measurements.values())
-
     return measurements
+
+
+class MultisliceTransform(ArrayObjectTransform):
+    def __init__(
+        self,
+        potential: BasePotential,
+        detectors: BaseDetector | list[BaseDetector],
+        conjugate: bool = False,
+        transpose: bool = False,
+    ):
+        self._potential = potential
+
+        if isinstance(detectors, BaseDetector):
+            detectors = [detectors]
+
+        self._detectors = detectors
+        self._conjugate = conjugate
+        self._transpose = transpose
+
+    @property
+    def _num_outputs(self):
+        return len(self._detectors)
+
+    @property
+    def potential(self):
+        return self._potential
+
+    @property
+    def detectors(self):
+        return self._detectors
+
+    @property
+    def conjugate(self):
+        return self._conjugate
+
+    @property
+    def transpose(self):
+        return self._transpose
+
+    @property
+    def _default_ensemble_chunks(self):
+        chunks = self._potential._default_ensemble_chunks
+        num_exit_planes = len(self._potential.exit_planes)
+
+        if num_exit_planes > 1:
+            chunks = chunks + (num_exit_planes,)
+
+        return chunks
+
+    @property
+    def ensemble_axes_metadata(self):
+        ensemble_axes_metadata = self.potential.ensemble_axes_metadata
+
+        if len(self.potential.exit_planes) > 1:
+            ensemble_axes_metadata = [
+                *ensemble_axes_metadata,
+                self.potential._get_exit_planes_axes_metadata(),
+            ]
+
+        return ensemble_axes_metadata
+
+    @property
+    def ensemble_shape(self):
+        ensemble_shape = self._potential.ensemble_shape
+
+        if len(self._potential.exit_planes) > 1:
+            ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
+
+        return ensemble_shape
+
+    def _out_metadata(self, waves, index: bool = 0):
+        return self.detectors[index]._out_metadata(waves)
+
+    def _out_dtype(self, waves, index: bool = 0):
+        return self.detectors[index]._out_dtype(waves)
+
+    def _out_meta(self, waves, index: bool = 0):
+        return self.detectors[index]._out_meta(waves)
+
+    def _out_type(self, waves, index: bool = 0):
+        return self.detectors[index]._out_type(waves)
+
+    def _out_base_shape(self, waves, index: bool = 0):
+        return self.detectors[index]._out_base_shape(waves)
+
+    def _out_base_axes_metadata(self, waves, index: bool = 0):
+        return self.detectors[index]._out_base_axes_metadata(waves)
+
+    def _partition_args(self, chunks=1, lazy: bool = True):
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+
+        if self._potential.num_exit_planes > 1:
+            chunks = chunks[:-1]
+
+        return self._potential._partition_args(chunks=chunks, lazy=lazy)
+
+    @staticmethod
+    def _multislice_transform_member(*args, potential_partial, **kwargs):
+        potential = potential_partial(*args)
+        return MultisliceTransform(potential, **kwargs)
+
+    def _from_partitioned_args(self, *args, **kwargs):
+        potential_partial = self._potential._from_partitioned_args()
+        return partial(
+            self._multislice_transform_member,
+            potential_partial=potential_partial,
+            detectors=self.detectors,
+            conjugate=self.conjugate,
+            transpose=self.transpose,
+        )
+
+    def _calculate_new_array(self, waves):
+        measurements = multislice_and_detect(
+            waves=waves,
+            potential=self.potential,
+            detectors=self.detectors,
+            conjugate=self.conjugate,
+            transpose=self.transpose,
+        )
+
+        arrays = tuple(measurement.array for measurement in measurements)
+
+        if len(arrays) == 1:
+            arrays = arrays[0]
+
+        return arrays

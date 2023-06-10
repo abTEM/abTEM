@@ -1,4 +1,4 @@
-from typing import Tuple
+from __future__ import annotations
 
 import numpy as np
 
@@ -13,7 +13,7 @@ if cp is not None:
     import cupyx
 
 
-def sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
+def sinc(gpts: tuple[int, int], sampling: tuple[float, float], xp):
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp)
     k = xp.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2)
@@ -80,8 +80,8 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
         positions: np.ndarray,
         a: np.ndarray,
         b: np.ndarray,
-        gpts: Tuple[int, int],
-        sampling: Tuple[float, float],
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
         device: str = "cpu",
         fourier_space: bool = False,
     ):
@@ -126,8 +126,8 @@ class InfinitePotentialProjections(ProjectionIntegratorPlan):
     def build(
         self,
         symbol: str,
-        gpts: Tuple[int, int],
-        sampling: Tuple[float, float],
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
         device: str = "cpu",
     ):
         scattering_factor = self.calculate_scattering_factor(

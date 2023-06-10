@@ -6,7 +6,7 @@ import pytest
 from hypothesis import given, assume
 
 import strategies as abtem_st
-from abtem.core.array import stack, concatenate
+from abtem.array import stack, concatenate
 from abtem.core.axes import OrdinalAxis
 from utils import assert_array_matches_device, gpu, remove_dummy_dimensions, assert_array_matches_laziness
 

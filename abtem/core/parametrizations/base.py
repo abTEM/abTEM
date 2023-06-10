@@ -17,7 +17,7 @@ fourier_space_funcs = "scattering_factor", "projected_scattering_factor"
 class Parametrization(EqualityMixin, metaclass=ABCMeta):
     _functions: dict
 
-    def __init__(self, parameters):
+    def __init__(self, parameters: dict[str, np.ndarray]):
         self._parameters = parameters
 
     @property
@@ -28,10 +28,10 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     def scaled_parameters(self, symbol):
         pass
 
-    def potential(self, symbol, charge:float=0.0):
+    def potential(self, symbol, charge: float = 0.0):
         return self.get_function("potential", symbol, charge)
 
-    def scattering_factor(self, symbol, charge:float=0.0):
+    def scattering_factor(self, symbol, charge: float = 0.0):
         return self.get_function("scattering_factor", symbol, charge)
 
     def projected_potential(self, symbol, charge=0.0):
@@ -102,7 +102,9 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         func = self.get_function(name, symbol)
 
-        ensemble_axes_metadata = [OrdinalAxis(label="", values=(symbol,), _default_type="overlay")]
+        ensemble_axes_metadata = [
+            OrdinalAxis(label="", values=(symbol,), _default_type="overlay")
+        ]
 
         if name in real_space_funcs:
             r = np.arange(sampling, cutoff, sampling)
@@ -121,5 +123,5 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
                 func(k2)[None],
                 sampling=sampling,
                 ensemble_axes_metadata=ensemble_axes_metadata,
-                metadata=metadata
+                metadata=metadata,
             )

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import Union, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import dask.array as da
 import numpy as np
@@ -11,12 +11,12 @@ from ase import Atom, Atoms
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
+from abtem.array import ArrayObject, T
 from abtem.core.axes import ScanAxis, PositionsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.distributions import AxisAlignedDistributionND, BaseDistribution
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
@@ -536,7 +536,7 @@ class LineScan(BaseScan):
         _validate_scan_sampling(self, probe)
 
     @property
-    def extent(self) -> Union[float, None]:
+    def extent(self) -> float | None:
         """Grid extent [Å]."""
         if self._start is None or self._end is None:
             return None
@@ -642,6 +642,14 @@ class LineScan(BaseScan):
     @property
     def ensemble_shape(self):
         return self.shape
+
+    def _out_ensemble_shape(self, array_object) -> tuple[int, ...]:
+        return self.ensemble_shape
+
+    def _out_ensemble_axes_metadata(
+        self, array_object: ArrayObject | T
+    ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
+        return [*self.ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
     @property
     def _default_ensemble_chunks(self):

@@ -1,4 +1,4 @@
-from typing import Tuple
+from __future__ import annotations
 
 import numpy as np
 from scipy.special import erf
@@ -65,8 +65,8 @@ class GaussianScatteringFactors(ProjectionIntegrator):
                           positions: np.ndarray,
                           a: np.ndarray,
                           b: np.ndarray,
-                          gpts: Tuple[int, int],
-                          sampling: Tuple[float, float],
+                          gpts: tuple[int, int],
+                          sampling: tuple[float, float],
                           device: str = 'cpu',
                           fourier_space: bool = False,
                           ) -> np.ndarray:
@@ -140,5 +140,5 @@ class GaussianProjectionIntegrals(ProjectionIntegratorPlan):
                                          correction_scattering_factors,
                                          )
 
-    def build(self, symbol: str, gpts: Tuple[int, int], sampling: Tuple[float, float], device: str = 'cpu'):
+    def build(self, symbol: str, gpts: tuple[int, int], sampling: tuple[float, float], device: str = 'cpu'):
         return self.gaussian_scattering_factors(symbol, gpts, sampling, device=device)

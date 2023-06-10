@@ -1,10 +1,10 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 from __future__ import annotations
+
 import string
 from abc import abstractmethod, ABCMeta
 from collections import defaultdict
-from typing import TYPE_CHECKING, List, Sequence
-from typing import Union, Tuple
+from typing import TYPE_CHECKING, Sequence
 
 import ipywidgets as widgets
 import matplotlib
@@ -309,8 +309,8 @@ def _axes_grid_cols_and_rows(measurements, axes_types):
 
 def _determine_axes_types(
     measurements: "BaseMeasurements",
-    explode: Union[bool, Tuple[bool, ...]],
-    overlay: Union[bool, Tuple[bool, ...]],
+    explode: bool | tuple[bool, ...],
+    overlay: bool | tuple[bool, ...],
 ):
     num_ensemble_axes = len(measurements.ensemble_shape)
 
@@ -356,7 +356,7 @@ def _validate_axes(
     overlay: bool = False,
     cbar: bool = False,
     common_color_scale: bool = False,
-    figsize: Tuple[float, float] = None,
+    figsize: tuple[float, float] = None,
     ioff: bool = False,
     aspect: bool = True,
     sharex: bool = True,
@@ -384,7 +384,7 @@ def _validate_axes(
         else:
             fig = plt.figure(figsize=figsize)
 
-    if ax is None: # and ("explode" in axes_types):
+    if ax is None:  # and ("explode" in axes_types):
 
         ncols, nrows = _axes_grid_cols_and_rows(measurements, axes_types)
 
@@ -398,7 +398,7 @@ def _validate_axes(
             sharex=sharex,
             sharey=sharey,
         )
-    #elif ax is None:
+    # elif ax is None:
     #    ax = fig.add_subplot()
     #    axes = np.array([[ax]])
     else:
@@ -613,7 +613,9 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self._yunits = None
 
         for ax in np.array(self.axes).ravel():
-            ax.ticklabel_format(style='sci', scilimits=(-3, 3), axis='both', useMathText=True)
+            ax.ticklabel_format(
+                style="sci", scilimits=(-3, 3), axis="both", useMathText=True
+            )
 
     @property
     def fig(self):
@@ -654,11 +656,9 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 i if axes_type != "overlay" else slice(None)
                 for i, axes_type in zip(indices, self._axes_types)
             )
-            yield axes_index, indexed_measurements.get_items(
-                indices, keepdims=keepdims
-            )
+            yield axes_index, indexed_measurements.get_items(indices, keepdims=keepdims)
 
-    def set_axes_padding(self, padding: Tuple[float, float] = (0.0, 0.0)):
+    def set_axes_padding(self, padding: tuple[float, float] = (0.0, 0.0)):
         self._axes.set_axes_padding(padding)
 
     def _get_axes_from_axes_types(self, axes_type):
@@ -692,7 +692,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
     def set_column_titles(
         self,
-        titles: Union[str, List[str]] = None,
+        titles: str | list[str] = None,
         pad: float = 10.0,
         format: str = ".3g",
         units: str = None,
@@ -709,7 +709,9 @@ class MeasurementVisualization(metaclass=ABCMeta):
             axes_metadata = indexed_measurements.ensemble_axes_metadata[0]
 
             if hasattr(axes_metadata, "to_nonlinear_axis"):
-                axes_metadata = axes_metadata.to_nonlinear_axis(indexed_measurements.ensemble_shape[0])
+                axes_metadata = axes_metadata.to_nonlinear_axis(
+                    indexed_measurements.ensemble_shape[0]
+                )
 
             titles = []
             for i, axis_metadata in enumerate(axes_metadata):
@@ -790,7 +792,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def _get_default_yunits(self):
         pass
 
-    def set_xunits(self, units=None):
+    def set_xunits(self, units: str = None):
         if units is None:
             self._xunits = self._get_default_xunits()
         else:
@@ -799,7 +801,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self.set_xlabels()
         self.set_xlim()
 
-    def set_yunits(self, units=None):
+    def set_yunits(self, units: str = None):
         if units is None:
             self._yunits = self._get_default_yunits()
         else:
@@ -810,7 +812,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
     def set_row_titles(
         self,
-        titles: Union[str, List[str]] = None,
+        titles: str | list[str] = None,
         pad: float = 0.0,
         format: str = ".3g",
         units: str = None,
@@ -886,9 +888,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         num_ensemble_dims = len(self.measurements.ensemble_shape)
         explode_axes = self._get_axes_from_axes_types("explode")
         overlay_axes = self._get_axes_from_axes_types("overlay")
-        num_indexing_axes = (
-            num_ensemble_dims - len(explode_axes) - len(overlay_axes)
-        )
+        num_indexing_axes = num_ensemble_dims - len(explode_axes) - len(overlay_axes)
 
         if len(indices) > num_indexing_axes:
             raise ValueError
@@ -1030,7 +1030,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         common_scale: bool = False,
         cbar: bool = False,
         explode: bool = False,
-        figsize: Tuple[int, int] = None,
+        figsize: tuple[float, float] = None,
         interact: bool = False,
     ):
         measurements = measurements.compute().to_cpu()
@@ -1210,7 +1210,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
                 cbar.formatter.set_useMathText(True)
                 cbar.ax.yaxis.set_offset_position("left")
 
-    def set_cbar_padding(self, padding: Tuple[float, float] = (0.1, 0.1)):
+    def set_cbar_padding(self, padding: tuple[float, float] = (0.1, 0.1)):
         self._axes.set_cbar_padding(padding)
 
     def set_cbar_size(self, fraction: float):
@@ -1251,7 +1251,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
     def set_sizebars(
         self,
-        axes: Tuple[int, ...] = ((-1, 0),),
+        axes: tuple[int, ...] = ((-1, 0),),
         label="",
         size: float = None,
         loc: str = "lower right",
@@ -1361,7 +1361,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         power: float = 1.0,
         common_scale: bool = False,
         explode: bool = False,
-        figsize: Tuple[int, int] = None,
+        figsize: tuple[float, float] = None,
         interact: bool = False,
     ):
 
@@ -1594,9 +1594,9 @@ class MeasurementVisualization1D(MeasurementVisualization):
         measurements: _BaseMeasurement1D,
         ax: Axes = None,
         common_scale: bool = True,
-        explode: Union[Sequence[str], bool] = False,
-        overlay: Union[Sequence[str], bool] = False,
-        figsize: Tuple[int, int] = None,
+        explode: Sequence[str] | bool = False,
+        overlay: Sequence[str] | bool = False,
+        figsize: tuple[float, float] = None,
         interact: bool = False,
     ):
 
@@ -1617,13 +1617,12 @@ class MeasurementVisualization1D(MeasurementVisualization):
             sharey=common_scale,
         )
 
-
         super().__init__(measurements=measurements, axes=axes, axes_types=axes_types)
 
-        self._x_units = None
-        self._y_units = None
-        self._x_label = None
-        self._y_label = None
+        self._xunits = None
+        self._yunits = None
+        self._xlabel = None
+        self._ylabel = None
         self._column_titles = []
         self._lines = np.array([[]])
         self._common_scale = common_scale
@@ -1664,7 +1663,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         return self.measurements.metadata.get("units", "")
 
     def set_xlim(self):
-        extent = self.measurements._plot_extent(self._x_units)
+        extent = self.measurements._plot_extent(self._xunits)
 
         margin = (extent[1] - extent[0]) * 0.05
         for i, measurement in self.generate_measurements():
@@ -1726,8 +1725,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self._artists = artists
 
     def _get_xdata(self):
-        extent = self.measurements._plot_extent(self._x_units)
-        # conversion = _get_conversion_factor(self._x_units, self._get_default_x_units())
+        extent = self.measurements._plot_extent(self._xunits)
         return np.linspace(
             extent[0],
             extent[1],
@@ -1758,7 +1756,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
     def __init__(
         self,
-        measurements: "IndexedDiffractionPatterns",
+        measurements: IndexedDiffractionPatterns,
         ax: Axes,
         cbar: bool = False,
         cmap: str = None,
@@ -1768,11 +1766,11 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         scale: float = 1.0,
         common_scale: bool = False,
         explode: bool = False,
-        figsize: Tuple[int, int] = None,
+        figsize: tuple[float, float] = None,
         interact: bool = False,
     ):
 
-        measurements = measurements.sort(criterion="intensity")
+        measurements = measurements.sort(criterion="distance")
 
         super().__init__(
             measurements,
@@ -1915,8 +1913,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         for i, measurement in self.generate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
-                _get_conversion_factor(self._xunits, self._get_default_xunits())
-                * x_lim
+                _get_conversion_factor(self._xunits, self._get_default_xunits()) * x_lim
             )
             self.axes[i].set_xlim([-x_lim, x_lim])
 
@@ -1924,8 +1921,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         for i, measurement in self.generate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
-                _get_conversion_factor(self._xunits, self._get_default_xunits())
-                * x_lim
+                _get_conversion_factor(self._xunits, self._get_default_xunits()) * x_lim
             )
             self.axes[i].set_xlim([-x_lim, x_lim])
 
@@ -2172,13 +2168,13 @@ def _merge_positions(positions, plane, tol: float = 1e-7) -> np.ndarray:
 
 def show_atoms(
     atoms: Atoms,
-    plane: Union[Tuple[float, float], str] = "xy",
+    plane: tuple[float, float] | str = "xy",
     ax: Axes = None,
     scale: float = 0.75,
     title: str = None,
     numbering: bool = False,
     show_periodic: bool = False,
-    figsize: Tuple[float, float] = None,
+    figsize: tuple[float, float] = None,
     legend: bool = False,
     merge: float = 1e-2,
     tight_limits: bool = False,

@@ -2,7 +2,7 @@ import hypothesis.strategies as st
 
 from abtem import distributions
 from abtem.transfer import polar_symbols, Aberrations, Aperture, TemporalEnvelope, SpatialEnvelope, CTF
-from abtem.core.transform import CompositeWaveTransform
+from abtem.transform import CompositeArrayObjectTransform
 from . import core as core_st
 from . import scan as scan_st
 
@@ -71,7 +71,7 @@ def composite_wave_transform(draw, allow_distribution=True):
         scan_st.custom_scan(),
     ]
     sampled_wave_transforms = draw(st.lists(st.one_of(wave_transforms), min_size=1, max_size=n))
-    return CompositeWaveTransform(sampled_wave_transforms)
+    return CompositeArrayObjectTransform(sampled_wave_transforms)
 
 
 @st.composite

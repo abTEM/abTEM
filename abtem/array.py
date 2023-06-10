@@ -1,7 +1,6 @@
 from __future__ import annotations
+
 import copy
-import inspect
-import itertools
 import json
 import warnings
 from abc import abstractmethod
@@ -68,7 +67,7 @@ class ComputableList(list):
 
                 computables.append(
                     array.to_zarr(
-                        url, compute=compute, component=f"array{i}", overwrite=overwrite
+                        url, compute=False, component=f"array{i}", overwrite=overwrite
                     )
                 )
                 kwargs = has_array._copy_kwargs(exclude=("array",))
@@ -267,6 +266,11 @@ class ArrayObject(CopyMixin):
     @classmethod
     def from_array_and_metadata(cls, array, axes_metadata, metadata):
         raise NotImplementedError
+
+    def rechunk(self, chunks):
+        array = self._array.rechunk()
+        kwargs = self._copy_kwargs(exclude=("array",))
+        return self.__class__(array, **kwargs)
 
     @property
     def metadata(self):
@@ -731,6 +735,7 @@ class ArrayObject(CopyMixin):
         kwargs = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
 
         kwargs["array"] = xp.squeeze(self.array, axis=squeezed)
+
         kwargs["ensemble_axes_metadata"] = [
             element
             for i, element in enumerate(self.ensemble_axes_metadata)
@@ -961,16 +966,13 @@ class ArrayObject(CopyMixin):
         *args,
         array_object_partial,
         transform_partial,
-        transform_ensemble_shape,
+        num_transform_args,
     ):
-
         transform = transform_partial(
-            *(arg.item() for arg in args[: len(transform_ensemble_shape)])
+            *(arg.item() for arg in args[:num_transform_args])
         )
 
-        ensemble_axes_metadata = [
-            axis.item() for axis in args[len(transform_ensemble_shape) : -1]
-        ]
+        ensemble_axes_metadata = [axis.item() for axis in args[num_transform_args:-1]]
 
         array = args[-1]
         if array.dtype == object:
@@ -982,7 +984,9 @@ class ArrayObject(CopyMixin):
 
         array = transform._calculate_new_array(array_object)
 
-        ensemble_dims = len(transform.ensemble_shape) + len(array_object.ensemble_shape) + 1
+        ensemble_dims = (
+            len(transform.ensemble_shape) + len(array_object.ensemble_shape) + 1
+        )
 
         if transform._num_outputs > 1:
             arr = np.zeros((1,) * ensemble_dims, dtype=object)
@@ -991,9 +995,26 @@ class ArrayObject(CopyMixin):
 
         return array
 
+    @property
+    def _has_base_chunks(self):
+
+        if not isinstance(self.array, da.core.Array):
+            return False
+
+        base_chunks = self.array.chunks[-len(self.base_shape) :]
+        return any(len(c) > 1 for c in base_chunks)
+
+    def no_base_chunks(self):
+        if not self._has_base_chunks:
+            return self
+        chunks = self.array.chunks[: -len(self.base_shape)] + (-1,) * len(
+            self.base_shape
+        )
+        return self.rechunk(chunks)
+
     def apply_transform(
         self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
-    ) -> ArrayObjectTransform | T:
+    ) -> T | ComputableList[T, ...]:
         """
         Transform the wave functions by a given transformation.
 
@@ -1019,14 +1040,18 @@ class ArrayObject(CopyMixin):
             return tuple(val for pair in zip(l1, l2) for val in pair)
 
         if self.is_lazy:
-            if isinstance(max_batch, int):
-                max_batch = max_batch * np.prod(self.base_shape)
+            if not transform._allow_base_chunks and self._has_base_chunks:
+                raise RuntimeError(
+                    f"transform {transform} not implemented for array object with chunks along base axes, compute first"
+                    f"or use the method `.no_base_chunks` to rechunk"
+                )
 
-            in_shape = transform.ensemble_shape + self.shape
+            if isinstance(max_batch, int):
+                max_batch = int(max_batch * np.prod(self.base_shape))
 
             chunks = transform._default_ensemble_chunks + self.array.chunks
             chunks = validate_chunks(
-                in_shape,
+                transform.ensemble_shape + self.shape,
                 chunks,
                 limit=max_batch,
                 dtype=self.dtype,
@@ -1057,11 +1082,25 @@ class ArrayObject(CopyMixin):
 
             array_symbols = _tuple_range(len(self.shape), len(transform.ensemble_shape))
 
+            # if transform._num_outputs > 1:
+            #     chunks = chunks[: len(transform._out_ensemble_shape(self))]
+            #     symbols = _tuple_range(len(transform._out_ensemble_shape(self)))
+            #     meta = transform._out_meta(self)
+            # else:
+            #     symbols = tuple(range(len(transform._out_shape(self))))
+            #     meta = transform._out_meta(self)
+
+            num_ensemble_dims = len(transform._out_ensemble_shape(self))
+
             if transform._num_outputs > 1:
-                chunks = chunks[: len(transform._out_ensemble_shape(self))]
-                symbols = _tuple_range(len(transform._out_ensemble_shape(self)))
+                chunks = chunks[:num_ensemble_dims]
+                symbols = _tuple_range(num_ensemble_dims)
+                meta = np.array((), dtype=object)
             else:
-                symbols = tuple(range(len(transform._out_shape(self))))
+                symbols = _tuple_range(num_ensemble_dims + 2)
+                base_shape = transform._out_base_shape(self)
+                chunks = chunks[:-len(base_shape)] + base_shape
+                meta = transform._out_meta(self)
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Increasing number of chunks")
@@ -1070,244 +1109,26 @@ class ArrayObject(CopyMixin):
                     symbols,
                     *interleave(transform_args, transform_symbols),
                     *interleave(axes_args, axes_symbols),
-                    self.array, array_symbols,
+                    self.array,
+                    array_symbols,
                     # *block_id_blocks,
                     adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                     transform_partial=transform._from_partitioned_args(),
-                    transform_ensemble_shape=transform.ensemble_shape,  # noqa
+                    num_transform_args=len(transform_args),  # noqa
                     array_object_partial=self._from_partitioned_args(),
-                    meta=np.array((), dtype=object),
+                    meta=meta,
                     # meta=transform._out_meta(self),
                     align_arrays=False,
                     concatenate=True,
                 )
 
             if transform._num_outputs > 1:
-                return transform._pack_multiple_outputs(self, new_array)
+                outputs = transform._pack_multiple_outputs(self, new_array)
+                return ComputableList(outputs)
             else:
                 return transform._pack_single_output(self, new_array)
         else:
             return transform.apply(self)
-
-    # def apply_transform(
-    #     self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
-    # ) -> ArrayObjectTransform | T:
-    #     """
-    #     Transform the wave functions by a given transformation.
-    #
-    #     Parameters
-    #     ----------
-    #     transform : ArrayObjectTransform
-    #         The array object transformation to apply.
-    #     max_batch : int, optional
-    #         The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-    #         automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
-    #         "dask.chunk-size-gpu".
-    #
-    #     Returns
-    #     -------
-    #     transformed_array_object : ArrayObjectTransform
-    #         The transformed array object.
-    #     """
-    #
-    #     if self.is_lazy:
-    #         if isinstance(max_batch, int):
-    #             max_batch = max_batch * np.prod(self.base_shape)
-    #
-    #         in_shape = transform.ensemble_shape + self.shape
-    #         out_shape = transform._out_ensemble_shape(self)
-    #         #             + transform._out_base_shape(
-    #         #     self
-    #         # )
-    #
-    #         chunks = transform._default_ensemble_chunks + self.array.chunks
-    #         chunks = validate_chunks(
-    #             in_shape,
-    #             chunks,
-    #             limit=max_batch,
-    #             dtype=self.dtype,
-    #         )
-    #
-    #         chunks = chunks[
-    #             : len(transform.ensemble_shape) + len(self.ensemble_shape)
-    #         ] + transform._out_base_shape(self)
-    #
-    #         transform_blocks = tuple(
-    #             (arg, (i,))
-    #             for i, arg in enumerate(
-    #                 transform._partition_args(chunks[: -len(self.shape)])
-    #             )
-    #         )
-    #         transform_blocks = tuple(itertools.chain(*transform_blocks))
-    #
-    #         axes_blocks = ()
-    #         for i, (axis, c) in enumerate(
-    #             zip(self.ensemble_axes_metadata, self.array.chunks)
-    #         ):
-    #             axes_blocks += (
-    #                 axis._to_blocks(
-    #                     (c,),
-    #                 ),
-    #                 (len(transform.ensemble_shape) + i,),
-    #             )
-    #
-    #         symbols = tuple(range(len(out_shape)))
-    #
-    #         array_blocks = (
-    #             self.array,
-    #             tuple(
-    #                 range(
-    #                     len(transform.ensemble_shape),
-    #                     len(in_shape),
-    #                 )
-    #             ),
-    #         )
-    #
-    #         #print(transform.ensemble_shape)
-    #
-    #         print(out_shape, axes_blocks)
-    #
-    #         #if transform._num_outputs > 1:
-    #             #print(symbols)
-    #             #symbols = symbols[:-2]
-    #         chunks = chunks[:-2]
-    #             #print(symbols, chunks)
-    #             #print(transform_blocks)
-    #
-    #         with warnings.catch_warnings():
-    #             warnings.filterwarnings("ignore", message="Increasing number of chunks")
-    #             new_array = da.blockwise(
-    #                 self._apply_transform,
-    #                 symbols,
-    #                 *transform_blocks,
-    #                 *axes_blocks,
-    #                 *array_blocks,
-    #                 #*block_id_blocks,
-    #                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-    #                 transform_partial=transform._from_partitioned_args(),
-    #                 transform_ensemble_shape=transform.ensemble_shape,  # noqa
-    #                 array_object_partial=self._from_partitioned_args(),
-    #                 meta=transform._out_meta(self),
-    #                 align_arrays=False,
-    #                 concatenate=True
-    #             )
-    #
-    #         return new_array
-    #
-    #         #print(new_array)
-    #         #sss
-    #
-    #         #new_array_object = transform._pack_output(self, new_array)
-    #
-    #         return new_array_object
-    #
-    #         # kwargs = self._copy_kwargs(exclude=("array",))
-    #         # kwargs["array"] = array
-    #         # kwargs["ensemble_axes_metadata"] = (
-    #         #     transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-    #         # )
-    #         # kwargs["metadata"].update(transform.metadata)
-    #         #
-    #         # return self.__class__(**kwargs)
-    #     else:
-    #         return transform.apply(self)
-
-    # def apply_transform(self, transform: ArrayObjectTransform, max_batch: int | str = "auto"):
-    #     """
-    #     Transform the wave functions by a given transformation.
-    #
-    #     Parameters
-    #     ----------
-    #     transform : ArrayObjectTransform
-    #         The array object transformation to apply.
-    #     max_batch : int, optional
-    #         The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-    #         automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
-    #         "dask.chunk-size-gpu".
-    #
-    #     Returns
-    #     -------
-    #     transformed_array_object : ArrayObjectTransform
-    #         The transformed array object.
-    #     """
-    #
-    #     if self.is_lazy:
-    #         if isinstance(max_batch, int):
-    #             max_batch = max_batch * np.prod(self.base_shape)
-    #
-    #         chunks = validate_chunks(
-    #             transform.ensemble_shape + self.shape,
-    #             transform._default_ensemble_chunks
-    #             + tuple(max(chunk) for chunk in self.array.chunks),
-    #             limit=max_batch,
-    #             dtype=np.dtype("complex64"),
-    #         )
-    #
-    #         transform_blocks = tuple(
-    #             (arg, (i,))
-    #             for i, arg in enumerate(
-    #                 transform._partition_args(chunks[: -len(self.shape)])
-    #             )
-    #         )
-    #         transform_blocks = tuple(itertools.chain(*transform_blocks))
-    #
-    #         axes_blocks = ()
-    #         for i, (axis, c) in enumerate(
-    #             zip(self.ensemble_axes_metadata, self.array.chunks)
-    #         ):
-    #             axes_blocks += (
-    #                 axis._to_blocks(
-    #                     (c,),
-    #                 ),
-    #                 (len(transform.ensemble_shape) + i,),
-    #             )
-    #
-    #         symbols = tuple(range(len(transform.ensemble_shape) + len(self.shape)))
-    #
-    #         array_blocks = (
-    #             self.array,
-    #             tuple(
-    #                 range(
-    #                     len(transform.ensemble_shape),
-    #                     len(transform.ensemble_shape) + len(self.shape),
-    #                 )
-    #             ),
-    #         )
-    #
-    #         block_shape = self.array.blocks.shape
-    #
-    #         block_id = np.arange(np.prod(block_shape)).reshape(block_shape)
-    #         block_id_blocks = (da.from_array(block_id, chunks=1), array_blocks[-1])
-    #
-    #         xp = get_array_module(self.device)
-    #
-    #         with warnings.catch_warnings():
-    #             warnings.filterwarnings("ignore", message="Increasing number of chunks")
-    #             array = da.blockwise(
-    #                 self._apply_transform,
-    #                 symbols,
-    #                 *transform_blocks,
-    #                 *axes_blocks,
-    #                 *array_blocks,
-    #                 *block_id_blocks,
-    #                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-    #                 transform_partial=transform._from_partitioned_args(),
-    #                 transform_ensemble_shape=transform.ensemble_shape, # noqa
-    #                 array_object_partial=self._from_partitioned_args(),
-    #                 meta=xp.array((), dtype=self.array.dtype),
-    #                 align_arrays=False,
-    #             )
-    #
-    #         kwargs = self._copy_kwargs(exclude=("array",))
-    #         kwargs["array"] = array
-    #         kwargs["ensemble_axes_metadata"] = (
-    #             transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-    #         )
-    #         kwargs["metadata"].update(transform.metadata)
-    #
-    #         return self.__class__(**kwargs)
-    #     else:
-    #         return transform.apply(self)
 
     def set_ensemble_axes_metadata(self, axes_metadata: AxisMetadata, axis: int):
         """

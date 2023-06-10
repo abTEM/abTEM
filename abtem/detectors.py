@@ -19,8 +19,10 @@ from abtem.measurements import (
     _scanned_measurement_type,
     _polar_detector_bins,
 )
+from abtem.array import T
 from abtem.transform import ArrayObjectTransform
 from abtem.visualize import discrete_cmap
+
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
@@ -111,7 +113,7 @@ class BaseDetector(ArrayObjectTransform):
 
             return xp.array((), dtype=self._out_dtype(waves))
 
-    def detect(self, waves: Waves) -> BaseMeasurements:
+    def detect(self, waves: T) -> T:
         """
         Detect the given waves producing a measurement.
 
@@ -221,16 +223,20 @@ class AnnularDetector(BaseDetector):
 
         return inner, outer
 
-    def _out_base_axes_metadata(self, waves: BaseWaves) -> list[AxisMetadata]:
+    def _out_base_axes_metadata(
+        self, waves: BaseWaves, index: int = 0
+    ) -> list[AxisMetadata]:
         return []
 
-    def _out_base_shape(self, waves: BaseWaves) -> tuple:
+    def _out_base_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
         return ()
 
-    def _out_dtype(self, array_object) -> np.dtype.base:
+    def _out_dtype(self, array_object, index: int = 0) -> np.dtype.base:
         return np.float32
 
-    def _out_type(self, waves: BaseWaves) -> type(RealSpaceLineProfiles) | type(Images):
+    def _out_type(
+        self, waves: BaseWaves, index: int = 0
+    ) -> type(RealSpaceLineProfiles) | type(Images):
         return _scanned_measurement_type(waves)
 
     def _calculate_new_array(self, waves):
@@ -380,26 +386,27 @@ class _AbstractRadialDetector(BaseDetector):
     def _calculate_nbins_azimuthal(self, waves: BaseWaves):
         pass
 
-    def _out_dtype(self, array_object):
+    def _out_dtype(self, waves: Waves, index: bool = 0):
         return np.float32
 
-    def _out_base_shape(self, waves: BaseWaves):
+    def _out_base_shape(self, waves: Waves, index: bool = 0):
         shape = (
             self._calculate_nbins_radial(waves),
             self._calculate_nbins_azimuthal(waves),
         )
+
         return shape
 
-    def _out_type(self, waves: BaseWaves):
+    def _out_type(self, waves: Waves, index: bool = 0):
         return PolarMeasurements
 
-    def _out_metadata(self, waves: BaseWaves) -> dict:
+    def _out_metadata(self, waves: Waves, index: bool = 0) -> dict:
         metadata = super()._out_metadata(waves)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return metadata
 
-    def _out_base_axes_metadata(self, waves: BaseWaves):
+    def _out_base_axes_metadata(self, waves: Waves, index: bool = 0):
         return [
             LinearAxis(
                 label="Radial scattering angle",
@@ -903,14 +910,18 @@ class WavesDetector(BaseDetector):
     def __init__(self, to_cpu: bool = False, url: str = None):
         super().__init__(to_cpu=to_cpu, url=url)
 
-    def _out_type(self, array_object):
+    def _out_type(self, array_object, index: bool = 0):
         from abtem.waves import Waves
 
         return Waves
 
     def _calculate_new_array(self, waves):
+
+        waves = waves.ensure_real_space()
+
         if self.to_cpu:
             waves = waves.to_cpu()
+
         return waves.array
 
     def detect(self, waves: Waves) -> Waves:

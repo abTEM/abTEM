@@ -80,25 +80,35 @@ class BaseTransferFunction(
         kernel : np.ndarray or dask.array.Array
         """
 
-        if waves is not None:
+        if waves is None:
+            device = "cpu"
+        else:
             self.accelerator.match(waves)
             self.grid.match(waves)
+            device = waves.device
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        alpha, phi = self._angular_grid(waves.device)
+        alpha, phi = self._angular_grid(device)
         return self._evaluate_from_angular_grid(alpha, phi)
 
-    def to_diffraction_patterns(self):
+    def to_diffraction_patterns(self, gpts=128, max_angle=None):
         from abtem.measurements import DiffractionPatterns
 
-        array = self._evaluate_kernel()
+        sampling = 1 / (max_angle * 1e-3) / 2 * self.wavelength
+
+        ctf = self.copy()
+        ctf.sampling = sampling
+        ctf.gpts = gpts
+
+        array = ctf._evaluate_kernel()
         diffraction_patterns = DiffractionPatterns(
             array,
-            sampling=self.reciprocal_space_sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            sampling=ctf.reciprocal_space_sampling,
+            ensemble_axes_metadata=ctf.ensemble_axes_metadata,
             fftshift=False,
+            metadata={"energy": self.energy},
         )
         diffraction_patterns = diffraction_patterns.shift_spectrum("center")
         return diffraction_patterns
@@ -319,18 +329,9 @@ class Aperture(BaseAperture):
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
-        # unpacked, _ = _unpack_distributions(
-        #     self.semiangle_cutoff, shape=alpha.shape, xp=xp
-        # )
-        #
-        # (semiangle_cutoff,) = unpacked
         semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
-        #
-        # alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
 
-
-
-        if self.soft:
+        if self.soft and len(alpha.shape) > 1:
             aperture = soft_aperture(
                 alpha, phi, semiangle_cutoff, self.angular_sampling
             )
@@ -721,12 +722,30 @@ class _HasAberrations:
     def _aliases():
         return {
             "defocus": "C10",
-            "astigmatism": "C12",
-            "astigmatism_angle": "phi12",
-            "coma": "C21",
-            "coma_angle": "phi21",
             "Cs": "C30",
             "C5": "C50",
+            "astigmatism": "C12",
+            "astigmatism_angle": "phi12",
+            "astigmatism3": "C32",
+            "astigmatism3_angle": "phi32",
+            "astigmatism5": "C52",
+            "astigmatism5_angle": "phi52",
+            "coma": "C21",
+            "coma_angle": "phi21",
+            "coma4": "C41",
+            "coma4_angle": "phi41",
+            "trefoil": "C23",
+            "trefoil_angle": "phi23",
+            "trefoil4": "C43",
+            "trefoil4_angle": "phi43",
+            "quadrafoil": "C34",
+            "quadrafoil_angle": "phi34",
+            "quadrafoil5": "C54",
+            "quadrafoil5_angle": "phi54",
+            "pentafoil": "C45",
+            "pentafoil_angle": "phi45",
+            "hexafoil": "C56",
+            "hexafoil_angle": "phi56",
         }
 
     def _default_aberration_coefficients(self):
@@ -1431,13 +1450,20 @@ class CTF(_HasAberrations, BaseAperture):
         else:
             return array
 
-    def profiles(self, max_angle: float = None, phi: float = 0.0):
+    def to_point_spread_functions(self, gpts, extent):
+        from abtem.waves import Probe
+
+        return Probe(gpts=gpts, extent=extent, energy=self.energy, aperture=self)
+
+    def profiles(self, gpts: int = 1000, max_angle: float = None, phi: float = 0.0):
         """
         Calculate radial line profiles for each included component (phase aberrations, aperture, temporal and spatial
         envelopes) of the contrast transfer function.
 
         Parameters
         ----------
+        gpts: int
+            Number of grid points along the line profiles.
         max_angle : float
             The maximum scattering angle included in the radial line profiles [mrad]. The default is 1.5 times the
             semiangle cutoff or 50 mrad if no semiangle cutoff is set.
@@ -1455,8 +1481,10 @@ class CTF(_HasAberrations, BaseAperture):
             else:
                 max_angle = self._max_semiangle_cutoff * 1.6
 
-        sampling = max_angle / 1000.0 / 1000.0
-        alpha = np.arange(0, max_angle / 1000.0, sampling).astype(np.float32)
+        self.accelerator.check_is_defined()
+
+        sampling = max_angle / (gpts - 1) / (self.wavelength * 1e3)
+        alpha = np.linspace(0, max_angle * 1e-3, gpts).astype(np.float32)
 
         components = dict()
 

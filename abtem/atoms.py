@@ -1,6 +1,6 @@
 """Module for modifying ASE `Atoms` objects for use in abTEM."""
+from __future__ import annotations
 from numbers import Number
-from typing import Union, Tuple
 
 import numpy as np
 from ase import Atoms
@@ -102,7 +102,7 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
     )
 
 
-def is_cell_orthogonal(cell: Union[Atoms, Cell, np.ndarray], tol: float = 1e-12):
+def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
     """
     Check whether atoms have an orthogonal cell.
 
@@ -276,7 +276,7 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-
 
 def decompose_affine_transform(
     affine_transform: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Decompose an affine transform into rotation, scale and shear.
 
@@ -308,7 +308,7 @@ def decompose_affine_transform(
     return rotation, scale, shear
 
 
-def pretty_print_transform(decomposed: Tuple[np.ndarray, np.ndarray, np.ndarray]):
+def pretty_print_transform(decomposed: tuple[np.ndarray, np.ndarray, np.ndarray]):
     """
     Print a decomposed transformation in an easy-to-read manner.
 
@@ -451,9 +451,7 @@ def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
 
 
 def rotation_matrix_from_plane(
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy"
+    plane: str | tuple[tuple[float, float, float] | tuple[float, float, float]] = "xy"
 ):
     """
     Give the rotation matrix corresponding to a rotation from a given plane to the `xy` plane.
@@ -487,9 +485,7 @@ def rotation_matrix_from_plane(
 
 def rotate_atoms_to_plane(
     atoms: Atoms,
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy",
+    plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
 ) -> Atoms:
     """
     Rotate atoms so that their `xy` plane is rotated into a given plane.
@@ -618,11 +614,9 @@ def orthogonalize_cell(
     max_repetitions: int = 5,
     return_transform: bool = False,
     allow_transform: bool = True,
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy",
-    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-    box: Tuple[float, float, float] = None,
+    plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    box: tuple[float, float, float] = None,
     tolerance: float = 0.01,
 ):
     """
@@ -676,7 +670,7 @@ def orthogonalize_cell(
     """
 
     cell = atoms.cell
-    cell[np.abs(cell) < 1e-6] = 0.
+    cell[np.abs(cell) < 1e-6] = 0.0
     atoms.set_cell(cell)
     atoms.wrap()
 
@@ -720,7 +714,7 @@ def orthogonalize_cell(
 
 def atoms_in_cell(
     atoms: Atoms,
-    margin: Union[float, Tuple[float, float, float]] = 0.0,
+    margin: float | tuple[float, float, float] = 0.0,
 ) -> Atoms:
     """
     Crop atoms outside the cell.
@@ -753,12 +747,10 @@ def atoms_in_cell(
 
 def cut_cell(
     atoms: Atoms,
-    cell: Tuple[float, float, float] = None,
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy",
-    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-    margin: Union[float, Tuple[float, float, float]] = 0.0,
+    cell: tuple[float, float, float] = None,
+    plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    margin: float | tuple[float, float, float] = 0.0,
 ) -> Atoms:
     """
     Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity. If the
@@ -834,7 +826,7 @@ def cut_cell(
 
 def pad_atoms(
     atoms: Atoms,
-    margins: Union[float, Tuple[float, float, float]],
+    margins: float | tuple[float, float, float],
     directions: str = "xyz",
 ) -> Atoms:
     """
