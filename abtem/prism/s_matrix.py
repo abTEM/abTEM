@@ -224,7 +224,7 @@ def _chunks_for_multiple_rechunk_reduce(partitions):
 
     assert sum(chunks_3) == sum(partitions)
     assert (
-        len(chunk_indices_1 + chunk_indices_2 + chunk_indices_3) == len(partitions) - 2
+        len(chunk_indices_1 + chunk_indices_2 + chunk_indices_3) == (len(partitions) - 2)
     )
     return (chunks_1, chunks_2, chunks_3), (
         chunk_indices_1,
@@ -335,7 +335,7 @@ def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_red
         tuple(((cc[0]) * d, (cc[1]) * d) for cc in c)
         for c, d in zip(chunk_ranges(partitions), s_matrix_array.sampling)
     )
-    print(chunk_extents)
+
     scan, scan_chunks = scan._sort_into_extents(chunk_extents)
 
     scans = [(indices, scan) for indices, _, scan in scan.generate_blocks(scan_chunks)]
@@ -1405,7 +1405,7 @@ class SMatrix(BaseSMatrix, Ensemble):
         self.accelerator.check_is_defined()
         dummy_probes = self.dummy_probes()
 
-        aperture = dummy_probes.aperture.evaluate(dummy_probes)
+        aperture = dummy_probes.aperture._evaluate_kernel(dummy_probes)
 
         indices = np.where(aperture > 0.0)
 
@@ -1423,12 +1423,6 @@ class SMatrix(BaseSMatrix, Ensemble):
 
         xp = get_array_module(self.device)
         return xp.asarray([kx, ky]).T
-
-        # xp = np if self.store_on_host else get_array_module(self.device)
-        # wave_vectors = prism_wave_vectors(
-        #     self.semiangle_cutoff, self.extent, self.energy, self.interpolation, xp=xp
-        # )
-        # return wave_vectors  # _validate_wave_vectors(wave_vectors)
 
     @property
     def potential(self) -> BasePotential:

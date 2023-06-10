@@ -180,6 +180,27 @@ class ArrayObjectTransform(Ensemble, CopyMixin):
             *self._out_base_axes_metadata(array_object),
         ]
 
+    def _get_blockwise_args(self, chunks):
+        def _tuple_range(length, offset=0):
+            return tuple(range(offset, offset + length))
+
+        def _arrays_to_symbols(arrays):
+            offset = 0
+            symbols = ()
+            for array in arrays:
+                length = len(array.shape)
+                symbols += (_tuple_range(length=length, offset=offset),)
+                offset += length
+            return symbols
+
+        transform_args = self._partition_args(chunks=chunks)
+        transform_symbols = _arrays_to_symbols(transform_args)
+
+        assert sum(len(args.shape) for args in transform_args) == sum(
+            len(symbols) for symbols in transform_symbols
+        )
+        return transform_args, transform_symbols
+
     @staticmethod
     def _extract(array, index):
         array = array.item()[index]

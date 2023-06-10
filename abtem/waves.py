@@ -1,6 +1,7 @@
 """Module for describing wave functions of the incoming electron beam and the exit wave."""
 from __future__ import annotations
 
+import itertools
 import numbers
 import warnings
 from abc import abstractmethod
@@ -1197,6 +1198,21 @@ class _WavesBuilder(BaseWaves):
         )
 
     @staticmethod
+    def _reduce_output(output):
+
+        squeeze = ()
+        for i, axes_metadata in enumerate(output.ensemble_axes_metadata):
+            if axes_metadata._squeeze:
+                squeeze += (i,)
+
+        output = output.squeeze(squeeze)
+
+        if hasattr(output, "reduce_ensemble"):
+            output = output.reduce_ensemble()
+
+        return output
+
+    @staticmethod
     def _lazy_build(
         *args,
         waves_partial,
@@ -1217,8 +1233,8 @@ class _WavesBuilder(BaseWaves):
     def _lazy_build_transform(self, waves_partial, transform, max_batch):
         from abtem.core.chunks import validate_chunks
 
-        def _tuple_range(length, start=0):
-            return tuple(range(start, start + length))
+        def _tuple_range(length, offset=0):
+            return tuple(range(offset, offset + length))
 
         def interleave(l1, l2):
             return tuple(val for pair in zip(l1, l2) for val in pair)
@@ -1237,13 +1253,7 @@ class _WavesBuilder(BaseWaves):
 
         transform_chunks = chunks[: len(transform.ensemble_shape)]
 
-        transform_args = transform._partition_args(chunks=transform_chunks)
-
-        transform_symbols = tuple(
-            _tuple_range(1, i) for i, args in enumerate(transform_args)
-        )
-
-
+        transform_args, transform_symbols = transform._get_blockwise_args(transform_chunks)
 
         dummy_waves = self._base_waves_partial(lazy=True, reciprocal_space=False)()
 
@@ -1282,9 +1292,12 @@ class _WavesBuilder(BaseWaves):
 
         if transform._num_outputs > 1:
             outputs = transform._pack_multiple_outputs(dummy_waves, new_array)
+            outputs = [self._reduce_output(output) for output in outputs]
             return ComputableList(outputs)
         else:
-            return transform._pack_single_output(dummy_waves, new_array)
+            output = transform._pack_single_output(dummy_waves, new_array)
+            output = self._reduce_output(output)
+            return output
 
 
 class PlaneWave(_WavesBuilder):
@@ -1389,6 +1402,8 @@ class PlaneWave(_WavesBuilder):
         lazy = _validate_lazy(lazy)
 
         transform = self._get_transforms(potential=potential, detectors=detectors)
+
+        print(transform.transforms)
 
         waves_partial = self._base_waves_partial(
             lazy=False, reciprocal_space=False, normalize=self.normalize
@@ -1711,23 +1726,13 @@ class Probe(_WavesBuilder):
         else:
             waves = waves_partial()
             measurements = transform.apply(waves)
+        #
+        # if not isinstance(scan, BaseScan):
+        #     squeeze = (-3,)
+        # else:
+        #     squeeze = ()
 
-        def _reduce_output(measurement, squeeze):
-            measurement = measurement.squeeze(squeeze)
-            if hasattr(measurement, "reduce_ensemble"):
-                measurement = measurement.reduce_ensemble()
-
-            return measurement
-
-        if not isinstance(scan, BaseScan):
-            squeeze = (-3,)
-        else:
-            squeeze = ()
-
-        if transform._num_outputs > 1:
-            return ComputableList([_reduce_output(measurement, squeeze) for measurement in measurements])
-        else:
-            return _reduce_output(measurements, squeeze)
+        return measurements
 
     def build(
         self,

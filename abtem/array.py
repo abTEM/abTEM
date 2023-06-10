@@ -1033,8 +1033,8 @@ class ArrayObject(CopyMixin):
             The transformed array object.
         """
 
-        def _tuple_range(length, start=0):
-            return tuple(range(start, start + length))
+        def _tuple_range(length, offset=0):
+            return tuple(range(offset, offset + length))
 
         def interleave(l1, l2):
             return tuple(val for pair in zip(l1, l2) for val in pair)
@@ -1060,13 +1060,8 @@ class ArrayObject(CopyMixin):
 
             transform_chunks = chunks[: len(transform.ensemble_shape)]
             array_ensemble_chunks = self.array.chunks[: len(self.ensemble_shape)]
-            ensemble_chunks = chunks[: len(transform._out_ensemble_shape(self))]
 
-            transform_args = transform._partition_args(chunks=transform_chunks)
-
-            transform_symbols = tuple(
-                _tuple_range(1, i) for i, args in enumerate(transform_args)
-            )
+            transform_args, transform_symbols = transform._get_blockwise_args(transform_chunks)
 
             axes_args = tuple(
                 axis._to_blocks(
@@ -1076,19 +1071,11 @@ class ArrayObject(CopyMixin):
             )
 
             axes_symbols = tuple(
-                _tuple_range(1, i + len(transform_args))
+                _tuple_range(length=1, offset=i + len(transform.ensemble_shape))
                 for i, args in enumerate(axes_args)
             )
 
             array_symbols = _tuple_range(len(self.shape), len(transform.ensemble_shape))
-
-            # if transform._num_outputs > 1:
-            #     chunks = chunks[: len(transform._out_ensemble_shape(self))]
-            #     symbols = _tuple_range(len(transform._out_ensemble_shape(self)))
-            #     meta = transform._out_meta(self)
-            # else:
-            #     symbols = tuple(range(len(transform._out_shape(self))))
-            #     meta = transform._out_meta(self)
 
             num_ensemble_dims = len(transform._out_ensemble_shape(self))
 
@@ -1099,7 +1086,7 @@ class ArrayObject(CopyMixin):
             else:
                 symbols = _tuple_range(num_ensemble_dims + 2)
                 base_shape = transform._out_base_shape(self)
-                chunks = chunks[:-len(base_shape)] + base_shape
+                chunks = chunks[: -len(base_shape)] + base_shape
                 meta = transform._out_meta(self)
 
             with warnings.catch_warnings():
@@ -1111,13 +1098,11 @@ class ArrayObject(CopyMixin):
                     *interleave(axes_args, axes_symbols),
                     self.array,
                     array_symbols,
-                    # *block_id_blocks,
                     adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                     transform_partial=transform._from_partitioned_args(),
                     num_transform_args=len(transform_args),  # noqa
                     array_object_partial=self._from_partitioned_args(),
                     meta=meta,
-                    # meta=transform._out_meta(self),
                     align_arrays=False,
                     concatenate=True,
                 )

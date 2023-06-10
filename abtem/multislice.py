@@ -621,31 +621,27 @@ class MultisliceTransform(ArrayObjectTransform):
     def _default_ensemble_chunks(self):
         chunks = self._potential._default_ensemble_chunks
         num_exit_planes = len(self._potential.exit_planes)
-
-        if num_exit_planes > 1:
-            chunks = chunks + (num_exit_planes,)
-
+        chunks = chunks + (num_exit_planes,)
         return chunks
 
     @property
     def ensemble_axes_metadata(self):
         ensemble_axes_metadata = self.potential.ensemble_axes_metadata
+        exit_planes_metadata = self.potential._get_exit_planes_axes_metadata()
 
-        if len(self.potential.exit_planes) > 1:
-            ensemble_axes_metadata = [
-                *ensemble_axes_metadata,
-                self.potential._get_exit_planes_axes_metadata(),
-            ]
+        if len(self.potential.exit_planes) == 1:
+            exit_planes_metadata._squeeze = True
 
+        ensemble_axes_metadata = [
+            *ensemble_axes_metadata,
+            exit_planes_metadata,
+        ]
         return ensemble_axes_metadata
 
     @property
     def ensemble_shape(self):
         ensemble_shape = self._potential.ensemble_shape
-
-        if len(self._potential.exit_planes) > 1:
-            ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
-
+        ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
         return ensemble_shape
 
     def _out_metadata(self, waves, index: bool = 0):
@@ -667,12 +663,12 @@ class MultisliceTransform(ArrayObjectTransform):
         return self.detectors[index]._out_base_axes_metadata(waves)
 
     def _partition_args(self, chunks=1, lazy: bool = True):
-        chunks = validate_chunks(self.ensemble_shape, chunks)
+        chunks = validate_chunks(self.ensemble_shape, chunks)[:-1]
+        args = self._potential._partition_args(chunks=chunks, lazy=lazy)
+        if len(self._potential.exit_planes) == 1 and self._potential.ensemble_shape:
+            args = (args[0][..., None],)
 
-        if self._potential.num_exit_planes > 1:
-            chunks = chunks[:-1]
-
-        return self._potential._partition_args(chunks=chunks, lazy=lazy)
+        return args
 
     @staticmethod
     def _multislice_transform_member(*args, potential_partial, **kwargs):
@@ -698,7 +694,12 @@ class MultisliceTransform(ArrayObjectTransform):
             transpose=self.transpose,
         )
 
-        arrays = tuple(measurement.array for measurement in measurements)
+        if self._potential.num_exit_planes == 1:
+            index = (*((slice(None),) * (len(self.ensemble_shape) - 1)), None)
+        else:
+            index = ()
+
+        arrays = tuple(measurement.array[index] for measurement in measurements)
 
         if len(arrays) == 1:
             arrays = arrays[0]

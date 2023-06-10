@@ -85,11 +85,12 @@ def format_title(
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     _concatenate: bool = True
-    #_events: bool = False
     label: str = ""
     _tex_label: str = None
     _default_type: str = None
     units: str = None
+    _ensemble_mean: bool = False
+    _squeeze: bool = False
 
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
@@ -158,7 +159,7 @@ class LinearAxis(AxisMetadata):
     sampling: float = 1.0
     units: str = ""
     offset: float = 0.0
-    _ensemble_mean: bool = False
+
 
     def format_coordinates(self, n: int = None) -> str:
         coordinates = self.coordinates(n)
@@ -319,7 +320,6 @@ class AxisAlignedTiltAxis(NonLinearAxis):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class WaveVectorAxis(OrdinalAxis):
     units: str = "1/Å"
-    _ensemble_mean: bool = False
 
     def format_title(self, formatting, include_label: bool = True, **kwargs):
         return format_title(self, formatting, units=None, include_label=include_label)
@@ -328,7 +328,6 @@ class WaveVectorAxis(OrdinalAxis):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class TiltAxis(OrdinalAxis):
     units: str = "mrad"
-    _ensemble_mean: bool = False
 
     @property
     def tilt(self):
@@ -347,7 +346,6 @@ class ThicknessAxis(NonLinearAxis):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ParameterAxis(NonLinearAxis):
     label: str = ""
-    _ensemble_mean: bool = False
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -368,7 +366,6 @@ class PositionsAxis(OrdinalAxis):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class FrozenPhononsAxis(AxisMetadata):
     label: str = "Frozen phonons"
-    _ensemble_mean: bool = False
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

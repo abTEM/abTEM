@@ -132,55 +132,6 @@ class BaseScan(ReciprocalSpaceMultiplication):
 
         return kernel
 
-    # def evaluate(self, waves: Waves) -> np.ndarray:
-    #     """
-    #     Evaluate the array to be multiplied with the waves in reciprocal space.
-    #
-    #     Parameters
-    #     ----------
-    #     waves : Waves, optional
-    #         If given, the array will be evaluated to match the provided waves.
-    #
-    #     Returns
-    #     -------
-    #     kernel : np.ndarray or dask.array.Array
-    #     """
-    #     device = validate_device(waves.device)
-    #     xp = get_array_module(device)
-    #
-    #     waves.grid.check_is_defined()
-    #
-    #     positions = xp.asarray(self.get_positions()) / xp.asarray(
-    #         waves.sampling
-    #     ).astype(np.float32)
-    #
-    #     kernel = fft_shift_kernel(positions, shape=waves.gpts)
-    #
-    #     try:
-    #         kernel *= self._get_weights()[..., None, None]
-    #     except NotImplementedError:
-    #         pass
-    #
-    #     return kernel
-
-    # def apply(self, waves: Waves, in_place: bool = False) -> "Waves":
-    #     """
-    #     Shift the waves by convolving them with a phase term in reciprocal space.
-    #
-    #     Parameters
-    #     ----------
-    #     waves : Waves
-    #         The waves to shift.
-    #     in_place : bool, optional
-    #         If True, the array representing the waves may be modified in-place.
-    #     Returns
-    #     -------
-    #     shifted_waves : Waves
-    #     """
-    #     array = self.evaluate(waves)
-    #     axes_metadata = self.ensemble_axes_metadata
-    #     return waves.convolve(array, axes_metadata, in_place=in_place)
-
 #
 # class SourceDistribution(BaseScan):
 #     """
@@ -277,7 +228,8 @@ class CustomScan(BaseScan):
                 values=tuple(
                     (float(position[0]), float(position[1]))
                     for position in self.positions
-                )
+                ),
+                _squeeze=True,
             )
         ]
 
