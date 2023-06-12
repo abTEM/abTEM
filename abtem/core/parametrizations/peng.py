@@ -42,7 +42,7 @@ class PengParametrization(Parametrization):
                   }
 
     def __init__(self):
-        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng.json'), 'r') as f:
+        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng_high.json'), 'r') as f:
             parameters = json.load(f)
 
         with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng_ionic.json'), 'r') as f:

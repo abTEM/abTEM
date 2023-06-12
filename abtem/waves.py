@@ -224,7 +224,7 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin, CopyMixin, EqualityMixin):
         if angle is None or angle == "full":
             return self.gpts
 
-        elif isinstance(angle, (numbers.Number, float)):
+        elif np.isscalar(angle):
             gpts = (
                 int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
                 int(2 * np.ceil(angle / self.angular_sampling[1])) + 1,
@@ -291,9 +291,6 @@ class _WaveRenormalization(EmptyEnsemble, ArrayObjectTransform):
     ) -> np.ndarray | tuple[np.ndarray, ...]:
         array = array_object.normalize().array
         return array
-
-    # def apply(self, waves, in_place: bool = False):
-    #     return
 
 
 class Waves(BaseWaves, ArrayObject):
@@ -771,7 +768,8 @@ class Waves(BaseWaves, ArrayObject):
 
     def diffraction_patterns(
         self,
-        max_angle: str | float = "cutoff",
+        max_angle: str | float = None,
+        max_frequency: str | float = None,
         block_direct: bool | float = False,
         fftshift: bool = True,
         parity: str = "odd",
@@ -840,6 +838,14 @@ class Waves(BaseWaves, ArrayObject):
             return array
 
         xp = get_array_module(self.array)
+
+        if max_angle is None and max_frequency is None:
+            max_angle = "cutoff"
+        elif max_angle is None:
+            max_angle = max_frequency / (self.wavelength * 1e3)
+        elif (max_angle is not None) and (max_frequency is not None):
+            raise ValueError()
+
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
 
         metadata = copy(self.metadata)
@@ -928,22 +934,6 @@ class Waves(BaseWaves, ArrayObject):
 
         return self.apply_transform(ctf, max_batch=max_batch)
 
-    @staticmethod
-    def _lazy_multislice(*args, waves_partial, potential_partial, **kwargs):
-
-        potential = potential_partial(*(arg.item() for arg in args[:1]))
-        ensemble_axes_metadata = [axis.item() for axis in args[1:-1]]
-
-        waves = waves_partial(*args[-1:], ensemble_axes_metadata=ensemble_axes_metadata)
-
-        measurements = waves.multislice(potential, **kwargs)
-        measurements = (
-            (measurements,) if hasattr(measurements, "array") else measurements
-        )
-        arr = np.zeros((1,) * (len(args) - 1), dtype=object)
-        arr.itemset(measurements)
-        return arr
-
     def multislice(
         self,
         potential: BasePotential,
@@ -974,7 +964,9 @@ class Waves(BaseWaves, ArrayObject):
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
 
-        multislice = MultisliceTransform()
+        multislice_transform = MultisliceTransform(potential=potential, detectors=detectors)
+
+        return self.apply_transform(transform=multislice_transform)
 
         # potential = _validate_potential(potential, self)
         # detectors = _validate_detectors(detectors)
@@ -1290,6 +1282,7 @@ class _WavesBuilder(BaseWaves):
                 concatenate=True,
             )
 
+
         if transform._num_outputs > 1:
             outputs = transform._pack_multiple_outputs(dummy_waves, new_array)
             outputs = [self._reduce_output(output) for output in outputs]
@@ -1403,8 +1396,6 @@ class PlaneWave(_WavesBuilder):
 
         transform = self._get_transforms(potential=potential, detectors=detectors)
 
-        print(transform.transforms)
-
         waves_partial = self._base_waves_partial(
             lazy=False, reciprocal_space=False, normalize=self.normalize
         )
@@ -1489,39 +1480,6 @@ class PlaneWave(_WavesBuilder):
         return self._build(
             potential=potential, detectors=detectors, lazy=lazy, max_batch=max_batch
         )
-        #
-        # potential = _validate_potential(potential)
-        # lazy = _validate_lazy(lazy)
-        # detectors = _validate_detectors(detectors)
-        #
-        # self.grid.match(potential)
-        # self.grid.check_is_defined()
-        # self.accelerator.check_is_defined()
-        #
-        # if transition_potentials:
-        #     multislice_func = partial(
-        #         transition_potential_multislice_and_detect,
-        #         transition_potentials=transition_potentials,
-        #         ctf=ctf,
-        #     )
-        # else:
-        #     multislice_func = multislice_and_detect
-        #
-        # if lazy:
-        #     measurements = self._lazy_build_multislice_detect(
-        #         detectors=detectors,
-        #         max_batch=max_batch,
-        #         potential=potential,
-        #         multislice_func=multislice_func,
-        #     )
-        #     measurements = _wrap_measurements(measurements)
-        # else:
-        #     waves = self.build(lazy=False)
-        #     measurements = waves.multislice(
-        #         potential=potential, detectors=detectors
-        #     )  ##multislice_func(waves, )
-        #
-        # return measurements
 
 
 class Probe(_WavesBuilder):
@@ -1718,7 +1676,6 @@ class Probe(_WavesBuilder):
             lazy=False, reciprocal_space=True, normalize=False
         )
 
-
         if lazy:
             measurements = self._lazy_build_transform(
                 waves_partial, transform=transform, max_batch=max_batch
@@ -1726,11 +1683,6 @@ class Probe(_WavesBuilder):
         else:
             waves = waves_partial()
             measurements = transform.apply(waves)
-        #
-        # if not isinstance(scan, BaseScan):
-        #     squeeze = (-3,)
-        # else:
-        #     squeeze = ()
 
         return measurements
 

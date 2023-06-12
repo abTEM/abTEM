@@ -49,7 +49,7 @@ from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     _validate_seeds,
-    MDFrozenPhonons,
+    AtomsEnsemble,
 )
 from abtem.measurements import Images
 from abtem.slicing import (
@@ -580,7 +580,7 @@ class Potential(_PotentialBuilder):
         if not hasattr(atoms, "randomize"):
 
             if isinstance(atoms, (list, tuple)):
-                self._frozen_phonons = MDFrozenPhonons(atoms)
+                self._frozen_phonons = AtomsEnsemble(atoms)
             elif isinstance(atoms, Atoms):
                 self._frozen_phonons = DummyFrozenPhonons(atoms)
             else:
@@ -615,7 +615,7 @@ class Potential(_PotentialBuilder):
         super().__init__(
             gpts=gpts,
             sampling=sampling,
-            cell=self._frozen_phonons.atoms.cell,
+            cell=self._frozen_phonons.cell,
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
             device=device,

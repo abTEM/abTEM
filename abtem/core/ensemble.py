@@ -110,6 +110,7 @@ class Ensemble(metaclass=ABCMeta):
         """
 
         chunks = self._validate_chunks(chunks)
+
         blocks = self._partition_args(chunks=chunks, lazy=False)
 
         for block_indices, start_stop in zip(

@@ -23,7 +23,7 @@ from abtem.measurements import (
     IndexedDiffractionPatterns
 )
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
-from abtem.inelastic.phonons import FrozenPhonons, MDFrozenPhonons
+from abtem.inelastic.phonons import FrozenPhonons, AtomsEnsemble
 from abtem.potentials.iam import Potential, CrystalPotential, PotentialArray
 from abtem.scan import CustomScan, LineScan, GridScan
 from abtem.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope

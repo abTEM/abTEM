@@ -1763,7 +1763,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         vmin: float = None,
         vmax: float = None,
         power: float = 1.0,
-        scale: float = 1.0,
+        scale: float = .1,
         common_scale: bool = False,
         explode: bool = False,
         figsize: tuple[float, float] = None,
@@ -1782,11 +1782,13 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             interact=interact,
         )
 
-        positions = measurements.positions[:, :2]
+        #positions = measurements.positions[:, :2]
 
-        self._scale = (
-            np.sqrt(np.min(squareform(distance_matrix(positions, positions)))) * scale
-        )
+        self._scale = scale
+
+        # (
+        #     np.sqrt(np.min(squareform(distance_matrix(positions, positions)))) * scale
+        # )
 
         if cmap is None:
             cmap = config.get("visualize.cmap", "viridis")

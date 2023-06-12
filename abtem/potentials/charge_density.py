@@ -13,7 +13,7 @@ from abtem.core.backend import copy_to_device
 from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.core.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, _PotentialBuilder
-from abtem.inelastic.phonons import MDFrozenPhonons, DummyFrozenPhonons
+from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.atoms import plane_to_axes
 from abtem.core.constants import eps0
 
@@ -317,7 +317,7 @@ class ChargeDensityPotential(_PotentialBuilder):
 
     def __init__(
         self,
-        atoms: Union[Atoms, MDFrozenPhonons],
+        atoms: Union[Atoms, AtomsEnsemble],
         charge_density: np.ndarray = None,
         gpts: Union[int, Tuple[int, int]] = None,
         sampling: Union[float, Tuple[float, float]] = None,

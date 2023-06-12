@@ -665,9 +665,8 @@ class MultisliceTransform(ArrayObjectTransform):
     def _partition_args(self, chunks=1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)[:-1]
         args = self._potential._partition_args(chunks=chunks, lazy=lazy)
-        if len(self._potential.exit_planes) == 1 and self._potential.ensemble_shape:
-            args = (args[0][..., None],)
-
+        #if len(self._potential.exit_planes) == 1 and self._potential.ensemble_shape:
+        args = (args[0][..., None],)
         return args
 
     @staticmethod

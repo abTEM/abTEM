@@ -1,9 +1,10 @@
 """Module to describe the effect of temperature on the atomic positions."""
+from __future__ import annotations
 
 from abc import abstractmethod, ABCMeta
 from functools import partial
 from numbers import Number
-from typing import Mapping, Union, Sequence, List, Iterable, Tuple
+from typing import Sequence, Iterable
 
 import dask
 import dask.array as da
@@ -13,16 +14,16 @@ from ase import data
 from ase.cell import Cell
 from ase.data import chemical_symbols
 from ase.io import read
+from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
 
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble
 from abtem.core.utils import CopyMixin, EqualityMixin
-from ase.io.trajectory import read_atoms
 
 try:
-    from gpaw.io import Reader
+    from gpaw.io import Reader # noqa
 except:
     Reader = None
 
@@ -69,13 +70,19 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def cell(self) -> Cell:
         return self._cell
 
-    def _validate_atomic_numbers_and_cell(self, atoms, atomic_numbers, cell):
+    @staticmethod
+    def _validate_atomic_numbers_and_cell(atoms: Atoms | Delayed, atomic_numbers, cell):
         if isinstance(atoms, Delayed) and (atomic_numbers is None or cell is None):
             atoms = atoms.compute()
-            # raise ValueError()
 
         if cell is None:
             cell = atoms.cell.copy()
+        else:
+            if not isinstance(cell, Cell):
+                cell = Cell(cell)
+            print(atoms.cell, cell)
+            if not np.allclose(atoms.cell.array, cell.array):
+                raise RuntimeError("cell of provided Atoms did not match provided cell")
 
         if atomic_numbers is None:
             atomic_numbers = np.unique(atoms.numbers)
@@ -86,7 +93,7 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def atoms(self) -> Union[Atoms, Delayed]:
+    def atoms(self) -> Atoms | Delayed:
         pass
 
     @abstractmethod
@@ -107,7 +114,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
     def __init__(
         self,
-        atoms: Union[Atoms, Delayed],
+        atoms: Atoms | Delayed,
         num_configs: int = None,
     ):
 
@@ -118,6 +125,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
     @property
     def num_configs(self):
+        """Number of atomic configurations."""
         return self._num_configs
 
     @property
@@ -135,13 +143,13 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
             return (1,)
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         if self._num_configs is None:
             return []
         else:
             return [FrozenPhononsAxis(_ensemble_mean=self.ensemble_mean)]
 
-    def randomize(self, atoms):
+    def randomize(self, atoms: Atoms) -> Atoms:
         return atoms
 
     @property
@@ -184,8 +192,8 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
 
 def _validate_seeds(
-    seeds: Union[int, Tuple[int, ...], None], num_seeds: int = None
-) -> Tuple[int, ...]:
+    seeds: int | tuple[int, ...] | None, num_seeds: int = None
+) -> tuple[int, ...]:
     if seeds is None or np.isscalar(seeds):
         if num_seeds is None:
             raise ValueError("Provide `num_configs` or a seed for each configuration.")
@@ -227,7 +235,7 @@ class FrozenPhonons(BaseFrozenPhonons):
     ensemble_mean : bool, optional
         If True (default), the mean of the ensemble of results from a multislice simulation is calculated, otherwise,
         the result of every frozen phonon configuration is returned.
-    seeds : int or sequence of int
+    seed : int or sequence of int
         Seed(s) for the random number generator used to generate the displacements, or one seed for each configuration in
          the frozen phonon ensemble.
     """
@@ -236,10 +244,10 @@ class FrozenPhonons(BaseFrozenPhonons):
         self,
         atoms: Atoms,
         num_configs: int,
-        sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
+        sigmas: float | dict[str | int, float] | Sequence[float],
         directions: str = "xyz",
         ensemble_mean: bool = True,
-        seeds: Union[int, Tuple[int, ...]] = None,
+        seed: int | tuple[int, ...] = None,
     ):
 
         if isinstance(sigmas, dict):
@@ -280,7 +288,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         self._sigmas = sigmas
         self._directions = directions
 
-        self._seeds = _validate_seeds(seeds, num_seeds=num_configs)
+        self._seed = _validate_seeds(seed, num_seeds=num_configs)
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -295,23 +303,23 @@ class FrozenPhonons(BaseFrozenPhonons):
         return (1,)
 
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return [FrozenPhononsAxis(_ensemble_mean=self.ensemble_mean)]
 
     @property
     def num_configs(self) -> int:
-        return len(self._seeds)
+        return len(self._seed)
 
     @property
-    def seeds(self) -> Tuple[int, ...]:
-        return self._seeds
+    def seed(self) -> tuple[int, ...]:
+        return self._seed
 
     @property
-    def sigmas(self) -> Union[Mapping[Union[str, int], float], np.ndarray]:
+    def sigmas(self) -> np.ndarray:
         return self._sigmas
 
     @property
-    def atoms(self) -> Union[Atoms, Delayed]:
+    def atoms(self) -> Atoms | Delayed:
         return self._atoms
 
     @property
@@ -322,7 +330,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         return self.num_configs
 
     @property
-    def axes(self) -> List[int]:
+    def axes(self) -> list[int]:
         axes = []
         for direction in list(set(self._directions.lower())):
             if direction == "x":
@@ -338,7 +346,7 @@ class FrozenPhonons(BaseFrozenPhonons):
     def randomize(self, atoms: Atoms) -> Atoms:
         sigmas = self.sigmas
 
-        if isinstance(sigmas, Mapping):
+        if isinstance(sigmas, dict):
             temp = np.zeros(len(atoms.numbers), dtype=np.float32)
             for unique in np.unique(atoms.numbers):
                 temp[atoms.numbers == unique] = np.float32(
@@ -351,7 +359,7 @@ class FrozenPhonons(BaseFrozenPhonons):
 
         atoms = atoms.copy()
 
-        rng = np.random.default_rng(self.seeds[0])
+        rng = np.random.default_rng(self.seed[0])
         r = rng.normal(size=(len(atoms), 3)) / np.sqrt(3)
 
         for axis in self.axes:
@@ -366,18 +374,18 @@ class FrozenPhonons(BaseFrozenPhonons):
             args = args.item()
 
         kwargs["atoms"] = args["atoms"]
-        kwargs["seeds"] = args["seeds"]
+        kwargs["seed"] = args["seed"]
         kwargs["num_configs"] = args["num_configs"]
         return cls(**kwargs)
 
     def _from_partitioned_args(self):
-        kwargs = self._copy_kwargs(exclude=("atoms", "seeds", "num_configs"))
+        kwargs = self._copy_kwargs(exclude=("atoms", "seed", "num_configs"))
         return partial(self._from_partitioned_args_func, **kwargs)
 
     @staticmethod
     def _frozen_phonon(atoms, seeds):
         arr = np.zeros((1,), dtype=object)
-        arr.itemset(0, {"atoms": atoms, "seeds": seeds, "num_configs": len(seeds)})
+        arr.itemset(0, {"atoms": atoms, "seed": seeds, "num_configs": len(seeds)})
         return arr
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
@@ -390,7 +398,7 @@ class FrozenPhonons(BaseFrozenPhonons):
 
         array = np.zeros((len(chunks[0]),), dtype=object)
         for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-            seeds = self.seeds[start:stop]
+            seeds = self.seed[start:stop]
 
             if lazy:
                 with dask.annotate(priority=-i * 10 - 10):
@@ -409,16 +417,23 @@ class FrozenPhonons(BaseFrozenPhonons):
 
         return (array,)
 
-    def to_md_frozen_phonons(self):
+    def to_atoms_ensemble(self):
+        """
+        Convert the frozen phonons to an ensemble of atoms.
+
+        Returns
+        -------
+        atoms_ensemble : AtomsEnsemble
+        """
         trajectory = []
-        for b in self.generate_blocks(1):
-            trajectory.append(b[-1].randomize(b[-1].atoms))
-        return MDFrozenPhonons(trajectory)
+        for block in self.generate_blocks(1):
+            trajectory.append(block[-1].randomize(block[-1].atoms))
+        return AtomsEnsemble(trajectory)
 
 
-class MDFrozenPhonons(BaseFrozenPhonons):
+class AtomsEnsemble(BaseFrozenPhonons):
     """
-    Frozen phonons based on a molecular dynamics simulation..
+    Frozen phonons based on a molecular dynamics simulation.
 
     Parameters
     ----------
@@ -433,6 +448,8 @@ class MDFrozenPhonons(BaseFrozenPhonons):
         self,
         trajectory: Sequence[Atoms],
         ensemble_mean: bool = True,
+        cell:Cell=None,
+        ensemble_axes_metadata:list[AxisMetadata]=None
     ):
 
         if isinstance(trajectory, Atoms):
@@ -446,18 +463,23 @@ class MDFrozenPhonons(BaseFrozenPhonons):
                 trajectory = [_safe_read_atoms(path) for path in trajectory]
 
         self._trajectory = trajectory
-
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
-            trajectory[0], None, None
+            trajectory[0], None, cell
         )
+
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
         )
 
+        if ensemble_axes_metadata is None:
+            ensemble_axes_metadata = FrozenPhononsAxis(_ensemble_mean=ensemble_mean)
+        self._ensemble_axes_metadata = [ensemble_axes_metadata]
+
+
     @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        return [FrozenPhononsAxis(_ensemble_mean=self.ensemble_mean)]
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        return self._ensemble_axes_metadata
 
     def __len__(self) -> int:
         return len(self._trajectory)
@@ -467,11 +489,11 @@ class MDFrozenPhonons(BaseFrozenPhonons):
         return self._trajectory[0]
 
     @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
+    def ensemble_shape(self) -> tuple[int, ...]:
         return (len(self),)
 
     @property
-    def _default_ensemble_chunks(self) -> Tuple[int, ...]:
+    def _default_ensemble_chunks(self) -> tuple[int, ...]:
         return (1,)
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
@@ -489,14 +511,14 @@ class MDFrozenPhonons(BaseFrozenPhonons):
             trajectory = self._trajectory[start:stop]
 
             if lazy:
-                with dask.annotate(priority=-i * 10 - 10):
-                    atoms = dask.delayed(lambda *args: list(args))(*trajectory)
+                atoms = dask.delayed(lambda *args: list(args))(*trajectory)
 
-                    delayed_frozen_phonon = dask.delayed(md_frozen_phonons)(atoms=atoms)
+                delayed_frozen_phonon = dask.delayed(md_frozen_phonons)(atoms=atoms)
 
-                    array.itemset(
-                        i, da.from_delayed(delayed_frozen_phonon, shape=(1,), dtype=object)
-                    )
+                array.itemset(
+                    i,
+                    da.from_delayed(delayed_frozen_phonon, shape=(1,), dtype=object),
+                )
             else:
                 trajectory = [
                     atoms.compute() if hasattr(atoms, "compute") else atoms
@@ -513,9 +535,10 @@ class MDFrozenPhonons(BaseFrozenPhonons):
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("trajectory",))
-        return partial(MDFrozenPhonons, **kwargs)
+        kwargs["cell"] = self.cell.array
+        return partial(AtomsEnsemble, **kwargs)
 
-    def randomize(self, atoms):
+    def randomize(self, atoms: Atoms) -> Atoms:
         return atoms
 
     def standard_deviations(self) -> np.ndarray:

@@ -642,9 +642,8 @@ class ArrayObject(CopyMixin):
         last_indexed = 0
         for i, item in enumerate(items):
             last_indexed += 1
-
             if isinstance(item, Number):
-                metadata = {**metadata, **expanded_axes_metadata[i].item_metadata(0)}
+                metadata = {**metadata, **expanded_axes_metadata[i].item_metadata(item)}
             else:
 
                 axes_metadata += [expanded_axes_metadata[i][item].copy()]

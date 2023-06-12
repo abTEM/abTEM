@@ -495,6 +495,10 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             for i, axis in enumerate(self.axes_metadata)
             if hasattr(axis, "_ensemble_mean") and axis._ensemble_mean
         )
+
+        if len(axis) == 0:
+            return self
+
         return self.mean(axis=axis)
 
     def _apply_element_wise_func(self, func: callable) -> "T":
@@ -2146,6 +2150,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         min_distance: float = 0.0,
         integration_radius: float = 0.0,
         max_index: int = None,
+            centering:str="P",
     ) -> "IndexedDiffractionPatterns":
 
         """
@@ -2186,6 +2191,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             min_distance=min_distance,
             integration_radius=integration_radius,
             max_index=max_index,
+            centering=centering,
         )
 
         ensemble_axes_metadata = self.ensemble_axes_metadata
@@ -2820,7 +2826,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         max_angle: float = None,
         max_frequency: float = None,
         gpts: tuple[int, int] = None,
-    ) -> "DiffractionPatterns":
+    ) -> DiffractionPatterns:
         """
         Crop the diffraction patterns such that they only include spatial frequencies (scattering angles) up to a given
         limit.
@@ -3819,6 +3825,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             vmax=vmax,
             explode=explode,
             figsize=figsize,
+            interact=interact
         )
 
         if title is not None:
@@ -3874,6 +3881,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             set(itertools.chain(*[intensities1.keys() for intensities1 in intensities]))
         )
 
+        #print(miller_indices)
+        #sss
+
         new_intensities = {}
         for hkl in miller_indices:
             new_intensities[hkl] = []
@@ -3887,6 +3897,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         intensities = dict(sorted(new_intensities.items()))
 
         miller_indices = np.stack(list(intensities.keys()), axis=0)
+
         positions = np.stack(list(positions.values()))
         intensities = np.stack(list(intensities.values()), axis=-1)
 

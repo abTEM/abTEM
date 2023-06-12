@@ -101,9 +101,13 @@ def _validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> C
     if not isinstance(cell, Cell):
         cell = Cell(np.diag(cell))
 
-    if not is_cell_orthogonal(cell):
-        cell = Atoms(cell=cell)
-        cell = abtem.orthogonalize_cell(cell).cell
+    # print(cell)
+    # ss
+
+    # if not is_cell_orthogonal(cell):
+    #
+    #     cell = Atoms(cell=cell)
+    #     cell = abtem.orthogonalize_cell(cell).cell
 
     return cell
 
@@ -149,6 +153,46 @@ def _integrate_disk(array, center, footprint):
     return (cropped * cropped_integration_footprint).sum((-2, -1))
 
 
+def _F_reflection_conditions(hkl):
+    all_even = (hkl % 2 == 0).all(axis=1)
+    all_odd = (hkl % 2 == 1).all(axis=1)
+    return all_even + all_odd
+
+
+def _I_reflection_conditions(hkl):
+    return (hkl.sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _A_reflection_conditions(hkl):
+    return (hkl[1:].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _B_reflection_conditions(hkl):
+    return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _C_reflection_conditions(hkl):
+    return (hkl[:-1].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _reflection_condition_mask(hkl: np.ndarray, centering: str):
+
+    if centering == "P":
+        return np.ones(len(hkl), dtype=bool)
+    elif centering == "F":
+        return _F_reflection_conditions(hkl)
+    elif centering == "I":
+        return _I_reflection_conditions(hkl)
+    elif centering == "A":
+        return _A_reflection_conditions(hkl)
+    elif centering == "A":
+        return _A_reflection_conditions(hkl)
+    elif centering == "A":
+        return _A_reflection_conditions(hkl)
+    else:
+        raise ValueError("lattice centering must be one of P, I, F, A, B or C")
+
+
 def _index_diffraction_patterns(
     diffraction_patterns: DiffractionPatterns,
     cell: Atoms | Cell | float | tuple[float, float, float],
@@ -157,22 +201,16 @@ def _index_diffraction_patterns(
     min_distance: float = 0.0,
     integration_radius: float = 0.0,
     max_index: int = None,
+    centering: str = "P",
 ):
-
     cell = _validate_cell(cell)
 
     shape = diffraction_patterns.shape[-2:]
 
     hkl = _sphere_of_miller_index_grid_points(diffraction_patterns, cell, max_index)
 
-    # is_valid = ((hkl % 2 == 0).all(axis=1) + (hkl % 2 == 1).all(axis=1)) #\
-
-    # a= ((hkl[:, [0, 1]].sum(axis=1) % 2 == 0)
-    #     * (hkl[:, [0, 2]].sum(axis=1) % 2 == 0)
-    #     * (hkl[:, [1, 2]].sum(axis=1) % 2 == 0)
-    # )
-
-    # hkl = hkl[is_valid]
+    mask = _reflection_condition_mask(hkl, centering=centering)
+    hkl = hkl[mask]
 
     k = _k_space_grid_points(hkl, cell)
 
@@ -187,17 +225,6 @@ def _index_diffraction_patterns(
     hkl = hkl[mask]
 
     nm = _digitize_k_space_grid(k, diffraction_patterns)
-
-    # mask = (
-    #     np.all((nm > 0), axis=1)
-    #     * (nm[:, 0] < diffraction_patterns.shape[-2])
-    #     * (nm[:, 1] < diffraction_patterns.shape[-1])
-    # )
-
-    # k = k[mask]
-    # nm = nm[mask]
-    # hkl = hkl[mask]
-
     labels = np.ravel_multi_index(nm.T, shape)
 
     wavelength = energy2wavelength(diffraction_patterns._get_from_metadata("energy"))
@@ -269,7 +296,6 @@ def _index_diffraction_patterns(
                 )
             )
         else:
-            # intensities.append(diffraction_patterns.array[..., n, m])
             intensities.append(diffraction_patterns.array[..., n, m])
 
         positions.append(k[indices][min_index])
