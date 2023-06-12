@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import itertools
-import numbers
+from numbers import Number
 import warnings
 from abc import abstractmethod
 from copy import copy
@@ -224,7 +224,7 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin, CopyMixin, EqualityMixin):
         if angle is None or angle == "full":
             return self.gpts
 
-        elif np.isscalar(angle):
+        elif isinstance(angle, (Number, float)):
             gpts = (
                 int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
                 int(2 * np.ceil(angle / self.angular_sampling[1])) + 1,

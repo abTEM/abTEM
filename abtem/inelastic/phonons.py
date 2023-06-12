@@ -23,7 +23,7 @@ from abtem.core.ensemble import Ensemble
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 try:
-    from gpaw.io import Reader # noqa
+    from gpaw.io import Reader  # noqa
 except:
     Reader = None
 
@@ -80,7 +80,7 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             if not isinstance(cell, Cell):
                 cell = Cell(cell)
-            print(atoms.cell, cell)
+
             if not np.allclose(atoms.cell.array, cell.array):
                 raise RuntimeError("cell of provided Atoms did not match provided cell")
 
@@ -448,8 +448,8 @@ class AtomsEnsemble(BaseFrozenPhonons):
         self,
         trajectory: Sequence[Atoms],
         ensemble_mean: bool = True,
-        cell:Cell=None,
-        ensemble_axes_metadata:list[AxisMetadata]=None
+        cell: Cell = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
     ):
 
         if isinstance(trajectory, Atoms):
@@ -463,10 +463,10 @@ class AtomsEnsemble(BaseFrozenPhonons):
                 trajectory = [_safe_read_atoms(path) for path in trajectory]
 
         self._trajectory = trajectory
+
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
             trajectory[0], None, cell
         )
-
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -475,7 +475,6 @@ class AtomsEnsemble(BaseFrozenPhonons):
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = FrozenPhononsAxis(_ensemble_mean=ensemble_mean)
         self._ensemble_axes_metadata = [ensemble_axes_metadata]
-
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
