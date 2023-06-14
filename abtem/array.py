@@ -1041,8 +1041,8 @@ class ArrayObject(CopyMixin):
         if self.is_lazy:
             if not transform._allow_base_chunks and self._has_base_chunks:
                 raise RuntimeError(
-                    f"transform {transform} not implemented for array object with chunks along base axes, compute first"
-                    f"or use the method `.no_base_chunks` to rechunk"
+                    f"transform {transform.__class__} not implemented for array object with chunks along base axes, "
+                    f"compute first or use the method `.no_base_chunks` to rechunk"
                 )
 
             if isinstance(max_batch, int):

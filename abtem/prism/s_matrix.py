@@ -1244,6 +1244,40 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         )
 
 
+# class PrismTransform(WavesTransform):
+#     def __init__(self, wave_vectors):
+#         self._wave_vectors =_validate_distribution(wave_vectors)
+#         super().__init__(distributions=("wave_vectors",))
+#
+#     @property
+#     def wave_vectors(self):
+#         return self._wave_vectors
+#
+#     @property
+#     def ensemble_shape(self):
+#         return self._wave_vectors.shape
+#
+#     @property
+#     def ensemble_axes_metadata(self):
+#         return [
+#             WaveVectorAxis(
+#                 label="q",
+#                 values=tuple(tuple(value) for value in self.wave_vectors),
+#             )
+#         ]
+#
+#     def _out_ensemble_axes_metadata(self, waves, index=0):
+#         return [*self.ensemble_axes_metadata, *waves.ensemble_axes_metadata]
+#
+#     def _out_ensemble_shape(self, wave, index=0):
+#         return (*self.ensemble_shape, *wave.ensemble_shape)
+#
+#     def _calculate_new_array(self, wave):
+#         wave_vectors = self.wave_vectors.values
+#         array = plane_waves(wave_vectors, wave.extent, wave.gpts)
+#         return array
+
+
 class SMatrix(BaseSMatrix, Ensemble):
     """
     The scattering matrix is used for simulating STEM experiments using the PRISM algorithm.
