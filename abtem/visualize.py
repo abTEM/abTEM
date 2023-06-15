@@ -308,7 +308,7 @@ def _axes_grid_cols_and_rows(measurements, axes_types):
 
 
 def _determine_axes_types(
-    measurements: "BaseMeasurements",
+    measurements: BaseMeasurements,
     explode: bool | tuple[bool, ...],
     overlay: bool | tuple[bool, ...],
 ):
@@ -438,7 +438,6 @@ def _make_indexing_sliders(
             label = axes_metadata.format_label()
 
         if axes_type == "range":
-
             sliders.append(
                 widgets.SelectionRangeSlider(
                     description=label,
@@ -670,6 +669,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
     def _get_indexed_measurements(self, keepdims: bool = True):
 
+        #print(self._indices, self._measurements.shape)
         indexed = self.measurements.get_items(self._indices, keepdims=keepdims)
 
         if keepdims:
@@ -924,7 +924,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
     def set_panel_labels(
         self,
-        labels: str = "alphabetic",
+        labels: str = "metadata",
         frameon: bool = True,
         loc: str = "upper left",
         pad: float = 0.1,
@@ -1029,14 +1029,14 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         ax: Axes = None,
         common_scale: bool = False,
         cbar: bool = False,
-        explode: bool = False,
+        explode: bool = None,
         figsize: tuple[float, float] = None,
         interact: bool = False,
     ):
-        measurements = measurements.compute().to_cpu()
+        #measurements = measurements.compute().to_cpu()
 
         axes_types = _determine_axes_types(
-            measurements=measurements, explode=explode, overlay=False
+            measurements=measurements, explode=explode, overlay=None
         )
 
         if "overlay" in axes_types:
@@ -1046,7 +1046,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             measurements=measurements,
             ax=ax,
             explode=explode,
-            overlay=False,
+            overlay=None,
             cbar=cbar,
             common_color_scale=common_scale,
             figsize=figsize,
@@ -1323,6 +1323,19 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
                 ax.spines["bottom"].set_visible(False)
                 ax.spines["left"].set_visible(False)
 
+    def adjust_tight_bbox(self):
+        #x_extent = self.measurements._plot_extent_x(self._xunits)
+        #y_extent = self.measurements._plot_extent_y(self._yunits)
+
+        #aspect = (y_extent[1] - y_extent[0]) / (x_extent[1] - x_extent[0])
+        aspect = 1
+
+        size_x = self.fig.get_size_inches()[0]
+        size_y = size_x * aspect
+
+        self.fig.set_size_inches((size_x, size_y))
+        self.fig.subplots_adjust(left=0, bottom=0, right=1, top=1)
+
 
 class MeasurementVisualization2D(BaseMeasurementVisualization2D):
     """
@@ -1449,17 +1462,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
         for image in self._artists.ravel():
             image.set_extent(extent)
 
-    def adjust_tight_bbox(self):
-        x_extent = self.measurements._plot_extent_x(self._xunits)
-        y_extent = self.measurements._plot_extent_y(self._yunits)
 
-        aspect = (y_extent[1] - y_extent[0]) / (x_extent[1] - x_extent[0])
-
-        size_x = self.fig.get_size_inches()[0]
-        size_y = size_x * aspect
-
-        self.fig.set_size_inches((size_x, size_y))
-        self.fig.subplots_adjust(left=0, bottom=0, right=1, top=1)
 
     def _add_domain_coloring_imshow(self, ax, array, norm):
         abs_array = np.abs(array)
@@ -1815,6 +1818,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
     def _get_scales(self, indexed_diffraction_spots, norm):
         conversion = _get_conversion_factor(self._xunits, self._get_default_xunits())
+
         return (
             norm(indexed_diffraction_spots.intensities) ** 0.5
             * self._scale
@@ -1861,8 +1865,12 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
             norm = self._normalization[i]
 
+            #print(measurement.intensities.max())
+
             scales = self._get_scales(measurement, norm)
             positions = self._get_positions(measurement)
+
+            #print(scales)
 
             if self._cmap not in plt.colormaps():
                 cmap = ListedColormap([self._cmap])
