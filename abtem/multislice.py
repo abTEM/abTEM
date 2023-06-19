@@ -18,7 +18,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast
-from abtem.detectors import BaseDetector
+from abtem.detectors import BaseDetector, _validate_detectors
 from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
@@ -486,6 +486,8 @@ def multislice_and_detect(
                         detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
                         for detector in detectors
                     ]
+
+
                 else:
                     measurements = _update_measurements(
                         waves, detectors, measurements, measurement_index
@@ -604,8 +606,7 @@ class MultisliceTransform(ArrayObjectTransform):
     ):
         self._potential = potential
 
-        if isinstance(detectors, BaseDetector):
-            detectors = [detectors]
+        detectors = _validate_detectors(detectors)
 
         self._detectors = detectors
         self._conjugate = conjugate

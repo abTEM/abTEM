@@ -915,6 +915,11 @@ class WavesDetector(BaseDetector):
 
         return Waves
 
+    def _out_metadata(self, waves: Waves, index=0) -> dict:
+        metadata = super()._out_metadata(array_object=waves, index=index)
+        metadata["reciprocal_space"] = False
+        return metadata
+
     def _calculate_new_array(self, waves):
 
         waves = waves.ensure_real_space()

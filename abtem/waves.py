@@ -640,7 +640,8 @@ class Waves(BaseWaves, ArrayObject):
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = ifft2(self.array, overwrite_x=overwrite_x)
         d["reciprocal_space"] = False
-        return self.__class__(**d)
+        waves = self.__class__(**d)
+        return waves
 
     def phase_shift(self, amount: float):
         """
@@ -1706,13 +1707,9 @@ class Probe(_WavesBuilder):
                 waves_partial, transform=transform, max_batch=max_batch
             )
         else:
-            #transform.set_output_specification(waves)
-            #measurements = transform.apply(waves)
             measurements = waves_partial()
             for transform in reversed(transform.transforms):
                 measurements = transform.apply(measurements)
-
-
             measurements = _reduce_ensemble(measurements)
 
         return measurements
