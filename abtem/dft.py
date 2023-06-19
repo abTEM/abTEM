@@ -337,7 +337,7 @@ class GPAWPotential(AbstractPotentialBuilder):
                     continue
 
                 cutoff = cutoffs[number]
-                margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
+                margin = int(np.ceil(cutoff / np.min(self.sampling)))
                 rows, cols = _disc_meshgrid(margin)
                 disc_indices = np.hstack((rows[:, None], cols[:, None]))
 

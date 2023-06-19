@@ -585,7 +585,7 @@ class AtomsArtist(Artist):
             self._scatter_artist.x = self.atoms.get_positions()[:, axes[0]]
             self._scatter_artist.y = self.atoms.get_positions()[:, axes[1]]
 
-        colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(np.int)) for i in self.atoms.numbers]
+        colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(int)) for i in self.atoms.numbers]
         sizes = [covalent_radii[i] * self.scale for i in self.atoms.numbers]
         self._scatter_artist._mark.colors = colors
         self._scatter_artist._mark.size = sizes

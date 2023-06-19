@@ -38,6 +38,7 @@ reconstruction_symbols = {
     "step_size_damping_rate": 0.995,
     "pre_position_correction_update_steps": None,
     "pre_probe_correction_update_steps": None,
+    "pure_phase_object_update_steps": None,
 }
 
 
@@ -164,6 +165,12 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         objects, probes, position, exit_waves, modified_exit_waves, **kwargs
     ):
         """Abstract method all subclasses must define to update the current probes, objects, and position estimates."""
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def _constraints_function(objects, probes, **kwargs):
+        """Abstract method all subclasses must define to enforce constraints on the objects and probes."""
         pass
 
     @staticmethod
@@ -586,6 +593,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 "counts_scaling_factor"
             ]
 
+        self._mean_diffraction_intensity = (
+            xp.sum(self._diffraction_patterns) / self._num_diffraction_patterns
+        )
         self._diffraction_patterns = xp.fft.ifftshift(
             xp.sqrt(self._diffraction_patterns), axes=(-2, -1)
         )
@@ -644,6 +654,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 self._probes = copy_to_device(self._probes.build().array, self._device)
             else:
                 self._probes = copy_to_device(self._probes, self._device)
+
+        probe_intensity = xp.sum(xp.abs(xp.fft.fft2(self._probes)) ** 2)
+        self._probes *= np.sqrt(self._mean_diffraction_intensity / probe_intensity)
 
         return self
 
@@ -842,6 +855,42 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         return objects, probes, position
 
+    @staticmethod
+    def _constraints_function(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        pure_phase_object: bool,
+        xp=np,
+        **kwargs,
+    ):
+        """
+        Regularized-PIE constraints static method:
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        pure_phase_object:bool
+            If True, constraints object to being a pure phase object, i.e. with unit amplitude
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        objects: np.ndarray
+            Constrained objects array
+        probes: np.ndarray
+            Constrained probes array
+        """
+        phase = xp.exp(1.0j * xp.angle(objects))
+        if pure_phase_object:
+            amplitude = 1.0
+        else:
+            amplitude = xp.minimum(xp.abs(objects), 1.0)
+        return amplitude * phase, probes
+
     """
     @staticmethod
     def _position_correction(objects: np.ndarray,
@@ -977,6 +1026,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         max_iterations: int,
         pre_position_correction_update_steps: int = None,
         pre_probe_correction_update_steps: int = None,
+        pure_phase_object_update_steps: int = None,
         **kwargs,
     ):
         """
@@ -1006,6 +1056,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             self._overlap_projection,
             self._fourier_projection,
             self._update_function,
+            self._constraints_function,
             None,
         )
         functions_queue = [functions_tuple]
@@ -1022,6 +1073,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 self._overlap_projection,
                 self._fourier_projection,
                 self._update_function,
+                self._constraints_function,
                 self._position_correction,
             )
 
@@ -1037,6 +1089,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
+
+        if pure_phase_object_update_steps is not None:
+            queue_summary += f"\n--Reconstructed object will be constrained to a pure-phase object for the first {pure_phase_object_update_steps} steps"
 
         functions_queue = [
             functions_queue[x : x + self._num_diffraction_patterns]
@@ -1109,6 +1164,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 ],
                 pre_probe_correction_update_steps=self._reconstruction_parameters[
                     "pre_probe_correction_update_steps"
+                ],
+                pure_phase_object_update_steps=self._reconstruction_parameters[
+                    "pure_phase_object_update_steps"
                 ],
             )
             if verbose:
@@ -1192,10 +1250,24 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                         ]
                     )
 
+                if (
+                    self._reconstruction_parameters["pure_phase_object_update_steps"]
+                    is None
+                ):
+                    pure_phase_object = False
+                else:
+                    pure_phase_object = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pure_phase_object_update_steps"
+                        ]
+                    )
+
                 (
                     _overlap_projection,
                     _fourier_projection,
                     _update_function,
+                    _constraints_function,
                     _position_correction,
                 ) = update_step
 
@@ -1223,6 +1295,10 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                     sobel=sobel,
                     reconstruction_parameters=self._reconstruction_parameters,
                     xp=xp,
+                )
+
+                self._objects, self._probes = _constraints_function(
+                    self._objects, self._probes, pure_phase_object, xp=xp
                 )
 
                 old_position = position
@@ -1450,6 +1526,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         xp = get_array_module_from_device(self._device)
         _diffraction_patterns = []
+        self._mean_diffraction_intensity = 0
         for dp in self._diffraction_patterns:
 
             # Convert Measurement Objects
@@ -1479,12 +1556,16 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             if self._experimental_parameters["counts_scaling_factor"] is not None:
                 _dp /= self._experimental_parameters["counts_scaling_factor"]
 
+            self._mean_diffraction_intensity += xp.sum(_dp)
             _dp = xp.fft.ifftshift(xp.sqrt(_dp), axes=(-2, -1))
             _diffraction_patterns.append(_dp)
 
         self._diffraction_patterns = tuple(_diffraction_patterns)
         self._experimental_parameters["angular_sampling"] = angular_sampling
         self._num_diffraction_patterns = self._diffraction_patterns[0].shape[0]
+
+        self._mean_diffraction_intensity /= 2 * self._num_diffraction_patterns
+
         if step_sizes is not None:
             self._experimental_parameters["scan_step_sizes"] = step_sizes
 
@@ -2312,6 +2393,47 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         )
 
     @staticmethod
+    def _constraints_function(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        pure_phase_object: bool,
+        xp=np,
+        **kwargs,
+    ):
+        """
+        Simultaneous-PIE constraints static method:
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        pure_phase_object:bool
+            If True, constraints object to being a pure phase object, i.e. with unit amplitude
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        objects: np.ndarray
+            Constrained objects array
+        probes: np.ndarray
+            Constrained probes array
+        """
+        electrostatic_object, magnetic_object = objects
+
+        phase_e = xp.exp(1.0j * xp.angle(electrostatic_object))
+        phase_m = xp.exp(1.0j * xp.angle(magnetic_object))
+        if pure_phase_object:
+            amplitude_e = 1.0
+            amplitude_m = 1.0
+        else:
+            amplitude_e = xp.minimum(xp.abs(electrostatic_object), 1.0)
+            amplitude_m = xp.minimum(xp.abs(magnetic_object), 1.0)
+        return (amplitude_e * phase_e, amplitude_m * phase_m), probes
+
+    @staticmethod
     def _position_correction(
         objects: Sequence[np.ndarray],
         probes: Sequence[np.ndarray],
@@ -2421,6 +2543,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         common_probe: bool = False,
         pre_position_correction_update_steps: int = None,
         pre_probe_correction_update_steps: int = None,
+        pure_phase_object_update_steps: int = None,
         **kwargs,
     ):
         """
@@ -2463,6 +2586,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             self._warmup_overlap_projection,
             self._warmup_fourier_projection,
             self._warmup_update_function,
+            self._constraints_function,
             None,
         )
         functions_queue = [functions_tuple]
@@ -2475,6 +2599,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                 _overlap_projection,
                 self._fourier_projection,
                 _update_function,
+                self._constraints_function,
                 None,
             )
             remaining_update_steps = total_update_steps - warmup_update_steps
@@ -2489,6 +2614,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     _overlap_projection,
                     self._fourier_projection,
                     _update_function,
+                    self._constraints_function,
                     None,
                 )
                 remaining_update_steps = (
@@ -2503,6 +2629,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     _overlap_projection,
                     self._fourier_projection,
                     _update_function,
+                    self._constraints_function,
                     self._position_correction,
                 )
                 remaining_update_steps = (
@@ -2518,6 +2645,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     self._warmup_overlap_projection,
                     self._warmup_fourier_projection,
                     self._warmup_update_function,
+                    self._constraints_function,
                     self._position_correction,
                 )
                 remaining_update_steps = (
@@ -2530,6 +2658,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     _overlap_projection,
                     self._fourier_projection,
                     _update_function,
+                    self._constraints_function,
                     self._position_correction,
                 )
                 remaining_update_steps = total_update_steps - warmup_update_steps
@@ -2547,6 +2676,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             queue_summary += (
                 f"\n--Using the first probe as a common probe for both objects"
             )
+
+        if pure_phase_object_update_steps is not None:
+            queue_summary += f"\n--Reconstructed object will be constrained to a pure-phase object for the first {pure_phase_object_update_steps} steps"
 
         functions_queue = [
             functions_queue[x : x + self._num_diffraction_patterns]
@@ -2627,6 +2759,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                 ],
                 pre_probe_correction_update_steps=self._reconstruction_parameters[
                     "pre_probe_correction_update_steps"
+                ],
+                pure_phase_object_update_steps=self._reconstruction_parameters[
+                    "pure_phase_object_update_steps"
                 ],
             )
             if verbose:
@@ -2713,6 +2848,19 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                         ]
                     )
 
+                if (
+                    self._reconstruction_parameters["pure_phase_object_update_steps"]
+                    is None
+                ):
+                    pure_phase_object = False
+                else:
+                    pure_phase_object = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pure_phase_object_update_steps"
+                        ]
+                    )
+
                 if warmup_update_steps != 0 and global_iteration_i == (
                     warmup_update_steps + 1
                 ):
@@ -2722,6 +2870,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     _overlap_projection,
                     _fourier_projection,
                     _update_function,
+                    _constraints_function,
                     _position_correction,
                 ) = update_step
 
@@ -2749,6 +2898,10 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     sobel=sobel,
                     reconstruction_parameters=self._reconstruction_parameters,
                     xp=xp,
+                )
+
+                self._objects, self._probes = _constraints_function(
+                    self._objects, self._probes, pure_phase_object, xp=xp
                 )
 
                 old_position = position
@@ -3023,6 +3176,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                 "counts_scaling_factor"
             ]
 
+        self._mean_diffraction_intensity = (
+            xp.sum(self._diffraction_patterns) / self._num_diffraction_patterns
+        )
         self._diffraction_patterns = xp.fft.ifftshift(
             xp.sqrt(self._diffraction_patterns), axes=(-2, -1)
         )
@@ -3081,6 +3237,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                 self._probes = copy_to_device(self._probes.build().array, self._device)
             else:
                 self._probes = copy_to_device(self._probes, self._device)
+
+        probe_intensity = xp.sum(xp.abs(xp.fft.fft2(self._probes)) ** 2)
+        self._probes *= np.sqrt(self._mean_diffraction_intensity / probe_intensity)
 
         self._probes = xp.tile(self._probes, (self._num_probes, 1, 1))
         self._probes /= xp.arange(self._num_probes)[:, None, None] + 1
@@ -3491,6 +3650,42 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         return objects, probes, position
 
     @staticmethod
+    def _constraints_function(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        pure_phase_object: bool,
+        xp=np,
+        **kwargs,
+    ):
+        """
+        Mixed-State-PIE constraints static method:
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        pure_phase_object:bool
+            If True, constraints object to being a pure phase object, i.e. with unit amplitude
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        objects: np.ndarray
+            Constrained objects array
+        probes: np.ndarray
+            Constrained probes array
+        """
+        phase = xp.exp(1.0j * xp.angle(objects))
+        if pure_phase_object:
+            amplitude = 1.0
+        else:
+            amplitude = xp.minimum(xp.abs(objects), 1.0)
+        return amplitude * phase, probes
+
+    @staticmethod
     def _position_correction(
         objects: np.ndarray,
         probes: np.ndarray,
@@ -3591,6 +3786,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         warmup_update_steps: int = 0,
         pre_position_correction_update_steps: int = None,
         pre_probe_correction_update_steps: int = None,
+        pure_phase_object_update_steps: int = None,
         **kwargs,
     ):
         """
@@ -3622,6 +3818,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             self._warmup_overlap_projection,
             self._warmup_fourier_projection,
             self._warmup_update_function,
+            self._constraints_function,
             None,
         )
         functions_queue = [functions_tuple]
@@ -3634,6 +3831,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                 self._overlap_projection,
                 self._fourier_projection,
                 self._update_function,
+                self._constraints_function,
                 None,
             )
             remaining_update_steps = total_update_steps - warmup_update_steps
@@ -3648,6 +3846,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     self._overlap_projection,
                     self._fourier_projection,
                     self._update_function,
+                    self._constraints_function,
                     None,
                 )
                 remaining_update_steps = (
@@ -3662,6 +3861,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     self._overlap_projection,
                     self._fourier_projection,
                     self._update_function,
+                    self._constraints_function,
                     self._position_correction,
                 )
                 remaining_update_steps = (
@@ -3677,6 +3877,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     self._warmup_overlap_projection,
                     self._warmup_fourier_projection,
                     self._warmup_update_function,
+                    self._constraints_function,
                     self._position_correction,
                 )
                 remaining_update_steps = (
@@ -3689,6 +3890,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     self._overlap_projection,
                     self._fourier_projection,
                     self._update_function,
+                    self._constraints_function,
                     self._position_correction,
                 )
                 remaining_update_steps = total_update_steps - warmup_update_steps
@@ -3701,6 +3903,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
+
+        if pure_phase_object_update_steps is not None:
+            queue_summary += f"\n--Reconstructed object will be constrained to a pure-phase object for the first {pure_phase_object_update_steps} steps"
 
         functions_queue = [
             functions_queue[x : x + self._num_diffraction_patterns]
@@ -3782,6 +3987,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                 ],
                 pre_probe_correction_update_steps=self._reconstruction_parameters[
                     "pre_probe_correction_update_steps"
+                ],
+                pure_phase_object_update_steps=self._reconstruction_parameters[
+                    "pure_phase_object_update_steps"
                 ],
             )
             if verbose:
@@ -3865,6 +4073,19 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                         ]
                     )
 
+                if (
+                    self._reconstruction_parameters["pure_phase_object_update_steps"]
+                    is None
+                ):
+                    pure_phase_object = False
+                else:
+                    pure_phase_object = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pure_phase_object_update_steps"
+                        ]
+                    )
+
                 if probe_orthogonalization_frequency is None:
                     orthogonalize_probes = False
                 else:
@@ -3876,6 +4097,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     _overlap_projection,
                     _fourier_projection,
                     _update_function,
+                    _constraints_function,
                     _position_correction,
                 ) = update_step
 
@@ -3904,6 +4126,10 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     sobel=sobel,
                     reconstruction_parameters=self._reconstruction_parameters,
                     xp=xp,
+                )
+
+                self._objects, self._probes = _constraints_function(
+                    self._objects, self._probes, pure_phase_object, xp=xp
                 )
 
                 old_position = position
@@ -4188,6 +4414,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                 "counts_scaling_factor"
             ]
 
+        self._mean_diffraction_intensity = (
+            xp.sum(self._diffraction_patterns) / self._num_diffraction_patterns
+        )
         self._diffraction_patterns = xp.fft.ifftshift(
             xp.sqrt(self._diffraction_patterns), axes=(-2, -1)
         )
@@ -4247,6 +4476,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                 _probes = copy_to_device(self._probes.build().array, self._device)
             else:
                 _probes = copy_to_device(self._probes, self._device)
+
+        probe_intensity = xp.sum(xp.abs(xp.fft.fft2(_probes)) ** 2)
+        _probes *= np.sqrt(self._mean_diffraction_intensity / probe_intensity)
 
         self._probes = xp.zeros((self._num_slices,) + _probes.shape, dtype=xp.complex64)
         self._probes[0] = _probes
@@ -4492,6 +4724,42 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         return objects, probes, position
 
     @staticmethod
+    def _constraints_function(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        pure_phase_object: bool,
+        xp=np,
+        **kwargs,
+    ):
+        """
+        Multislice-PIE constraints static method:
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        pure_phase_object:bool
+            If True, constraints object to being a pure phase object, i.e. with unit amplitude
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        objects: np.ndarray
+            Constrained objects array
+        probes: np.ndarray
+            Constrained probes array
+        """
+        phase = xp.exp(1.0j * xp.angle(objects))
+        if pure_phase_object:
+            amplitude = 1.0
+        else:
+            amplitude = xp.minimum(xp.abs(objects), 1.0)
+        return amplitude * phase, probes
+
+    @staticmethod
     def _position_correction(
         objects: np.ndarray,
         probes: np.ndarray,
@@ -4590,6 +4858,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         max_iterations: int,
         pre_position_correction_update_steps: int = None,
         pre_probe_correction_update_steps: int = None,
+        pure_phase_object_update_steps: int = None,
         **kwargs,
     ):
         """
@@ -4619,6 +4888,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             self._overlap_projection,
             self._fourier_projection,
             self._update_function,
+            self._constraints_function,
             None,
         )
         functions_queue = [functions_tuple]
@@ -4635,6 +4905,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                 self._overlap_projection,
                 self._fourier_projection,
                 self._update_function,
+                self._constraints_function,
                 self._position_correction,
             )
 
@@ -4650,6 +4921,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
+
+        if pure_phase_object_update_steps is not None:
+            queue_summary += f"\n--Reconstructed object will be constrained to a pure-phase object for the first {pure_phase_object_update_steps} steps"
 
         functions_queue = [
             functions_queue[x : x + self._num_diffraction_patterns]
@@ -4723,6 +4997,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                 ],
                 pre_probe_correction_update_steps=self._reconstruction_parameters[
                     "pre_probe_correction_update_steps"
+                ],
+                pure_phase_object_update_steps=self._reconstruction_parameters[
+                    "pure_phase_object_update_steps"
                 ],
             )
             if verbose:
@@ -4809,10 +5086,24 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                         ]
                     )
 
+                if (
+                    self._reconstruction_parameters["pure_phase_object_update_steps"]
+                    is None
+                ):
+                    pure_phase_object = False
+                else:
+                    pure_phase_object = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pure_phase_object_update_steps"
+                        ]
+                    )
+
                 (
                     _overlap_projection,
                     _fourier_projection,
                     _update_function,
+                    _constraints_function,
                     _position_correction,
                 ) = update_step
 
@@ -4854,6 +5145,10 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                     wavelength=wavelength,
                     fft2_convolve=fft2_convolve,
                     xp=xp,
+                )
+
+                self._objects, self._probes = _constraints_function(
+                    self._objects, self._probes, pure_phase_object, xp=xp
                 )
 
                 old_position = position

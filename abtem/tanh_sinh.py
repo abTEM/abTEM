@@ -184,8 +184,8 @@ def tanh_sinh_nodes_and_weights(step_size: float, order: int):
         Nodes and weights
     """
 
-    xk = np.zeros(2 * order + 1, dtype=np.float)
-    wk = np.zeros(2 * order + 1, dtype=np.float)
+    xk = np.zeros(2 * order + 1, dtype=float)
+    wk = np.zeros(2 * order + 1, dtype=float)
     for i, k in enumerate(range(-order, order + 1)):
         xk[i] = np.tanh(np.pi / 2 * np.sinh(k * step_size))
         numerator = step_size / 2 * np.pi * np.cosh(k * step_size)
