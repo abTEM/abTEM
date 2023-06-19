@@ -224,11 +224,25 @@ def _index_diffraction_patterns(
     k = k[mask]
     hkl = hkl[mask]
 
+    wavelength = energy2wavelength(diffraction_patterns._get_from_metadata("energy"))
+    d_ewald = np.abs(_k_space_distances_to_ewald_sphere(k, wavelength))
+
+    mask = d_ewald < distance_threshold
+
+    k = k[mask]
+    hkl = hkl[mask]
+    d_ewald = d_ewald[mask]
+
     nm = _digitize_k_space_grid(k, diffraction_patterns)
     labels = np.ravel_multi_index(nm.T, shape)
 
-    wavelength = energy2wavelength(diffraction_patterns._get_from_metadata("energy"))
-    d_ewald = _k_space_distances_to_ewald_sphere(k, wavelength)
+    #print(labels.shape, nm.shape)
+
+    #return
+
+    #print(nm.shape)
+    #print(d_ewald.shape, k.shape)
+    #sss
 
     ensemble_indices = tuple(range(len(diffraction_patterns.ensemble_shape)))
     max_intensities = diffraction_patterns.array.max(axis=ensemble_indices)
@@ -274,9 +288,6 @@ def _index_diffraction_patterns(
             if max_intensity != maximum_filtered[n, m]:
                 continue
 
-        if np.min(np.abs(d_ewald[indices])) > distance_threshold:
-            continue
-
         if integration_footprint is not None:
             max_intensity = _integrate_disk(
                 max_intensities, (n, m), integration_footprint
@@ -285,7 +296,10 @@ def _index_diffraction_patterns(
         if max_intensity < threshold:
             continue
 
-        min_index = np.argmin(np.abs(d_ewald[indices]))
+        min_index = np.argmin(d_ewald[indices])
+
+        #if d_ewald[indices][min_index] > distance_threshold:
+        #    continue
 
         selected_hkl.append(hkl[indices][min_index])
 

@@ -206,6 +206,7 @@ class CustomScan(BaseScan):
             positions = positions[None]
 
         self._positions = positions
+        self._squeeze = False
 
         super().__init__()
 
@@ -221,6 +222,8 @@ class CustomScan(BaseScan):
         if len(self.positions) == 0:
             self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.0
 
+
+
     @property
     def ensemble_axes_metadata(self):
         return [
@@ -229,7 +232,7 @@ class CustomScan(BaseScan):
                     (float(position[0]), float(position[1]))
                     for position in self.positions
                 ),
-                _squeeze=True,
+                _squeeze=self._squeeze
             )
         ]
 
@@ -596,7 +599,7 @@ class LineScan(BaseScan):
         return self.shape
 
     def _out_ensemble_shape(self, array_object) -> tuple[int, ...]:
-        return self.ensemble_shape
+        return self.ensemble_shape + array_object.ensemble_shape
 
     def _out_ensemble_axes_metadata(
         self, array_object: ArrayObject | T

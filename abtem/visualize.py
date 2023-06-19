@@ -969,6 +969,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 **kwargs,
             )
             at.formatting = formatting
+
             at.patch.set_boxstyle("round,pad=0.,rounding_size=0.2")
             ax.add_artist(at)
             anchored_text.append(at)
@@ -998,7 +999,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         def update(i):
             self.set_indices((i,))
             if adjust_scale:
-                raise NotImplementedError
+                self._update_vmin_vmax()
 
             return self.artists.ravel()
 
@@ -2303,7 +2304,7 @@ def show_atoms(
 
     if tight_limits:
         ax.set_adjustable("box")
-        ax.set_xlim(left=np.min(cell_lines_x), right=np.max(cell_lines_x))
-        ax.set_ylim(left=np.min(cell_lines_y), right=np.max(cell_lines_y))
+        ax.set_xlim([np.min(cell_lines_x), np.max(cell_lines_x)])
+        ax.set_ylim([np.min(cell_lines_y), np.max(cell_lines_y)])
 
     return fig, ax

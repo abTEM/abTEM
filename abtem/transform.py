@@ -16,7 +16,7 @@ from abtem.core.ensemble import Ensemble
 from abtem.core.fft import ifft2
 from abtem.core.utils import (
     CopyMixin,
-    expand_dims_to_broadcast,
+    expand_dims_to_broadcast, EqualityMixin,
 )
 from abtem.distributions import (
     EnsembleFromDistributions,
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from abtem.array import ArrayObject, T
 
 
-class ArrayObjectTransform(Ensemble, CopyMixin):
+class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
     _allow_base_chunks: bool = False
 
     @property
@@ -317,12 +317,20 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
     def _validate_distribution(distribution):
         return _validate_distribution(distribution)
 
-    def _axes_metadata_from_distributions(self, **kwargs):
+    # def _validate_ensemble_axes_metadata(self, ensemble_axes_metadata):
+    #     if isinstance(ensemble_axes_metadata, AxisMetadata):
+    #         ensemble_axes_metadata = [ensemble_axes_metadata]
+    #
+    #     assert len(ensemble_axes_metadata) == len(self.ensemble_shape)
+    #     return ensemble_axes_metadata
+
+    def _get_axes_metadata_from_distributions(self, **kwargs):
         ensemble_axes_metadata = []
-        for distribution_name in self._distributions:
-            distribution = getattr(self, distribution_name)
+        for name in kwargs.keys():
+            assert name in self._distributions
+            distribution = getattr(self, name)
             if isinstance(distribution, BaseDistribution):
-                axis_kwargs = kwargs[distribution_name]
+                axis_kwargs = kwargs[name]
                 ensemble_axes_metadata += [
                     ParameterAxis(
                         values=distribution,
@@ -510,7 +518,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     ) -> np.ndarray | tuple[np.ndarray, ...]:
 
         for transform in reversed(self.transforms):
-
             array_object = transform.apply(array_object)
 
         if self._num_outputs > 1:
@@ -588,6 +595,7 @@ class ReciprocalSpaceMultiplication(WavesTransform):
 
         waves = waves.ensure_reciprocal_space(overwrite_x=self.in_place)
         kernel = self._evaluate_kernel(waves)
+
 
         kernel, new_array = expand_dims_to_broadcast(
             kernel, waves.array, match_dims=[(-2, -1), (-2, -1)]

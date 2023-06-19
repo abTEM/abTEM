@@ -39,7 +39,7 @@ def test_multislice_with_frozen_phonons(
     "waves_builder",
     [
         abtem_st.probe,
-        # abtem_st.plane_wave,
+        abtem_st.plane_wave,
     ],
 )
 def test_multislice_detect_with_frozen_phonons(
@@ -149,16 +149,16 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
 
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 
-    measurement_shape = detector.measurement_shape(probe)
+    measurement_shape = detector._out_shape(probe)
     assert (
         measurement.shape
         == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
     )
-    assert measurement.dtype == detector.measurement_dtype
-    assert type(measurement) == detector.measurement_type(probe.build(scan))
+    assert measurement.dtype == detector._out_dtype(probe)
+    assert type(measurement) == detector._out_type(probe.build(scan))
 
     if not isinstance(detector, AnnularDetector):
-        assert measurement.base_axes_metadata == detector.measurement_axes_metadata(
+        assert measurement.base_axes_metadata == detector._out_base_axes_metadata(
             probe.build(scan)
         )
 

@@ -226,7 +226,7 @@ class BasePotential(
 
     @property
     def _default_ensemble_chunks(self) -> tuple:
-        return validate_chunks(self.ensemble_shape, (1,))
+        return validate_chunks(self.ensemble_shape, (1,) * len(self.ensemble_shape))
 
     def to_images(self):
         """
@@ -435,7 +435,7 @@ class _PotentialBuilder(BasePotential):
             blocks = self.ensemble_blocks(self._default_ensemble_chunks)
 
             xp = get_array_module(self.device)
-            chunks = validate_chunks(self.ensemble_shape, (1,))
+            chunks = validate_chunks(self.ensemble_shape, self._default_ensemble_chunks)
             chunks = chunks + ((len(self),), (self.gpts[0],), (self.gpts[1],))
 
             if self.ensemble_shape:
@@ -465,10 +465,14 @@ class _PotentialBuilder(BasePotential):
             if self.ensemble_shape:
 
                 for i, _, potential in self.generate_blocks():
+
+                    i = np.unravel_index((0,),self.ensemble_shape)
+
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
                     ):
-                        array[i, j] = slic.array[0]
+
+                        array[i + (j,)] = slic.array[0]
             else:
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
 

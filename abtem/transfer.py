@@ -213,7 +213,9 @@ def soft_aperture(
     """
     xp = get_array_module(alpha)
 
-    semiangle_cutoff = xp.array(semiangle_cutoff)
+    semiangle_cutoff = xp.array(semiangle_cutoff, dtype=xp.float32)
+
+    base_ndims = len(alpha.shape)
 
     semiangle_cutoff, alpha = expand_dims_to_broadcast(semiangle_cutoff, alpha)
     semiangle_cutoff, phi = expand_dims_to_broadcast(
@@ -229,13 +231,14 @@ def soft_aperture(
 
     ndims = len(alpha.shape)
 
-    zeros = (slice(None),) * (ndims - 2) + (0,) * 2
+    zeros = (slice(None),) * (ndims - base_ndims) + (0,) * base_ndims
 
     denominator[zeros] = 1.0
 
     array = xp.clip(
         (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
     )
+
     array[zeros] = 1.0
     return array
 
@@ -331,7 +334,7 @@ class Aperture(BaseAperture):
 
         semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
 
-        if self.soft and len(alpha.shape) > 1:
+        if self.soft:
             aperture = soft_aperture(
                 alpha, phi, semiangle_cutoff, self.angular_sampling
             )
@@ -545,15 +548,9 @@ class TemporalEnvelope(BaseTransferFunction):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        ensemble_axes_metadata = []
-        if isinstance(self.focal_spread, BaseDistribution):
-            ensemble_axes_metadata = ParameterAxis(
-                label="focal spread",
-                values=self.focal_spread.values,
-                units="mrad",
-                _ensemble_mean=self.focal_spread.ensemble_mean,
-            )
-        return ensemble_axes_metadata
+        return self._get_axes_metadata_from_distributions(
+            focal_spread={"units": "mrad"}
+        )
 
     def _evaluate_from_angular_grid(
         self, alpha: np.ndarray, phi: np.ndarray
@@ -891,16 +888,12 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        ensemble_axes_metadata = self._phase_aberrations_ensemble_axes_metadata
-        if isinstance(self.angular_spread, BaseDistribution):
-            ensemble_axes_metadata = ensemble_axes_metadata + [
-                ParameterAxis(
-                    label="angular spread",
-                    values=tuple(self.angular_spread.values),
-                    units="mrad",
-                    _ensemble_mean=self.angular_spread.ensemble_mean,
-                )
-            ]
+        ensemble_axes_metadata = [
+            *self._phase_aberrations_ensemble_axes_metadata,
+            *self._get_axes_metadata_from_distributions(
+                angular_spread={"units": "mrad"}
+            ),
+        ]
         return ensemble_axes_metadata
 
     @property
@@ -1453,7 +1446,11 @@ class CTF(_HasAberrations, BaseAperture):
     def to_point_spread_functions(self, gpts, extent):
         from abtem.waves import Probe
 
-        return Probe(gpts=gpts, extent=extent, energy=self.energy, aperture=self)
+        return (
+            Probe(gpts=gpts, extent=extent, energy=self.energy, aperture=self)
+            .build()
+            .complex_images()
+        )
 
     def profiles(self, gpts: int = 1000, max_angle: float = None, phi: float = 0.0):
         """

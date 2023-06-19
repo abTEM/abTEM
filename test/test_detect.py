@@ -15,6 +15,7 @@ from abtem.waves import Probe
 from utils import gpu
 
 #@reproduce_failure('6.61.0', b'AXicY2AAgwMGDCiA0aIBSAIAF6sBqg==')
+#"@reproduce_failure('6.59.0', b'AXicY2AAgwMGDCiA0aKBiYEBABexAaw=')
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -33,16 +34,17 @@ def test_detect(data, detector, lazy, device):
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
     measurement = detector.detect(waves).compute()
+
     assert measurement.ensemble_shape == waves.ensemble_shape
-    assert measurement.dtype == detector.measurement_dtype
-    assert measurement.base_shape == detector.measurement_shape(waves)
-    assert type(measurement) == detector.measurement_type(waves)
-    assert measurement.base_axes_metadata == detector.measurement_axes_metadata(waves)
+    assert measurement.dtype == detector._out_dtype(waves)
+    assert measurement.base_shape == detector._out_base_shape(waves)
+    assert type(measurement) == detector._out_type(waves)
+    assert measurement.base_axes_metadata == detector._out_base_axes_metadata(waves)
 
     if detector.to_cpu:
         assert measurement.device == "cpu"
 
-#@reproduce_failure('6.29.3', b'AXicE2RgBEIQIgQYGRc9sH4WvpmnqCHlztL9nC/Xz5pQNpn/PxgA9QMAEZYRRA==')
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -65,7 +67,7 @@ def test_annular_detector(data, lazy, device):
     )
 
     assert measurement.ensemble_shape == shape
-    assert measurement.dtype == detector.measurement_dtype
+    assert measurement.dtype == detector._out_dtype(waves)
     assert measurement.base_shape == _scan_shape(waves)
 
     if len(scan_axes) == 1:
@@ -80,6 +82,7 @@ def test_annular_detector(data, lazy, device):
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
+
 def test_integrate_consistent(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))
 

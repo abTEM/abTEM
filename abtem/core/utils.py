@@ -46,7 +46,7 @@ class CopyMixin:
 def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
     if not isinstance(b, a.__class__):
         return False
-    #ssss
+
     for key, value in a.__dict__.items():
 
         if key in exclude:

@@ -79,22 +79,35 @@ class Ensemble(metaclass=ABCMeta):
             Block sizes along each dimension.
         """
 
+        def interleave(l1, l2):
+            return tuple(val for pair in zip(l1, l2) for val in pair)
+
+        def _tuple_range(length, offset=0):
+            return tuple(range(offset, offset + length))
+
         chunks = self._validate_chunks(chunks)
 
         args = self._partition_args(chunks, lazy=True)
 
         assert isinstance(args, tuple)
 
-        symbols = tuple(range(len(args)))
-        args = tuple((block, (i,)) for i, block in zip(symbols, args))
+        #symbols = tuple(range(len(args)))
+        out_symbols = tuple(range(sum(len(a.shape) for a in args)))
+
+        arg_symbols = ()
+        n = 0
+        for a in args:
+            arg_symbols += (_tuple_range(len(a.shape), n),)
+            n += len(a.shape)
+
         adjust_chunks = {i: c for i, c in enumerate(chunks)}
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Increasing number of chunks")
             return da.blockwise(
                 self._wrapped_from_partitioned_args(),
-                symbols,
-                *tuple(itertools.chain(*args)),
+                out_symbols,
+                *interleave(args, arg_symbols),
                 adjust_chunks=adjust_chunks,
                 meta=np.array((), dtype=object)
             )
@@ -163,8 +176,12 @@ class Ensemble(metaclass=ABCMeta):
 
     def _wrapped_from_partitioned_args(self):
         def wrap_from_partitioned_args(*args, from_partitioned_args, **kwargs):
+
             blocks = tuple(arg.item() for arg in args)
-            arr = np.empty((1,) * len(args), dtype=object)
+
+            n = sum(len(a.shape) for a in args)
+
+            arr = np.empty((1,) * n, dtype=object)
             arr.itemset(0, from_partitioned_args(*blocks, **kwargs))
             return arr
 

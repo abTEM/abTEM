@@ -7,6 +7,7 @@ import strategies as abtem_st
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
 from utils import gpu, assert_array_matches_device
+import matplotlib.pyplot as plt
 
 
 @given(data=st.data())
@@ -26,7 +27,7 @@ def test_prism_matches_probe(data, lazy, device):
     )
 
     assert np.allclose(
-        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
+        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array,
     )
 
 
@@ -163,7 +164,7 @@ def test_prism_scan(data, interpolation, detector, downsample, lazy, device):
         or isinstance(detector, WavesDetector)
     )
     scan.match_probe(probe)
-    measurement_shape = detector.measurement_shape(probe)
+    measurement_shape = detector._out_shape(probe)
 
     measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
 
@@ -171,14 +172,14 @@ def test_prism_scan(data, interpolation, detector, downsample, lazy, device):
         measurement.shape
         == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
     )
-    assert measurement.dtype == detector.measurement_dtype
+    assert measurement.dtype == detector._out_dtype(probe)
 
     measurement = measurement.compute()
     assert (
         measurement.shape
         == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
     )
-    assert measurement.dtype == detector.measurement_dtype
+    assert measurement.dtype == detector._out_dtype(probe)
 
 
 @given(data=st.data())

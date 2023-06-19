@@ -66,6 +66,10 @@ def _wrap_measurements(measurements):
 def _finalize_lazy_measurements(
     arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
+
+    if extra_ensemble_axes_metadata is None:
+        extra_ensemble_axes_metadata = []
+
     measurements = []
     for i, detector in enumerate(detectors):
 
@@ -85,7 +89,23 @@ def _finalize_lazy_measurements(
             meta=meta,
         )
 
-        measurement = detector._pack_single_output(waves, array)
+        ensemble_axes_metadata = detector._out_ensemble_axes_metadata(waves)
+
+        base_axes_metadata = detector._out_base_axes_metadata(waves)
+
+        axes_metadata = ensemble_axes_metadata + base_axes_metadata
+
+        metadata = detector._out_metadata(waves)
+
+        cls = detector._out_type(waves)
+
+        axes_metadata = extra_ensemble_axes_metadata + axes_metadata
+
+        measurement = cls.from_array_and_metadata(
+            array, axes_metadata=axes_metadata, metadata=metadata
+        )
+
+        #measurement = detector._pack_single_output(waves, array)
 
         if hasattr(measurement, "reduce_ensemble"):
             measurement = measurement.reduce_ensemble()
@@ -768,8 +788,8 @@ class Waves(BaseWaves, ArrayObject):
 
     def diffraction_patterns(
         self,
-        max_angle: str | float = None,
-        max_frequency: str | float = None,
+        max_angle: str | float = "cutoff",
+        #max_frequency: str | float = None,
         block_direct: bool | float = False,
         fftshift: bool = True,
         parity: str = "odd",
@@ -839,12 +859,8 @@ class Waves(BaseWaves, ArrayObject):
 
         xp = get_array_module(self.array)
 
-        if max_angle is None and max_frequency is None:
-            max_angle = "cutoff"
-        elif max_angle is None:
-            max_angle = max_frequency / (self.wavelength * 1e3)
-        elif (max_angle is not None) and (max_frequency is not None):
-            raise ValueError()
+        if max_angle is None:
+            max_angle = "full"
 
         new_gpts = self._gpts_within_angle(max_angle, parity=parity)
 
@@ -1052,6 +1068,23 @@ class Waves(BaseWaves, ArrayObject):
         return self.intensity().show(**kwargs)
 
 
+def _reduce_ensemble(ensemble):
+    if isinstance(ensemble, (list, tuple)):
+        return [_reduce_ensemble(ensemble) for ensemble in ensemble]
+
+    squeeze = ()
+    for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata):
+        if axes_metadata._squeeze:
+            squeeze += (i,)
+
+    output = ensemble.squeeze(squeeze)
+
+    if hasattr(output, "reduce_ensemble"):
+        output = output.reduce_ensemble()
+
+    return output
+
+
 class _WavesBuilder(BaseWaves):
     def __init__(self, transforms: list[ArrayObjectTransform], device: str):
 
@@ -1190,21 +1223,6 @@ class _WavesBuilder(BaseWaves):
         )
 
     @staticmethod
-    def _reduce_output(output):
-
-        squeeze = ()
-        for i, axes_metadata in enumerate(output.ensemble_axes_metadata):
-            if axes_metadata._squeeze:
-                squeeze += (i,)
-
-        output = output.squeeze(squeeze)
-
-        if hasattr(output, "reduce_ensemble"):
-            output = output.reduce_ensemble()
-
-        return output
-
-    @staticmethod
     def _lazy_build(
         *args,
         waves_partial,
@@ -1251,20 +1269,20 @@ class _WavesBuilder(BaseWaves):
 
         transform.set_output_specification(dummy_waves)
 
-        num_ensemble_dims = len(transform.ensemble_shape)
+
         if transform._num_outputs > 1:
+            num_ensemble_dims = len(transform.ensemble_shape)
             chunks = chunks[:num_ensemble_dims]
             symbols = _tuple_range(num_ensemble_dims)
             new_axes = None
             meta = np.array((), dtype=object)
         else:
-            symbols = _tuple_range(num_ensemble_dims + 2)
             base_shape = transform._out_base_shape(dummy_waves)
-            new_axes = {
-                num_ensemble_dims: base_shape[0],
-                num_ensemble_dims + 1: base_shape[1],
-            }
-            chunks = chunks[:-len(base_shape)] + base_shape
+            num_ensemble_dims = len(transform._out_ensemble_shape(dummy_waves))
+            symbols = _tuple_range(num_ensemble_dims + len(base_shape))
+            new_base_shape = base_shape[:len(symbols) - len(transform.ensemble_shape)]
+            new_axes = {num_ensemble_dims + i: n for i, n in enumerate(new_base_shape)}
+            chunks = chunks[:-len(base_shape)] + new_base_shape
             meta = transform._out_meta(dummy_waves)
 
         with warnings.catch_warnings():
@@ -1282,14 +1300,12 @@ class _WavesBuilder(BaseWaves):
                 concatenate=True,
             )
 
-
         if transform._num_outputs > 1:
             outputs = transform._pack_multiple_outputs(dummy_waves, new_array)
-            outputs = [self._reduce_output(output) for output in outputs]
-            return ComputableList(outputs)
+            return ComputableList(_reduce_ensemble(outputs))
         else:
             output = transform._pack_single_output(dummy_waves, new_array)
-            output = self._reduce_output(output)
+            output = _reduce_ensemble(output)
             return output
 
 
@@ -1401,14 +1417,20 @@ class PlaneWave(_WavesBuilder):
         )
 
         if lazy:
-            waves = self._lazy_build_transform(
+            measurements = self._lazy_build_transform(
                 waves_partial, transform=transform, max_batch=max_batch
             )
         else:
-            waves = waves_partial()
-            waves = transform.apply(waves)
+            measurements = waves_partial()
+            for transform in reversed(transform.transforms):
+                measurements = transform.apply(measurements)
 
-        return waves
+            measurements = _reduce_ensemble(measurements)
+            # measurements = waves_partial()
+            # measurements = transform.apply(measurements)
+            # measurements = _reduce_ensemble(measurements)
+
+        return measurements
 
     def build(
         self,
@@ -1631,10 +1653,13 @@ class Probe(_WavesBuilder):
         detectors: BaseDetector | list[BaseDetector] = None,
     ) -> CompositeArrayObjectTransform:
 
+        squeeze = False
         if scan is None:
             scan = (self.extent[0] / 2, self.extent[1] / 2)
+            squeeze = True
 
         scan = _validate_scan(scan, self)
+        scan._squeeze = squeeze
 
         transforms = [*self.transforms, scan]
 
@@ -1681,8 +1706,14 @@ class Probe(_WavesBuilder):
                 waves_partial, transform=transform, max_batch=max_batch
             )
         else:
-            waves = waves_partial()
-            measurements = transform.apply(waves)
+            #transform.set_output_specification(waves)
+            #measurements = transform.apply(waves)
+            measurements = waves_partial()
+            for transform in reversed(transform.transforms):
+                measurements = transform.apply(measurements)
+
+
+            measurements = _reduce_ensemble(measurements)
 
         return measurements
 

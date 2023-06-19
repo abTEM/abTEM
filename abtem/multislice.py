@@ -222,6 +222,7 @@ def _allocate_measurement(
     metadata = detector._out_metadata(waves)
 
     array = xp.zeros(shape, dtype=detector._out_dtype(waves))
+
     return measurement_type.from_array_and_metadata(
         array=array, axes_metadata=axes_metadata, metadata=metadata
     )
@@ -235,8 +236,14 @@ def _potential_ensemble_shape_and_metadata(potential):
     extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
 
     if len(potential.exit_planes) > 1:
-        extra_ensemble_axes_shape = (*extra_ensemble_axes_shape, len(potential.exit_planes))
-        extra_ensemble_axes_metadata = [*extra_ensemble_axes_metadata, potential._get_exit_planes_axes_metadata()]
+        extra_ensemble_axes_shape = (
+            *extra_ensemble_axes_shape,
+            len(potential.exit_planes),
+        )
+        extra_ensemble_axes_metadata = [
+            *extra_ensemble_axes_metadata,
+            potential._get_exit_planes_axes_metadata(),
+        ]
 
     return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
 
@@ -246,7 +253,7 @@ def allocate_multislice_measurements(
     detectors: list[BaseDetector],
     extra_ensemble_axes_shape: tuple[int, ...],
     extra_ensemble_axes_metadata: list[AxisMetadata],
-) -> dict[BaseDetector, BaseMeasurements]:
+) -> list[BaseMeasurements | Waves]:
     """
     Allocate the multislice measurements that would be produced by detecting the given set of wave functions with the
     given set of detectors.
@@ -264,14 +271,16 @@ def allocate_multislice_measurements(
 
     Returns
     -------
-    allocated_measurements : dict
-        Mapping of detectors to measurements.
+    allocated_measurements : list
+        List of allocated to measurements.
     """
 
-    measurements = {}
+    measurements = []
     for detector in detectors:
-        measurements[detector] = _allocate_measurement(
-            waves, detector, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
+        measurements.append(
+            _allocate_measurement(
+                waves, detector, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
+            )
         )
 
     return measurements
@@ -342,23 +351,25 @@ def multislice_step(
 def _update_measurements(
     waves: Waves,
     detectors: list[BaseDetector],
-    measurements: dict[BaseDetector, BaseMeasurements],
+    measurements: list[BaseMeasurements],
     measurement_index: tuple[int, ...],
     additive: bool = False,
 ):
     if measurements is None:
         return
 
-    for detector in detectors:
+    assert len(detectors) == len(measurements)
+
+    for i, detector in enumerate(detectors):
         new_measurement = detector.detect(waves)
 
-        if detector in measurements.keys():
-            if additive:
-                measurements[detector].array[measurement_index] += new_measurement.array
-            else:
-                measurements[detector].array[measurement_index] = new_measurement.array
+        #if detector in measurements:
+        if additive:
+            measurements[i].array[measurement_index] += new_measurement.array
         else:
-            measurements[detector] = new_measurement
+            measurements[i].array[measurement_index] = new_measurement.array
+        # else:
+        #     measurements[i] = new_measurement
 
     return measurements
 
@@ -387,7 +398,7 @@ def multislice_and_detect(
     detectors: list[BaseDetector] = None,
     conjugate: bool = False,
     transpose: bool = False,
-) -> tuple[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
+) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
@@ -433,6 +444,11 @@ def multislice_and_detect(
 
     for potential_index, _, potential_configuration in potential.generate_blocks():
 
+        if len(potential.ensemble_shape):
+            potential_index = np.unravel_index(
+                potential_index, potential.ensemble_shape
+            )
+
         exit_plane_index = 0
         if potential.exit_planes[0] == -1:
             measurement_index = _validate_potential_ensemble_indices(
@@ -466,12 +482,10 @@ def multislice_and_detect(
                 )
 
                 if measurements is None:
-                    measurements = {
-                        detector: detector.detect(waves)[
-                            (None,) * len(potential.ensemble_shape)
-                        ]
+                    measurements = [
+                        detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
                         for detector in detectors
-                    }
+                    ]
                 else:
                     measurements = _update_measurements(
                         waves, detectors, measurements, measurement_index
@@ -479,105 +493,105 @@ def multislice_and_detect(
 
                 exit_plane_index += 1
 
-    measurements = tuple(measurements.values())
+    # measurements = tuple(measurements.values())
 
     return measurements
 
 
-def transition_potential_multislice_and_detect(
-    waves: Waves,
-    potential: BasePotential,
-    detectors: list[BaseDetector],
-    sites,
-    transition_potentials,
-    conjugate: bool = False,
-    transpose: bool = False,
-) -> tuple[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
-    """
-    Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
-    at each of the exit planes specified in the potential.
-
-    Parameters
-    ----------
-    waves : Waves
-        A batch of wave functions as a :class:`.Waves` object.
-    potential : BasePotential
-        A potential as :class:`BasePotential` object.
-    detectors : (list of) BaseDetector, optional
-        A detector or a list of detectors defining how the wave functions should be converted to measurements after
-        running the multislice algorithm.
-    conjugate : bool, optional
-        If True, use the conjugate of the transmission function (default is False).
-    transpose : bool, optional
-        If True, reverse the order of propagation and transmission (default is False).
-
-    Returns
-    -------
-    measurements : Waves or (list of) :class:`.BaseMeasurement`
-        Exit waves or detected measurements or lists of measurements.
-    """
-
-    antialias_aperture = AntialiasAperture()
-    propagator = FresnelPropagator()
-
-    measurements = allocate_multislice_measurements(
-        waves,
-        detectors,
-        potential,
-    )
-
-    for potential_index, _, potential_configuration in potential.generate_blocks():
-        slice_generator = potential_configuration.generate_slices()
-
-        for scatter_index, (scatter_slice, sites_slice) in enumerate(
-            zip(slice_generator, sites)
-        ):
-
-            waves = multislice_step(
-                waves,
-                scatter_slice,
-                propagator,
-                antialias_aperture,
-                conjugate=conjugate,
-                transpose=transpose,
-            )
-
-            sites_slice = transition_potentials.validate_sites(sites_slice)
-
-            for _, scattered_waves in transition_potentials.generate_scattered_waves(
-                waves, sites_slice
-            ):
-
-                for depth, potential_slice in potential_configuration.generate_slices(
-                    first_slice=scatter_index, return_depth=True
-                ):
-
-                    scattered_waves = multislice_step(
-                        scattered_waves,
-                        potential_slice,
-                        propagator,
-                        antialias_aperture,
-                        conjugate=conjugate,
-                        transpose=transpose,
-                    )
-
-                    if potential_slice.exit_planes:
-                        exit_plane_index = np.searchsorted(
-                            potential.exit_thicknesses, depth - 1e-6
-                        )
-
-                        measurement_index = _validate_potential_ensemble_indices(
-                            potential_index, exit_plane_index, potential_configuration
-                        )
-
-                        for detector in detectors:
-                            new_measurement = detector.detect(scattered_waves).mean(0)
-                            measurements[detector].array[
-                                measurement_index
-                            ] += new_measurement.array
-
-    measurements = tuple(measurements.values())
-    return measurements
+# def transition_potential_multislice_and_detect(
+#     waves: Waves,
+#     potential: BasePotential,
+#     detectors: list[BaseDetector],
+#     sites,
+#     transition_potentials,
+#     conjugate: bool = False,
+#     transpose: bool = False,
+# ) -> tuple[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
+#     """
+#     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
+#     at each of the exit planes specified in the potential.
+#
+#     Parameters
+#     ----------
+#     waves : Waves
+#         A batch of wave functions as a :class:`.Waves` object.
+#     potential : BasePotential
+#         A potential as :class:`BasePotential` object.
+#     detectors : (list of) BaseDetector, optional
+#         A detector or a list of detectors defining how the wave functions should be converted to measurements after
+#         running the multislice algorithm.
+#     conjugate : bool, optional
+#         If True, use the conjugate of the transmission function (default is False).
+#     transpose : bool, optional
+#         If True, reverse the order of propagation and transmission (default is False).
+#
+#     Returns
+#     -------
+#     measurements : Waves or (list of) :class:`.BaseMeasurement`
+#         Exit waves or detected measurements or lists of measurements.
+#     """
+#
+#     antialias_aperture = AntialiasAperture()
+#     propagator = FresnelPropagator()
+#
+#     measurements = allocate_multislice_measurements(
+#         waves,
+#         detectors,
+#         potential,
+#     )
+#
+#     for potential_index, _, potential_configuration in potential.generate_blocks():
+#         slice_generator = potential_configuration.generate_slices()
+#
+#         for scatter_index, (scatter_slice, sites_slice) in enumerate(
+#             zip(slice_generator, sites)
+#         ):
+#
+#             waves = multislice_step(
+#                 waves,
+#                 scatter_slice,
+#                 propagator,
+#                 antialias_aperture,
+#                 conjugate=conjugate,
+#                 transpose=transpose,
+#             )
+#
+#             sites_slice = transition_potentials.validate_sites(sites_slice)
+#
+#             for _, scattered_waves in transition_potentials.generate_scattered_waves(
+#                 waves, sites_slice
+#             ):
+#
+#                 for depth, potential_slice in potential_configuration.generate_slices(
+#                     first_slice=scatter_index, return_depth=True
+#                 ):
+#
+#                     scattered_waves = multislice_step(
+#                         scattered_waves,
+#                         potential_slice,
+#                         propagator,
+#                         antialias_aperture,
+#                         conjugate=conjugate,
+#                         transpose=transpose,
+#                     )
+#
+#                     if potential_slice.exit_planes:
+#                         exit_plane_index = np.searchsorted(
+#                             potential.exit_thicknesses, depth - 1e-6
+#                         )
+#
+#                         measurement_index = _validate_potential_ensemble_indices(
+#                             potential_index, exit_plane_index, potential_configuration
+#                         )
+#
+#                         for detector in detectors:
+#                             new_measurement = detector.detect(scattered_waves).mean(0)
+#                             measurements[detector].array[
+#                                 measurement_index
+#                             ] += new_measurement.array
+#
+#     measurements = tuple(measurements.values())
+#     return measurements
 
 
 class MultisliceTransform(ArrayObjectTransform):

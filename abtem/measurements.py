@@ -960,6 +960,9 @@ class _BaseMeasurement2D(BaseMeasurements):
         measurement_visualization_2d : MeasurementVisualization2D
         """
 
+        if not interact:
+            self.compute()
+
         visualization = MeasurementVisualization2D(
             measurements=self,
             ax=ax,
@@ -1660,6 +1663,9 @@ class _BaseMeasurement1D(BaseMeasurements):
         visualization : MeasurementVisualization1D
         """
 
+        if not interact:
+            self.compute()
+
         visualization = MeasurementVisualization1D(
             self,
             ax=ax,
@@ -2183,6 +2189,18 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if self.is_lazy:
             raise RuntimeError("indexing not implemented for lazy measurement")
 
+        # out = _index_diffraction_patterns(
+        #     self,
+        #     cell,
+        #     threshold=threshold,
+        #     distance_threshold=distance_threshold,
+        #     min_distance=min_distance,
+        #     integration_radius=integration_radius,
+        #     max_index=max_index,
+        #     centering=centering,
+        # )
+        # return out
+
         hkl, intensities, positions = _index_diffraction_patterns(
             self,
             cell,
@@ -2193,6 +2211,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             max_index=max_index,
             centering=centering,
         )
+
+
 
         ensemble_axes_metadata = self.ensemble_axes_metadata
 
@@ -3416,6 +3436,9 @@ class PolarMeasurements(BaseMeasurements):
 
         diffraction_patterns = self.to_diffraction_patterns(gpts=gpts)
 
+        if not interact:
+            diffraction_patterns.compute()
+
         return diffraction_patterns.show(
             ax=ax,
             cbar=cbar,
@@ -3531,10 +3554,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             (float(position[0]), float(position[1]), float(position[2]))
             for position in kwargs["positions"]
         ]
-        super()._pack_kwargs(kwargs)
+        return super()._pack_kwargs(kwargs)
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
+
         kwargs = super()._unpack_kwargs(attrs)
         kwargs["miller_indices"] = np.array(kwargs["miller_indices"], dtype=int)
         kwargs["positions"] = np.array(kwargs["positions"], dtype=np.float32)
@@ -3813,6 +3837,10 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         -------
         measurement_visualization_2d : MeasurementVisualization2D
         """
+
+        if not interact:
+            self.compute()
+
         visualization = DiffractionSpotsVisualization(
             self,
             ax=ax,

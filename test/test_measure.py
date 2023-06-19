@@ -246,6 +246,7 @@ def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
     )
 
     assume(isinstance(measurement, Images) or len(_scan_shape(measurement)) == 2)
+    measurement = measurement.no_base_chunks()
     noisy = measurement.poisson_noise(dose_per_area=dose_per_area, samples=16).compute()
 
     if isinstance(measurement, Images):

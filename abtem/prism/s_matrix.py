@@ -62,6 +62,7 @@ class BaseSMatrix(BaseWaves):
     _device: str
     ensemble_axes_metadata: list[AxisMetadata]
     ensemble_shape: tuple[int, ...]
+
     @property
     def device(self):
         """The device where the S-Matrix is created and reduced."""
@@ -113,7 +114,7 @@ class BaseSMatrix(BaseWaves):
         ]
 
     def dummy_probes(
-        self, scan: BaseScan = None, ctf: CTF = None, plane: str = "entrance"
+        self, scan: BaseScan = None, ctf: CTF = None, plane: str = "entrance", **kwargs
     ) -> Probe:
         # TODO
         """
@@ -148,13 +149,15 @@ class BaseSMatrix(BaseWaves):
 
         ctf.semiangle_cutoff = min(ctf.semiangle_cutoff, self.semiangle_cutoff)
 
+        default_kwargs = {"device": self.device, "metadata": {**self.metadata}}
+        kwargs = {**default_kwargs, **kwargs}
+
         probes = Probe._from_ctf(
             extent=self.window_extent,
             gpts=self.window_gpts,
             ctf=ctf,
             energy=self.energy,
-            device=self._device,
-            metadata={**self.metadata},
+            **kwargs,
         )
 
         if scan is not None:
@@ -223,8 +226,8 @@ def _chunks_for_multiple_rechunk_reduce(partitions):
     chunks_3 = chunks_3 + (sum(partitions[i + 2 :]),)
 
     assert sum(chunks_3) == sum(partitions)
-    assert (
-        len(chunk_indices_1 + chunk_indices_2 + chunk_indices_3) == (len(partitions) - 2)
+    assert len(chunk_indices_1 + chunk_indices_2 + chunk_indices_3) == (
+        len(partitions) - 2
     )
     return (chunks_1, chunks_2, chunks_3), (
         chunk_indices_1,
@@ -1014,10 +1017,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                     (slice(None),) * (len(self.waves.shape) - 3) + ctf_slics + slics
                 )
 
-                for detector, measurement in measurements.items():
+                for detector, measurement in zip(detectors, measurements):
                     measurement.array[indices] = detector.detect(waves).array
 
-        return tuple(measurements.values())
+        return tuple(measurements)
 
     @property
     def _window_margin(self):
@@ -1437,18 +1440,14 @@ class SMatrix(BaseSMatrix, Ensemble):
     def wave_vectors(self) -> np.ndarray:
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        dummy_probes = self.dummy_probes()
+        dummy_probes = self.dummy_probes(device="cpu")
 
         aperture = dummy_probes.aperture._evaluate_kernel(dummy_probes)
 
         indices = np.where(aperture > 0.0)
 
-        n = np.fft.fftfreq(aperture.shape[0], d=1 / aperture.shape[0])[
-            indices[0],
-        ]
-        m = np.fft.fftfreq(aperture.shape[1], d=1 / aperture.shape[1])[
-            indices[1],
-        ]
+        n = np.fft.fftfreq(aperture.shape[0], d=1 / aperture.shape[0])[indices[0]]
+        m = np.fft.fftfreq(aperture.shape[1], d=1 / aperture.shape[1])[indices[1]]
 
         w, h = self.extent
 
@@ -1908,17 +1907,17 @@ class SMatrix(BaseSMatrix, Ensemble):
             new_measurements = ensure_list(new_measurements)
 
             if measurements is None:
-                measurements = dict(zip(detectors, new_measurements))
+                measurements = new_measurements
             else:
                 for measurement, new_measurement in zip(
-                    measurements.values(), new_measurements
+                    measurements, new_measurements
                 ):
                     if measurement.axes_metadata[0]._ensemble_mean:
                         measurement.array[:] += new_measurement.array
                     else:
                         measurement.array[i] = new_measurement.array
 
-        measurements = list(measurements.values())
+        #measurements = list(measurements.values())
 
         for i, measurement in enumerate(measurements):
             if (

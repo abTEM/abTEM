@@ -70,9 +70,7 @@ class ComputableList(list):
                         url, compute=False, component=f"array{i}", overwrite=overwrite
                     )
                 )
-                kwargs = has_array._copy_kwargs(exclude=("array",))
-
-                packed_kwargs = has_array._pack_kwargs(kwargs)
+                packed_kwargs = has_array._pack_kwargs(has_array._copy_kwargs(exclude=("array",)))
 
                 root.attrs[f"kwargs{i}"] = packed_kwargs
                 root.attrs[f"type{i}"] = has_array.__class__.__name__
@@ -1083,8 +1081,8 @@ class ArrayObject(CopyMixin):
                 symbols = _tuple_range(num_ensemble_dims)
                 meta = np.array((), dtype=object)
             else:
-                symbols = _tuple_range(num_ensemble_dims + 2)
                 base_shape = transform._out_base_shape(self)
+                symbols = _tuple_range(num_ensemble_dims + len(base_shape))
                 chunks = chunks[: -len(base_shape)] + base_shape
                 meta = transform._out_meta(self)
 

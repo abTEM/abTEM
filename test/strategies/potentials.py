@@ -7,7 +7,7 @@ from ase.data import chemical_symbols
 from hypothesis.extra import numpy as numpy_st
 
 from abtem.potentials.iam import Potential, PotentialArray
-from abtem.inelastic.phonons import FrozenPhonons, DummyFrozenPhonons, MDFrozenPhonons
+from abtem.inelastic.phonons import FrozenPhonons, DummyFrozenPhonons, AtomsEnsemble
 from . import core as core_st
 
 
@@ -69,7 +69,7 @@ def frozen_phonons(draw,
     return FrozenPhonons(drawn_atoms,
                          num_configs=num_configs,
                          sigmas=sigmas,
-                         seeds=seeds,
+                         seed=seeds,
                          ensemble_mean=ensemble_mean)
 
 
@@ -112,13 +112,13 @@ def md_frozen_phonons(draw,
     n = draw(st.integers(min_value=min_configs, max_value=max_configs))
 
     trajectory = [drawn_atoms] * n
-    atomic_numbers = np.unique(drawn_atoms.numbers)
-    cell = drawn_atoms.cell
+    # atomic_numbers = np.unique(drawn_atoms.numbers)
+    # cell = drawn_atoms.cell
 
     if lazy:
         trajectory = [dask.delayed(drawn_atoms) for drawn_atoms in trajectory]
 
-    return MDFrozenPhonons(trajectory)
+    return AtomsEnsemble(trajectory)
 
 
 @st.composite

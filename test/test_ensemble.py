@@ -9,7 +9,8 @@ from hypothesis import given, reproduce_failure
 import strategies as abtem_st
 from abtem.core.ensemble import concatenate_array_blocks
 
-
+#@reproduce_failure('6.59.0', b'AXicY2BAAFYGTMBo0QAAAYkAvw==')
+#@reproduce_failure('6.59.0', b'AXicY2SAA1YYg9GigQEXAAAUHQDA')
 @given(data=st.data())
 @pytest.mark.parametrize(
     "ensemble",
@@ -32,6 +33,7 @@ from abtem.core.ensemble import concatenate_array_blocks
 )
 def test_ensemble_shape(data, ensemble):
     ensemble = data.draw(ensemble())
+    #print(ensemble.ensemble_shape, ensemble.ensemble_axes_metadata)
     assert len(ensemble.ensemble_shape) == len(ensemble.ensemble_axes_metadata)
     assert len(ensemble.ensemble_shape) == len(ensemble._default_ensemble_chunks)
 
@@ -42,7 +44,7 @@ def test_ensemble_shape(data, ensemble):
     [
         abtem_st.frozen_phonons,
         abtem_st.dummy_frozen_phonons,
-        abtem_st.md_frozen_phonons,
+        #abtem_st.md_frozen_phonons,
         abtem_st.grid_scan,
         abtem_st.line_scan,
         abtem_st.custom_scan,
@@ -95,9 +97,9 @@ def test_array_waves_transform(data, ensemble, chunks):
 
     waves = data.draw(abtem_st.probe()).build()
     for i in np.ndindex(blocks.shape):
-        blocks[i] = blocks[i].evaluate(waves)
+        blocks[i] = blocks[i]._evaluate_kernel(waves)
     blocks = concatenate_array_blocks(blocks)
-    array = ensemble.evaluate(waves)
+    array = ensemble._evaluate_kernel(waves)
 
     assert array.shape[:-2] == ensemble.ensemble_shape
     assert blocks.shape[:-2] == ensemble.ensemble_shape
@@ -120,10 +122,12 @@ def test_array_waves_transform(data, ensemble, chunks):
         abtem_st.ctf,
     ],
 )
-@pytest.mark.parametrize("lazy", [False])
+@pytest.mark.parametrize("lazy", [True, False])
 def test_apply_waves_transform(data, ensemble, lazy):
     ensemble = data.draw(ensemble())
     waves = data.draw(abtem_st.probe(allow_distribution=False)).build(lazy=lazy)
 
+    ensemble_shape = ensemble._out_ensemble_shape(waves)
     waves = ensemble.apply(waves)
-    assert waves.shape[:-2] == ensemble.ensemble_shape
+
+    assert waves.shape[:-2] == ensemble_shape

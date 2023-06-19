@@ -798,7 +798,7 @@ class PixelatedDetector(BaseDetector):
 
         return 0.0, min(cutoff)
 
-    def _out_base_shape(self, waves: Waves, index=0) -> tuple[int, int]:
+    def _out_base_shape(self, waves: Waves, index: int = 0) -> tuple[int, int]:
         if self.reciprocal_space:
             shape = waves._gpts_within_angle(self.max_angle)
         else:
