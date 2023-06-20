@@ -19,7 +19,7 @@ from dask.delayed import Delayed
 
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata, UnknownAxis
 from abtem.core.chunks import chunk_ranges, validate_chunks
-from abtem.core.ensemble import Ensemble
+from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 try:
@@ -157,30 +157,26 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         return self._atoms
 
     @classmethod
-    def _from_partitioned_args_func(cls, *args, **kwargs):
-        return cls(args[0])
+    def _from_partitioned_args_func(cls, args, **kwargs):
+        atoms = args.item()
+        new_dummy_frozen_phonons = cls(atoms=atoms, **kwargs)
+        return _wrap_with_array(new_dummy_frozen_phonons, 1)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("atoms",))
         return partial(self._from_partitioned_args_func, **kwargs)
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
-        def _dummy_frozen_phonons(atoms):
-            arr = np.zeros((1,), dtype=object)
-            arr.itemset(0, atoms)
-            return arr
-
-        if not lazy and self.is_lazy:
-            atoms = self.atoms.compute()
-        else:
-            atoms = self.atoms
-
         if lazy:
-            array = da.from_delayed(
-                dask.delayed(_dummy_frozen_phonons)(atoms), shape=(1,), dtype=object
-            )
+            lazy_args = dask.delayed(_wrap_with_array)(self.atoms, ndims=1)
+
+            array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
+
+            #array = da.from_delayed(
+            #    dask.delayed(self.atoms), shape=(1,), dtype=object
+            #)
         else:
-            array = _dummy_frozen_phonons(atoms)
+            array = _wrap_with_array(self.atoms, 1)
 
         return (array,)
 
@@ -369,52 +365,32 @@ class FrozenPhonons(BaseFrozenPhonons):
         return atoms
 
     @classmethod
-    def _from_partitioned_args_func(cls, *args, **kwargs):
-        args = args[0]
-        if hasattr(args, "item"):
-            args = args.item()
-
-        kwargs["atoms"] = args["atoms"]
-        kwargs["seed"] = args["seed"]
-        kwargs["num_configs"] = args["num_configs"]
-        return cls(**kwargs)
+    def _from_partitioned_args_func(cls, args, **kwargs):
+        atoms, seed = args.item()
+        new_frozen_phonons = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
+        ndims = max(len(new_frozen_phonons.ensemble_shape), 1)
+        return _wrap_with_array(new_frozen_phonons, ndims)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("atoms", "seed", "num_configs"))
         return partial(self._from_partitioned_args_func, **kwargs)
 
-    @staticmethod
-    def _frozen_phonon(atoms, seeds):
-        arr = np.zeros((1,), dtype=object)
-        arr.itemset(0, {"atoms": atoms, "seed": seeds, "num_configs": len(seeds)})
-        return arr
-
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        if not lazy and self.is_lazy:
-            atoms = self.atoms.compute()
-        else:
-            atoms = self.atoms
-
         array = np.zeros((len(chunks[0]),), dtype=object)
-        for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-            seeds = self.seed[start:stop]
-
-            if lazy:
-                with dask.annotate(priority=-i * 10 - 10):
-                    lazy_atoms = dask.delayed(atoms)
-                    lazy_frozen_phonon = dask.delayed(self._frozen_phonon)(
-                        atoms=lazy_atoms, seeds=seeds
-                    )
-                    array.itemset(
-                        i, da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object)
-                    )
-            else:
-                array.itemset(i, self._frozen_phonon(atoms=atoms, seeds=seeds))
-
         if lazy:
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+                seeds = self.seed[start:stop]
+                lazy_atoms = dask.delayed(self.atoms)
+                lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
+                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
+                array.itemset(i, lazy_array)
+
             array = da.concatenate(list(array))
+        else:
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+                array.itemset(i, _wrap_with_array((self.atoms, self.seed[start:stop]), ndims=1))
 
         return (array,)
 

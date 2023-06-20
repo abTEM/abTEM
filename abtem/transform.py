@@ -531,7 +531,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
         chunks = validate_chunks(self.ensemble_shape, chunks, limit="auto")
 
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
 
         blocks = ()
         start = 0

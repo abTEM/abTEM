@@ -1,3 +1,4 @@
+from __future__ import annotations
 import itertools
 import operator
 import warnings
@@ -9,7 +10,7 @@ import dask.array as da
 import numpy as np
 
 from abtem.core import config
-from abtem.core.axes import AxisMetadata
+from abtem.core.axes import AxisMetadata, AxesMetadataList
 from abtem.core.chunks import (
     chunk_ranges,
     validate_chunks,
@@ -17,13 +18,53 @@ from abtem.core.chunks import (
     iterate_chunk_ranges,
     Chunks,
 )
+from abtem.core.utils import tuple_range, interleave
+
+
+def _wrap_with_array(x, ndims):
+    wrapped = np.zeros((1,) * ndims, dtype=object)
+    wrapped.itemset(0, x)
+    return wrapped
+
+
+def _wrap_args_with_array(*args, ndims):
+    return _wrap_with_array(args, ndims)
 
 
 class Ensemble(metaclass=ABCMeta):
-    ensemble_shape: Tuple[int, ...]
-    ensemble_axes_metadata: List[AxisMetadata]
 
     @property
+    def ensemble_shape(self) -> tuple[int, ...]:
+        """Shape of the ensemble axes."""
+        return ()
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        """List of AxisMetadata of the ensemble axes."""
+        return []
+
+    @property
+    def axes_metadata(self) -> AxesMetadataList:
+        """List of AxisMetadata."""
+        return AxesMetadataList(
+            self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
+        )
+
+    @property
+    def shape(self):
+        """Shape of the ensemble."""
+        return self.ensemble_shape + self.base_shape
+
+    @property
+    def base_shape(self) -> tuple[int, ...]:
+        """Shape of the base axes."""
+        return ()
+
+    @property
+    def base_axes_metadata(self) -> list[AxisMetadata]:
+        """List of AxisMetadata of the base axes."""
+        return []
+
     @abstractmethod
     def _default_ensemble_chunks(self):
         pass
@@ -31,26 +72,6 @@ class Ensemble(metaclass=ABCMeta):
     @abstractmethod
     def _partition_args(self, chunks: Chunks = None, lazy: bool = True):
         pass
-
-    def _partition_ensemble_axes_metadata(
-        self, chunks: Chunks = None, lazy: bool = True
-    ):
-        chunks = self._validate_chunks(chunks)
-
-        ensemble_axes = np.zeros(chunk_shape(chunks), dtype=object)
-        for index, slic in iterate_chunk_ranges(chunks):
-            ensemble_axes.itemset(
-                index,
-                [
-                    self.ensemble_axes_metadata[i][slic[i]]
-                    for i, axis in enumerate(self.ensemble_axes_metadata)
-                ],
-            )
-
-        if lazy:
-            ensemble_axes = da.from_array(ensemble_axes, chunks=1)
-
-        return ensemble_axes
 
     def select_block(self, index: Tuple[int, ...], chunks: Chunks):
         """
@@ -69,6 +90,26 @@ class Ensemble(metaclass=ABCMeta):
         selected_args = tuple(arg[index] for arg, index in zip(args, index))
         return self._from_partitioned_args()(*selected_args)
 
+    @abstractmethod
+    def _from_partitioned_args(self):
+        pass
+
+    # def _wrapped_from_partitioned_args(self):
+    #     def wrap_from_partitioned_args(*args, from_partitioned_args, **kwargs):
+    #
+    #         blocks = tuple(arg.item() for arg in args)
+    #
+    #         n = sum(len(a.shape) for a in args)
+    #
+    #         arr = np.empty((1,) * n, dtype=object)
+    #         arr.itemset(0, from_partitioned_args(*blocks, **kwargs))
+    #         return arr
+    #
+    #     return partial(
+    #         wrap_from_partitioned_args,
+    #         from_partitioned_args=self._from_partitioned_args(),
+    #     )
+
     def ensemble_blocks(self, chunks: Chunks = None) -> da.core.Array:
         """
         Split the ensemble into an array of smaller ensembles.
@@ -79,37 +120,32 @@ class Ensemble(metaclass=ABCMeta):
             Block sizes along each dimension.
         """
 
-        def interleave(l1, l2):
-            return tuple(val for pair in zip(l1, l2) for val in pair)
-
-        def _tuple_range(length, offset=0):
-            return tuple(range(offset, offset + length))
-
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
 
         args = self._partition_args(chunks, lazy=True)
 
-        assert isinstance(args, tuple)
+        out_symbols = tuple_range(sum(len(arg.shape) for arg in args))
 
-        #symbols = tuple(range(len(args)))
-        out_symbols = tuple(range(sum(len(a.shape) for a in args)))
+        assert len(out_symbols) == max(len(self.ensemble_shape), 1)
 
         arg_symbols = ()
-        n = 0
-        for a in args:
-            arg_symbols += (_tuple_range(len(a.shape), n),)
-            n += len(a.shape)
+        offset = 0
+        for arg in args:
+            arg_symbols += (tuple_range(len(arg.shape), offset),)
+            offset += len(arg.shape)
 
-        adjust_chunks = {i: c for i, c in enumerate(chunks)}
+        adjust_chunks = {i: axes_chunks for i, axes_chunks in enumerate(chunks)}
+
+        func = self._from_partitioned_args()
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Increasing number of chunks")
             return da.blockwise(
-                self._wrapped_from_partitioned_args(),
+                func,
                 out_symbols,
                 *interleave(args, arg_symbols),
                 adjust_chunks=adjust_chunks,
-                meta=np.array((), dtype=object)
+                meta=np.array((), dtype=object),
             )
 
     def generate_blocks(self, chunks: Chunks = 1):
@@ -122,7 +158,7 @@ class Ensemble(metaclass=ABCMeta):
             Block sizes along each dimension.
         """
 
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
 
         blocks = self._partition_args(chunks=chunks, lazy=False)
 
@@ -136,7 +172,7 @@ class Ensemble(metaclass=ABCMeta):
 
             yield block_indices, slics, self._from_partitioned_args()(*block)
 
-    def _validate_chunks(self, chunks: Chunks, limit: Union[str, int] = "auto"):
+    def _validate_ensemble_chunks(self, chunks: Chunks, limit: Union[str, int] = "auto"):
         if chunks is None:
             chunks = self._default_ensemble_chunks
 
@@ -169,26 +205,6 @@ class Ensemble(metaclass=ABCMeta):
             chunks = chunks[: -len(base_shape)]
 
         return chunks
-
-    @abstractmethod
-    def _from_partitioned_args(self):
-        pass
-
-    def _wrapped_from_partitioned_args(self):
-        def wrap_from_partitioned_args(*args, from_partitioned_args, **kwargs):
-
-            blocks = tuple(arg.item() for arg in args)
-
-            n = sum(len(a.shape) for a in args)
-
-            arr = np.empty((1,) * n, dtype=object)
-            arr.itemset(0, from_partitioned_args(*blocks, **kwargs))
-            return arr
-
-        return partial(
-            wrap_from_partitioned_args,
-            from_partitioned_args=self._from_partitioned_args(),
-        )
 
 
 class EmptyEnsemble(Ensemble):

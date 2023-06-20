@@ -611,7 +611,7 @@ class GPAWPotential(_PotentialBuilder):
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
 
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
 
         def frozen_phonons(calculators, frozen_phonons):
             arr = np.zeros((1,), dtype=object)

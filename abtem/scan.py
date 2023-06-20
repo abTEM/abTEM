@@ -244,7 +244,7 @@ class CustomScan(BaseScan):
         return self._from_partitioned_args_func
 
     def _partition_args(self, chunks=None, lazy: bool = True):
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
@@ -915,7 +915,7 @@ class GridScan(HasGridMixin, BaseScan):
 
     def _partition_args(self, chunks=None, lazy=True):
         self.grid.check_is_defined()
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
         blocks = ()
         for i in range(2):
             cumchunks = tuple(np.cumsum(chunks[i]))

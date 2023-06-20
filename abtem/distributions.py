@@ -9,6 +9,7 @@ from typing import Sequence, Iterable, Iterator
 import dask.array as da
 import numpy as np
 
+from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module, ArrayModule
 from abtem.core.chunks import Chunks, equal_sized_chunks
 from abtem.core.ensemble import Ensemble
@@ -387,6 +388,9 @@ class EnsembleFromDistributions(Ensemble, CopyMixin):
     distributions : tuple of str, optional
         Names of properties that may be described by a distribution.
     """
+
+    ensemble_axes_metadata: list[AxisMetadata]
+
     def __init__(self, distributions: tuple[str, ...] = (), **kwargs):
         self._distributions = distributions
         super().__init__(**kwargs)
@@ -421,7 +425,7 @@ class EnsembleFromDistributions(Ensemble, CopyMixin):
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
         distributions = self._distribution_properties
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
         blocks = ()
         for distribution, n in zip(distributions.values(), chunks):
             blocks += (distribution.divide(n, lazy=lazy),)

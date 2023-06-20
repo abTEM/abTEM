@@ -348,24 +348,19 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
     def __init__(
         self,
-        array: np.ndarray,
+        array: np.ndarray | da.core.Array,
         ensemble_axes_metadata: list[AxisMetadata],
         metadata: dict,
+        base_dims: int,
         allow_base_axis_chunks: bool = False,
     ):
 
-        if ensemble_axes_metadata is None:
-            ensemble_axes_metadata = []
-
-        if metadata is None:
-            metadata = {}
-
-        self._ensemble_axes_metadata = ensemble_axes_metadata
-        self._metadata = metadata
-
-        self._array = array
-
-        self._check_axes_metadata()
+        super().__init__(
+            array=array,
+            base_dims=base_dims,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
         # if not allow_base_axis_chunks:
         #     if self.is_lazy and (
@@ -1010,8 +1005,6 @@ class Images(_BaseMeasurement2D):
         A dictionary defining measurement metadata.
     """
 
-    _base_dims = 2  # Images are assumed to be 2D
-
     def __init__(
         self,
         array: da.core.Array | np.array,
@@ -1029,6 +1022,7 @@ class Images(_BaseMeasurement2D):
 
         super().__init__(
             array=array,
+            base_dims=2,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
             allow_base_axis_chunks=True,
@@ -1395,11 +1389,11 @@ class Images(_BaseMeasurement2D):
 
 
 class _BaseMeasurement1D(BaseMeasurements):
-    _base_dims = 1
 
     def __init__(
         self,
         array: np.ndarray,
+
         sampling: float = None,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
@@ -1409,6 +1403,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         super().__init__(
             array=array,
+            base_dims=1,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
             allow_base_axis_chunks=True,
@@ -2009,8 +2004,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         A dictionary defining measurement metadata.
     """
 
-    _base_dims = 2  # The dimension of diffraction patterns is 2.
-
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
@@ -2032,6 +2025,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         super().__init__(
             array=array,
+            base_dims=2,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
             allow_base_axis_chunks=False,
@@ -2156,7 +2150,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         min_distance: float = 0.0,
         integration_radius: float = 0.0,
         max_index: int = None,
-            centering:str="P",
+        centering: str = "P",
     ) -> "IndexedDiffractionPatterns":
 
         """
@@ -2211,8 +2205,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
             max_index=max_index,
             centering=centering,
         )
-
-
 
         ensemble_axes_metadata = self.ensemble_axes_metadata
 
@@ -3011,9 +3003,6 @@ class PolarMeasurements(BaseMeasurements):
     polar_measurements : PolarMeasurements
         The polar measurements.
     """
-
-    _base_dims = 2
-
     def __init__(
         self,
         array: np.ndarray,
@@ -3031,6 +3020,7 @@ class PolarMeasurements(BaseMeasurements):
 
         super().__init__(
             array=array,
+            base_dims=2,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
@@ -3457,7 +3447,6 @@ class PolarMeasurements(BaseMeasurements):
 
 
 class IndexedDiffractionPatterns(BaseMeasurements):
-    _base_dims = 1
 
     def __init__(
         self,
@@ -3494,6 +3483,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         super().__init__(
             array=array,
+            base_dims=1,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
@@ -3853,7 +3843,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             vmax=vmax,
             explode=explode,
             figsize=figsize,
-            interact=interact
+            interact=interact,
         )
 
         if title is not None:
@@ -3909,8 +3899,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             set(itertools.chain(*[intensities1.keys() for intensities1 in intensities]))
         )
 
-        #print(miller_indices)
-        #sss
+        # print(miller_indices)
+        # sss
 
         new_intensities = {}
         for hkl in miller_indices:

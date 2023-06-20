@@ -1,16 +1,20 @@
+from __future__ import annotations
+
 import dataclasses
 from copy import copy
 from dataclasses import dataclass
 from numbers import Number
-from typing import List, Tuple, Union, Iterable, Sequence
-from tabulate import tabulate
-import numpy as np
+from typing import Union, Sequence
+
 import dask.array as da
-from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
-from abtem.core import config
-from abtem.core.utils import safe_equality
+import numpy as np
 from numpy.typing import ArrayLike
+from tabulate import tabulate
+
+from abtem.core import config
+from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.units import _get_conversion_factor, _format_units, _validate_units
+from abtem.core.utils import safe_equality
 
 
 def format_label(axes, units=None):
@@ -84,11 +88,11 @@ def format_title(
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
-    _concatenate: bool = True
     label: str = ""
+    units: str = None
     _tex_label: str = None
     _default_type: str = None
-    units: str = None
+    _concatenate: bool = True
     _ensemble_mean: bool = False
     _squeeze: bool = False
 
@@ -138,6 +142,15 @@ class AxisMetadata:
         d["type"] = self.__class__.__name__
         return d
 
+    def concatenate(self, other: AxisMetadata) -> AxisMetadata:
+        if not self._concatenate:
+            raise RuntimeError()
+
+        if not self.__eq__(other):
+            raise RuntimeError()
+
+        return self
+
     @staticmethod
     def from_dict(d):
         cls = globals()[d["type"]]
@@ -160,7 +173,6 @@ class LinearAxis(AxisMetadata):
     units: str = ""
     offset: float = 0.0
 
-
     def format_coordinates(self, n: int = None) -> str:
         coordinates = self.coordinates(n)
         if n > 3:
@@ -173,15 +185,6 @@ class LinearAxis(AxisMetadata):
         return np.linspace(
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )
-
-    def concatenate(self, other: AxisMetadata) -> "LinearAxis":
-        if not self._concatenate:
-            raise RuntimeError()
-
-        if not self.__eq__(other):
-            raise RuntimeError()
-
-        return self
 
     def to_nonlinear_axis(self, n):
         values = tuple(self.coordinates(n))
@@ -292,11 +295,7 @@ class NonLinearAxis(OrdinalAxis):
             return " ".join([f"{value:.2f}" for value in self.values])
 
     def format_title(self, formatting, **kwargs):
-
         return format_title(self, formatting=formatting, **kwargs)
-
-        #return f"{self.label} = {self.values[0]:>{formatting}} {self.units}"
-
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisAlignedTiltAxis(NonLinearAxis):
@@ -420,63 +419,3 @@ class AxesMetadataList(list):
 
     def __repr__(self):
         return format_axes_metadata(self, self._shape)
-
-
-class HasAxes:
-    base_shape: Tuple[int, ...]
-    ensemble_shape: Tuple[int, ...]
-    base_axes_metadata: List[AxisMetadata]
-    ensemble_axes_metadata: List[AxisMetadata]
-
-    @property
-    def axes_metadata(self) -> AxesMetadataList:
-        """
-        List of AxisMetadata.
-        """
-        return AxesMetadataList(
-            self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
-        )
-
-    @property
-    def num_base_axes(self) -> int:
-        """
-        Number of base axes.
-        """
-        return len(self.base_axes_metadata)
-
-    @property
-    def num_ensemble_axes(self) -> int:
-        """
-        Number of ensemble axes.
-        """
-        return len(self.ensemble_axes_metadata)
-
-    @property
-    def num_axes(self) -> int:
-        """
-        Number of axes.
-        """
-        return self.num_ensemble_axes + self.num_base_axes
-
-    @property
-    def base_axes(self) -> Tuple[int, ...]:
-        """
-        Axis indices of base axes.
-        """
-        return tuple(
-            range(self.num_ensemble_axes, self.num_ensemble_axes + self.num_base_axes)
-        )
-
-    @property
-    def ensemble_axes(self) -> Tuple[int, ...]:
-        """
-        Axis indices of ensemble axes.
-        """
-        return tuple(range(self.num_ensemble_axes))
-
-    @property
-    def shape(self) -> Tuple[int, ...]:
-        """
-        The size of each axis.
-        """
-        return self.ensemble_shape + self.base_shape

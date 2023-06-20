@@ -1,4 +1,5 @@
 """Module for various convenient utilities."""
+from __future__ import annotations
 import copy
 import inspect
 import warnings
@@ -53,7 +54,6 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
             continue
 
         #print(key, value, b.__dict__[key], value == b.__dict__[key])
-        #sss
 
         try:
             equal = value == b.__dict__[key]
@@ -119,7 +119,7 @@ def insert_empty_axis(match_axis1, match_axis2):
             break
 
 
-def normalize_axes(dims, shape:tuple[int, ...]):
+def normalize_axes(dims, shape: tuple[int, ...]):
     num_dims = len(shape)
     return tuple(dim if dim >= 0 else num_dims + dim for dim in dims)
 
@@ -181,6 +181,14 @@ def expand_dims_to_broadcast(
         arr2 = xp.broadcast_to(arr2, s)
 
     return arr1, arr2
+
+
+def tuple_range(length: int, offset: int = 0) -> tuple[int, ...]:
+    return tuple(range(offset, offset + length))
+
+
+def interleave(l1: list | tuple, l2: list | tuple):
+    return tuple(val for pair in zip(l1, l2) for val in pair)
 
 
 def label_to_index(labels, max_label=None):

@@ -1,9 +1,8 @@
-"""Module for handling measurements."""
+"""Module for applying noise to measurements."""
 from __future__ import annotations
 
 import numpy as np
 
-from abtem.array import T
 from abtem.core.axes import (
     NonLinearAxis,
     SampleAxis,
@@ -12,7 +11,6 @@ from abtem.core.backend import get_array_module
 from abtem.distributions import _validate_distribution, BaseDistribution
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.transform import EnsembleTransform
-import dask.array as da
 
 
 class NoiseTransform(EnsembleTransform):
@@ -95,9 +93,6 @@ class NoiseTransform(EnsembleTransform):
         else:
             seed = self.seeds
 
-        # if seed is not None:
-        #    seed += block_id
-
         rng = xp.random.default_rng(seed=seed)
 
         randomized_seed = int(
@@ -111,46 +106,3 @@ class NoiseTransform(EnsembleTransform):
         array = rng.poisson(array).astype(xp.float32)
 
         return array
-
-    # def apply(self, x):
-    #
-    #     #if block_id is None:
-    #     #    block_id = 0
-    #
-    #     array = x.array
-    #     xp = get_array_module(array)
-    #
-    #     if isinstance(self.seeds, BaseDistribution):
-    #         array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
-    #
-    #     if isinstance(self.dose, BaseDistribution):
-    #         dose = xp.array(self.dose.values, dtype=xp.float32)
-    #         array = array[None] * xp.expand_dims(
-    #             dose, tuple(range(1, len(array.shape) + 1))
-    #         )
-    #     else:
-    #         array = array * xp.array(self.dose, dtype=xp.float32)
-    #
-    #     if isinstance(self.seeds, BaseDistribution):
-    #         seed = sum(self.seeds.values)
-    #     else:
-    #         seed = self.seeds
-    #
-    #     #if seed is not None:
-    #     #    seed += block_id
-    #
-    #     rng = xp.random.default_rng(seed=seed)
-    #
-    #     randomized_seed = int(
-    #         rng.integers(np.iinfo(np.int32).max)
-    #     )  # fixes strange cupy bug
-    #
-    #     rng = xp.random.RandomState(seed=randomized_seed)
-    #
-    #     array = xp.clip(array, a_min=0.0, a_max=None)
-    #
-    #     array = rng.poisson(array).astype(xp.float32)
-    #
-    #     measurement = self._pack_output(x, array)
-    #
-    #     return measurement

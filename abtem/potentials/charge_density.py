@@ -382,7 +382,7 @@ class ChargeDensityPotential(_PotentialBuilder):
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
 
-        chunks = self._validate_chunks(chunks)
+        chunks = self._validate_ensemble_chunks(chunks)
 
         charge_densities = self.charge_density
 

@@ -93,8 +93,15 @@ class BaseTransferFunction(
         alpha, phi = self._angular_grid(device)
         return self._evaluate_from_angular_grid(alpha, phi)
 
-    def to_diffraction_patterns(self, gpts=128, max_angle=None):
+    def to_diffraction_patterns(
+        self, max_angle: float =None, gpts: int | tuple[int, int] = None,
+    ):
         from abtem.measurements import DiffractionPatterns
+
+        if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
+            max_angle = self._max_semiangle_cutoff
+        elif max_angle is None:
+            raise RuntimeError()
 
         sampling = 1 / (max_angle * 1e-3) / 2 * self.wavelength
 
