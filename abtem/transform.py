@@ -117,7 +117,6 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         -------
         measurement_shape : tuple of int
         """
-
         return *self.ensemble_shape, *array_object.ensemble_shape
 
     def _out_base_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
@@ -343,6 +342,14 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
 
 
 class WavesTransform(EnsembleTransform):
+
+    def __init__(self, distributions=()):
+        super().__init__(distributions=distributions)
+
+    @property
+    def distributions(self):
+        return self._distributions
+
     def apply(self, waves: Waves) -> Waves:
         waves = super().apply(waves)
         return waves
@@ -595,7 +602,6 @@ class ReciprocalSpaceMultiplication(WavesTransform):
 
         waves = waves.ensure_reciprocal_space(overwrite_x=self.in_place)
         kernel = self._evaluate_kernel(waves)
-
 
         kernel, new_array = expand_dims_to_broadcast(
             kernel, waves.array, match_dims=[(-2, -1), (-2, -1)]

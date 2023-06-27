@@ -4,22 +4,22 @@ import operator
 import warnings
 from abc import abstractmethod, ABCMeta
 from functools import reduce, partial
-from typing import Tuple, List, Union
+from typing import Tuple, List, Union, TYPE_CHECKING
 
 import dask.array as da
 import numpy as np
 
 from abtem.core import config
-from abtem.core.axes import AxisMetadata, AxesMetadataList
+#from abtem.core.axes import AxisMetadata, AxesMetadataList
 from abtem.core.chunks import (
     chunk_ranges,
     validate_chunks,
-    chunk_shape,
-    iterate_chunk_ranges,
     Chunks,
 )
 from abtem.core.utils import tuple_range, interleave
 
+if TYPE_CHECKING:
+    from abtem.core.axes import AxisMetadata, AxesMetadataList
 
 def _wrap_with_array(x, ndims):
     wrapped = np.zeros((1,) * ndims, dtype=object)
@@ -29,6 +29,23 @@ def _wrap_with_array(x, ndims):
 
 def _wrap_args_with_array(*args, ndims):
     return _wrap_with_array(args, ndims)
+
+
+
+def pack_unpack(*args, func, **kwargs):
+    if hasattr(args, "item"):
+        ndims = len(args.shape)
+        args = args.item()
+    else:
+        ndims = None
+
+    new = func(*args, **kwargs)
+
+    if ndims:
+        return _wrap_with_array(new, ndims)
+
+    return new
+
 
 
 class Ensemble(metaclass=ABCMeta):
@@ -157,7 +174,6 @@ class Ensemble(metaclass=ABCMeta):
         chunks : iterable of tuples
             Block sizes along each dimension.
         """
-
         chunks = self._validate_ensemble_chunks(chunks)
 
         blocks = self._partition_args(chunks=chunks, lazy=False)
@@ -167,9 +183,7 @@ class Ensemble(metaclass=ABCMeta):
             itertools.product(*chunk_ranges(chunks)),
         ):
             block = tuple(block[i] for i, block in zip(block_indices, blocks))
-
             slics = tuple(slice(start, stop) for start, stop in start_stop)
-
             yield block_indices, slics, self._from_partitioned_args()(*block)
 
     def _validate_ensemble_chunks(self, chunks: Chunks, limit: Union[str, int] = "auto"):

@@ -12,7 +12,7 @@ import numpy as np
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module, ArrayModule
 from abtem.core.chunks import Chunks, equal_sized_chunks
-from abtem.core.ensemble import Ensemble
+from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.utils import EqualityMixin, CopyMixin
 
 
@@ -63,10 +63,15 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
 class DistributionFromValues(BaseDistribution):
     def __init__(
-        self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = False
+        self, values: np.ndarray, weights: np.ndarray=None, ensemble_mean: bool = False
     ):
         self._values = values
+
+        if weights is None:
+            weights = np.ones(len(values))
+
         self._weights = weights
+
         self._ensemble_mean = ensemble_mean
 
     def __neg__(self) -> DistributionFromValues:
@@ -379,7 +384,7 @@ def _unpack_distributions(
     return unpacked, weights
 
 
-class EnsembleFromDistributions(Ensemble, CopyMixin):
+class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
     """
     Base object for ensembles based on distributions.
 
@@ -388,8 +393,6 @@ class EnsembleFromDistributions(Ensemble, CopyMixin):
     distributions : tuple of str, optional
         Names of properties that may be described by a distribution.
     """
-
-    ensemble_axes_metadata: list[AxisMetadata]
 
     def __init__(self, distributions: tuple[str, ...] = (), **kwargs):
         self._distributions = distributions
@@ -429,15 +432,28 @@ class EnsembleFromDistributions(Ensemble, CopyMixin):
         blocks = ()
         for distribution, n in zip(distributions.values(), chunks):
             blocks += (distribution.divide(n, lazy=lazy),)
-
         return blocks
+
 
     @classmethod
     def _partial_transform(cls, *args, keys, **kwargs):
+
         assert len(args) == len(keys)
-        kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
-        transform = cls(**kwargs)
-        return transform
+
+        unpack = False
+        try:
+            kwargs = {**kwargs, **{key: arg.item() for key, arg in zip(keys, args)}}
+            unpack = True
+
+        except AttributeError:
+            kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
+
+        new_transform = cls(**kwargs)
+
+        if unpack:
+            new_transform = _wrap_with_array(new_transform, len(keys))
+
+        return new_transform
 
     def _from_partitioned_args(self):
         keys = tuple(self._distribution_properties.keys())

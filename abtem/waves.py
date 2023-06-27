@@ -29,7 +29,7 @@ from abtem.core.backend import (
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator
 from abtem.core.energy import HasAcceleratorMixin
-from abtem.core.ensemble import EmptyEnsemble
+from abtem.core.ensemble import EmptyEnsemble, Ensemble, _wrap_with_array
 from abtem.core.fft import fft2, ifft2, fft_crop, fft_interpolate
 from abtem.core.grid import Grid, validate_gpts, polar_spatial_frequencies
 from abtem.core.grid import HasGridMixin
@@ -46,7 +46,7 @@ from abtem.detectors import (
     WavesDetector,
     FlexibleAnnularDetector,
 )
-from abtem.distributions import BaseDistribution
+from abtem.distributions import BaseDistribution, EnsembleFromDistributions
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -1011,14 +1011,18 @@ def _reduce_ensemble(ensemble):
     return output
 
 
-class _WavesBuilder(BaseWaves):
-    def __init__(self, transforms: list[ArrayObjectTransform], device: str):
+class _WavesBuilder(EnsembleFromDistributions, BaseWaves):
+    def __init__(
+        self, distributions, transforms: list[ArrayObjectTransform], device: str
+    ):
 
         if transforms is None:
             transforms = []
 
         self._transforms = transforms
         self._device = device
+
+        super().__init__()
 
     @property
     def device(self):
@@ -1233,7 +1237,7 @@ class _WavesBuilder(BaseWaves):
             return output
 
 
-class PlaneWave(_WavesBuilder):
+class PlaneWave(Ensemble, BaseWaves):
     """
     Represents electron probe wave functions for simulating experiments with a plane-wave probe, such as HRTEM and SAED.
 
@@ -1281,7 +1285,12 @@ class PlaneWave(_WavesBuilder):
 
         transforms = transforms + [self._tilt]
 
-        super().__init__(transforms=transforms, device=device)
+        # super().__init__(transforms=transforms, device=device)
+        super().__init__(distributions=("tilt",))
+
+    @property
+    def tilt(self):
+        return self._tilt
 
     @property
     def metadata(self):
@@ -1424,7 +1433,7 @@ class PlaneWave(_WavesBuilder):
         )
 
 
-class Probe(_WavesBuilder):
+class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     """
     Represents electron-probe wave functions for simulating experiments with a convergent beam,
     such as CBED and STEM.
@@ -1466,11 +1475,11 @@ class Probe(_WavesBuilder):
         sampling: float | tuple[float, float] = None,
         energy: float = None,
         soft: bool = True,
-        tilt: tuple[float | BaseDistribution, float | BaseDistribution]
-        | BaseDistribution = (
-            0.0,
-            0.0,
-        ),
+        # tilt: tuple[float | BaseDistribution, float | BaseDistribution]
+        # | BaseDistribution = (
+        #     0.0,
+        #     0.0,
+        # ),
         device: str = None,
         aperture: BaseAperture = None,
         aberrations: Aberrations | dict = None,
@@ -1481,10 +1490,14 @@ class Probe(_WavesBuilder):
 
         self._accelerator = Accelerator(energy=energy)
 
-        if not ((semiangle_cutoff is None) + (aperture is None) == 1):
-            raise ValueError("provide exactly one of `semiangle_cutoff` or `aperture`")
-        elif semiangle_cutoff is None:
-            semiangle_cutoff = 30.0
+        # if not ((semiangle_cutoff is None) + (aperture is None) == 1):
+        #     raise ValueError("provide exactly one of `semiangle_cutoff` or `aperture`")
+        # elif semiangle_cutoff is None:
+        #     semiangle_cutoff = 30.0
+
+        if semiangle_cutoff is None and aperture is None:
+            semiangle_cutoff = 30
+
 
         if aperture is None:
             aperture = Aperture(semiangle_cutoff=semiangle_cutoff, soft=soft)
@@ -1501,19 +1514,176 @@ class Probe(_WavesBuilder):
 
         self._aperture = aperture
         self._aberrations = aberrations
-        self._tilt = validate_tilt(tilt=tilt)
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-
-        device = validate_device(device)
         self._metadata = {} if metadata is None else metadata
 
-        transforms = [] if transforms is None else transforms
-        transforms = transforms + [self.tilt] + [self.aperture] + [self.aberrations]
+        if transforms is None:
+            transforms = EmptyEnsemble()
 
-        super().__init__(transforms=transforms, device=device)
-
+        self._transforms = transforms
         self.accelerator.match(self.aperture)
+
+    @property
+    def transforms(self):
+        return self._transforms
+
+    @property
+    def ensemble_shape(self):
+        return (
+            self.aperture.ensemble_shape
+            + self.aberrations.ensemble_shape
+            + self.transforms.ensemble_shape
+        )
+
+    def _arg_splits(self):
+        shapes = (
+            0,
+            len(self._aperture.ensemble_shape),
+            len(self._aberrations.ensemble_shape),
+            len(self._transforms.ensemble_shape),
+        )
+
+        cumulative_shapes = np.cumsum(shapes)
+        return [
+            (cumulative_shapes[i], cumulative_shapes[i + 1])
+            for i in range(len(cumulative_shapes) - 1)
+        ]
+
+    def _partition_args(self, chunks=(1,), lazy: bool = True):
+        chunks = self._validate_ensemble_chunks(chunks)
+
+        arg_splits = self._arg_splits()
+
+        aperture_chunks = chunks[slice(*arg_splits[0])]
+        args = self._aperture._partition_args(aperture_chunks, lazy=lazy)
+
+        aberrations_chunks = chunks[slice(*arg_splits[1])]
+        args += self._aberrations._partition_args(aberrations_chunks, lazy=lazy)
+
+        transform_chunks = chunks[slice(*arg_splits[2])]
+        args += self._transforms._partition_args(transform_chunks)
+        return args
+
+    @property
+    def _default_ensemble_chunks(self):
+        return ("auto",) * len(self.ensemble_shape)
+
+    @classmethod
+    def _from_partitioned_args_func(
+        cls,
+        *args,
+        aperture_partial,
+        aberrations_partial,
+        transform_partial,
+        arg_splits,
+        **kwargs,
+    ):
+        aperture_args = args[slice(*arg_splits[0])]
+        aberrations_args = args[slice(*arg_splits[1])]
+        transform_args = args[slice(*arg_splits[2])]
+
+        def unpack_iterable(x):
+            return tuple(xi.item() for xi in x)
+
+        unpack = False
+
+
+        if not len(aperture_args):
+            aperture = aperture_partial(*aperture_args).item()
+        elif hasattr(aperture_args[0], "item"):
+            unpack = True
+            aperture_args = unpack_iterable(aperture_args)
+            aperture = aperture_partial(*aperture_args)
+        else:
+            aperture = aperture_partial(*aperture_args)
+
+
+        if not len(aberrations_args):
+            aberrations = aberrations_partial(*aberrations_args).item()
+        elif len(aberrations_args) and hasattr(aberrations_args[0], "item"):
+            unpack = True
+            aberrations_args = unpack_iterable(aberrations_args)
+            aberrations = aberrations_partial(*aberrations_args)
+        else:
+            aberrations = aberrations_partial(*aberrations_args)
+
+        if not len(transform_args):
+            try:
+                transform = transform_partial(*transform_args).item()
+            except:
+                transform = transform_partial(*transform_args)
+
+        elif len(transform_args) and hasattr(transform_args[0], "item"):
+            unpack = True
+            transform_args = unpack_iterable(transform_args)
+            transform = transform_partial(*transform_args)
+        else:
+            print(transform_args)
+            transform = transform_partial(*transform_args)
+
+        new_probe = cls(aperture=aperture, aberrations=aberrations, transforms=transform, **kwargs)
+
+        if unpack:
+           ndims = max(len(new_probe.ensemble_shape), 1)
+           new_probe = _wrap_with_array(new_probe, ndims)
+
+
+        #print(new_probe.shape)
+
+        return new_probe
+
+    def _from_partitioned_args(self, *args, **kwargs):
+        aperture_partial = self.aperture._from_partitioned_args()
+        aberrations_partial = self.aberrations._from_partitioned_args()
+        transform_partial = self.transforms._from_partitioned_args()
+
+        kwargs = self._copy_kwargs(exclude=("aperture", "aberrations", "transforms"))
+        return partial(
+            self._from_partitioned_args_func,
+            aperture_partial=aperture_partial,
+            aberrations_partial=aberrations_partial,
+            transform_partial=transform_partial,
+            arg_splits=self._arg_splits(),
+            **kwargs,
+        )
+
+    # def _build_scan_multislice_detect(self, scan, max_batch):
+    #     from abtem.core.chunks import validate_chunks
+    #
+    #     if isinstance(max_batch, int):
+    #         max_batch = int(max_batch * np.prod(self.base_shape))
+    #
+    #     chunks = transform._default_ensemble_chunks + self.base_shape
+    #
+    #     chunks = validate_chunks(
+    #         transform.ensemble_shape + self.base_shape,
+    #         chunks,
+    #         limit=max_batch,
+    #         dtype=self.dtype,
+    #     )
+    #
+    #     transform_chunks = chunks[: len(transform.ensemble_shape)]
+    #
+    #     transform_args, transform_symbols = transform._get_blockwise_args(
+    #         transform_chunks
+    #     )
+    #
+    #     dummy_waves = self._base_waves_partial(lazy=True, reciprocal_space=False)()
+    #
+    #     transform.set_output_specification(dummy_waves)
+    #
+    #     chunks =
+    #
+    #     args = self._partition_args()
+
+    @property
+    def soft(self):
+        return self.aperture.soft
+
+    @property
+    def tilt(self):
+        return self
 
     @classmethod
     def _from_ctf(cls, ctf, **kwargs):
@@ -1563,7 +1733,7 @@ class Probe(_WavesBuilder):
             **self._metadata,
             "energy": self.energy,
             **self.aperture.metadata,
-            **self._tilt.metadata,
+            # **self._tilt.metadata,
         }
 
     def _get_transforms(

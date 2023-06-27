@@ -12,6 +12,7 @@ import dask.array as da
 from abtem.core.backend import cp
 
 
+
 def is_array_like(x):
     if isinstance(x, np.ndarray) or (cp is not None and isinstance(x, cp.ndarray)):
         return True
@@ -45,6 +46,7 @@ class CopyMixin:
 
 
 def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
+
     if not isinstance(b, a.__class__):
         return False
 
@@ -53,16 +55,14 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
         if key in exclude:
             continue
 
-        #print(key, value, b.__dict__[key], value == b.__dict__[key])
-
         try:
             equal = value == b.__dict__[key]
         except (KeyError, TypeError):
             return False
 
-        #print(equal)
-        # if (not isinstance(value, Iterable)) or (not isinstance(b.__dict__[key], Iterable)):
-        #    return False
+        from abtem.core.ensemble import EmptyEnsemble
+        if isinstance(value, EmptyEnsemble) and isinstance(b.__dict__[key], EmptyEnsemble):
+            return True
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)

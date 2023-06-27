@@ -72,7 +72,9 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @staticmethod
     def _validate_atomic_numbers_and_cell(atoms: Atoms | Delayed, atomic_numbers, cell):
-        if isinstance(atoms, (Delayed, da.core.Array)) and (atomic_numbers is None or cell is None):
+        if isinstance(atoms, (Delayed, da.core.Array)) and (
+            atomic_numbers is None or cell is None
+        ):
             atoms = atoms.compute()
 
         if cell is None:
@@ -158,8 +160,14 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
     @classmethod
     def _from_partitioned_args_func(cls, args, **kwargs):
-        atoms = args.item()
+
+        if hasattr(args, "item"):
+            args = args.item()
+
+        atoms = args
+
         new_dummy_frozen_phonons = cls(atoms=atoms, **kwargs)
+
         return _wrap_with_array(new_dummy_frozen_phonons, 1)
 
     def _from_partitioned_args(self):
@@ -171,13 +179,8 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
             lazy_args = dask.delayed(_wrap_with_array)(self.atoms, ndims=1)
 
             array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
-
-            #array = da.from_delayed(
-            #    dask.delayed(self.atoms), shape=(1,), dtype=object
-            #)
         else:
             array = _wrap_with_array(self.atoms, 1)
-
         return (array,)
 
     def __len__(self):
@@ -365,34 +368,46 @@ class FrozenPhonons(BaseFrozenPhonons):
         return atoms
 
     @classmethod
-    def _from_partitioned_args_func(cls, args, **kwargs):
-        atoms, seed = args.item()
-        new_frozen_phonons = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
-        ndims = max(len(new_frozen_phonons.ensemble_shape), 1)
-        return _wrap_with_array(new_frozen_phonons, ndims)
+    def _from_partitioned_args_func(cls, *args, **kwargs):
+        args = args[0]
+
+        unpack = False
+        if hasattr(args, "item"):
+            args = args.item()
+            unpack = True
+
+        atoms, seed = args
+
+        new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
+
+        if unpack:
+            new = _wrap_with_array(new, 1)
+
+        return new
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("atoms", "seed", "num_configs"))
-        return partial(self._from_partitioned_args_func, **kwargs)
+        output = partial(self._from_partitioned_args_func, **kwargs)
+        return output
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
-
-        array = np.zeros((len(chunks[0]),), dtype=object)
         if lazy:
+            arrays = []
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 seeds = self.seed[start:stop]
                 lazy_atoms = dask.delayed(self.atoms)
                 lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
-                array.itemset(i, lazy_array)
+                arrays.append(lazy_array)
 
-            array = da.concatenate(list(array))
+            array = da.concatenate(arrays)
         else:
+            array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                array.itemset(i, _wrap_with_array((self.atoms, self.seed[start:stop]), ndims=1))
+                array.itemset(i, (self.atoms, self.seed[start:stop]))
 
-        return (array,)
+        return array,
 
     def to_atoms_ensemble(self):
         """
@@ -427,7 +442,7 @@ class AtomsEnsemble(BaseFrozenPhonons):
         ensemble_mean: bool = True,
         cell: Cell = None,
         ensemble_axes_metadata: list[AxisMetadata] = None,
-        ensemble_shape:tuple[int, ...] = None
+        ensemble_shape: tuple[int, ...] = None,
     ):
 
         if isinstance(trajectory, Atoms):
@@ -463,16 +478,13 @@ class AtomsEnsemble(BaseFrozenPhonons):
 
         atoms = trajectory.ravel()[0]
 
-        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
-            atoms, None, cell
-        )
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, cell)
 
         self._trajectory = trajectory
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
         )
-
 
         self._ensemble_axes_metadata = ensemble_axes_metadata
 
@@ -497,17 +509,15 @@ class AtomsEnsemble(BaseFrozenPhonons):
     def _default_ensemble_chunks(self) -> tuple[int, ...]:
         if isinstance(self._trajectory, (da.core.Array, np.ndarray)):
             return (1,) * len(self.ensemble_shape)
-        return 1,
+        return (1,)
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
 
-        #print("partition")
-
         if lazy:
             if isinstance(self._trajectory, da.core.Array):
-                return self._trajectory,
+                return (self._trajectory,)
             else:
-                return da.from_array(self._trajectory, chunks=chunks),
+                return (da.from_array(self._trajectory, chunks=chunks),)
         else:
             if isinstance(self._trajectory, da.core.Array):
                 return self._trajectory.compute()
@@ -559,7 +569,7 @@ class AtomsEnsemble(BaseFrozenPhonons):
         # return (array,)
 
     def _from_partitioned_args(self):
-        kwargs = self._copy_kwargs(exclude=("trajectory","ensemble_shape"))
+        kwargs = self._copy_kwargs(exclude=("trajectory", "ensemble_shape"))
         kwargs["cell"] = self.cell.array
         kwargs["ensemble_shape"] = (1,) * len(self.ensemble_shape)
         kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)

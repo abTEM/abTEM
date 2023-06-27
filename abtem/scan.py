@@ -15,6 +15,7 @@ from abtem.array import ArrayObject, T
 from abtem.core.axes import ScanAxis, PositionsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
+from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.potentials.iam import BasePotential, _validate_potential
@@ -896,11 +897,23 @@ class GridScan(HasGridMixin, BaseScan):
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
         x_scan, y_scan = args
+
+        unpack = False
+        if hasattr(x_scan, "item"):
+            x_scan = x_scan.item()
+            y_scan = y_scan.item()
+            unpack =True
+
         start = (x_scan["start"], y_scan["start"])
         end = (x_scan["end"], y_scan["end"])
         gpts = (x_scan["gpts"], y_scan["gpts"])
         endpoint = (x_scan["endpoint"], y_scan["endpoint"])
-        return cls(start=start, end=end, gpts=gpts, endpoint=endpoint)
+        new_scan = cls(start=start, end=end, gpts=gpts, endpoint=endpoint)
+
+        if unpack:
+            new_scan = _wrap_with_array(new_scan, 2)
+
+        return new_scan
 
     def _from_partitioned_args(self):
         return self._from_partitioned_args_func
@@ -919,7 +932,6 @@ class GridScan(HasGridMixin, BaseScan):
         blocks = ()
         for i in range(2):
             cumchunks = tuple(np.cumsum(chunks[i]))
-
             block = np.empty(len(chunks[i]), dtype=object)
             for j, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[i])):
                 start = self.start[i] + start_chunk * self.sampling[i]
