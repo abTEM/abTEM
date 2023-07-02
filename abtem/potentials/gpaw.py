@@ -23,6 +23,7 @@ from abtem.core.electron_configurations import (
     electron_configurations,
     config_str_to_config_tuples,
 )
+from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
 from abtem.potentials.charge_density import _interpolate_slice
 from abtem.core.parametrizations.ewald import EwaldParametrization
@@ -596,7 +597,10 @@ class GPAWPotential(_PotentialBuilder):
 
         calculators = args["calculators"]
 
-        return GPAWPotential(calculators, frozen_phonons=frozen_phonons, **kwargs)
+
+        new_potential = GPAWPotential(calculators, frozen_phonons=frozen_phonons, **kwargs)
+
+        return _wrap_with_array(new_potential)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("calculators", "frozen_phonons"))

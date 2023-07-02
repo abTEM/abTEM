@@ -181,7 +181,10 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
             array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
         else:
-            array = _wrap_with_array(self.atoms, 1)
+            atoms = self.atoms
+            if self.is_lazy:
+                atoms = atoms.compute()
+            array = _wrap_with_array(atoms, 1)
         return (array,)
 
     def __len__(self):
@@ -395,9 +398,12 @@ class FrozenPhonons(BaseFrozenPhonons):
 
             array = da.concatenate(arrays)
         else:
+            atoms = self.atoms
+            if self.is_lazy:
+                atoms = atoms.compute()
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                array.itemset(i, (self.atoms, self.seed[start:stop]))
+                array.itemset(i, (atoms, self.seed[start:stop]))
 
         return (array,)
 

@@ -286,6 +286,8 @@ class Waves(BaseWaves, ArrayObject):
         from the waves.
     """
 
+    _base_dims = 2
+
     def __init__(
         self,
         array: np.ndarray,
@@ -304,7 +306,6 @@ class Waves(BaseWaves, ArrayObject):
 
         super().__init__(
             array=array,
-            base_dims=2,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
@@ -1092,7 +1093,7 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
     @staticmethod
     @abstractmethod
-    def _build_waves(waves_builder: _WavesBuilder, max_batch: int):
+    def _build_waves(waves_builder: _WavesBuilder, wrapped: int):
         pass
 
     @staticmethod
@@ -1403,7 +1404,7 @@ class Probe(_WavesBuilder):
         self._metadata = {} if metadata is None else metadata
 
         if positions is None:
-            positions = abtem.CustomScan(np.array([(0.0, 0.0)]), squeeze=True)
+            positions = abtem.CustomScan(np.zeros((0, 2)), squeeze=True)
 
         self._positions = positions
 

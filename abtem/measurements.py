@@ -351,13 +351,11 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         array: np.ndarray | da.core.Array,
         ensemble_axes_metadata: list[AxisMetadata],
         metadata: dict,
-        base_dims: int,
         allow_base_axis_chunks: bool = False,
     ):
 
         super().__init__(
             array=array,
-            base_dims=base_dims,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
@@ -369,11 +367,6 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         #         raise RuntimeError(
         #             f"Chunks not allowed in base axes of {self.__class__}."
         #         )
-
-    def _from_partitioned_args(self):
-        d = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
-        cls = self.__class__
-        return partial(lambda *args, **kwargs: cls(args[0], **kwargs), **d)
 
     @property
     @abstractmethod
@@ -618,6 +611,8 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
 
 class _BaseMeasurement2D(BaseMeasurements):
+    _base_dims = 2
+
     @abstractmethod
     def _get_1d_equivalent(self):
         pass
@@ -1022,7 +1017,6 @@ class Images(_BaseMeasurement2D):
 
         super().__init__(
             array=array,
-            base_dims=2,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
             allow_base_axis_chunks=True,
@@ -1389,7 +1383,7 @@ class Images(_BaseMeasurement2D):
 
 
 class _BaseMeasurement1D(BaseMeasurements):
-
+    _base_dims = 1
     def __init__(
         self,
         array: np.ndarray,
@@ -1403,7 +1397,6 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         super().__init__(
             array=array,
-            base_dims=1,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
             allow_base_axis_chunks=True,
@@ -2025,7 +2018,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         super().__init__(
             array=array,
-            base_dims=2,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
             allow_base_axis_chunks=False,
@@ -3003,6 +2995,8 @@ class PolarMeasurements(BaseMeasurements):
     polar_measurements : PolarMeasurements
         The polar measurements.
     """
+    _base_dims = 2
+
     def __init__(
         self,
         array: np.ndarray,
@@ -3020,7 +3014,6 @@ class PolarMeasurements(BaseMeasurements):
 
         super().__init__(
             array=array,
-            base_dims=2,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
@@ -3447,7 +3440,7 @@ class PolarMeasurements(BaseMeasurements):
 
 
 class IndexedDiffractionPatterns(BaseMeasurements):
-
+    _base_dims = 1
     def __init__(
         self,
         array: np.ndarray,
@@ -3483,7 +3476,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         super().__init__(
             array=array,
-            base_dims=1,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )

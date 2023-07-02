@@ -132,6 +132,7 @@ class BaseSMatrix(BaseWaves):
     _device: str
     ensemble_axes_metadata: list[AxisMetadata]
     ensemble_shape: tuple[int, ...]
+    _base_dims = 3
 
     @property
     def device(self):
@@ -231,7 +232,7 @@ class BaseSMatrix(BaseWaves):
         )
 
         if scan is not None:
-            probes = probes.insert_transform(scan)
+            probes._positions = scan
 
         return probes
 
@@ -316,7 +317,8 @@ def _lazy_reduce(
     detectors,
     max_batch_reduction,
 ):
-    waves = waves_partial(array, ensemble_axes_metadata=ensemble_axes_metadata)
+    args = (array, ensemble_axes_metadata)
+    waves = waves_partial(args).item()
     s_matrix = SMatrixArray._from_waves(waves, **from_waves_kwargs)
 
     measurements = s_matrix._batch_reduce_to_measurements(
@@ -411,7 +413,7 @@ def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_red
 
     scan, scan_chunks = scan._sort_into_extents(chunk_extents)
 
-    scans = [(indices, scan) for indices, _, scan in scan.generate_blocks(scan_chunks)]
+    scans = [(indices, scan.item()) for indices, _, scan in scan.generate_blocks(scan_chunks)]
 
     partitions = (pad_amounts[chunked_axis][0],) + partitions[chunked_axis]
     partitions = partitions + (
@@ -610,6 +612,8 @@ def _single_rechunk_reduce(
 
     for indices, _, sub_scan in scan.generate_blocks(scan_chunks):
 
+        sub_scan = sub_scan.item()
+
         if len(sub_scan) == 0:
             blocks.itemset(
                 (0,) * len(array.shape[:-3]) + indices,
@@ -792,7 +796,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         super().__init__(
             array=array,
-            base_dims=3,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
@@ -1016,6 +1019,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     ) -> tuple[BaseMeasurements | Waves, ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
+        #print(self.waves.ensemble_axes_metadata[:-1])
 
         measurements = allocate_multislice_measurements(
             dummy_probes,
@@ -1032,11 +1036,11 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             array = self.waves.array
 
         for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
-
+            sub_ctf = sub_ctf.item()
             ctf_coefficients = self._calculate_ctf_coefficients(sub_ctf)
 
             for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
-
+                sub_scan = sub_scan.item()
                 positions = xp.asarray(sub_scan.get_positions())
 
                 positions_coefficients = self._calculate_positions_coefficients(
@@ -1308,40 +1312,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             max_batch_reduction=max_batch_reduction,
             rechunk=rechunk,
         )
-
-
-# class PrismTransform(WavesTransform):
-#     def __init__(self, wave_vectors):
-#         self._wave_vectors =_validate_distribution(wave_vectors)
-#         super().__init__(distributions=("wave_vectors",))
-#
-#     @property
-#     def wave_vectors(self):
-#         return self._wave_vectors
-#
-#     @property
-#     def ensemble_shape(self):
-#         return self._wave_vectors.shape
-#
-#     @property
-#     def ensemble_axes_metadata(self):
-#         return [
-#             WaveVectorAxis(
-#                 label="q",
-#                 values=tuple(tuple(value) for value in self.wave_vectors),
-#             )
-#         ]
-#
-#     def _out_ensemble_axes_metadata(self, waves, index=0):
-#         return [*self.ensemble_axes_metadata, *waves.ensemble_axes_metadata]
-#
-#     def _out_ensemble_shape(self, wave, index=0):
-#         return (*self.ensemble_shape, *wave.ensemble_shape)
-#
-#     def _calculate_new_array(self, wave):
-#         wave_vectors = self.wave_vectors.values
-#         array = plane_waves(wave_vectors, wave.extent, wave.gpts)
-#         return array
 
 
 class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
@@ -1665,7 +1635,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             potential_partial = self.potential._from_partitioned_args()
             kwargs = self._copy_kwargs(exclude=("potential", "sampling", "extent"))
         else:
-            potential_partial = lambda *args, **kwargs: None
+            potential_partial = lambda *args, **kwargs: _wrap_with_array(None, 1)
             kwargs = self._copy_kwargs(exclude=("potential",))
 
         return partial(self._s_matrix, potential_partial=potential_partial, **kwargs)
@@ -1815,6 +1785,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 )
 
             for i, _, s_matrix in self.generate_blocks(1):
+                s_matrix = s_matrix.item()
                 for start, stop in wave_vector_blocks:
                     items = (slice(start, stop),)
                     if self.ensemble_shape:
@@ -1960,6 +1931,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             measurements = None
 
         for i, _, s_matrix in self.generate_blocks(1):
+            s_matrix = s_matrix.item()
             s_matrix_array = s_matrix.build(lazy=False)
 
             new_measurements = s_matrix_array.reduce(

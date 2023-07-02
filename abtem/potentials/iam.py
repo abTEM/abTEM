@@ -856,7 +856,7 @@ class PotentialArray(BasePotential, ArrayObject):
         A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
         from the waves.
     """
-
+    _base_dims = 3
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
@@ -877,7 +877,7 @@ class PotentialArray(BasePotential, ArrayObject):
 
         super().__init__(
             array=array,
-            base_dims=3,
+
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )

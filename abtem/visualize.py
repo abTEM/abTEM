@@ -1236,7 +1236,6 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
                 if isinstance(images, np.ndarray):
                     for j, image in enumerate(images):
-
                         cbars[ax].append(plt.colorbar(image, cax=cax[j], **kwargs))
                 else:
                     cbars[ax].append(plt.colorbar(images, cax=cax[0], **kwargs))
@@ -1244,9 +1243,9 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             else:
                 if isinstance(images, np.ndarray):
                     for j, image in enumerate(images):
-                        cbars[ax].append(plt.colorbar(image, **kwargs))
+                        cbars[ax].append(plt.colorbar(image, ax=ax, **kwargs))
                 else:
-                    cbars[ax].append(plt.colorbar(images, **kwargs))
+                    cbars[ax].append(plt.colorbar(images, ax=ax, **kwargs))
 
         self._cbars = cbars
 

@@ -34,8 +34,19 @@ from abtem.core.backend import (
     check_cupy_is_installed,
 )
 from abtem.core.chunks import Chunks, validate_chunks, chunk_shape, iterate_chunk_ranges
-from abtem.core.ensemble import Ensemble, _wrap_with_array, _wrap_args_with_array, unpack_blockwise_args
-from abtem.core.utils import normalize_axes, CopyMixin, tuple_range, EqualityMixin, interleave
+from abtem.core.ensemble import (
+    Ensemble,
+    _wrap_with_array,
+    _wrap_args_with_array,
+    unpack_blockwise_args,
+)
+from abtem.core.utils import (
+    normalize_axes,
+    CopyMixin,
+    tuple_range,
+    EqualityMixin,
+    interleave,
+)
 
 if TYPE_CHECKING:
     from abtem.transform import ArrayObjectTransform
@@ -198,12 +209,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        base_dims,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
-        self._base_dims = base_dims
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
@@ -1038,9 +1046,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
 
         array = args[-1]
 
-        array_object = array_object_partial(
-            (array, ensemble_axes_metadata)
-        ).item()
+        array_object = array_object_partial((array, ensemble_axes_metadata)).item()
 
         array = transform._calculate_new_array(array_object)
 
@@ -1261,7 +1267,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
             )
 
             def combine_args(*args):
-
                 return args[0], args[1].item()
 
             ndims = max(len(self.ensemble_shape), 1)
@@ -1275,7 +1280,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
                 align_arrays=False,
                 concatenate=True,
                 dtype=object,
-                meta=xp.array((), self.dtype)
+                meta=xp.array((), self.dtype),
             )
         else:
             array = self.compute().array
@@ -1289,10 +1294,21 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
             )
 
             for block_indices, chunk_range in iterate_chunk_ranges(chunks):
-                blocks[block_indices] = {
-                    "array": array[chunk_range],
-                    "ensemble_axes_metadata": ensemble_axes_metadata[block_indices],
-                }
+
+                if len(block_indices) == 0:
+                    block_indices = 0
+                # blocks.itemset(
+                #     block_indices,
+                #     _wrap_with_array(
+                #         (array[chunk_range], ensemble_axes_metadata[block_indices]), 1
+                #     ),
+                # )
+
+                blocks.itemset(
+                    block_indices,
+                    (array[chunk_range], ensemble_axes_metadata[block_indices])
+                    ,
+                )
 
         return (blocks,)
 
@@ -1513,6 +1529,8 @@ def concat_array_object_ensemble_blocks(blocks):
     concat_axes_metadata = axes_metadata_from_array_object_blocks(blocks)
 
     concat_array_object = ArrayObject(
-        concat_array, blocks.ravel()[0].base_dims, ensemble_axes_metadata=concat_axes_metadata
+        concat_array,
+        blocks.ravel()[0].base_dims,
+        ensemble_axes_metadata=concat_axes_metadata,
     )
     return concat_array_object

@@ -73,7 +73,6 @@ class NoiseTransform(EnsembleTransform):
         return {"units": "", "label": "electron counts"}
 
     def _calculate_new_array(self, array_object) -> np.ndarray | tuple[np.ndarray, ...]:
-
         array = array_object.array
         xp = get_array_module(array)
 

@@ -6,8 +6,9 @@ import pytest
 from hypothesis import given, assume
 
 import strategies as abtem_st
-from abtem.array import stack, concatenate
+from abtem.array import stack, concatenate#, concat_array_object_ensemble_blocks
 from abtem.core.axes import OrdinalAxis
+#from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import assert_array_matches_device, gpu, remove_dummy_dimensions, assert_array_matches_laziness
 
 
@@ -274,3 +275,28 @@ def test_concatenates_with_self(data, has_array, lazy, device):
     assume(axis < len(has_array.ensemble_shape))
     indices = (slice(None),) * axis + (slice(0, has_array.shape[axis]),)
     assert concatenated[indices].to_cpu() == has_array.to_cpu()
+
+
+# @given(data=st.data())
+# def test_ensemble_blocks(data):
+#     array_object = data.draw(random_array_object(lazy=True))
+#
+#     blocks = array_object.ensemble_blocks().compute()
+#
+#     concat_array_object = concat_array_object_ensemble_blocks(blocks)
+#
+#     assert array_object.compute() == concat_array_object
+
+    # array_object = data.draw(random_array_object())
+    #
+    # array_object = array_object.ensure_lazy()
+    #
+    # chunks = data.draw(random_chunks(array_object.ensemble_shape)).example()
+    #
+    # array_object = array_object.rechunk(chunks=chunks)
+    #
+    # blocks = array_object.ensemble_blocks().compute()
+    #
+    # concat_array_object = concat_array_object_ensemble_blocks(blocks)
+    #
+    # assert array_object.compute() == concat_array_object

@@ -122,7 +122,11 @@ class BaseScan(ReciprocalSpaceMultiplication):
 
         waves.grid.check_is_defined()
 
-        positions = xp.asarray(self.get_positions()) / xp.asarray(
+        positions = self.get_positions()
+        if len(positions) == 0:
+            return xp.ones(waves.gpts, dtype=xp.complex64)
+
+        positions = xp.asarray(positions) / xp.asarray(
             waves.sampling
         ).astype(np.float32)
 
@@ -230,6 +234,9 @@ class CustomScan(BaseScan):
 
     @property
     def ensemble_axes_metadata(self):
+        if len(self.positions) == 0:
+            return []
+
         return [
             PositionsAxis(
                 values=tuple(
@@ -252,9 +259,14 @@ class CustomScan(BaseScan):
         return new_scan
 
     def _from_partitioned_args(self):
+        if len(self.positions) == 0:
+            return _wrap_with_array(self)
         return self._from_partitioned_args_func
 
     def _partition_args(self, chunks=None, lazy: bool = True):
+        if len(self.positions) == 0:
+            return ()
+
         chunks = self._validate_ensemble_chunks(chunks)
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
@@ -291,6 +303,8 @@ class CustomScan(BaseScan):
 
     @property
     def shape(self):
+        if len(self.positions) == 0:
+            return ()
         return self.positions.shape[:-1]
 
     @property

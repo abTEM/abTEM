@@ -194,12 +194,18 @@ class Ensemble(metaclass=ABCMeta):
 
         blocks = self._partition_args(chunks=chunks, lazy=False)
 
+        for block in blocks:
+            if len(block.shape) > 1:
+                raise NotImplementedError
+
         for block_indices, start_stop in zip(
             itertools.product(*(range(block.shape[0]) for block in blocks)),
             itertools.product(*chunk_ranges(chunks)),
         ):
+
             block = tuple(block[i] for i, block in zip(block_indices, blocks))
             slics = tuple(slice(start, stop) for start, stop in start_stop)
+
             yield block_indices, slics, self._from_partitioned_args()(*block)
 
     def _validate_ensemble_chunks(self, chunks: Chunks, limit: Union[str, int] = "auto"):
