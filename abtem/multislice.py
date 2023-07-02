@@ -25,7 +25,7 @@ from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
     BasePotential,
     TransmissionFunction,
-    PotentialArray,
+    PotentialArray, _validate_potential,
 )
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
@@ -607,6 +607,8 @@ class MultisliceTransform(ArrayObjectTransform):
         conjugate: bool = False,
         transpose: bool = False,
     ):
+        potential = _validate_potential(potential)
+
         self._potential = potential
 
         detectors = _validate_detectors(detectors)

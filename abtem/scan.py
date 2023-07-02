@@ -627,8 +627,13 @@ class LineScan(BaseScan):
         raise NotImplementedError
 
     @staticmethod
-    def _from_partitioned_args(*args, **kwargs):
-        return lambda x: x
+    def _from_partitioned_args_func(*args, **kwargs):
+        args = unpack_blockwise_args(args)
+        line_scan = args[0]
+        return _wrap_with_array(line_scan)
+
+    def _from_partitioned_args(self):
+        return self._from_partitioned_args_func
 
     def _partition_args(self, chunks=None, lazy: bool = True):
         if chunks is None:
@@ -641,17 +646,25 @@ class LineScan(BaseScan):
 
         cumchunks = tuple(np.cumsum(chunks[0]))
 
-        block = np.empty(len(chunks[0]), dtype=object)
+        blocks = []
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
             start = np.array(self.start) + start_chunk * self.sampling * direction
 
             end = start + self.sampling * chunk * direction
-            block[i] = LineScan(start=start, end=end, gpts=chunk, endpoint=False)
+
+            block = _wrap_with_array(LineScan(start=start, end=end, gpts=chunk, endpoint=False))
+
+            if lazy:
+                block = da.from_array(block, chunks=1)
+
+            blocks.append(block)
 
         if lazy:
-            block = da.from_array(block, chunks=1)
+            blocks = da.concatenate(blocks)
+        else:
+            blocks = np.concatenate(blocks)
 
-        return (block,)
+        return (blocks,)
 
     def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
         x = np.linspace(

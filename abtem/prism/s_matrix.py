@@ -11,7 +11,7 @@ import numpy as np
 from ase import Atoms
 from dask.graph_manipulation import wait_on
 
-from abtem.array import _validate_lazy, ArrayObject
+from abtem.array import _validate_lazy, ArrayObject, ComputableList
 from abtem.core.axes import (
     OrdinalAxis,
     AxisMetadata,
@@ -23,9 +23,15 @@ from abtem.core.backend import get_array_module, cp, validate_device, copy_to_de
 from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks, Chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator
-from abtem.core.ensemble import Ensemble
+from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.grid import Grid, GridUndefinedError
-from abtem.core.utils import safe_ceiling_int, expand_dims_to_broadcast, ensure_list
+from abtem.core.utils import (
+    safe_ceiling_int,
+    expand_dims_to_broadcast,
+    ensure_list,
+    CopyMixin,
+    EqualityMixin,
+)
 from abtem.detectors import (
     BaseDetector,
     _validate_detectors,
@@ -47,7 +53,71 @@ from abtem.prism.utils import (
 from abtem.scan import BaseScan, _validate_scan, GridScan
 from abtem.transfer import CTF
 from abtem.waves import BaseWaves, _antialias_cutoff_gpts
-from abtem.waves import Waves, Probe, _finalize_lazy_measurements, _wrap_measurements
+from abtem.waves import Waves, Probe
+
+
+def _extract_measurement(array, index):
+    if array.size == 0:
+        return array
+
+    array = array.item()[index].array
+    return array
+
+
+def _wrap_measurements(measurements):
+    return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
+
+
+def _finalize_lazy_measurements(
+    arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
+):
+
+    if extra_ensemble_axes_metadata is None:
+        extra_ensemble_axes_metadata = []
+
+    measurements = []
+    for i, detector in enumerate(detectors):
+
+        base_shape = detector._out_base_shape(waves)
+        meta = detector._out_meta(waves)
+
+        new_axis = tuple(range(len(arrays.shape), len(arrays.shape) + len(base_shape)))
+
+        if chunks is None:
+            chunks = arrays.chunks
+
+        array = arrays.map_blocks(
+            _extract_measurement,
+            i,
+            chunks=chunks + tuple((n,) for n in base_shape),
+            new_axis=new_axis,
+            meta=meta,
+        )
+
+        ensemble_axes_metadata = detector._out_ensemble_axes_metadata(waves)
+
+        base_axes_metadata = detector._out_base_axes_metadata(waves)
+
+        axes_metadata = ensemble_axes_metadata + base_axes_metadata
+
+        metadata = detector._out_metadata(waves)
+
+        cls = detector._out_type(waves)
+
+        axes_metadata = extra_ensemble_axes_metadata + axes_metadata
+
+        measurement = cls.from_array_and_metadata(
+            array, axes_metadata=axes_metadata, metadata=metadata
+        )
+
+        # measurement = detector._pack_single_output(waves, array)
+
+        if hasattr(measurement, "reduce_ensemble"):
+            measurement = measurement.reduce_ensemble()
+
+        measurements.append(measurement)
+
+    return measurements
 
 
 def _round_gpts_to_multiple_of_interpolation(
@@ -697,8 +767,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         from the waves.
     """
 
-    _base_dims = 3
-
     def __init__(
         self,
         array: np.ndarray,
@@ -716,30 +784,25 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         metadata: dict = None,
     ):
 
-        if len(array.shape) < 2:
-            raise RuntimeError("Wave function array should have 2 dimensions or more")
-
-        self._array = array
         self._grid = Grid(
             extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
         )
         self._accelerator = Accelerator(energy=energy)
-        # self._beam_tilt = BeamTilt(tilt=tilt)
+        self._wave_vectors = wave_vectors
 
-        self._ensemble_axes_metadata = (
-            [] if ensemble_axes_metadata is None else ensemble_axes_metadata
+        super().__init__(
+            array=array,
+            base_dims=3,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
         )
 
-        self._metadata = {} if metadata is None else metadata
-
-        self._wave_vectors = wave_vectors
         self._semiangle_cutoff = semiangle_cutoff
         self._window_gpts = tuple(window_gpts)
         self._window_offset = tuple(window_offset)
         self._interpolation = _validate_interpolation(interpolation)
         self._device = device
         self._periodic = periodic
-        self._check_axes_metadata()
 
     @classmethod
     def _pack_kwargs(cls, kwargs):
@@ -1281,7 +1344,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 #         return array
 
 
-class SMatrix(BaseSMatrix, Ensemble):
+class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     """
     The scattering matrix is used for simulating STEM experiments using the PRISM algorithm.
 
@@ -1524,32 +1587,32 @@ class SMatrix(BaseSMatrix, Ensemble):
             self.window_gpts[1] * sampling[1],
         )
 
-    @staticmethod
-    def _wrapped_build_s_matrix(*args, s_matrix_partial):
-        s_matrix = s_matrix_partial(*tuple(arg.item() for arg in args[:-1]))
-
-        wave_vector_range = slice(*np.squeeze(args[-1]))
-        array = s_matrix._build_s_matrix(wave_vector_range).array
-        return array
-
-    def _s_matrix_partial(self):
-        def s_matrix(*args, potential_partial, **kwargs):
-            if potential_partial is not None:
-                potential = potential_partial(*args + (np.array([None], dtype=object),))
-            else:
-                potential = None
-            return SMatrix(potential=potential, **kwargs)
-
-        potential_partial = (
-            self.potential._from_partitioned_args()
-            if self.potential is not None
-            else None
-        )
-        return partial(
-            s_matrix,
-            potential_partial=potential_partial,
-            **self._copy_kwargs(exclude=("potential",)),
-        )
+    # @staticmethod
+    # def _wrapped_build_s_matrix(*args, s_matrix_partial):
+    #     s_matrix = s_matrix_partial(*tuple(arg.item() for arg in args[:-1]))
+    #
+    #     wave_vector_range = slice(*np.squeeze(args[-1]))
+    #     array = s_matrix._build_s_matrix(wave_vector_range).array
+    #     return array
+    #
+    # def _s_matrix_partial(self):
+    #     def s_matrix(*args, potential_partial, **kwargs):
+    #         if potential_partial is not None:
+    #             potential = potential_partial(*args + (np.array([None], dtype=object),))
+    #         else:
+    #             potential = None
+    #         return SMatrix(potential=potential, **kwargs)
+    #
+    #     potential_partial = (
+    #         self.potential._from_partitioned_args()
+    #         if self.potential is not None
+    #         else None
+    #     )
+    #     return partial(
+    #         s_matrix,
+    #         potential_partial=potential_partial,
+    #         **self._copy_kwargs(exclude=("potential",)),
+    #     )
 
     def multislice(
         self,
@@ -1586,26 +1649,25 @@ class SMatrix(BaseSMatrix, Ensemble):
         if self.potential is not None:
             return self.potential._partition_args(chunks, lazy=lazy)
         else:
-            array = np.zeros((1,), dtype=object)
-            array[0] = None
+            array = np.empty((1,), dtype=object)
             if lazy:
                 array = da.from_array(array, chunks=1)
             return (array,)
 
     @staticmethod
     def _s_matrix(*args, potential_partial, **kwargs):
-        potential = potential_partial(*args)
-        return SMatrix(potential=potential, **kwargs)
+        potential = potential_partial(*args).item()
+        s_matrix = SMatrix(potential=potential, **kwargs)
+        return _wrap_with_array(s_matrix)
 
     def _from_partitioned_args(self, *args, **kwargs):
         if self.potential is not None:
             potential_partial = self.potential._from_partitioned_args()
-            exclude = ("potential", "sampling", "extent")
+            kwargs = self._copy_kwargs(exclude=("potential", "sampling", "extent"))
         else:
             potential_partial = lambda *args, **kwargs: None
-            exclude = ("potential",)
+            kwargs = self._copy_kwargs(exclude=("potential",))
 
-        kwargs = self._copy_kwargs(exclude=exclude)
         return partial(self._s_matrix, potential_partial=potential_partial, **kwargs)
 
     @staticmethod
@@ -1909,15 +1971,13 @@ class SMatrix(BaseSMatrix, Ensemble):
             if measurements is None:
                 measurements = new_measurements
             else:
-                for measurement, new_measurement in zip(
-                    measurements, new_measurements
-                ):
+                for measurement, new_measurement in zip(measurements, new_measurements):
                     if measurement.axes_metadata[0]._ensemble_mean:
                         measurement.array[:] += new_measurement.array
                     else:
                         measurement.array[i] = new_measurement.array
 
-        #measurements = list(measurements.values())
+        # measurements = list(measurements.values())
 
         for i, measurement in enumerate(measurements):
             if (

@@ -669,7 +669,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
     def _get_indexed_measurements(self, keepdims: bool = True):
 
-        #print(self._indices, self._measurements.shape)
+        # print(self._indices, self._measurements.shape)
         indexed = self.measurements.get_items(self._indices, keepdims=keepdims)
 
         if keepdims:
@@ -1034,7 +1034,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         figsize: tuple[float, float] = None,
         interact: bool = False,
     ):
-        #measurements = measurements.compute().to_cpu()
+        # measurements = measurements.compute().to_cpu()
 
         axes_types = _determine_axes_types(
             measurements=measurements, explode=explode, overlay=None
@@ -1325,10 +1325,10 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
                 ax.spines["left"].set_visible(False)
 
     def adjust_tight_bbox(self):
-        #x_extent = self.measurements._plot_extent_x(self._xunits)
-        #y_extent = self.measurements._plot_extent_y(self._yunits)
+        # x_extent = self.measurements._plot_extent_x(self._xunits)
+        # y_extent = self.measurements._plot_extent_y(self._yunits)
 
-        #aspect = (y_extent[1] - y_extent[0]) / (x_extent[1] - x_extent[0])
+        # aspect = (y_extent[1] - y_extent[0]) / (x_extent[1] - x_extent[0])
         aspect = 1
 
         size_x = self.fig.get_size_inches()[0]
@@ -1462,8 +1462,6 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
         for image in self._artists.ravel():
             image.set_extent(extent)
-
-
 
     def _add_domain_coloring_imshow(self, ax, array, norm):
         abs_array = np.abs(array)
@@ -1698,9 +1696,21 @@ class MeasurementVisualization1D(MeasurementVisualization):
                 y_lim = common_ylim
             self.axes[i].set_ylim(y_lim)
 
-    def set_legends(self, **kwargs):
+    def set_legends(self, loc: str = "first", **kwargs):
+
+        indices = [index for index in np.ndindex(*self.axes.shape)]
+
+        if loc == "first":
+            loc = indices[:1]
+        elif loc == "last":
+            loc = indices[-1:]
+        elif loc == "all":
+            loc = indices
+
         for i, _ in self.generate_measurements():
-            self.axes[i].legend(**kwargs)
+
+            if i in loc:
+                self.axes[i].legend(**kwargs)
 
     def set_artists(self):
 
@@ -1767,7 +1777,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         vmin: float = None,
         vmax: float = None,
         power: float = 1.0,
-        scale: float = .1,
+        scale: float = 0.1,
         common_scale: bool = False,
         explode: bool = False,
         figsize: tuple[float, float] = None,
@@ -1786,7 +1796,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             interact=interact,
         )
 
-        #positions = measurements.positions[:, :2]
+        # positions = measurements.positions[:, :2]
 
         self._scale = scale
 
@@ -1866,12 +1876,12 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
             norm = self._normalization[i]
 
-            #print(measurement.intensities.max())
+            # print(measurement.intensities.max())
 
             scales = self._get_scales(measurement, norm)
             positions = self._get_positions(measurement)
 
-            #print(scales)
+            # print(scales)
 
             if self._cmap not in plt.colormaps():
                 cmap = ListedColormap([self._cmap])

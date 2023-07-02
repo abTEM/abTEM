@@ -100,12 +100,20 @@ class BaseTransferFunction(
     ):
         from abtem.measurements import DiffractionPatterns
 
-        if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
-            max_angle = self._max_semiangle_cutoff
-        elif max_angle is None:
-            raise RuntimeError()
+        if (self.sampling is None) or (max_angle is not None):
 
-        sampling = 1 / (max_angle * 1e-3) / 2 * self.wavelength
+            if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
+                max_angle = self._max_semiangle_cutoff
+
+            elif max_angle is None:
+                raise RuntimeError()
+
+            sampling = 1 / (max_angle * 1e-3) / 2 * self.wavelength
+        else:
+            sampling = self.sampling
+
+        if self.gpts is None and gpts is None:
+            gpts = 128
 
         ctf = self.copy()
         ctf.sampling = sampling
@@ -343,7 +351,7 @@ class Aperture(BaseAperture):
 
         semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
 
-        if self.soft:
+        if self.soft and self.grid.check_is_defined(False):
             aperture = soft_aperture(
                 alpha, phi, semiangle_cutoff, self.angular_sampling
             )

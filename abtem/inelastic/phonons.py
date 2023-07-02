@@ -106,9 +106,10 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __len__(self) -> int:
         pass
 
-    # def __iter__(self):
-    #     for _, _, fp in self.generate_blocks(1):
-    #         yield self.randomize(fp.atoms)
+    def __iter__(self):
+        for _, _, fp in self.generate_blocks(1):
+            fp = fp.item()
+            yield fp.randomize(fp.atoms)
 
 
 class DummyFrozenPhonons(BaseFrozenPhonons):
@@ -373,10 +374,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         atoms, seed = args[0]
 
         new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
-
-        if len(new.ensemble_shape):
-            new = _wrap_with_array(new, len(new.ensemble_shape))
-
+        new = _wrap_with_array(new, len(new.ensemble_shape))
         return new
 
     def _from_partitioned_args(self):

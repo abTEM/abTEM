@@ -33,7 +33,7 @@ from abtem.core.axes import (
 )
 from abtem.core.axes import ThicknessAxis, FrozenPhononsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
-from abtem.core.chunks import chunk_shape, generate_chunks, Chunks
+from abtem.core.chunks import chunk_shape, generate_chunks, Chunks, chunk_ranges
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
@@ -439,6 +439,7 @@ class _PotentialBuilder(BasePotential):
 
             if self.ensemble_shape:
                 for i, _, potential in self.generate_blocks(1):
+                    potential = potential.item()
                     i = np.unravel_index((0,), self.ensemble_shape)
 
                     for j, slic in enumerate(
@@ -1335,82 +1336,58 @@ class CrystalPotential(_PotentialBuilder):
         else:
             return [FrozenPhononsAxis(_ensemble_mean=True)]
 
-    @staticmethod
-    def _wrap_partition_args(*args):
-        arr = np.zeros((1,), dtype=object)
-        arr.itemset(
-            0,
-            {
-                "potential_args": args[0],
-                "seeds": args[1],
-                "num_frozen_phonons": args[2],
-            },
-        )
-        return arr
+    @classmethod
+    def _from_partitioned_args_func(cls, *args, **kwargs):
+        args = unpack_blockwise_args(args)
+        potential, seed = args[0]
+        if hasattr(potential, "item"):
+            potential = potential.item()
+
+        if seed is not None:
+            num_frozen_phonons = len(seed)
+        else:
+            num_frozen_phonons = None
+
+        new = cls(potential_unit=potential, seeds=seed, num_frozen_phonons=num_frozen_phonons, **kwargs)
+        return _wrap_with_array(new)
+
+    def _from_partitioned_args(self):
+        kwargs = self._copy_kwargs(exclude=("potential_unit", "seeds", "num_frozen_phonons"))
+        output = partial(self._from_partitioned_args_func, **kwargs)
+        return output
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
 
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        if len(self.ensemble_shape) == 0:
-            array = np.zeros((1,), dtype=object)
+        if not len(self.ensemble_shape):
             chunks = ((1,),)
-        else:
-            array = np.zeros(len(chunks[0]), dtype=object)
-
-        for block_indices, chunk_range in iterate_chunk_ranges(chunks):
-            if self.seeds is None:
-                seeds = None
-                num_frozen_phonons = None
-            else:
-                seeds = self.seeds[chunk_range[0]]
-                num_frozen_phonons = len(seeds)
-
-            potential_unit = self.potential_unit._partition_args(-1, lazy=lazy)[0]
-
-            if lazy:
-                block = dask.delayed(self._wrap_partition_args)(
-                    potential_unit, seeds, num_frozen_phonons
-                )
-                block = da.from_delayed(block, shape=(1,), dtype=object)
-            else:
-                block = self._wrap_partition_args(
-                    potential_unit, seeds, num_frozen_phonons
-                )
-
-            array.itemset(block_indices[0], block)
 
         if lazy:
-            array = da.concatenate(array)
+            arrays = []
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+                if self.seeds is not None:
+                    seeds = self.seeds[start:stop]
+                else:
+                    seeds = self.seeds
+                lazy_potential = self.potential_unit.ensemble_blocks(-1)
+                lazy_args = dask.delayed(_wrap_with_array)((lazy_potential, seeds), ndims=1)
+                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
+                arrays.append(lazy_array)
+
+            array = da.concatenate(arrays)
+        else:
+            array = np.zeros((len(chunks),), dtype=object)
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+
+                if self.seeds is not None:
+                    seeds = self.seeds[start:stop]
+                else:
+                    seeds = self.seeds
+
+                array.itemset(i, (self.potential_unit, seeds))
 
         return (array,)
-
-    @staticmethod
-    def _crystal_potential(*args, potential_partial, **kwargs):
-        args = args[0]
-        if hasattr(args, "item"):
-            args = args.item()
-
-        potential_args = args["potential_args"]
-        if hasattr(potential_args, "item"):
-            potential_args = potential_args.item()
-
-        potential_unit = potential_partial(potential_args)
-
-        kwargs["seeds"] = args["seeds"]
-        kwargs["num_frozen_phonons"] = args["num_frozen_phonons"]
-        potential = CrystalPotential(potential_unit, **kwargs)
-
-        return potential
-
-    def _from_partitioned_args(self):
-        kwargs = self._copy_kwargs(
-            exclude=("potential_unit", "seeds", "num_frozen_phonons")
-        )
-        potential_partial = self.potential_unit._from_partitioned_args()
-        return partial(
-            self._crystal_potential, potential_partial=potential_partial, **kwargs
-        )
 
     def generate_slices(
         self, first_slice: int = 0, last_slice: int = None, return_depth: bool = False

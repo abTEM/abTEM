@@ -2,20 +2,18 @@
 from __future__ import annotations
 
 import itertools
-from numbers import Number
-import warnings
 from abc import abstractmethod
 from copy import copy
 from functools import partial
+from numbers import Number
 from typing import Sequence
 
-import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
 
 import abtem
-from abtem.array import ArrayObject, _validate_lazy, ComputableList, expand_dims
+from abtem.array import ArrayObject, ComputableList, expand_dims, _validate_lazy
 from abtem.core.axes import (
     RealSpaceAxis,
     ReciprocalSpaceAxis,
@@ -45,15 +43,12 @@ from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
     tuple_range,
-    interleave,
 )
 from abtem.detectors import (
     BaseDetector,
-    _validate_detectors,
-    WavesDetector,
     FlexibleAnnularDetector,
 )
-from abtem.distributions import BaseDistribution, EnsembleFromDistributions
+from abtem.distributions import BaseDistribution
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -68,72 +63,7 @@ from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
     CompositeArrayObjectTransform,
     ArrayObjectTransform,
-    EmptyTransform,
 )
-
-
-def _extract_measurement(array, index):
-    if array.size == 0:
-        return array
-
-    array = array.item()[index].array
-    return array
-
-
-def _wrap_measurements(measurements):
-    return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
-
-
-def _finalize_lazy_measurements(
-    arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
-):
-
-    if extra_ensemble_axes_metadata is None:
-        extra_ensemble_axes_metadata = []
-
-    measurements = []
-    for i, detector in enumerate(detectors):
-
-        base_shape = detector._out_base_shape(waves)
-        meta = detector._out_meta(waves)
-
-        new_axis = tuple(range(len(arrays.shape), len(arrays.shape) + len(base_shape)))
-
-        if chunks is None:
-            chunks = arrays.chunks
-
-        array = arrays.map_blocks(
-            _extract_measurement,
-            i,
-            chunks=chunks + tuple((n,) for n in base_shape),
-            new_axis=new_axis,
-            meta=meta,
-        )
-
-        ensemble_axes_metadata = detector._out_ensemble_axes_metadata(waves)
-
-        base_axes_metadata = detector._out_base_axes_metadata(waves)
-
-        axes_metadata = ensemble_axes_metadata + base_axes_metadata
-
-        metadata = detector._out_metadata(waves)
-
-        cls = detector._out_type(waves)
-
-        axes_metadata = extra_ensemble_axes_metadata + axes_metadata
-
-        measurement = cls.from_array_and_metadata(
-            array, axes_metadata=axes_metadata, metadata=metadata
-        )
-
-        # measurement = detector._pack_single_output(waves, array)
-
-        if hasattr(measurement, "reduce_ensemble"):
-            measurement = measurement.reduce_ensemble()
-
-        measurements.append(measurement)
-
-    return measurements
 
 
 def _ensure_parity(n, even, v=1):
@@ -1007,7 +937,12 @@ class Waves(BaseWaves, ArrayObject):
 
 def _reduce_ensemble(ensemble):
     if isinstance(ensemble, (list, tuple)):
-        return [_reduce_ensemble(ensemble) for ensemble in ensemble]
+        outputs = [_reduce_ensemble(x) for x in ensemble]
+
+        if isinstance(ensemble, ComputableList):
+            outputs = ComputableList(outputs)
+
+        return outputs
 
     squeeze = ()
     for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata):
@@ -1022,18 +957,116 @@ def _reduce_ensemble(ensemble):
     return output
 
 
-class _WavesBuilder(EnsembleFromDistributions, BaseWaves):
-    def __init__(
-        self, distributions, transforms: list[ArrayObjectTransform], device: str
+class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
+    def __init__(self, ensemble_names, device: str):
+
+        self._ensemble_names = ensemble_names
+        self._device = device
+        super().__init__()
+
+    def check_can_build(self, potential=None):
+        if potential is not None:
+            self.grid.match(potential)
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
+    @property
+    def _ensembles(self):
+        return {name: getattr(self, name) for name in self._ensemble_names}
+
+    @property
+    def _ensemble_shapes(self):
+        return tuple(ensemble.ensemble_shape for ensemble in self._ensembles.values())
+
+    @property
+    def ensemble_shape(self):
+        """Shape of the ensemble axes of the waves."""
+        return tuple(itertools.chain(*self._ensemble_shapes))
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        """List of AxisMetadata of the ensemble axes."""
+        return list(
+            itertools.chain(
+                *tuple(
+                    ensemble.ensemble_axes_metadata
+                    for ensemble in self._ensembles.values()
+                )
+            )
+        )
+
+    def _chunk_splits(self):
+        shapes = (0,) + tuple(
+            len(ensemble_shape) for ensemble_shape in self._ensemble_shapes
+        )
+        cumulative_shapes = np.cumsum(shapes)
+        return [
+            (cumulative_shapes[i], cumulative_shapes[i + 1])
+            for i in range(len(cumulative_shapes) - 1)
+        ]
+
+    def _arg_splits(self):
+        shapes = (0,)
+        for arg_split, ensemble in zip(self._chunk_splits(), self._ensembles.values()):
+            shapes += (len(ensemble._partition_args(1, lazy=True)),)
+        cumulative_shapes = np.cumsum(shapes)
+        return [
+            (cumulative_shapes[i], cumulative_shapes[i + 1])
+            for i in range(len(cumulative_shapes) - 1)
+        ]
+
+    def _partition_args(self, chunks=(1,), lazy: bool = True):
+        if chunks is None:
+            chunks = self._default_ensemble_chunks
+            chunks = validate_chunks(
+                self.ensemble_shape, chunks, limit="auto", dtype=np.complex64
+            )
+
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+
+        args = ()
+        for arg_split, ensemble in zip(self._chunk_splits(), self._ensembles.values()):
+            arg_chunks = chunks[slice(*arg_split)]
+            args += ensemble._partition_args(arg_chunks, lazy=lazy)
+
+        return args
+
+    @classmethod
+    def _from_partitioned_args_func(
+        cls,
+        *args,
+        partials,
+        arg_splits,
+        **kwargs,
     ):
 
-        if transforms is None:
-            transforms = []
+        args = unpack_blockwise_args(args)
+        for arg_split, (name, partial) in zip(arg_splits, partials.items()):
+            kwargs[name] = partial(*args[slice(*arg_split)]).item()
 
-        self._transforms = transforms
-        self._device = device
+        new_probe = cls(
+            **kwargs,
+        )
+        new_probe = _wrap_with_array(new_probe)
+        return new_probe
 
-        super().__init__()
+    def _from_partitioned_args(self, *args, **kwargs):
+        partials = {
+            name: ensemble._from_partitioned_args()
+            for name, ensemble in self._ensembles.items()
+        }
+
+        kwargs = self._copy_kwargs(exclude=tuple(self._ensembles.keys()))
+        return partial(
+            self._from_partitioned_args_func,
+            partials=partials,
+            arg_splits=self._arg_splits(),
+            **kwargs,
+        )
+
+    @property
+    def _default_ensemble_chunks(self):
+        return ("auto",) * len(self.ensemble_shape)
 
     @property
     def device(self):
@@ -1051,205 +1084,55 @@ class _WavesBuilder(EnsembleFromDistributions, BaseWaves):
         return self.gpts
 
     @property
-    def ensemble_shape(self) -> tuple[int, ...]:
-        """Shape of the ensemble axes of the waves."""
-        return CompositeArrayObjectTransform(self.transforms).ensemble_shape
-
-    @property
-    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        """List of AxisMetadata of the ensemble axes."""
-        return CompositeArrayObjectTransform(self.transforms).ensemble_axes_metadata
-
-    @property
     def axes_metadata(self) -> AxesMetadataList:
         """List of AxisMetadata."""
         return AxesMetadataList(
             self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
         )
 
-    @property
-    def tilt(self):
-        """The small-angle tilt of applied to the Fresnel propagator [mrad]."""
-        return self._tilt
-
-    @tilt.setter
-    def tilt(self, value):
-        old_tilt = self.tilt
-        new_tilt = validate_tilt(value)
-        for i, transform in enumerate(self._transforms):
-            if transform is old_tilt:
-                self._transforms[i] = new_tilt
-
-        self._tilt = new_tilt
-
+    @staticmethod
     @abstractmethod
-    def metadata(self):
-        """Metadata describing the waves."""
+    def _build_waves(waves_builder: _WavesBuilder, max_batch: int):
         pass
 
-    def insert_transform(
-        self, transform: ArrayObjectTransform, index: int = None
-    ) -> _WavesBuilder:
-        """
-        Insert a wave function transformation applied during the creation of the waves.
-
-        Parameters
-        ----------
-        transform : ArrayObjectTransform
-            Wave transform to apply during creation.
-        index : int
-            The position in the order of the applied transformations.
-        """
-        if index is None:
-            index = len(self._transforms)
-
-        self._transforms.insert(index, transform)
-        return self
-
-    @property
-    def transforms(self):
-        """The transforms applied during creation of the waves."""
-        return self._transforms
-
     @staticmethod
-    def _base_waves(
-        gpts: float,
-        extent: float,
-        energy: float,
-        reciprocal_space: bool,
-        device: str,
-        metadata: dict,
-        lazy: bool,
-        normalize: bool,
-    ):
-        xp = get_array_module(device)
-
-        kwargs = {"dtype": xp.complex64, "shape": gpts}
-
-        if normalize:
-            func = xp.full
-            kwargs["fill_value"] = 1 / np.prod(gpts)
-        else:
-            func = xp.ones
-
-        if lazy:
-            delayed_array = dask.delayed(func)(**kwargs)
-            array = da.from_delayed(
-                delayed_array, shape=gpts, meta=xp.array((), dtype=xp.complex64)
-            )
-        else:
-            array = func(**kwargs)
-
-        return Waves(
-            array=array,
-            energy=energy,
-            extent=extent,
-            reciprocal_space=reciprocal_space,
-            metadata=metadata,
-        )
-
-    def _base_waves_partial(
-        self,
-        lazy: bool = False,
-        reciprocal_space: bool = False,
-        normalize: bool = False,
-    ):
-        return partial(
-            self._base_waves,
-            gpts=self.gpts,
-            extent=self.extent,
-            energy=self.energy,
-            reciprocal_space=reciprocal_space,
-            device=self.device,
-            metadata=self.metadata,
-            lazy=lazy,
-            normalize=normalize,
-        )
-
-    @staticmethod
-    def _lazy_build(
-        *args,
-        waves_partial,
-        transform_partial,
-    ):
-
-        transform = transform_partial(*(arg.item() for arg in args))
-        waves = waves_partial()
-        array = transform._calculate_new_array(waves)
-
-        if transform._num_outputs > 1:
-            arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(array)
-            return arr
-
-        return array
-
-    def _lazy_build_transform(self, waves_partial, transform, max_batch):
-        from abtem.core.chunks import validate_chunks
-
+    def _lazy_build_waves(waves_builder: _WavesBuilder, max_batch: int) -> Waves:
         if isinstance(max_batch, int):
-            max_batch = int(max_batch * np.prod(self.base_shape))
+            max_batch = int(max_batch * np.prod(waves_builder.gpts))
 
-        chunks = transform._default_ensemble_chunks + self.base_shape
+        chunks = waves_builder._default_ensemble_chunks + waves_builder.gpts
 
         chunks = validate_chunks(
-            transform.ensemble_shape + self.base_shape,
-            chunks,
+            shape=waves_builder.ensemble_shape + waves_builder.gpts,
+            chunks=chunks + (-1, -1),
             limit=max_batch,
-            dtype=self.dtype,
+            dtype=waves_builder.dtype,
         )
 
-        transform_chunks = chunks[: len(transform.ensemble_shape)]
+        blocks = waves_builder.ensemble_blocks(chunks=chunks[:-2])
 
-        transform_args, transform_symbols = transform._get_blockwise_args(
-            transform_chunks
+        xp = get_array_module(waves_builder.device)
+
+        array = blocks.map_blocks(
+            waves_builder._build_waves,
+            meta=xp.array((), dtype=np.complex64),
+            new_axis=tuple_range(2, len(waves_builder.ensemble_shape)),
+            chunks=blocks.chunks + waves_builder.gpts,
+            wrapped=False,
+            enforce_ndim=True,
         )
 
-        dummy_waves = self._base_waves_partial(lazy=True, reciprocal_space=False)()
-
-        transform.set_output_specification(dummy_waves)
-
-        if transform._num_outputs > 1:
-            num_ensemble_dims = len(transform.ensemble_shape)
-            chunks = chunks[:num_ensemble_dims]
-            symbols = tuple_range(num_ensemble_dims)
-            new_axes = None
-            meta = np.array((), dtype=object)
-        else:
-            base_shape = transform._out_base_shape(dummy_waves)
-            num_ensemble_dims = len(transform._out_ensemble_shape(dummy_waves))
-            symbols = tuple_range(num_ensemble_dims + len(base_shape))
-            new_base_shape = base_shape[: len(symbols) - len(transform.ensemble_shape)]
-            new_axes = {num_ensemble_dims + i: n for i, n in enumerate(new_base_shape)}
-            chunks = chunks[: -len(base_shape)] + new_base_shape
-            meta = transform._out_meta(dummy_waves)
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="Increasing number of chunks")
-            new_array = da.blockwise(
-                self._lazy_build,
-                symbols,
-                *interleave(transform_args, transform_symbols),
-                adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                transform_partial=transform._from_partitioned_args(),
-                new_axes=new_axes,
-                waves_partial=waves_partial,
-                meta=meta,
-                align_arrays=False,
-                concatenate=True,
-            )
-
-        if transform._num_outputs > 1:
-            outputs = transform._pack_multiple_outputs(dummy_waves, new_array)
-
-            return ComputableList(_reduce_ensemble(outputs))
-        else:
-            output = transform._pack_single_output(dummy_waves, new_array)
-            output = _reduce_ensemble(output)
-            return output
+        return Waves(
+            array,
+            energy=waves_builder.energy,
+            extent=waves_builder.extent,
+            reciprocal_space=False,
+            metadata=waves_builder.metadata,
+            ensemble_axes_metadata=waves_builder.ensemble_axes_metadata,
+        )
 
 
-class PlaneWave(Ensemble, BaseWaves):
+class PlaneWave(_WavesBuilder):
     """
     Represents electron probe wave functions for simulating experiments with a plane-wave probe, such as HRTEM and SAED.
 
@@ -1284,7 +1167,6 @@ class PlaneWave(Ensemble, BaseWaves):
         normalize: bool = False,
         tilt: tuple[float, float] = (0.0, 0.0),
         device: str = None,
-        transforms: list[ArrayObjectTransform] = None,
     ):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -1293,16 +1175,16 @@ class PlaneWave(Ensemble, BaseWaves):
         self._normalize = normalize
         device = validate_device(device)
 
-        transforms = [] if transforms is None else transforms
-
-        transforms = transforms + [self._tilt]
-
-        # super().__init__(transforms=transforms, device=device)
-        super().__init__(distributions=("tilt",))
+        super().__init__(ensemble_names=("tilt",), device=device)
 
     @property
     def tilt(self):
+        """The small-angle tilt of applied to the Fresnel propagator [mrad]."""
         return self._tilt
+
+    @tilt.setter
+    def tilt(self, value):
+        self._tilt = validate_tilt(value)
 
     @property
     def metadata(self):
@@ -1318,60 +1200,33 @@ class PlaneWave(Ensemble, BaseWaves):
         """True if the created waves are normalized in reciprocal space."""
         return self._normalize
 
-    # def _get_transforms(
-    #     self,
-    #     potential: BasePotential = None,
-    #     detectors: BaseDetector | list[BaseDetector] = None,
-    # ) -> CompositeArrayObjectTransform:
-    #
-    #     transforms = [*self.transforms]
-    #
-    #     if detectors is None:
-    #         detectors = WavesDetector()
-    #
-    #     detectors = _validate_detectors(detectors)
-    #
-    #     if potential is not None:
-    #         multislice = MultisliceTransform(potential, detectors)
-    #
-    #         transforms = [multislice, *transforms]
-    #     else:
-    #         assert len(detectors)
-    #         transforms = [*detectors, *transforms]
-    #
-    #     transform = CompositeArrayObjectTransform(transforms)
-    #
-    #     return transform
+    @staticmethod
+    def _build_waves(waves_builder, wrapped: bool = True):
+        if hasattr(waves_builder, "item"):
+            waves_builder = waves_builder.item()
 
-    # def _build(self, potential=None, detectors=None, lazy=None, max_batch="auto"):
-    #
-    #     if potential is not None:
-    #         potential = _validate_potential(potential)
-    #         self.grid.match(potential)
-    #
-    #     self.grid.check_is_defined()
-    #     self.accelerator.check_is_defined()
-    #
-    #     lazy = _validate_lazy(lazy)
-    #
-    #     transform = self._get_transforms(potential=potential, detectors=detectors)
-    #
-    #     waves_partial = self._base_waves_partial(
-    #         lazy=False, reciprocal_space=False, normalize=self.normalize
-    #     )
-    #
-    #     if lazy:
-    #         measurements = self._lazy_build_transform(
-    #             waves_partial, transform=transform, max_batch=max_batch
-    #         )
-    #     else:
-    #         measurements = waves_partial()
-    #         for transform in reversed(transform.transforms):
-    #             measurements = transform.apply(measurements)
-    #
-    #         measurements = _reduce_ensemble(measurements)
-    #
-    #     return measurements
+        xp = get_array_module(waves_builder.device)
+
+        if waves_builder.normalize:
+            array = xp.full(waves_builder.gpts, 1/ np.prod(waves_builder.gpts), dtype=xp.complex64)
+
+        else:
+            array = xp.ones(waves_builder.gpts, dtype=xp.complex64)
+
+        waves = Waves(
+            array,
+            energy=waves_builder.energy,
+            extent=waves_builder.extent,
+            metadata=waves_builder.metadata,
+            reciprocal_space=False,
+        )
+
+        waves = waves.apply_transform(waves_builder.tilt)
+
+        if not wrapped:
+            waves = waves.array
+
+        return waves
 
     def build(
         self,
@@ -1396,9 +1251,16 @@ class PlaneWave(Ensemble, BaseWaves):
         plane_waves : Waves
             The wave functions.
         """
-        return self._build(
-            potential=None, detectors=None, lazy=lazy, max_batch=max_batch
-        )
+        self.check_can_build()
+
+        lazy = _validate_lazy(lazy)
+
+        if not lazy:
+            probes = self._build_waves(self)
+        else:
+            probes = self._lazy_build_waves(self, max_batch)
+
+        return _reduce_ensemble(probes)
 
     def multislice(
         self,
@@ -1406,8 +1268,6 @@ class PlaneWave(Ensemble, BaseWaves):
         detectors: BaseDetector = None,
         max_batch: int | str = "auto",
         lazy: bool = None,
-        ctf: CTF = None,
-        transition_potentials=None,
     ) -> Waves:
         """
         Run the multislice algorithm, after building the plane-wave wave function as needed. The grid of the wave
@@ -1439,13 +1299,25 @@ class PlaneWave(Ensemble, BaseWaves):
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
+        potential = _validate_potential(potential)
 
-        return self._build(
-            potential=potential, detectors=detectors, lazy=lazy, max_batch=max_batch
-        )
+        lazy = _validate_lazy(lazy)
+
+        self.check_can_build(potential)
+
+        if not lazy:
+            probes = self._build_waves(self)
+        else:
+            probes = self._lazy_build_waves(self, max_batch)
+
+        multislice = MultisliceTransform(potential, detectors)
+
+        measurements = probes.apply_transform(multislice)
+
+        return _reduce_ensemble(measurements)
 
 
-class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
+class Probe(_WavesBuilder):
     """
     Represents electron-probe wave functions for simulating experiments with a convergent beam,
     such as CBED and STEM.
@@ -1487,15 +1359,14 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         sampling: float | tuple[float, float] = None,
         energy: float = None,
         soft: bool = True,
-        # tilt: tuple[float | BaseDistribution, float | BaseDistribution]
-        # | BaseDistribution = (
-        #     0.0,
-        #     0.0,
-        # ),
+        tilt: tuple[float | BaseDistribution, float | BaseDistribution]
+        | BaseDistribution = (
+            0.0,
+            0.0,
+        ),
         device: str = None,
         aperture: BaseAperture = None,
         aberrations: Aberrations | dict = None,
-        transforms: list[ArrayObjectTransform] = None,
         positions: BaseScan = None,
         metadata: dict = None,
         **kwargs,
@@ -1523,128 +1394,47 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
             aberrations = Aberrations(energy=energy, **aberrations, **kwargs)
 
         aberrations._accelerator = self._accelerator
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         self._aperture = aperture
         self._aberrations = aberrations
+        self.tilt = tilt
 
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._metadata = {} if metadata is None else metadata
 
-        if transforms is None:
-            transforms = CompositeArrayObjectTransform()
-
         if positions is None:
-            positions = abtem.CustomScan([(0.0, 0.0)], squeeze=True)
+            positions = abtem.CustomScan(np.array([(0.0, 0.0)]), squeeze=True)
 
         self._positions = positions
-        self._transforms = transforms
+
+
         self.accelerator.match(self.aperture)
+
+        ensemble_names = (
+            "tilt",
+            "aberrations",
+            "aperture",
+            "positions",
+        )
+
+        super().__init__(ensemble_names=ensemble_names, device=device)
+
+    @property
+    def tilt(self):
+        """The small-angle tilt of applied to the Fresnel propagator [mrad]."""
+        return self._tilt
+
+    @tilt.setter
+    def tilt(self, value):
+        self._tilt = validate_tilt(value)
 
     @property
     def positions(self):
         return self._positions
 
     @property
-    def transforms(self):
-        return self._transforms
-
-    @property
-    def _ensembles(self):
-        names = (
-            "transforms",
-            "aberrations",
-            "aperture",
-            "positions",
-        )
-        return {name : getattr(self, name) for name in names}
-
-    @property
-    def _ensemble_shapes(self):
-        return tuple(ensemble.ensemble_shape for ensemble in self._ensembles.values())
-
-    @property
-    def ensemble_shape(self):
-        return tuple(itertools.chain(*self._ensemble_shapes))
-
-    @property
-    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        return list(
-            itertools.chain(
-                *tuple(ensemble.ensemble_axes_metadata for ensemble in self._ensembles.values())
-            )
-        )
-
-    def _chunk_splits(self):
-        shapes = (0,) + tuple(
-            len(ensemble_shape) for ensemble_shape in self._ensemble_shapes
-        )
-        cumulative_shapes = np.cumsum(shapes)
-        return [
-            (cumulative_shapes[i], cumulative_shapes[i + 1])
-            for i in range(len(cumulative_shapes) - 1)
-        ]
-
-    def _arg_splits(self):
-        shapes = (0,) + tuple(
-            1 if len(ensemble_shape) else 0 for ensemble_shape in self._ensemble_shapes
-        )
-        cumulative_shapes = np.cumsum(shapes)
-        return [
-            (cumulative_shapes[i], cumulative_shapes[i + 1])
-            for i in range(len(cumulative_shapes) - 1)
-        ]
-
-    def _partition_args(self, chunks=(1,), lazy: bool = True):
-        chunks = self._validate_ensemble_chunks(chunks)
-
-        args = ()
-        for arg_split, ensemble in zip(self._chunk_splits(), self._ensembles.values()):
-            arg_chunks = chunks[slice(*arg_split)]
-            args += ensemble._partition_args(arg_chunks, lazy=lazy)
-
-        return args
-
-    @property
-    def _default_ensemble_chunks(self):
-        return ("auto",) * len(self.ensemble_shape)
-
-    @classmethod
-    def _from_partitioned_args_func(
-        cls,
-        *args,
-        partials,
-        arg_splits,
-        **kwargs,
-    ):
-
-        args = unpack_blockwise_args(args)
-        for arg_split, (name, partial) in zip(arg_splits, partials.items()):
-            kwargs[name] = partial(*args[slice(*arg_split)]).item()
-
-        new_probe = cls(**kwargs,)
-        new_probe = _wrap_with_array(new_probe)
-        return new_probe
-
-    def _from_partitioned_args(self, *args, **kwargs):
-        partials = {name: ensemble._from_partitioned_args() for name, ensemble in self._ensembles.items()}
-
-        kwargs = self._copy_kwargs(
-            exclude=tuple(self._ensembles.keys())
-        )
-        return partial(
-            self._from_partitioned_args_func,
-            partials=partials,
-            arg_splits=self._arg_splits(),
-            **kwargs,
-        )
-
-    @property
     def soft(self):
         return self.aperture.soft
-
-    @property
-    def tilt(self):
-        return self
 
     @classmethod
     def _from_ctf(cls, ctf, **kwargs):
@@ -1698,69 +1488,35 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         }
 
     @staticmethod
-    def _build_probes(probe, wrapped: bool = True):
-        if hasattr(probe, "item"):
-            probe = probe.item()
+    def _build_waves(waves_builder, wrapped: bool = True):
+        if hasattr(waves_builder, "item"):
+            waves_builder = waves_builder.item()
 
-        array = probe.positions._evaluate_kernel(probe)
+        array = waves_builder.positions._evaluate_kernel(waves_builder)
 
         waves = Waves(
             array,
-            energy=probe.energy,
-            extent=probe.extent,
-            metadata=probe.metadata,
+            energy=waves_builder.energy,
+            extent=waves_builder.extent,
+            metadata=waves_builder.metadata,
             reciprocal_space=True,
-            ensemble_axes_metadata=probe.positions.ensemble_axes_metadata,
+            ensemble_axes_metadata=waves_builder.positions.ensemble_axes_metadata,
         )
 
-        waves = waves.apply_transform(probe.aperture)
+        waves = waves.apply_transform(waves_builder.aperture)
 
-        waves = waves.apply_transform(probe.aberrations)
+        waves = waves.apply_transform(waves_builder.tilt)
+
+        waves = waves.apply_transform(waves_builder.aberrations)
+
+        waves = waves.normalize()
 
         waves = waves.ensure_real_space()
-
-        waves = waves.apply_transform(probe.transforms)
 
         if not wrapped:
             waves = waves.array
 
         return waves
-
-    @staticmethod
-    def _lazy_build_probes(probe, max_batch):
-        if isinstance(max_batch, int):
-            max_batch = int(max_batch * np.prod(probe.gpts))
-
-        chunks = probe._default_ensemble_chunks + probe.gpts
-
-        chunks = validate_chunks(
-            shape=probe.ensemble_shape + probe.gpts,
-            chunks=chunks + (-1, -1),
-            limit=max_batch,
-            dtype=probe.dtype,
-        )
-
-        blocks = probe.ensemble_blocks(chunks=chunks[:-2])
-
-        xp = get_array_module(probe.device)
-
-        array = blocks.map_blocks(
-            probe._build_probes,
-            meta=xp.array((), dtype=np.complex64),
-            new_axis=tuple_range(2, len(probe.ensemble_shape)),
-            chunks=blocks.chunks + probe.gpts,
-            wrapped=False,
-            enforce_ndim=True,
-        )
-
-        return Waves(
-            array,
-            energy=probe.energy,
-            extent=probe.extent,
-            reciprocal_space=False,
-            metadata=probe.metadata,
-            ensemble_axes_metadata=probe.ensemble_axes_metadata,
-        )
 
     def build(
         self,
@@ -1788,6 +1544,9 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         probe_wave_functions : Waves
             The built probe wave functions.
         """
+        self.check_can_build()
+        lazy = _validate_lazy(lazy)
+
         scan = _validate_scan(scan, self)
 
         probe = self.copy()
@@ -1795,9 +1554,11 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         probe._positions = scan
 
         if not lazy:
-            return self._build_probes(probe)
+            probes = self._build_waves(probe)
+        else:
+            probes = self._lazy_build_waves(probe, max_batch)
 
-        return self._lazy_build_probes(probe, max_batch)
+        return _reduce_ensemble(probes)
 
     def multislice(
         self,
@@ -1834,6 +1595,12 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         measurements : BaseMeasurements or Waves or list of BaseMeasurement
         """
 
+        potential = _validate_potential(potential)
+
+        self.check_can_build(potential)
+
+        lazy = _validate_lazy(lazy)
+
         probe = self.copy()
 
         probe.grid.match(potential)
@@ -1843,15 +1610,15 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         probe._positions = scan
 
         if not lazy:
-            probes = self._build_probes(probe)
+            probes = self._build_waves(probe)
         else:
-            probes = self._lazy_build_probes(probe, max_batch)
+            probes = self._lazy_build_waves(probe, max_batch)
 
         multislice = MultisliceTransform(potential, detectors)
 
         measurements = probes.apply_transform(multislice)
 
-        return measurements
+        return _reduce_ensemble(measurements)
 
     def scan(
         self,
@@ -1859,7 +1626,6 @@ class Probe(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         scan: BaseScan | np.ndarray | Sequence = None,
         detectors: BaseDetector | Sequence[BaseDetector] = None,
         max_batch: int | str = "auto",
-        transition_potentials=None,
         lazy: bool = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """

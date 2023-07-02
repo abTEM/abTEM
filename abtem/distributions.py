@@ -432,11 +432,11 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
         blocks = ()
         for distribution, n in zip(distributions.values(), chunks):
             blocks += (distribution.divide(n, lazy=lazy),)
+
         return blocks
 
     @classmethod
     def _partial_transform(cls, *args, keys, **kwargs):
-
         assert len(args) == len(keys)
 
         args = unpack_blockwise_args(args)

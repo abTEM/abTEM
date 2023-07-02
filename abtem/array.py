@@ -1261,6 +1261,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
             )
 
             def combine_args(*args):
+
                 return args[0], args[1].item()
 
             ndims = max(len(self.ensemble_shape), 1)
