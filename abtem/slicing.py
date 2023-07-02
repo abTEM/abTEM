@@ -6,7 +6,7 @@ from typing import Sequence
 import numpy as np
 from ase import Atoms
 
-from abtem.core.utils import label_to_index
+from abtem.core.utils import label_to_index, EqualityMixin
 from abtem.atoms import is_cell_orthogonal
 
 
@@ -66,7 +66,7 @@ def _unpack_item(item: int | slice, num_items):
     return first_index, last_index
 
 
-class BaseSlicedAtoms:
+class BaseSlicedAtoms(EqualityMixin):
     def __init__(self, atoms: Atoms, slice_thickness: float | np.ndarray | str):
 
         if not is_cell_orthogonal(atoms):

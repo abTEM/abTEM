@@ -19,7 +19,7 @@ from dask.delayed import Delayed
 
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata, UnknownAxis
 from abtem.core.chunks import chunk_ranges, validate_chunks
-from abtem.core.ensemble import Ensemble, _wrap_with_array
+from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 try:
@@ -369,19 +369,13 @@ class FrozenPhonons(BaseFrozenPhonons):
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
-        args = args[0]
-
-        unpack = False
-        if hasattr(args, "item"):
-            args = args.item()
-            unpack = True
-
-        atoms, seed = args
+        args = unpack_blockwise_args(args)
+        atoms, seed = args[0]
 
         new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
 
-        if unpack:
-            new = _wrap_with_array(new, 1)
+        if len(new.ensemble_shape):
+            new = _wrap_with_array(new, len(new.ensemble_shape))
 
         return new
 
@@ -407,7 +401,7 @@ class FrozenPhonons(BaseFrozenPhonons):
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 array.itemset(i, (self.atoms, self.seed[start:stop]))
 
-        return array,
+        return (array,)
 
     def to_atoms_ensemble(self):
         """

@@ -94,7 +94,9 @@ class BaseTransferFunction(
         return self._evaluate_from_angular_grid(alpha, phi)
 
     def to_diffraction_patterns(
-        self, max_angle: float =None, gpts: int | tuple[int, int] = None,
+        self,
+        max_angle: float = None,
+        gpts: int | tuple[int, int] = None,
     ):
         from abtem.measurements import DiffractionPatterns
 

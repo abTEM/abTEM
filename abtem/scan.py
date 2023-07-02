@@ -15,7 +15,7 @@ from abtem.array import ArrayObject, T
 from abtem.core.axes import ScanAxis, PositionsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
-from abtem.core.ensemble import _wrap_with_array
+from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.potentials.iam import BasePotential, _validate_potential
@@ -27,11 +27,13 @@ if TYPE_CHECKING:
     from abtem.prism.s_matrix import BaseSMatrix
 
 
-def _validate_scan(scan, probe=None):
-    if scan is None:
-        scan = GridScan()
+def _validate_scan(scan:np.ndarray | BaseScan, probe:Probe=None):
+    if scan is None and probe is None:
+        scan = CustomScan(np.zeros((1,2)), squeeze=True)
+    elif scan is None:
+        scan = CustomScan(np.zeros((0, 2)), squeeze=True)
 
-    if not hasattr(scan, "get_positions"):
+    if not isinstance(scan, BaseScan):
         scan = CustomScan(scan)
 
     if probe is not None:
@@ -133,6 +135,7 @@ class BaseScan(ReciprocalSpaceMultiplication):
 
         return kernel
 
+
 #
 # class SourceDistribution(BaseScan):
 #     """
@@ -200,14 +203,15 @@ class CustomScan(BaseScan):
         (0., 0.).
     """
 
-    def __init__(self, positions: np.ndarray = (0.0, 0.0)):
+    def __init__(self, positions: np.ndarray = (0.0, 0.0), squeeze: bool = False):
+
         positions = np.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
             positions = positions[None]
 
         self._positions = positions
-        self._squeeze = False
+        self._squeeze = squeeze
 
         super().__init__()
 
@@ -221,9 +225,8 @@ class CustomScan(BaseScan):
             The matched probe or s-matrix.
         """
         if len(self.positions) == 0:
+            probe.grid.check_is_defined()
             self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.0
-
-
 
     @property
     def ensemble_axes_metadata(self):
@@ -233,13 +236,20 @@ class CustomScan(BaseScan):
                     (float(position[0]), float(position[1]))
                     for position in self.positions
                 ),
-                _squeeze=self._squeeze
+                _squeeze=self._squeeze,
             )
         ]
 
     @staticmethod
     def _from_partitioned_args_func(*args, **kwargs):
-        return CustomScan(args[0])
+        scan = unpack_blockwise_args(args)
+
+        positions = scan[0]["positions"]
+
+        new_scan = CustomScan(positions)
+
+        new_scan = _wrap_with_array(new_scan, 1)
+        return new_scan
 
     def _from_partitioned_args(self):
         return self._from_partitioned_args_func
@@ -249,7 +259,9 @@ class CustomScan(BaseScan):
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            positions.itemset(i, self._positions[start_chunk : start_chunk + chunk])
+            positions.itemset(
+                i, {"positions": self._positions[start_chunk : start_chunk + chunk]}
+            )
 
         if lazy:
             positions = da.from_array(positions, chunks=1)
@@ -896,23 +908,13 @@ class GridScan(HasGridMixin, BaseScan):
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
-        x_scan, y_scan = args
-
-        unpack = False
-        if hasattr(x_scan, "item"):
-            x_scan = x_scan.item()
-            y_scan = y_scan.item()
-            unpack =True
-
+        x_scan, y_scan = unpack_blockwise_args(args)
         start = (x_scan["start"], y_scan["start"])
         end = (x_scan["end"], y_scan["end"])
         gpts = (x_scan["gpts"], y_scan["gpts"])
         endpoint = (x_scan["endpoint"], y_scan["endpoint"])
         new_scan = cls(start=start, end=end, gpts=gpts, endpoint=endpoint)
-
-        if unpack:
-            new_scan = _wrap_with_array(new_scan, 2)
-
+        new_scan = _wrap_with_array(new_scan, 2)
         return new_scan
 
     def _from_partitioned_args(self):

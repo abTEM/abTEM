@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import inspect
 import warnings
-from typing import Tuple, Iterable
+from typing import Tuple
 
 import numpy as np
 
@@ -31,7 +31,7 @@ class CopyMixin:
             if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD)
         )
 
-    def _copy_kwargs(self, exclude: Tuple["str", ...] = (), cls=None) -> dict:
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
         if cls is None:
             cls = self.__class__
 
@@ -45,7 +45,7 @@ class CopyMixin:
         return copy.deepcopy(self)
 
 
-def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
+def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
 
     if not isinstance(b, a.__class__):
         return False
@@ -57,7 +57,7 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
 
         try:
             equal = value == b.__dict__[key]
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ValueError):
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
@@ -71,7 +71,8 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
                 equal = np.allclose(value, b.__dict__[key])
 
             except (ValueError, TypeError):
-                pass
+                if isinstance(value, EqualityMixin):
+                    equal = safe_equality(value, b.__dict__[key])
 
         if equal is False:
             return False

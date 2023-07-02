@@ -12,7 +12,7 @@ import numpy as np
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module, ArrayModule
 from abtem.core.chunks import Chunks, equal_sized_chunks
-from abtem.core.ensemble import Ensemble, _wrap_with_array
+from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import EqualityMixin, CopyMixin
 
 
@@ -434,24 +434,16 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
             blocks += (distribution.divide(n, lazy=lazy),)
         return blocks
 
-
     @classmethod
     def _partial_transform(cls, *args, keys, **kwargs):
 
         assert len(args) == len(keys)
 
-        unpack = False
-        try:
-            kwargs = {**kwargs, **{key: arg.item() for key, arg in zip(keys, args)}}
-            unpack = True
-
-        except AttributeError:
-            kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
+        args = unpack_blockwise_args(args)
+        kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
 
         new_transform = cls(**kwargs)
-
-        if unpack:
-            new_transform = _wrap_with_array(new_transform, len(keys))
+        new_transform = _wrap_with_array(new_transform, len(keys))
 
         return new_transform
 

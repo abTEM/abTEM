@@ -12,7 +12,7 @@ import numpy as np
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks, validate_chunks
-from abtem.core.ensemble import Ensemble
+from abtem.core.ensemble import Ensemble, EmptyEnsemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import ifft2
 from abtem.core.utils import (
     CopyMixin,
@@ -308,6 +308,12 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
             return self._pack_single_output(array_object, new_array)
 
 
+class EmptyTransform(EmptyEnsemble, ArrayObjectTransform):
+
+    def apply(self, array_object):
+        return array_object
+
+
 class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
     def __init__(self, distributions: tuple[str, ...] = ()):
         super().__init__(distributions=distributions)
@@ -520,6 +526,12 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         ]
         return tuple(itertools.chain(*default_ensemble_chunks))
 
+    def apply(self, array_object):
+        if len(self):
+            return super().apply(array_object)
+        else:
+            return array_object
+
     def _calculate_new_array(
         self, array_object: T
     ) -> np.ndarray | tuple[np.ndarray, ...]:
@@ -531,6 +543,28 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
             return tuple(array_object[i].array for i in range(self._num_outputs))
         else:
             return array_object.array
+
+    @staticmethod
+    def _partial(*args, partials):
+        args = unpack_blockwise_args(args)
+
+        transforms = []
+        for partial, arg_indices in partials:
+            partial_args = tuple(args[i] for i in arg_indices)
+            transforms += [partial(*partial_args).item()]
+
+        new_transform = CompositeArrayObjectTransform(transforms)
+        return _wrap_with_array(new_transform)
+
+    def _from_partitioned_args(self):
+        partials = ()
+        i = 0
+        for transform in self.transforms:
+            num_args = len(transform._partition_args(1))
+            arg_indices = tuple(range(i, i + num_args))
+            partials += ((transform._from_partitioned_args(), arg_indices),)
+            i += num_args
+        return partial(self._partial, partials=partials)
 
     def _partition_args(self, chunks=None, lazy: bool = True):
         if chunks is None:
@@ -549,23 +583,8 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
         return blocks
 
-    @staticmethod
-    def _partial(*args, partials):
-        transforms = []
-        for partial, arg_indices in partials:
-            partial_args = tuple(args[i] for i in arg_indices)
-            transforms += [partial(*partial_args)]
-        return CompositeArrayObjectTransform(transforms)
 
-    def _from_partitioned_args(self):
-        partials = ()
-        i = 0
-        for transform in self.transforms:
-            num_args = len(transform._partition_args(1))
-            arg_indices = tuple(range(i, i + num_args))
-            partials += ((transform._from_partitioned_args(), arg_indices),)
-            i += num_args
-        return partial(self._partial, partials=partials)
+
 
 
 class ReciprocalSpaceMultiplication(WavesTransform):

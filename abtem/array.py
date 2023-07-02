@@ -34,8 +34,8 @@ from abtem.core.backend import (
     check_cupy_is_installed,
 )
 from abtem.core.chunks import Chunks, validate_chunks, chunk_shape, iterate_chunk_ranges
-from abtem.core.ensemble import Ensemble, _wrap_with_array, _wrap_args_with_array
-from abtem.core.utils import normalize_axes, CopyMixin, tuple_range, EqualityMixin
+from abtem.core.ensemble import Ensemble, _wrap_with_array, _wrap_args_with_array, unpack_blockwise_args
+from abtem.core.utils import normalize_axes, CopyMixin, tuple_range, EqualityMixin, interleave
 
 if TYPE_CHECKING:
     from abtem.transform import ArrayObjectTransform
@@ -1030,19 +1030,17 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
         transform_partial,
         num_transform_args,
     ):
-        transform = transform_partial(
-            *(arg.item() for arg in args[:num_transform_args])
-        )
+        args = unpack_blockwise_args(args[:-1]) + (args[-1],)
 
-        ensemble_axes_metadata = [axis.item() for axis in args[num_transform_args:-1]]
+        transform = transform_partial(*args[:num_transform_args]).item()
+
+        ensemble_axes_metadata = [axis for axis in args[num_transform_args:-1]]
 
         array = args[-1]
-        if array.dtype == object:
-            array = array.item()
 
         array_object = array_object_partial(
-            array, ensemble_axes_metadata=ensemble_axes_metadata
-        )
+            (array, ensemble_axes_metadata)
+        ).item()
 
         array = transform._calculate_new_array(array_object)
 
@@ -1095,13 +1093,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
             The transformed array object.
         """
 
-        def _tuple_range(length, offset=0):
-            return tuple(range(offset, offset + length))
-
-        def interleave(l1, l2):
-            return tuple(val for pair in zip(l1, l2) for val in pair)
-
         if self.is_lazy:
+
             if not transform._allow_base_chunks and self._has_base_chunks:
                 raise RuntimeError(
                     f"transform {transform.__class__} not implemented for array object with chunks along base axes, "
@@ -1112,12 +1105,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
                 max_batch = int(max_batch * np.prod(self.base_shape))
 
             chunks = transform._default_ensemble_chunks + self.array.chunks
+
             chunks = validate_chunks(
                 transform.ensemble_shape + self.shape,
                 chunks,
                 limit=max_batch,
                 dtype=self.dtype,
             )
+
             assert chunks[len(transform.ensemble_shape) :] == self.array.chunks
 
             transform_chunks = chunks[: len(transform.ensemble_shape)]
@@ -1135,21 +1130,21 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
             )
 
             axes_symbols = tuple(
-                _tuple_range(length=1, offset=i + len(transform.ensemble_shape))
+                tuple_range(length=1, offset=i + len(transform.ensemble_shape))
                 for i, args in enumerate(axes_args)
             )
 
-            array_symbols = _tuple_range(len(self.shape), len(transform.ensemble_shape))
+            array_symbols = tuple_range(len(self.shape), len(transform.ensemble_shape))
 
             num_ensemble_dims = len(transform._out_ensemble_shape(self))
 
             if transform._num_outputs > 1:
                 chunks = chunks[:num_ensemble_dims]
-                symbols = _tuple_range(num_ensemble_dims)
+                symbols = tuple_range(num_ensemble_dims)
                 meta = np.array((), dtype=object)
             else:
                 base_shape = transform._out_base_shape(self)
-                symbols = _tuple_range(num_ensemble_dims + len(base_shape))
+                symbols = tuple_range(num_ensemble_dims + len(base_shape))
                 chunks = chunks[: -len(base_shape)] + base_shape
                 meta = transform._out_meta(self)
 
@@ -1255,6 +1250,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
         chunks = self._validate_ensemble_chunks(chunks)
 
         if lazy:
+            xp = get_array_module(self.array)
             array = self.ensure_lazy().array
 
             if chunks != array.chunks:
@@ -1264,18 +1260,21 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
                 chunks=chunks
             )
 
+            def combine_args(*args):
+                return args[0], args[1].item()
+
             ndims = max(len(self.ensemble_shape), 1)
             blocks = da.blockwise(
-                _wrap_args_with_array,
+                combine_args,
                 tuple_range(ndims),
                 array,
                 tuple_range(len(array.shape)),
                 ensemble_axes_metadata,
                 tuple_range(ndims),
-                ndims=ndims,
                 align_arrays=False,
                 concatenate=True,
                 dtype=object,
+                meta=xp.array((), self.dtype)
             )
         else:
             array = self.compute().array
@@ -1297,10 +1296,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
         return (blocks,)
 
     @classmethod
-    def _from_partitioned_args_func(cls, args, **kwargs):
-        array, ensemble_axes_metadata = args.item()
-        ensemble_axes_metadata = ensemble_axes_metadata.item()
+    def _from_partitioned_args_func(cls, *args, **kwargs):
+        args = unpack_blockwise_args(args)
 
+        array, ensemble_axes_metadata = args[0]
         assert isinstance(ensemble_axes_metadata, list)
 
         new_array_object = cls(

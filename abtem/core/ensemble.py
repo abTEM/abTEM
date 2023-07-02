@@ -21,30 +21,45 @@ from abtem.core.utils import tuple_range, interleave
 if TYPE_CHECKING:
     from abtem.core.axes import AxisMetadata, AxesMetadataList
 
-def _wrap_with_array(x, ndims):
+
+def _wrap_with_array(x, ndims:int=None):
+
+    if ndims is None:
+        ndims = len(x.ensemble_shape)
+
     wrapped = np.zeros((1,) * ndims, dtype=object)
     wrapped.itemset(0, x)
     return wrapped
 
 
 def _wrap_args_with_array(*args, ndims):
-    return _wrap_with_array(args, ndims)
+    args = _wrap_with_array(args, ndims)
+    print(args)
+    return args
 
 
+def unpack_blockwise_args(args):
+    unpacked = ()
+    for arg in args:
+        if hasattr(arg, "item"):
+            arg = arg.item()
 
-def pack_unpack(*args, func, **kwargs):
-    if hasattr(args, "item"):
-        ndims = len(args.shape)
-        args = args.item()
-    else:
-        ndims = None
+        unpacked += (arg,)
+    return unpacked
 
-    new = func(*args, **kwargs)
 
-    if ndims:
-        return _wrap_with_array(new, ndims)
+# def pack_unpack(*args, func, **kwargs):
+#     args = unpack_blockwise_args(args)
+#
+#     new = func(*args, **kwargs)
+#
+#     if ndims:
+#         return _wrap_with_array(new, len(new.ensemble_shape))
+#
+#     return new
+#
 
-    return new
+
 
 
 
@@ -143,7 +158,7 @@ class Ensemble(metaclass=ABCMeta):
 
         out_symbols = tuple_range(sum(len(arg.shape) for arg in args))
 
-        assert len(out_symbols) == max(len(self.ensemble_shape), 1)
+        #assert len(out_symbols) == max(len(self.ensemble_shape), 1)
 
         arg_symbols = ()
         offset = 0
@@ -162,6 +177,7 @@ class Ensemble(metaclass=ABCMeta):
                 out_symbols,
                 *interleave(args, arg_symbols),
                 adjust_chunks=adjust_chunks,
+                concatenate=True,
                 meta=np.array((), dtype=object),
             )
 

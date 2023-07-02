@@ -37,7 +37,7 @@ from abtem.core.chunks import chunk_shape, generate_chunks, Chunks
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
-from abtem.core.ensemble import Ensemble, _wrap_with_array, pack_unpack
+from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.integrals.base import ProjectionIntegratorPlan
 from abtem.core.integrals.gaussians import GaussianProjectionIntegrals
@@ -555,8 +555,6 @@ class Potential(_PotentialBuilder):
             elif isinstance(atoms, Atoms):
                 self._frozen_phonons = DummyFrozenPhonons(atoms)
             else:
-
-                print(type(atoms))
                 raise ValueError()
         else:
 
@@ -804,24 +802,15 @@ class Potential(_PotentialBuilder):
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, frozen_phonons_partial, **kwargs):
-        args = args[0]
+        args = unpack_blockwise_args(args)
 
-        unpack = False
-        if hasattr(args, "item"):
-            args = args.item()
-            unpack = True
-
-        frozen_phonons = frozen_phonons_partial(args)
-
-        if hasattr(frozen_phonons, "item"):
-            frozen_phonons = frozen_phonons.item()
+        frozen_phonons = frozen_phonons_partial(*args)
+        frozen_phonons = frozen_phonons.item()
 
         new_potential = cls(frozen_phonons, **kwargs)
 
-        if unpack:
-            ndims = max(len(new_potential.ensemble_shape), 1)
-            new_potential = _wrap_with_array(new_potential, ndims)
-
+        ndims = max(len(new_potential.ensemble_shape), 1)
+        new_potential = _wrap_with_array(new_potential, ndims)
         return new_potential
 
     def _from_partitioned_args(self, *args, **kwargs):

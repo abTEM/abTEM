@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 import numpy as np
 
@@ -11,10 +11,11 @@ from abtem.core.antialias import AntialiasAperture
 from abtem.core.antialias import antialias_aperture
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
-from abtem.core.chunks import validate_chunks
+from abtem.core.chunks import validate_chunks, Chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.config import config
 from abtem.core.energy import energy2wavelength
+from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast
@@ -28,6 +29,7 @@ from abtem.potentials.iam import (
 )
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
+import dask.array as da
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -443,6 +445,7 @@ def multislice_and_detect(
         )
 
     for potential_index, _, potential_configuration in potential.generate_blocks():
+        potential_configuration = potential_configuration.item()
 
         if len(potential.ensemble_shape):
             potential_index = np.unravel_index(
@@ -600,7 +603,7 @@ class MultisliceTransform(ArrayObjectTransform):
     def __init__(
         self,
         potential: BasePotential,
-        detectors: BaseDetector | list[BaseDetector],
+        detectors: BaseDetector | list[BaseDetector] = None,
         conjugate: bool = False,
         transpose: bool = False,
     ):
@@ -677,6 +680,8 @@ class MultisliceTransform(ArrayObjectTransform):
     def _out_base_axes_metadata(self, waves, index: bool = 0):
         return self.detectors[index]._out_base_axes_metadata(waves)
 
+    # def _validate_ensemble_chunks(self, chunks: Chunks, limit: Union[str, int] = "auto"):
+    #
     def _partition_args(self, chunks=1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)[:-1]
         args = self._potential._partition_args(chunks=chunks, lazy=lazy)
@@ -686,8 +691,16 @@ class MultisliceTransform(ArrayObjectTransform):
 
     @staticmethod
     def _multislice_transform_member(*args, potential_partial, **kwargs):
+
+        args = unpack_blockwise_args(args)
+
         potential = potential_partial(*args)
-        return MultisliceTransform(potential, **kwargs)
+        potential = potential.item()
+
+        multislice = MultisliceTransform(potential, **kwargs)
+
+        multislice = _wrap_with_array(multislice)
+        return multislice
 
     def _from_partitioned_args(self, *args, **kwargs):
         potential_partial = self._potential._from_partitioned_args()
