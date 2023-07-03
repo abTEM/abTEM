@@ -6,7 +6,7 @@ from ase import units
 from numba import jit
 from scipy.special import kn
 
-from abtem.core.parametrizations.base import Parametrization
+from abtem.core.parametrizations.base import Parametrization, get_data_path
 from abtem.core.constants import kappa
 
 
@@ -92,11 +92,13 @@ class LobatoParametrization(Parametrization):
                   'charge': charge,
                   }
 
-    def __init__(self):
-        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/lobato.json'), 'r') as f:
+    def __init__(self, sigmas: dict[str, float] = None):
+        path = os.path.join(get_data_path(), "lobato.json")
+
+        with open(path, 'r') as f:
             parameters = json.load(f)
 
-        super().__init__(parameters)
+        super().__init__(parameters=parameters, sigmas=sigmas)
 
     def scaled_parameters(self, symbol):
         parameters = np.array(self.parameters[symbol])

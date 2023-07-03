@@ -8,6 +8,9 @@ from hypothesis import given
 
 import strategies as abtem_st
 import dask.array as da
+import ase.build
+
+from abtem import FrozenPhonons
 
 
 @given(data=st.data())
@@ -37,3 +40,14 @@ def test_frozen_phonons_as_ensembles(data, frozen_phonons, lazy):
 
     assert all(isinstance(array, da.core.Array) for array in frozen_phonons._partition_args(lazy=True))
     assert all(not isinstance(array, da.core.Array) for array in frozen_phonons._partition_args(lazy=False))
+
+
+
+def test_sigmas():
+    atoms = ase.build.bulk("Au", cubic=True) * (5, 5, 5)
+
+    frozen_phonons = FrozenPhonons(atoms, num_configs=100, sigmas=.1, seed=100, directions="xyz")
+
+    ensemble = frozen_phonons.to_atoms_ensemble()
+
+    assert np.abs(np.linalg.norm(ensemble.standard_deviations(), axis=1).mean() - .1) < .001

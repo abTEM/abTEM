@@ -8,6 +8,7 @@ from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import spatial_frequencies
 from abtem.core.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
 from abtem.core.parametrizations import validate_parametrization
+from abtem.core.parametrizations.base import Parametrization
 
 if cp is not None:
     import cupyx
@@ -27,9 +28,8 @@ def sinc(gpts: tuple[int, int], sampling: tuple[float, float], xp):
 def superpose_deltas(
     positions: np.ndarray,
     array: np.ndarray,
-    # slice_index=None,
-    weights=None,
-    round_positions: bool = False,
+    weights: np.ndarray = None,
+    round_positions: bool = True,
 ) -> np.ndarray:
     xp = get_array_module(array)
     shape = array.shape
@@ -64,15 +64,15 @@ def superpose_deltas(
 
 
 class ProjectedScatteringFactors(ProjectionIntegrator):
-    def __init__(self, scattering_factor):
+    def __init__(self, scattering_factor: np.ndarray):
         self._scattering_factor = scattering_factor
 
     @property
-    def gpts(self):
+    def gpts(self) -> tuple[int, int]:
         return self._scattering_factor.shape[-2:]
 
     @property
-    def scattering_factor(self):
+    def scattering_factor(self) -> np.ndarray:
         return self._scattering_factor
 
     def integrate_on_grid(
@@ -98,7 +98,9 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
 
         array = fft2(array, overwrite_x=True)
 
-        array *= self._scattering_factor / sinc(self.gpts, sampling, device)
+        f = self.scattering_factor / sinc(self.gpts, sampling, device)
+
+        array *= f
 
         if fourier_space:
             return array.real
@@ -108,20 +110,16 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
 
 
 class InfinitePotentialProjections(ProjectionIntegratorPlan):
-    def __init__(self, parametrization="lobato"):
+    def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
         super().__init__(periodic=True, finite=False)
 
-    def cutoff(self, symbol: str):
-        return 0.0
+    @property
+    def parametrization(self) -> Parametrization:
+        return self._parametrization
 
-    def calculate_scattering_factor(self, symbol, gpts, sampling, device):
-        xp = get_array_module(device)
-        kx, ky = spatial_frequencies(gpts, sampling, xp=np)
-        k2 = kx[:, None] ** 2 + ky[None] ** 2
-        f = self._parametrization.projected_scattering_factor(symbol)(k2)
-        f = xp.asarray(f, dtype=xp.float32)
-        return ProjectedScatteringFactors(f)
+    def cutoff(self, symbol: str) -> float:
+        return np.inf
 
     def build(
         self,
@@ -129,8 +127,17 @@ class InfinitePotentialProjections(ProjectionIntegratorPlan):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-    ):
-        scattering_factor = self.calculate_scattering_factor(
-            symbol, gpts, sampling, device
-        )
-        return scattering_factor
+    ) -> ProjectedScatteringFactors:
+
+        xp = get_array_module(device)
+        kx, ky = spatial_frequencies(gpts, sampling, xp=np)
+
+        k2 = kx[:, None] ** 2 + ky[None] ** 2
+        f = self.parametrization.projected_scattering_factor(symbol)(k2)
+        f = xp.asarray(f, dtype=xp.float32)
+
+        if symbol in self.parametrization.sigmas.keys():
+            sigma = self.parametrization.sigmas[symbol]
+            f = f * np.exp(-k2 * (np.pi * sigma / np.sqrt(3 / 2)) ** 2)
+
+        return ProjectedScatteringFactors(f)

@@ -189,7 +189,6 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         quad_order : int, optional
             Order of quadrature integration passed to scipy.integrate.fixed_quad. Default is 8.
         """
-
         self._parametrization = validate_parametrization(parametrization)
         self._taper = taper
         self._quad_order = quad_order

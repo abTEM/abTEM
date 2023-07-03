@@ -466,7 +466,7 @@ def _set_update_indices_callback(sliders, visualization, callbacks):
         for slider in sliders:
             idx = slider.index
             if isinstance(idx, tuple):
-                idx = range(*idx)
+                idx = slice(*idx)
             indices += (idx,)
 
         with sliders[0].hold_trait_notifications():
@@ -909,7 +909,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 raise RuntimeError(
                     "axes type must be one of 'index', 'range', 'explode' or 'overlay'"
                 )
-
+        
         return tuple(validated_indices)
 
     def set_indices(self, indices=()):

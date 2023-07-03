@@ -260,7 +260,7 @@ class CustomScan(BaseScan):
 
     def _from_partitioned_args(self):
         if len(self.positions) == 0:
-            return _wrap_with_array(self)
+            return lambda *args, **kwargs : _wrap_with_array(self)
         return self._from_partitioned_args_func
 
     def _partition_args(self, chunks=None, lazy: bool = True):

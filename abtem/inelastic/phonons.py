@@ -416,8 +416,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         atoms_ensemble : AtomsEnsemble
         """
         trajectory = []
-        for block in self.generate_blocks(1):
-            trajectory.append(block[-1].randomize(block[-1].atoms))
+        for _,_,block in self.generate_blocks(1):
+            block= block.item()
+            trajectory.append(block.randomize(block.atoms))
         return AtomsEnsemble(trajectory)
 
 
