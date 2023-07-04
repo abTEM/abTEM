@@ -97,6 +97,7 @@ class Ensemble(metaclass=ABCMeta):
         """List of AxisMetadata of the base axes."""
         return []
 
+    @property
     @abstractmethod
     def _default_ensemble_chunks(self):
         pass
@@ -125,22 +126,6 @@ class Ensemble(metaclass=ABCMeta):
     @abstractmethod
     def _from_partitioned_args(self):
         pass
-
-    # def _wrapped_from_partitioned_args(self):
-    #     def wrap_from_partitioned_args(*args, from_partitioned_args, **kwargs):
-    #
-    #         blocks = tuple(arg.item() for arg in args)
-    #
-    #         n = sum(len(a.shape) for a in args)
-    #
-    #         arr = np.empty((1,) * n, dtype=object)
-    #         arr.itemset(0, from_partitioned_args(*blocks, **kwargs))
-    #         return arr
-    #
-    #     return partial(
-    #         wrap_from_partitioned_args,
-    #         from_partitioned_args=self._from_partitioned_args(),
-    #     )
 
     def ensemble_blocks(self, chunks: Chunks = None) -> da.core.Array:
         """

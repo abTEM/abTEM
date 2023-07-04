@@ -61,7 +61,6 @@ from abtem.scan import BaseScan, GridScan, _validate_scan
 from abtem.tilt import validate_tilt
 from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
-    CompositeArrayObjectTransform,
     ArrayObjectTransform,
 )
 
@@ -907,10 +906,7 @@ class Waves(BaseWaves, ArrayObject):
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. See `abtem.measurements.detect` for a list of implemented detectors. If
             not given, returns the wave functions themselves.
-        conjugate : bool, optional
-            If True, use the conjugate of the transmission function (default is False).
-        transpose : bool, optional
-            If True, reverse the order of propagation and transmission (default is False).
+
 
         Returns
         -------

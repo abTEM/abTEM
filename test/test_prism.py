@@ -192,9 +192,10 @@ def test_s_matrix_store_on_host(data, lazy):
     assert_array_matches_device(s_matrix.array, "cpu")
 
 
+
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize('device', ["cpu", gpu])
 @pytest.mark.parametrize('detector', [
     abtem_st.segmented_detector,
     abtem_st.flexible_annular_detector,
@@ -213,10 +214,11 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
     scan = GridScan()
     scan.match_probe(probe)
 
-    prism_measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
-    probe_measurement = probe.scan(potential=potential, scan=scan, detectors=detector, lazy=lazy)
+    prism_measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy).compute()
+    probe_measurement = probe.scan(potential=potential, scan=scan, detectors=detector, lazy=lazy).compute()
 
-    assert prism_measurement == probe_measurement
+    assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
+
 
 # @given(atoms=abtem_st.atoms(min_side_length=5, max_side_length=10),
 #        gpts=abtem_st.gpts(min_value=32, max_value=64),

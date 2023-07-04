@@ -30,6 +30,7 @@ from abtem.distributions import (
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
 from abtem.transform import ReciprocalSpaceMultiplication
+from abtem.core.backend import cp
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
@@ -1113,7 +1114,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
 
         axis = tuple(range(0, len(self.ensemble_shape)))
         alpha = xp.expand_dims(alpha, axis=axis)
-        phi = xp.expand_dims(phi, axis=axis).astype(np.float32)
+        phi = xp.expand_dims(phi, axis=axis).astype(xp.float32)
 
         array = xp.zeros(alpha.shape, dtype=np.float32)
         if self._nonzero_coefficients(("C10", "C12", "phi12")):
@@ -1180,7 +1181,10 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         array *= np.float32(2 * xp.pi / self.wavelength)
         array = complex_exponential(-array)
 
-        if weights is not None and not np.all(weights == 1.0):
+        if cp is not None:
+            weights = cp.asnumpy(weights)
+
+        if weights is not None and not np.all(weights != 1.):
             array = xp.asarray(weights, dtype=xp.float32) * array
 
         return array

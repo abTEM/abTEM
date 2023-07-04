@@ -1,15 +1,14 @@
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+from scipy.ndimage import maximum_filter
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-from scipy.ndimage import maximum_filter
 
-import abtem
-from abtem.atoms import is_cell_orthogonal
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import label_to_index
 
@@ -100,9 +99,6 @@ def _validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> C
 
     if not isinstance(cell, Cell):
         cell = Cell(np.diag(cell))
-
-    # print(cell)
-    # ss
 
     # if not is_cell_orthogonal(cell):
     #
@@ -236,14 +232,6 @@ def _index_diffraction_patterns(
     nm = _digitize_k_space_grid(k, diffraction_patterns)
     labels = np.ravel_multi_index(nm.T, shape)
 
-    #print(labels.shape, nm.shape)
-
-    #return
-
-    #print(nm.shape)
-    #print(d_ewald.shape, k.shape)
-    #sss
-
     ensemble_indices = tuple(range(len(diffraction_patterns.ensemble_shape)))
     max_intensities = diffraction_patterns.array.max(axis=ensemble_indices)
 
@@ -297,9 +285,6 @@ def _index_diffraction_patterns(
             continue
 
         min_index = np.argmin(d_ewald[indices])
-
-        #if d_ewald[indices][min_index] > distance_threshold:
-        #    continue
 
         selected_hkl.append(hkl[indices][min_index])
 

@@ -12,11 +12,17 @@ import numpy as np
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks, validate_chunks
-from abtem.core.ensemble import Ensemble, EmptyEnsemble, _wrap_with_array, unpack_blockwise_args
+from abtem.core.ensemble import (
+    Ensemble,
+    EmptyEnsemble,
+    _wrap_with_array,
+    unpack_blockwise_args,
+)
 from abtem.core.fft import ifft2
 from abtem.core.utils import (
     CopyMixin,
-    expand_dims_to_broadcast, EqualityMixin,
+    expand_dims_to_broadcast,
+    EqualityMixin,
 )
 from abtem.distributions import (
     EnsembleFromDistributions,
@@ -309,7 +315,6 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
 
 
 class EmptyTransform(EmptyEnsemble, ArrayObjectTransform):
-
     def apply(self, array_object):
         return array_object
 
@@ -348,7 +353,6 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
 
 
 class WavesTransform(EnsembleTransform):
-
     def __init__(self, distributions=()):
         super().__init__(distributions=distributions)
 
@@ -582,9 +586,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
             start = stop
 
         return blocks
-
-
-
 
 
 class ReciprocalSpaceMultiplication(WavesTransform):

@@ -17,7 +17,7 @@ from abtem import FrozenPhonons
 @pytest.mark.parametrize('frozen_phonons', [
     abtem_st.dummy_frozen_phonons,
     abtem_st.frozen_phonons,
-    #abtem_st.md_frozen_phonons,
+    abtem_st.md_frozen_phonons,
 ])
 @pytest.mark.parametrize('lazy', [
     True, False,
@@ -31,6 +31,7 @@ def test_frozen_phonons_as_ensembles(data, frozen_phonons, lazy):
         chunks = ()
 
     blocks = frozen_phonons.ensemble_blocks(chunks).compute()
+
     assert all([not block.is_lazy for block in blocks])
 
     for i, _, fp in frozen_phonons.generate_blocks(chunks):

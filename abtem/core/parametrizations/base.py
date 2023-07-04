@@ -78,7 +78,18 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         return self.get_function("finite_projected_scattering_factor", symbol, charge)
 
     def get_function(self, name: str, symbol: str, charge: float = 0.0):
+        """
+        Returns the line profiles for a parameterized function for one or more element.
 
+        Parameters
+        ----------
+        name : {'potential', 'projected_potential', 'charge', 'finite_projected_potential', 'scattering_factor',
+                'projected_scattering_factor', 'x_ray_scattering_factor', 'finite_projected_scattering_factor'}
+            Name of the function to return.
+
+
+
+        """
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
 

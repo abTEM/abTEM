@@ -428,11 +428,14 @@ class AtomsEnsemble(BaseFrozenPhonons):
 
     Parameters
     ----------
-    trajectory : sequence of ASE.Atoms
+    trajectory : list of ASE.Atoms, dask.core.Array, list of dask.Delayed
         Sequence of atoms representing a thermal distribution of atomic configurations.
     ensemble_mean : True, optional
         If True, the mean of the ensemble of results from a multislice simulation is calculated, otherwise, the result
-        of every frozen phonon is returned.i
+        of every frozen phonon is returned.
+    cell : Cell, optional
+    ensemble_axes_metadata : list of AxesMetadata, optional
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
     """
 
     def __init__(
@@ -441,30 +444,35 @@ class AtomsEnsemble(BaseFrozenPhonons):
         ensemble_mean: bool = True,
         cell: Cell = None,
         ensemble_axes_metadata: list[AxisMetadata] = None,
-        ensemble_shape: tuple[int, ...] = None,
     ):
 
-        if isinstance(trajectory, Atoms):
-            trajectory = [trajectory]
-
-        elif isinstance(trajectory, str):
+        if isinstance(trajectory, str):
             trajectory = read(trajectory, index=":")
+
+        elif isinstance(trajectory, Atoms):
+            trajectory = [trajectory]
 
         if isinstance(trajectory, (list, tuple)):
             if isinstance(trajectory[0], str):
                 trajectory = [_safe_read_atoms(path) for path in trajectory]
 
-            trajectory_list = trajectory
+            if isinstance(trajectory[0], Delayed):
+                stack = []
+                for atoms in trajectory:
+                    atoms = dask.delayed(_wrap_with_array)(atoms, 1)
+                    atoms = da.from_delayed(atoms, shape=(1,), dtype=object)
+                    stack.append(atoms)
 
-            trajectory = np.zeros(len(trajectory), dtype=object).reshape(ensemble_shape)
-            for i, atoms in enumerate(trajectory_list):
-                trajectory.itemset(i, atoms)
+                trajectory = da.concatenate(stack)
 
-        if isinstance(trajectory, np.ndarray):
-            trajectory = trajectory.reshape(ensemble_shape)
+            else:
+                stack = np.empty(len(trajectory), dtype=object)
+                for i, atoms in enumerate(trajectory):
+                    stack.itemset(i, atoms)
 
-        elif not isinstance(trajectory, da.core.Array):
-            raise ValueError()
+                trajectory = stack
+
+        assert isinstance(trajectory, (np.ndarray, da.core.Array))
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = [FrozenPhononsAxis(_ensemble_mean=ensemble_mean)]
@@ -476,7 +484,6 @@ class AtomsEnsemble(BaseFrozenPhonons):
         assert len(ensemble_axes_metadata) == len(trajectory.shape)
 
         atoms = trajectory.ravel()[0]
-
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, cell)
 
         self._trajectory = trajectory
@@ -486,6 +493,15 @@ class AtomsEnsemble(BaseFrozenPhonons):
         )
 
         self._ensemble_axes_metadata = ensemble_axes_metadata
+
+    @property
+    def trajectory(self):
+        return self._trajectory
+
+    def __getitem__(self, item):
+        new_trajectory = self._trajectory[item]
+        kwargs = self._copy_kwargs(exclude=("trajectory",))
+        return AtomsEnsemble(new_trajectory, **kwargs)
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -511,68 +527,40 @@ class AtomsEnsemble(BaseFrozenPhonons):
         return (1,)
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
-
+        chunks = validate_chunks(self.ensemble_shape, chunks)
         if lazy:
-            if isinstance(self._trajectory, da.core.Array):
-                return (self._trajectory,)
-            else:
-                return (da.from_array(self._trajectory, chunks=chunks),)
-        else:
-            if isinstance(self._trajectory, da.core.Array):
-                return self._trajectory.compute()
-            else:
-                return self._trajectory
+            arrays = []
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+                trajectory = self.trajectory[start:stop]
+                lazy_args = dask.delayed(_wrap_with_array)(trajectory, ndims=1)
+                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
+                arrays.append(lazy_array)
 
-        # #if :
-        # return self._trajectory,
-        #
-        # #print(self._trajectory)
-        #
-        # chunks = validate_chunks(self.ensemble_shape, chunks)
-        #
-        # def md_frozen_phonons(atoms):
-        #     arr = np.zeros((1,), dtype=object)
-        #     arr.itemset(0, atoms)
-        #     return arr
-        #
-        # array = np.zeros((len(chunks[0]),), dtype=object)
-        # start = 0
-        # for i, chunk in enumerate(chunks[0]):
-        #     stop = start + chunk
-        #     trajectory = self._trajectory[start:stop]
-        #
-        #     if lazy:
-        #         atoms = dask.delayed(lambda *args: list(args))(*trajectory)
-        #
-        #         delayed_frozen_phonon = dask.delayed(md_frozen_phonons)(atoms=atoms)
-        #
-        #         array.itemset(
-        #             i,
-        #             da.from_delayed(delayed_frozen_phonon, shape=(1,), dtype=object),
-        #         )
-        #     else:
-        #         pass
-        #
-        #         # print("aaaaa", trajectory)
-        #         # trajectory = [
-        #         #     atoms.compute() if hasattr(atoms, "compute") else atoms
-        #         #     for atoms in trajectory
-        #         # ]
-        #         # array.itemset(i, trajectory)
-        #
-        #     start = stop
-        #
-        # if lazy:
-        #     array = da.concatenate(list(array))
-        #
-        # return (array,)
+            array = da.concatenate(arrays)
+        else:
+            trajectory = self.trajectory
+            if isinstance(trajectory, da.core.Array):
+                trajectory = trajectory.compute()
+
+            array = np.zeros((len(chunks[0]),), dtype=object)
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+                array.itemset(i, _wrap_with_array(trajectory[start:stop], 1))
+
+        return (array,)
+
+    def _from_partition_args_func(self, *args, **kwargs):
+        args = unpack_blockwise_args(args)
+        trajectory = args[0]
+        #kwargs["ensemble_shape"] = (1,) * len(self.ensemble_shape)
+        atoms_ensemble = AtomsEnsemble(trajectory, **kwargs)
+        return _wrap_with_array(atoms_ensemble, 1)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("trajectory", "ensemble_shape"))
         kwargs["cell"] = self.cell.array
-        kwargs["ensemble_shape"] = (1,) * len(self.ensemble_shape)
+
         kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)
-        return partial(AtomsEnsemble, **kwargs)
+        return partial(self._from_partition_args_func, **kwargs)
 
     def randomize(self, atoms: Atoms) -> Atoms:
         return atoms

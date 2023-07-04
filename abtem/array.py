@@ -3,11 +3,10 @@ from __future__ import annotations
 import copy
 import json
 import warnings
-from abc import abstractmethod
 from contextlib import nullcontext, contextmanager
 from functools import partial
 from numbers import Number
-from typing import Union, TypeVar, Sequence, TYPE_CHECKING
+from typing import TypeVar, Sequence, TYPE_CHECKING
 
 import dask
 import dask.array as da
@@ -37,7 +36,6 @@ from abtem.core.chunks import Chunks, validate_chunks, chunk_shape, iterate_chun
 from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
-    _wrap_args_with_array,
     unpack_blockwise_args,
 )
 from abtem.core.utils import (
@@ -204,7 +202,19 @@ T = TypeVar("T", bound="ArrayObject")
 class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
     """
     A base class for simulation objects described by an array and associated metadata.
+
+    Parameters
+    ----------
+    array : ndarray
+        Array representing the array object.
+    ensemble_axes_metadata : list of AxesMetadata
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+    metadata : dict
+        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
+        from the waves.
     """
+
+    _base_dims: int
 
     def __init__(
         self,
@@ -1471,7 +1481,7 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> T:
     )
 
 
-def concatenate_array_blocks(blocks):
+def _concatenate_array_blocks(blocks):
     for i in range(len(blocks.shape)):
         new_blocks = np.empty(blocks.shape[:-1], dtype=object)
 
@@ -1484,14 +1494,14 @@ def concatenate_array_blocks(blocks):
     return blocks.item()
 
 
-def unpack_array_object_blocks(blocks):
+def _unpack_array_object_blocks(blocks):
     new_blocks = np.empty(blocks.shape, dtype=object)
     for indices in np.ndindex(blocks.shape):
         new_blocks[indices] = blocks[indices].array
     return new_blocks
 
 
-def concatenate_axes_metadata(axes_metadata):
+def _concatenate_axes_metadata(axes_metadata):
     if len(axes_metadata) == 0:
         raise RuntimeError()
 
@@ -1503,7 +1513,7 @@ def concatenate_axes_metadata(axes_metadata):
     return axes_metadata[0]
 
 
-def axes_metadata_from_array_object_blocks(blocks):
+def _axes_metadata_from_array_object_blocks(blocks):
     if blocks.ravel()[0].ensemble_dims == 0:
         return []
 
@@ -1512,7 +1522,7 @@ def axes_metadata_from_array_object_blocks(blocks):
         index = tuple(slice(None) if j == i else 0 for j in range(len(blocks.shape)))
 
         axes_metadata.append(
-            concatenate_axes_metadata(
+            _concatenate_axes_metadata(
                 [
                     block.ensemble_axes_metadata[i]
                     for block in blocks[index]
@@ -1523,14 +1533,13 @@ def axes_metadata_from_array_object_blocks(blocks):
     return axes_metadata
 
 
-def concat_array_object_ensemble_blocks(blocks):
-    array_blocks = unpack_array_object_blocks(blocks)
-    concat_array = concatenate_array_blocks(array_blocks)
-    concat_axes_metadata = axes_metadata_from_array_object_blocks(blocks)
+def _concat_array_object_ensemble_blocks(blocks):
+    array_blocks = _unpack_array_object_blocks(blocks)
+    concat_array = _concatenate_array_blocks(array_blocks)
+    concat_axes_metadata = _axes_metadata_from_array_object_blocks(blocks)
 
     concat_array_object = ArrayObject(
-        concat_array,
-        blocks.ravel()[0].base_dims,
+        array=concat_array,
         ensemble_axes_metadata=concat_axes_metadata,
     )
     return concat_array_object

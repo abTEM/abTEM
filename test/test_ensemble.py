@@ -9,8 +9,7 @@ from hypothesis import given, reproduce_failure
 import strategies as abtem_st
 from abtem.core.ensemble import concatenate_array_blocks
 
-#@reproduce_failure('6.59.0', b'AXicY2BAAFYGTMBo0QAAAYkAvw==')
-#@reproduce_failure('6.59.0', b'AXicY2SAA1YYg9GigQEXAAAUHQDA')
+
 @given(data=st.data())
 @pytest.mark.parametrize(
     "ensemble",
@@ -48,7 +47,7 @@ def test_ensemble_shape(data, ensemble):
         abtem_st.waves,
         abtem_st.ctf,
         abtem_st.dummy_frozen_phonons,
-        #abtem_st.md_frozen_phonons,
+        abtem_st.md_frozen_phonons,
         abtem_st.grid_scan,
         abtem_st.line_scan,
         abtem_st.custom_scan,

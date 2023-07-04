@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 from functools import partial
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -11,7 +11,7 @@ from abtem.core.antialias import AntialiasAperture
 from abtem.core.antialias import antialias_aperture
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
-from abtem.core.chunks import validate_chunks, Chunks
+from abtem.core.chunks import validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.config import config
 from abtem.core.energy import energy2wavelength
@@ -29,7 +29,6 @@ from abtem.potentials.iam import (
 )
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
-import dask.array as da
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -600,6 +599,22 @@ def multislice_and_detect(
 
 
 class MultisliceTransform(ArrayObjectTransform):
+    """
+    Transformation applying the multislice algorithm to wave functions, producing new wave functions or measurements.
+
+    Parameters
+    ----------
+    potential : BasePotential
+        A potential as :class:`.BasePotential` object.
+    detectors : (list of) BaseDetector, optional
+        A detector or a list of detectors defining how the wave functions should be converted to measurements after
+        running the multislice algorithm.
+    conjugate : bool, optional
+        If True, use the complex conjugate of the transmission function (default is False).
+    transpose : bool, optional
+        If True, reverse the order of propagation and transmission (default is False).
+    """
+
     def __init__(
         self,
         potential: BasePotential,

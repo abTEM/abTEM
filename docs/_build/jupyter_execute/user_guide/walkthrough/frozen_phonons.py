@@ -41,10 +41,10 @@ atoms = read('data/srtio3.cif') * (5, 5, 50)
 # In[3]:
 
 
-frozen_phonons = abtem.FrozenPhonons(atoms, 
-                                     num_configs = 10, 
-                                     sigmas = .1, 
-                                     seeds = 100)
+frozen_phonons = abtem.FrozenPhonons(atoms,
+                                     num_configs = 10,
+                                     sigmas = .1,
+                                     seed= 100)
 
 
 # ```{warning}

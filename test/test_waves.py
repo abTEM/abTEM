@@ -37,15 +37,15 @@ import strategies as abtem_st
 
 
 @pytest.mark.parametrize(
-    "waves_builder", [abtem_st.probe]
+    "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
 )
-@pytest.mark.parametrize("device", [gpu])
-@pytest.mark.parametrize("lazy", [False])
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+@pytest.mark.parametrize("lazy", [False, True])
 @given(data=st.data())
 def test_can_build(data, waves_builder, device, lazy):
     waves_builder = data.draw(waves_builder(device=device))
 
-    waves = waves_builder.build(lazy=lazy)#.compute()
+    waves = waves_builder.build(lazy=lazy)
 
     assert_array_matches_device(waves.array, device)
 
@@ -212,10 +212,41 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
     [
         abtem_st.probe,
         abtem_st.plane_wave,
+    ],
+)
+@pytest.mark.parametrize(
+    "detectors",
+    [
+        abtem_st.pixelated_detector,
+        abtem_st.waves_detector,
+        abtem_st.segmented_detector,
+        None,
+    ],
+)
+def test_build_then_multislice(data, waves_builder, detectors, potential, lazy):
+    waves_builder = data.draw(waves_builder())
+    waves_builder.grid.match(potential)
+
+    if detectors is not None:
+        detectors = data.draw(detectors())
+
+    waves = waves_builder.multislice(potential, detectors=detectors, lazy=lazy).compute()
+
+    build_waves = waves_builder.build(lazy=lazy)
+    build_waves = build_waves.multislice(potential, detectors=detectors).compute()
+
+    assert np.allclose(build_waves.array, waves.array)
+
+
+@given(data=st.data(), potential=abtem_st.potential())
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize(
+    "waves_builder",
+    [
         abtem_st.s_matrix,
     ],
 )
-def test_build_then_multislice(data, waves_builder, potential, lazy):
+def test_build_then_multislice_s_matrix(data, waves_builder, potential, lazy):
     waves_builder = data.draw(waves_builder())
     waves_builder.grid.match(potential)
 
@@ -224,11 +255,9 @@ def test_build_then_multislice(data, waves_builder, potential, lazy):
     build_waves = waves_builder.build(lazy=lazy)
     build_waves = build_waves.multislice(potential).compute()
 
-    try:
-        build_waves = build_waves.reduce()
-        waves = waves.reduce()
-    except AttributeError:
-        pass
+    build_waves = build_waves.reduce()
+    waves = waves.reduce()
+
     assert np.allclose(build_waves.array, waves.array)
 
 
