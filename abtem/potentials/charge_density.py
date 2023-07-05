@@ -206,6 +206,10 @@ def _interpolate_between_cells(
 def _interpolate_slice(array, cell, gpts, sampling, a, b):
     slice_shape = gpts + (int((b - a) / (min(sampling))),)
 
+    if slice_shape[-1] <= 1:
+        raise RuntimeError("The slice thickness requested is not implmented for the provided charge density "
+                           "calculatation")
+
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
 
     slice_array = _interpolate_between_cells(
@@ -214,7 +218,7 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
 
     dz = (b - a) / slice_shape[-1]
 
-    return np.sum(slice_array, axis=-1) * dz #np.trapz(slice_array, axis=-1, dx=(b - a) / (slice_shape[-1] - 1))
+    return np.sum(slice_array, axis=-1) * dz
 
 
 def _generate_slices(
@@ -471,7 +475,12 @@ class ChargeDensityPotential(_PotentialBuilder):
             array, slice_shape, cell, slice_box, (0, 0, a)
         )
 
-        return np.trapz(slice_array, axis=-1, dx=(b - a) / (slice_shape[-1] - 1))
+        pixel_thickness = (slice_shape[-1] - 1)
+
+
+        print("sss", pixel_thickness)
+        sssss
+        return np.trapz(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
 
     def _integrate_slice(self, array, a, b):
         dz = self.box[2] / array.shape[2]

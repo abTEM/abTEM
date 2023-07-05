@@ -1248,10 +1248,10 @@ class CrystalPotential(_PotentialBuilder):
                 "'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons"
             )
 
-        if (potential_unit.num_frozen_phonons > 1) and (num_frozen_phonons is not None):
-            warnings.warn(
-                "the potential unit has frozen phonons, but 'num_frozen_phonon' is not set"
-            )
+        # if (potential_unit.num_frozen_phonons > 1) and (num_frozen_phonons is not None):
+        #     warnings.warn(
+        #         "the potential unit has frozen phonons, but 'num_frozen_phonons' is not set"
+        #     )
 
         gpts = (
             potential_unit.gpts[0] * repetitions[0],
@@ -1360,34 +1360,71 @@ class CrystalPotential(_PotentialBuilder):
 
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        if not len(self.ensemble_shape):
+        if chunks == ():
             chunks = ((1,),)
 
         if lazy:
             arrays = []
+
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+
                 if self.seeds is not None:
                     seeds = self.seeds[start:stop]
                 else:
-                    seeds = self.seeds
-                lazy_potential = self.potential_unit.ensemble_blocks(-1)
-                lazy_args = dask.delayed(_wrap_with_array)((lazy_potential, seeds), ndims=1)
+                    seeds = None
+
+                lazy_atoms = dask.delayed(self.potential_unit)
+                lazy_args = dask.delayed(_wrap_with_array)((lazy_atoms, seeds), ndims=1)
                 lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 arrays.append(lazy_array)
 
             array = da.concatenate(arrays)
         else:
-            array = np.zeros((len(chunks),), dtype=object)
-            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
 
+
+            potential_unit = self.potential_unit
+            #if self.potential_unit.array:
+            #    atoms = atoms.compute()
+            array = np.zeros((len(chunks[0]),), dtype=object)
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 if self.seeds is not None:
                     seeds = self.seeds[start:stop]
                 else:
-                    seeds = self.seeds
+                    seeds = None
 
-                array.itemset(i, (self.potential_unit, seeds))
+                array.itemset(i, (potential_unit, self.seeds[start:stop]))
 
         return (array,)
+
+        # chunks = validate_chunks(self.ensemble_shape, chunks)
+        #
+        # if not len(self.ensemble_shape):
+        #     chunks = ((1,),)
+        #
+        # if lazy:
+        #     arrays = []
+        #     for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+        #         if self.seeds is not None:
+        #             seeds = self.seeds[start:stop]
+        #         else:
+        #             seeds = self.seeds
+        #         lazy_potential = self.potential_unit.ensemble_blocks(-1)
+        #         lazy_args = dask.delayed(_wrap_with_array)((lazy_potential, seeds), ndims=1)
+        #         lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
+        #         arrays.append(lazy_array)
+        #
+        #     array = da.concatenate(arrays)
+        # else:
+        #
+        #     array = np.zeros((chunks[0],), dtype=object)
+        #     for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+        #         if self.seeds is not None:
+        #             seeds = self.seeds[start:stop]
+        #         else:
+        #             seeds = self.seeds
+        #
+        #         array.itemset(i, (self.potential_unit, seeds))
+        # return (array,)
 
     def generate_slices(
         self, first_slice: int = 0, last_slice: int = None, return_depth: bool = False
