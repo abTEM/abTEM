@@ -13,7 +13,7 @@ import numpy as np
 from ase import Atoms
 
 import abtem
-from abtem.array import ArrayObject, ComputableList, expand_dims, _validate_lazy
+from abtem.array import ArrayObject, ComputableList, _expand_dims, _validate_lazy
 from abtem.core.axes import (
     RealSpaceAxis,
     ReciprocalSpaceAxis,
@@ -109,10 +109,12 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin):
     @property
     @abstractmethod
     def device(self):
+        """The device where the waves are built or stored."""
         pass
 
     @property
     def dtype(self):
+        """The datatype of waves."""
         return np.complex64
 
     @property
@@ -430,8 +432,8 @@ class Waves(BaseWaves, ArrayObject):
             )
         )
 
-        kernel = expand_dims(kernel, axis=kernel_dims)
-        array = expand_dims(waves._array, axis=waves_dims)
+        kernel = _expand_dims(kernel, axis=kernel_dims)
+        array = _expand_dims(waves._array, axis=waves_dims)
 
         xp = get_array_module(self.device)
 
@@ -451,7 +453,7 @@ class Waves(BaseWaves, ArrayObject):
         d["ensemble_axes_metadata"] = axes_metadata + d["ensemble_axes_metadata"]
         return waves.__class__(**d)
 
-    def normalize(self, space: str = "reciprocal", overwrite_x: bool = False):
+    def normalize(self, space: str = "reciprocal", in_place: bool = False):
         """
         Normalize the wave functions in real or reciprocal space.
 
@@ -460,6 +462,8 @@ class Waves(BaseWaves, ArrayObject):
         space : str
             Should be one of 'real' or 'reciprocal' (default is 'reciprocal'). Defines whether the wave function should
             be normalized such that the intensity sums to one in real or reciprocal space.
+        in_place : bool, optional
+            If True, the array representing the waves may be modified in-place.
 
         Returns
         -------
@@ -475,15 +479,15 @@ class Waves(BaseWaves, ArrayObject):
         reciprocal_space = self.reciprocal_space
 
         if space == "reciprocal":
-            waves = self.ensure_reciprocal_space(overwrite_x=overwrite_x)
+            waves = self.ensure_reciprocal_space(overwrite_x=in_place)
             f = xp.sqrt(abs2(waves.array).sum((-2, -1), keepdims=True))
-            if overwrite_x:
+            if in_place:
                 waves._array /= f
             else:
                 waves._array = waves._array / f
 
             if not reciprocal_space:
-                waves = waves.ensure_real_space(overwrite_x=overwrite_x)
+                waves = waves.ensure_real_space(overwrite_x=in_place)
 
         elif space == "real":
             raise NotImplementedError
@@ -922,14 +926,18 @@ class Waves(BaseWaves, ArrayObject):
 
         return self.apply_transform(transform=multislice_transform)
 
-    def show(self, **kwargs):
+    def show(self, complex_images:bool=False, **kwargs):
         """
         Show the wave-function intensities.
 
         kwargs :
             Keyword arguments for `abtem.measurements.Images.show`.
         """
-        return self.intensity().show(**kwargs)
+
+        if complex_images:
+            return self.complex_images().show(**kwargs)
+        else:
+            return self.intensity().show(**kwargs)
 
 
 def _reduce_ensemble(ensemble):
@@ -955,13 +963,14 @@ def _reduce_ensemble(ensemble):
 
 
 class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
-    def __init__(self, ensemble_names, device: str):
+    def __init__(self, ensemble_names: tuple[str, ...], device: str):
 
         self._ensemble_names = ensemble_names
         self._device = device
         super().__init__()
 
-    def check_can_build(self, potential=None):
+    def check_can_build(self, potential: BasePotential = None):
+        """Check whether the wave functions can be built."""
         if potential is not None:
             self.grid.match(potential)
         self.grid.check_is_defined()
@@ -1151,8 +1160,6 @@ class PlaneWave(_WavesBuilder):
     device : str, optional
         The wave functions are stored on this device ('cpu' or 'gpu'). The default is determined by the user
         configuration.
-    transforms : list of WaveTransform, optional
-        Can apply any transformation to the wave functions (e.g. to describe a phase plate).
     """
 
     def __init__(
@@ -1205,7 +1212,9 @@ class PlaneWave(_WavesBuilder):
         xp = get_array_module(waves_builder.device)
 
         if waves_builder.normalize:
-            array = xp.full(waves_builder.gpts, 1/ np.prod(waves_builder.gpts), dtype=xp.complex64)
+            array = xp.full(
+                waves_builder.gpts, 1 / np.prod(waves_builder.gpts), dtype=xp.complex64
+            )
 
         else:
             array = xp.ones(waves_builder.gpts, dtype=xp.complex64)
@@ -1284,10 +1293,6 @@ class PlaneWave(_WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             setting in the user configuration file.
-        ctf : CTF, optional
-            A contrast transfer function may be applied before detecting to save memory.
-        transition_potentials : BaseTransitionPotential, optional
-            Used to describe inelastic core losses.
 
         Returns
         -------
@@ -1404,7 +1409,6 @@ class Probe(_WavesBuilder):
 
         self._positions = positions
 
-
         self.accelerator.match(self.aperture)
 
         ensemble_names = (
@@ -1426,11 +1430,13 @@ class Probe(_WavesBuilder):
         self._tilt = validate_tilt(value)
 
     @property
-    def positions(self):
+    def positions(self) -> BaseScan:
+        """The position(s) of the probe."""
         return self._positions
 
     @property
     def soft(self):
+        """True if the aperture has a soft edge."""
         return self.aperture.soft
 
     @classmethod
@@ -1584,8 +1590,6 @@ class Probe(_WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             setting in the user configuration file.
-        transition_potentials : BaseTransitionPotential, optional
-            Used to describe inelastic core losses.
 
         Returns
         -------
@@ -1685,21 +1689,21 @@ class Probe(_WavesBuilder):
 
             m = (point1[1] - point0[1]) / (point1[0] - point0[0])
 
-            def y(x):
+            def _y(x):
                 return m * (x - point0[0]) + point0[1]
 
-            def x(y):
+            def _x(y):
                 return (y - point0[1]) / m + point0[0]
 
-            if y(0) < lower_corner[1]:
-                intersect0 = (x(lower_corner[1]), y(x(lower_corner[1])))
+            if _y(0) < lower_corner[1]:
+                intersect0 = (_x(lower_corner[1]), _y(_x(lower_corner[1])))
             else:
-                intersect0 = (0, y(lower_corner[0]))
+                intersect0 = (0, _y(lower_corner[0]))
 
-            if y(upper_corner[0]) > upper_corner[1]:
-                intersect1 = (x(upper_corner[1]), y(x(upper_corner[1])))
+            if _y(upper_corner[0]) > upper_corner[1]:
+                intersect1 = (_x(upper_corner[1]), _y(_x(upper_corner[1])))
             else:
-                intersect1 = (upper_corner[0], y(upper_corner[0]))
+                intersect1 = (upper_corner[0], _y(upper_corner[0]))
 
             return intersect0, intersect1
 
@@ -1721,6 +1725,8 @@ class Probe(_WavesBuilder):
 
         Parameters
         ----------
+        complex_images : bool
+            If true shows complex images using domain-coloring instead of the intensity.
         kwargs : Keyword arguments for the :func:`.Images.show` function.
         """
         wave = self.build((self.extent[0] / 2, self.extent[1] / 2))

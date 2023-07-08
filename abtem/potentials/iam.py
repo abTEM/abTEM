@@ -1,8 +1,8 @@
-"""Module to calculate electrostatic potentials using the independent atom model."""
+"""Module for describing electrostatic potentials using the independent atom model."""
 from __future__ import annotations
 
 import warnings
-from abc import ABCMeta, abstractmethod
+from abc import abstractmethod
 from functools import partial
 from functools import reduce
 from numbers import Number
@@ -29,12 +29,11 @@ from abtem.atoms import (
 from abtem.core.axes import (
     RealSpaceAxis,
     _find_axes_type,
-    AxesMetadataList,
 )
 from abtem.core.axes import ThicknessAxis, FrozenPhononsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
-from abtem.core.chunks import chunk_shape, generate_chunks, Chunks, chunk_ranges
-from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
+from abtem.core.chunks import generate_chunks, Chunks, chunk_ranges
+from abtem.core.chunks import validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args

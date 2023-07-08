@@ -1,3 +1,4 @@
+"""Module for describing array objects."""
 from __future__ import annotations
 
 import copy
@@ -37,6 +38,7 @@ from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
     unpack_blockwise_args,
+    concatenate_array_blocks
 )
 from abtem.core.utils import (
     normalize_axes,
@@ -68,6 +70,25 @@ class ComputableList(list):
         progress_bar: bool = None,
         **kwargs,
     ):
+        """
+        Write data to a zarr file.
+
+        Parameters
+        ----------
+        url : str
+            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
+            s3:// for remote data.
+        compute : bool
+            If true compute immediately; return dask.delayed.Delayed otherwise.
+        overwrite : bool
+            If given array already exists, overwrite=False will cause an error, where overwrite=True will replace the
+            existing data.
+        progress_bar : bool
+            Display a progress bar in the terminal or notebook during computation. The progress bar is only displayed
+            with a local scheduler.
+        kwargs :
+            Keyword arguments passed to `dask.array.to_zarr`.
+        """
 
         computables = []
         with zarr.open(url, mode="w") as root:
@@ -108,7 +129,14 @@ class ComputableList(list):
 
         return output
 
-    def compute(self, **kwargs) -> list | tuple[list, tuple]:
+    def compute(self, **kwargs) -> list[ArrayObject] | tuple[list[ArrayObject], tuple]:
+        """
+        Turn a list of lazy ArrayObjects object into the in-memory equivalents.
+
+        kwargs :
+            Keyword arguments passed to `ArrayObject.compute`.
+        """
+
         output, profilers = _compute(self, **kwargs)
 
         if profilers:
@@ -243,10 +271,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
 
     @property
     def base_dims(self):
+        """Number of base dimensions."""
         return self._base_dims
 
     @property
     def ensemble_dims(self):
+        """Number of ensemble dimensions."""
         return len(self.shape) - self.base_dims
 
     @property
@@ -275,9 +305,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
 
     @property
     def axes_metadata(self) -> AxesMetadataList:
-        """
-        List of AxisMetadata.
-        """
+        """List of AxisMetadata."""
         return AxesMetadataList(
             self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
         )
@@ -355,6 +383,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
 
     @property
     def metadata(self):
+        """Metadata stored as a dictionary."""
         return self._metadata
 
     def __len__(self) -> int:
@@ -778,7 +807,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
             ensemble_axes_metadata.insert(a, am)
 
         kwargs = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
-        kwargs["array"] = expand_dims(self.array, axis=axis)
+        kwargs["array"] = _expand_dims(self.array, axis=axis)
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
@@ -1081,6 +1110,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
         return any(len(c) > 1 for c in base_chunks)
 
     def no_base_chunks(self):
+        """Rechunk to remove chunks across the base dimensions."""
         if not self._has_base_chunks:
             return self
         chunks = self.array.chunks[: -len(self.base_shape)] + (-1,) * len(
@@ -1176,7 +1206,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
                     adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                     transform_partial=transform._from_partitioned_args(),
                     num_transform_args=len(transform_args),  # noqa
-                    array_object_partial=self._from_partitioned_args(),
+                    array_object_partial=self._from_partitioned_args(),  # noqa
                     meta=meta,
                     align_arrays=False,
                     concatenate=True,
@@ -1276,12 +1306,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
                 chunks=chunks
             )
 
-            def combine_args(*args):
+            def _combine_args(*args):
                 return args[0], args[1].item()
 
             ndims = max(len(self.ensemble_shape), 1)
             blocks = da.blockwise(
-                combine_args,
+                _combine_args,
                 tuple_range(ndims),
                 array,
                 tuple_range(len(array.shape)),
@@ -1316,8 +1346,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
 
                 blocks.itemset(
                     block_indices,
-                    (array[chunk_range], ensemble_axes_metadata[block_indices])
-                    ,
+                    (array[chunk_range], ensemble_axes_metadata[block_indices]),
                 )
 
         return (blocks,)
@@ -1342,17 +1371,17 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
         )
 
 
-def expand_dims(a, axis):
+def _expand_dims(array: np.ndarray, axis: int | tuple | list) -> np.ndarray:
     if type(axis) not in (tuple, list):
         axis = (axis,)
 
-    out_ndim = len(axis) + a.ndim
+    out_ndim = len(axis) + array.ndim
     axis = validate_axis(axis, out_ndim)
 
-    shape_it = iter(a.shape)
+    shape_it = iter(array.shape)
     shape = [1 if ax in axis else next(shape_it) for ax in range(out_ndim)]
 
-    return a.reshape(shape)
+    return array.reshape(shape)
 
 
 def from_zarr(url: str, chunks: Chunks = None):
@@ -1481,19 +1510,6 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> T:
     )
 
 
-def _concatenate_array_blocks(blocks):
-    for i in range(len(blocks.shape)):
-        new_blocks = np.empty(blocks.shape[:-1], dtype=object)
-
-        for indices in np.ndindex(blocks.shape):  # noqa
-            concat_index = len(indices) - 1
-            indices = indices[:-1]
-            new_blocks[indices] = np.concatenate(blocks[indices], axis=concat_index)
-
-        blocks = new_blocks
-    return blocks.item()
-
-
 def _unpack_array_object_blocks(blocks):
     new_blocks = np.empty(blocks.shape, dtype=object)
     for indices in np.ndindex(blocks.shape):
@@ -1535,7 +1551,7 @@ def _axes_metadata_from_array_object_blocks(blocks):
 
 def _concat_array_object_ensemble_blocks(blocks):
     array_blocks = _unpack_array_object_blocks(blocks)
-    concat_array = _concatenate_array_blocks(array_blocks)
+    concat_array = concatenate_array_blocks(array_blocks)
     concat_axes_metadata = _axes_metadata_from_array_object_blocks(blocks)
 
     concat_array_object = ArrayObject(

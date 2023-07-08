@@ -2,7 +2,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
-from math import pi
 from typing import Any
 from typing import TYPE_CHECKING
 from typing import Tuple, Union, List
@@ -13,9 +12,7 @@ import numpy as np
 from ase import Atoms
 from ase import units
 from ase.data import chemical_symbols, atomic_numbers
-from ase.units import Bohr
 from scipy.interpolate import interp1d
-from scipy.ndimage import map_coordinates
 
 from abtem.core.axes import AxisMetadata
 from abtem.core.constants import eps0
@@ -25,7 +22,6 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.potentials.charge_density import _interpolate_slice
 from abtem.core.parametrizations.ewald import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
@@ -34,6 +30,7 @@ from abtem.inelastic.phonons import (
     _safe_read_atoms,
 )
 from abtem.potentials.charge_density import _generate_slices
+from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import _PotentialBuilder, Potential
 
 try:

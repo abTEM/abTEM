@@ -239,7 +239,7 @@ class AnnularDetector(BaseDetector):
     ) -> type(RealSpaceLineProfiles) | type(Images):
         return _scanned_measurement_type(waves)
 
-    def _calculate_new_array(self, waves):
+    def _calculate_new_array(self, waves: Waves):
         """
         Detect the given waves producing diffraction patterns.
 

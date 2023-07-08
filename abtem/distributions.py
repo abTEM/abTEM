@@ -9,7 +9,6 @@ from typing import Sequence, Iterable, Iterator
 import dask.array as da
 import numpy as np
 
-from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module, ArrayModule
 from abtem.core.chunks import Chunks, equal_sized_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -25,7 +24,7 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self.values
 
     def __iter__(self) -> Iterator[float]:
-       return iter(self.values)
+        return iter(self.values)
 
     @property
     @abstractmethod
@@ -41,29 +40,34 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @abstractmethod
     def divide(self, chunks: Chunks, lazy: bool = True):
-        """"""
+        """Divide the distribution into chunks."""
         pass
 
     @property
     @abstractmethod
     def ensemble_mean(self) -> bool:
-        """"""
+        """Calculate the mean of the ensemble."""
         pass
 
     @property
     @abstractmethod
     def values(self) -> np.ndarray:
+        """Scalar values representing the distribution."""
         pass
 
     @property
     @abstractmethod
     def weights(self) -> np.ndarray:
+        """Weight of each of distribution value."""
         pass
 
 
 class DistributionFromValues(BaseDistribution):
     def __init__(
-        self, values: np.ndarray, weights: np.ndarray=None, ensemble_mean: bool = False
+        self,
+        values: np.ndarray,
+        weights: np.ndarray = None,
+        ensemble_mean: bool = False,
     ):
         self._values = values
 
@@ -128,11 +132,33 @@ class DistributionFromValues(BaseDistribution):
     def weights(self) -> np.ndarray:
         return self._weights
 
-    def combine(self, other: DistributionFromValues) -> AxisAlignedDistributionND:
-        return AxisAlignedDistributionND([self, other])
+    def combine(self, other: DistributionFromValues) -> MultidimensionalDistribution:
+        """
+        Combine distribution with another distribution to produce a higher-dimensional distribution.
+
+        Parameters
+        ----------
+        other : DistributionFromValues
+            The distribution to combine this distribution with.
+
+        Returns
+        -------
+        combined_distribution : MultidimensionalDistribution
+            Higher-dimensional combined distribution.
+        """
+        return MultidimensionalDistribution([self, other])
 
 
-class AxisAlignedDistributionND(BaseDistribution):
+class MultidimensionalDistribution(BaseDistribution):
+    """
+    A multidimensional distribution composed of multiple lower-dimensional distributions.
+
+    Parameters
+    ----------
+    distributions : list of BaseDistribution
+        The lower-dimensional distributions composed into a higher-dimensional distribution.
+    """
+
     def __init__(self, distributions: list[BaseDistribution]):
         for distribution in distributions:
             assert distribution.dimensions == 1
@@ -141,6 +167,7 @@ class AxisAlignedDistributionND(BaseDistribution):
 
     @property
     def distributions(self):
+        """The lower dimensional distributions making up this distribution."""
         return self._distributions
 
     def _apply_to_distributions(self, method_name):
@@ -265,7 +292,7 @@ def gaussian(
     ensemble_mean: bool | tuple[bool, ...] = True,
     sampling_limit: float | tuple[float, ...] = 3.0,
     normalize: str = "intensity",
-) -> AxisAlignedDistributionND:
+) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.
     The values are evenly spaced within a given truncation of the Gaussian distribution. As an example, this
@@ -330,7 +357,7 @@ def gaussian(
             )
         )
 
-    return AxisAlignedDistributionND(distributions=distributions)
+    return MultidimensionalDistribution(distributions=distributions)
 
 
 def _validate_distribution(

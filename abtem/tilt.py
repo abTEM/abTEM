@@ -10,7 +10,7 @@ from abtem.core.backend import get_array_module
 from abtem.transform import CompositeArrayObjectTransform, ArrayObjectTransform
 from abtem.distributions import (
     BaseDistribution,
-    AxisAlignedDistributionND,
+    MultidimensionalDistribution,
     EnsembleFromDistributions,
     from_values, _validate_distribution,
 )
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 def validate_tilt(tilt):
     """Validate that the given tilt is correctly defined."""
-    if isinstance(tilt, AxisAlignedDistributionND):
+    if isinstance(tilt, MultidimensionalDistribution):
         raise NotImplementedError
 
     if isinstance(tilt, BaseDistribution):

@@ -6,7 +6,7 @@ from abc import abstractmethod, ABCMeta
 from collections import defaultdict
 from typing import TYPE_CHECKING, Sequence
 
-import ipywidgets as widgets
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,8 +24,6 @@ from matplotlib.patches import Circle
 from mpl_toolkits.axes_grid1 import Size, Divider
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
-from scipy.spatial import distance_matrix
-from scipy.spatial.distance import squareform
 from traitlets.traitlets import link
 
 from abtem.atoms import pad_atoms, plane_to_axes
@@ -34,6 +32,17 @@ from abtem.core.axes import ReciprocalSpaceAxis, format_label, LinearAxis
 from abtem.core.colors import hsluv_cmap
 from abtem.core.units import _get_conversion_factor
 from abtem.core.utils import label_to_index
+
+try:
+    import ipywidgets as widgets
+except ImportError:
+    widgets = None
+
+ipywidgets_not_installed = RuntimeError(
+    "This functionality of abTEM requires ipywidgets, see "
+    "https://ipywidgets.readthedocs.io/en/stable/user_install.html."
+)
+
 
 if TYPE_CHECKING:
     from abtem.measurements import (
@@ -249,11 +258,11 @@ class AxesGrid:
         return self._divider
 
     @property
-    def ncols(self):
+    def ncols(self) -> int:
         return self._axes.shape[0]
 
     @property
-    def nrows(self):
+    def nrows(self) -> int:
         return self._axes.shape[1]
 
     def __getitem__(self, item):
@@ -263,10 +272,13 @@ class AxesGrid:
         return len(self._axes)
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int, int]:
         return self._axes.shape
 
-    def set_cbar_padding(self, padding: tuple = (0.1, 0.1)):
+    def set_cbar_padding(self, padding: tuple[float, float] = (0.1, 0.1)):
+        if np.isscalar(padding):
+            padding = (padding,) * 2
+
         self._col_sizes["cbar_padding_left"].fixed_size = padding[0]
         self._row_sizes["cbar_padding_left"].fixed_size = padding[0]
         self._col_sizes["cbar_padding_right"].fixed_size = padding[1]
@@ -280,7 +292,10 @@ class AxesGrid:
         self._col_sizes["cbar_spacing"].fixed_size = spacing
         self._row_sizes["cbar_spacing"].fixed_size = spacing
 
-    def set_axes_padding(self, padding=(0.0, 0.0)):
+    def set_axes_padding(self, padding: tuple[float, float] = (0.0, 0.0)):
+        if np.isscalar(padding):
+            padding = (padding,) * 2
+
         self._col_sizes["padding"].fixed_size = padding[0]
         self._row_sizes["padding"].fixed_size = padding[1]
 
@@ -309,8 +324,8 @@ def _axes_grid_cols_and_rows(measurements, axes_types):
 
 def _determine_axes_types(
     measurements: BaseMeasurements,
-    explode: bool | tuple[bool, ...],
-    overlay: bool | tuple[bool, ...],
+    explode: bool | tuple[bool, ...] | None,
+    overlay: bool | tuple[bool, ...] | None,
 ):
     num_ensemble_axes = len(measurements.ensemble_shape)
 
@@ -827,6 +842,12 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 return
 
             axes_metadata = indexed_measurements.ensemble_axes_metadata[1]
+
+            if hasattr(axes_metadata, "to_nonlinear_axis"):
+                axes_metadata = axes_metadata.to_nonlinear_axis(
+                    indexed_measurements.ensemble_shape[1]
+                )
+
             titles = []
             for i, axis_metadata in enumerate(axes_metadata):
                 titles.append(
@@ -834,6 +855,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
                         format, units=units, include_label=i == 0
                     )
                 )
+
                 if i == indexed_measurements.ensemble_shape[1]:
                     break
         elif isinstance(titles, str):
@@ -909,7 +931,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 raise RuntimeError(
                     "axes type must be one of 'index', 'range', 'explode' or 'overlay'"
                 )
-        
+
         return tuple(validated_indices)
 
     def set_indices(self, indices=()):
@@ -1551,9 +1573,10 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
     @property
     def widgets(self):
-        canvas = self.fig.canvas
+        if widgets is None:
+            raise ipywidgets_not_installed
 
-        # vmin_vmax_slider = make_vmin_vmax_slider(self)
+        canvas = self.fig.canvas
 
         def index_update_callback(change):
             if self._autoscale:
@@ -2081,6 +2104,9 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
     @property
     def widgets(self):
+        if widgets is None:
+            raise ipywidgets_not_installed
+
         canvas = self.fig.canvas
 
         sliders = _make_indexing_sliders(self, self.axes_types)

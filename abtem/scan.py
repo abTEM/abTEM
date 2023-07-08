@@ -27,9 +27,9 @@ if TYPE_CHECKING:
     from abtem.prism.s_matrix import BaseSMatrix
 
 
-def _validate_scan(scan:np.ndarray | BaseScan, probe:Probe=None):
+def _validate_scan(scan: np.ndarray | BaseScan, probe: Probe = None) -> BaseScan:
     if scan is None and probe is None:
-        scan = CustomScan(np.zeros((1,2)), squeeze=True)
+        scan = CustomScan(np.zeros((1, 2)), squeeze=True)
     elif scan is None:
         scan = CustomScan(np.zeros((0, 2)), squeeze=True)
 
@@ -43,7 +43,7 @@ def _validate_scan(scan:np.ndarray | BaseScan, probe:Probe=None):
     return scan
 
 
-def _validate_scan_sampling(scan, probe):
+def _validate_scan_sampling(scan: BaseScan, probe: Probe):
     if scan.sampling is None:
         if not hasattr(probe, "semiangle_cutoff"):
             raise ValueError()
@@ -126,9 +126,9 @@ class BaseScan(ReciprocalSpaceMultiplication):
         if len(positions) == 0:
             return xp.ones(waves.gpts, dtype=xp.complex64)
 
-        positions = xp.asarray(positions) / xp.asarray(
-            waves.sampling
-        ).astype(np.float32)
+        positions = xp.asarray(positions) / xp.asarray(waves.sampling).astype(
+            np.float32
+        )
 
         kernel = fft_shift_kernel(positions, shape=waves.gpts)
 
@@ -260,7 +260,7 @@ class CustomScan(BaseScan):
 
     def _from_partitioned_args(self):
         if len(self.positions) == 0:
-            return lambda *args, **kwargs : _wrap_with_array(self)
+            return lambda *args, **kwargs: _wrap_with_array(self)
         return self._from_partitioned_args_func
 
     def _partition_args(self, chunks=None, lazy: bool = True):
@@ -613,7 +613,7 @@ class LineScan(BaseScan):
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return [
             ScanAxis(
-                label="x",
+                label="r",
                 sampling=self.sampling,
                 offset=0.0,
                 units="Å",
@@ -666,7 +666,9 @@ class LineScan(BaseScan):
 
             end = start + self.sampling * chunk * direction
 
-            block = _wrap_with_array(LineScan(start=start, end=end, gpts=chunk, endpoint=False))
+            block = _wrap_with_array(
+                LineScan(start=start, end=end, gpts=chunk, endpoint=False)
+            )
 
             if lazy:
                 block = da.from_array(block, chunks=1)

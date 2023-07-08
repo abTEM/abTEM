@@ -1,4 +1,4 @@
-"""Module for handling measurements."""
+"""Module for describing abTEM measurement objects."""
 from __future__ import annotations
 
 import copy
