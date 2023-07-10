@@ -1,4 +1,5 @@
 """Module for describing the nuclear and electronic charge density used as the electrostatic potential in multislice simulations."""
+from __future__ import annotations
 from functools import partial
 from typing import Tuple, Union
 
@@ -11,7 +12,7 @@ from scipy.ndimage import map_coordinates
 
 from abtem.core.backend import copy_to_device
 from abtem.core.fft import fft_crop, fft_interpolate
-from abtem.core.parametrizations import EwaldParametrization
+from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, _PotentialBuilder
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.atoms import plane_to_axes

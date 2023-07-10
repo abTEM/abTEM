@@ -12,6 +12,7 @@ import numpy as np
 
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import cp
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import (
@@ -30,7 +31,6 @@ from abtem.distributions import (
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
 from abtem.transform import ReciprocalSpaceMultiplication
-from abtem.core.backend import cp
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
@@ -57,6 +57,8 @@ class BaseTransferFunction(
 
     @property
     def angular_sampling(self) -> tuple[float, float]:
+        """The sampling in scattering angles of the transfer function [mrad]."""
+
         return reciprocal_space_sampling_to_angular_sampling(
             self.reciprocal_space_sampling, self.energy
         )
@@ -99,6 +101,11 @@ class BaseTransferFunction(
         max_angle: float = None,
         gpts: int | tuple[int, int] = None,
     ):
+        """
+
+
+
+        """
         from abtem.measurements import DiffractionPatterns
 
         if (self.sampling is None) or (max_angle is not None):
@@ -121,14 +128,14 @@ class BaseTransferFunction(
         ctf.gpts = gpts
 
         array = ctf._evaluate_kernel()
+        xp = get_array_module(array)
         diffraction_patterns = DiffractionPatterns(
-            array,
+            xp.fft.fftshift(array),
             sampling=ctf.reciprocal_space_sampling,
             ensemble_axes_metadata=ctf.ensemble_axes_metadata,
             fftshift=False,
             metadata={"energy": self.energy},
         )
-        diffraction_patterns = diffraction_patterns.shift_spectrum("center")
         return diffraction_patterns
 
     def show(self, **kwargs):
@@ -1184,7 +1191,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         if cp is not None:
             weights = cp.asnumpy(weights)
 
-        if weights is not None and not np.all(weights != 1.):
+        if weights is not None and not np.all(weights != 1.0):
             array = xp.asarray(weights, dtype=xp.float32) * array
 
         return array
@@ -1464,7 +1471,9 @@ class CTF(_HasAberrations, BaseAperture):
         else:
             return array
 
-    def to_point_spread_functions(self, gpts, extent):
+    def to_point_spread_functions(
+        self, gpts: int | tuple[int, int], extent: float | tuple[float, float]
+    ):
         from abtem.waves import Probe
 
         return (

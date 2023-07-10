@@ -1,4 +1,5 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
+from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -22,7 +23,7 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.core.parametrizations.ewald import EwaldParametrization
+from abtem.parametrizations import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
@@ -594,8 +595,9 @@ class GPAWPotential(_PotentialBuilder):
 
         calculators = args["calculators"]
 
-
-        new_potential = GPAWPotential(calculators, frozen_phonons=frozen_phonons, **kwargs)
+        new_potential = GPAWPotential(
+            calculators, frozen_phonons=frozen_phonons, **kwargs
+        )
 
         return _wrap_with_array(new_potential)
 
@@ -607,7 +609,7 @@ class GPAWPotential(_PotentialBuilder):
         return partial(
             self._gpaw_potential,
             frozen_phonons_partial=frozen_phonons_partial,
-            **kwargs
+            **kwargs,
         )
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):

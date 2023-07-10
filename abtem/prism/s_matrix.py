@@ -30,13 +30,13 @@ from abtem.core.utils import (
     expand_dims_to_broadcast,
     ensure_list,
     CopyMixin,
-    EqualityMixin,
+    EqualityMixin, tuple_range,
 )
 from abtem.detectors import (
     BaseDetector,
     _validate_detectors,
     WavesDetector,
-    FlexibleAnnularDetector,
+    FlexibleAnnularDetector, AnnularDetector,
 )
 from abtem.measurements import BaseMeasurements
 from abtem.multislice import (
@@ -79,6 +79,11 @@ def _finalize_lazy_measurements(
     for i, detector in enumerate(detectors):
 
         base_shape = detector._out_base_shape(waves)
+
+        if isinstance(detector, AnnularDetector):
+            # TODO
+            base_shape = ()
+
         meta = detector._out_meta(waves)
 
         new_axis = tuple(range(len(arrays.shape), len(arrays.shape) + len(base_shape)))
@@ -109,8 +114,6 @@ def _finalize_lazy_measurements(
         measurement = cls.from_array_and_metadata(
             array, axes_metadata=axes_metadata, metadata=metadata
         )
-
-        # measurement = detector._pack_single_output(waves, array)
 
         if hasattr(measurement, "reduce_ensemble"):
             measurement = measurement.reduce_ensemble()
@@ -324,6 +327,7 @@ def _lazy_reduce(
     measurements = s_matrix._batch_reduce_to_measurements(
         scan, ctf, detectors, max_batch_reduction
     )
+
 
     arr = np.zeros((1,) * (len(array.shape) - 1), dtype=object)
     arr.itemset(measurements)
@@ -842,8 +846,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
     @classmethod
     def _from_waves(cls, waves: Waves, **kwargs):
-        kwargs.update({key: getattr(waves, key) for key in _common_kwargs(cls, Waves)})
+        common_kwargs = _common_kwargs(cls, Waves)
+        kwargs.update({key: getattr(waves, key) for key in common_kwargs})
         kwargs["ensemble_axes_metadata"] = kwargs["ensemble_axes_metadata"][:-1]
+
         return cls(**kwargs)
 
     @property
@@ -1237,6 +1243,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         reduction_scheme = self._validate_reduction_scheme(reduction_scheme)
 
         if self.is_lazy:
+
             if reduction_scheme == "multiple-rechunk":
                 measurements = _multiple_rechunk_reduce(
                     self, scan, detectors, ctf, max_batch_reduction
@@ -1970,6 +1977,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
         array.itemset(0, measurements)
+
         return array
 
     def reduce(
@@ -2048,18 +2056,19 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             scan = _validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
+            chunks = blocks.chunks + scan.shape
 
-            blocks = blocks[(slice(None),) + (None,) * len(scan.shape)]
-            chunks = blocks.chunks[: -len(scan.shape)] + scan.shape
-
+            new_axis = tuple_range(offset=len(blocks.shape), length=len(scan.shape))
             drop_axis = ()
-            if self.potential is None or not self.potential.ensemble_shape:
+            if len(self.ensemble_shape) == 0:
                 drop_axis = (0,)
                 chunks = chunks[1:]
+                new_axis = tuple_range(offset=len(blocks.shape) - 1, length=len(scan.shape))
 
             arrays = blocks.map_blocks(
                 self._lazy_build_s_matrix_detect,
                 drop_axis=drop_axis,
+                new_axis=new_axis,
                 chunks=chunks,
                 scan=scan,
                 ctf=ctf,

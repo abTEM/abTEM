@@ -1,7 +1,8 @@
+from __future__ import annotations
 import numpy as np
 from scipy.special import erf
 
-from abtem.core.parametrizations.base import Parametrization
+from abtem.parametrizations.base import Parametrization
 from abtem.core.constants import eps0
 from ase.data import chemical_symbols
 

@@ -6,7 +6,7 @@ import pytest
 from ase.data import chemical_symbols
 from hypothesis import given, settings
 
-from abtem.core.parametrizations import LobatoParametrization, KirklandParametrization
+from abtem.parametrizations import LobatoParametrization, KirklandParametrization
 from utils import array_is_close
 
 try:

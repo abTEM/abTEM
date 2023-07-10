@@ -7,7 +7,7 @@ import numpy as np
 from numba import jit
 from scipy.special import erf
 
-from abtem.core.parametrizations.base import Parametrization, get_data_path
+from abtem.parametrizations.base import Parametrization, get_data_path
 from abtem.core.constants import kappa
 
 

@@ -3,7 +3,7 @@ import warnings
 
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given
+from hypothesis import given, reproduce_failure
 
 import strategies as abtem_st
 from utils import gpu
@@ -20,7 +20,9 @@ except ImportError:
     abtem_st.images,
     abtem_st.line_profiles,
     abtem_st.diffraction_patterns,
-    abtem_st.polar_measurements
+    abtem_st.polar_measurements,
+    abtem_st.potential_array,
+    abtem_st.waves
 ])
 @pytest.mark.skipif('hyperspy' not in sys.modules, reason="requires hyperspy")
 def test_hyperspy(data, measurement, lazy, device):

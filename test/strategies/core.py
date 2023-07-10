@@ -41,7 +41,7 @@ def gpts(draw,
 
 
 @st.composite
-def sampling(draw, min_value=0.01, max_value=0.1, allow_none=False):
+def sampling(draw, min_value=0.02, max_value=0.1, allow_none=False):
     sampling = st.floats(min_value=min_value, max_value=max_value)
     sampling = sampling | st.tuples(sampling, sampling)
     if allow_none:

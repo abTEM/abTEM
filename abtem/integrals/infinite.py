@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from abtem.core.backend import cp
 from abtem.core.backend import get_array_module, device_name_from_array_module
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import spatial_frequencies
-from abtem.core.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
-from abtem.core.parametrizations import validate_parametrization
-from abtem.core.parametrizations.base import Parametrization
+from abtem.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
+from abtem.parametrizations import validate_parametrization
+
+if TYPE_CHECKING:
+    from abtem.parametrizations.base import Parametrization
+
 
 if cp is not None:
     import cupyx
@@ -31,6 +36,21 @@ def superpose_deltas(
     weights: np.ndarray = None,
     round_positions: bool = True,
 ) -> np.ndarray:
+    """
+    Add superposition of delta functions at given positions to a 2D array.
+
+    Parameters
+    ----------
+    positions : np.ndarray
+        Array of 2D positions as an nx2 array. The positions are given in units of pixels.
+    array : np.ndarray
+        The delta functions are added to this 2D array.
+    weights : np.ndarray, optional
+        If given each delta function is weighted by the given factor. Must match the length of `positions`.
+
+    """
+
+
     xp = get_array_module(array)
     shape = array.shape
 
@@ -68,11 +88,8 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
         self._scattering_factor = scattering_factor
 
     @property
-    def gpts(self) -> tuple[int, int]:
-        return self._scattering_factor.shape[-2:]
-
-    @property
     def scattering_factor(self) -> np.ndarray:
+        """Projected scattering factor array on a 2D grid."""
         return self._scattering_factor
 
     def integrate_on_grid(
@@ -98,7 +115,7 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
 
         array = fft2(array, overwrite_x=True)
 
-        f = self.scattering_factor / sinc(self.gpts, sampling, device)
+        f = self.scattering_factor / sinc(self._scattering_factor.shape[-2:], sampling, device)
 
         array *= f
 

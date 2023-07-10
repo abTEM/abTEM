@@ -63,9 +63,6 @@ def frozen_phonons(draw,
     cell = drawn_atoms.cell
     atomic_numbers = atomic_numbers
 
-    if lazy:
-        drawn_atoms = dask.delayed(drawn_atoms)
-
     return FrozenPhonons(drawn_atoms,
                          num_configs=num_configs,
                          sigmas=sigmas,
@@ -88,10 +85,7 @@ def dummy_frozen_phonons(draw,
                              max_thickness=max_thickness,
                              max_atoms=max_atoms))
 
-    if lazy:
-        return DummyFrozenPhonons(dask.delayed(drawn_atoms))
-    else:
-        return DummyFrozenPhonons(drawn_atoms)
+    return DummyFrozenPhonons(drawn_atoms)
 
 
 @st.composite

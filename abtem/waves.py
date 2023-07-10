@@ -58,7 +58,7 @@ from abtem.measurements import (
 from abtem.multislice import MultisliceTransform
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.scan import BaseScan, GridScan, _validate_scan
-from abtem.tilt import validate_tilt
+from abtem.tilt import _validate_tilt
 from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
     ArrayObjectTransform,
@@ -299,6 +299,10 @@ class Waves(BaseWaves, ArrayObject):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
+
+        if sampling is not None and extent is not None:
+            extent = None
+
         self._grid = Grid(
             extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
         )
@@ -1175,7 +1179,7 @@ class PlaneWave(_WavesBuilder):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
-        self._tilt = validate_tilt(tilt=tilt)
+        self._tilt = _validate_tilt(tilt=tilt)
         self._normalize = normalize
         device = validate_device(device)
 
@@ -1188,7 +1192,7 @@ class PlaneWave(_WavesBuilder):
 
     @tilt.setter
     def tilt(self, value):
-        self._tilt = validate_tilt(value)
+        self._tilt = _validate_tilt(value)
 
     @property
     def metadata(self):
@@ -1427,7 +1431,7 @@ class Probe(_WavesBuilder):
 
     @tilt.setter
     def tilt(self, value):
-        self._tilt = validate_tilt(value)
+        self._tilt = _validate_tilt(value)
 
     @property
     def positions(self) -> BaseScan:

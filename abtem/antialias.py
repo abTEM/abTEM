@@ -1,6 +1,8 @@
-from typing import Tuple
+from __future__ import annotations
 
 import numpy as np
+from typing import TYPE_CHECKING
+
 
 from abtem.core import config
 from abtem.core.backend import get_array_module
@@ -8,9 +10,29 @@ from abtem.core.fft import fft2_convolve
 from abtem.core.grid import HasGridMixin, spatial_frequencies
 from abtem.core.utils import EqualityMixin, CopyMixin
 
+if TYPE_CHECKING:
+    from abtem.waves import Waves
+    from abtem.potentials.iam import TransmissionFunction
 
-def antialias_aperture(gpts:Tuple[int,int], sampling:Tuple[float,float], xp=None):
 
+def antialias_aperture(
+    gpts: tuple[int, int], sampling: tuple[float, float], xp=None
+) -> np.ndarray:
+
+    """
+    Array defining Fourier space antialias aperture.
+
+    Parameters
+    ----------
+    gpts : two int, optional
+        Number of grid points in x and y describing the antialias aperture.
+    sampling : two float, optional
+        Reciprocal space sampling in x and y of the antialias aperture. Units are arbitrary.
+
+    Returns
+    -------
+    antialias_aperture_array : np.ndarray
+    """
     cutoff = config.get("antialias.cutoff") / max(sampling) / 2
     taper = config.get("antialias.taper") / max(sampling)
 
@@ -34,7 +56,7 @@ class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
         self._key = None
         self._array = None
 
-    def get_array(self, x):
+    def get_array(self, x: Waves | TransmissionFunction):
         key = (
             x.gpts,
             x.sampling,
@@ -54,9 +76,11 @@ class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
 
         return self._array
 
-    def bandlimit(self, x, overwrite_x: bool = False):
+    def bandlimit(
+        self, x: Waves | TransmissionFunction, in_place: bool = False
+    ) -> Waves | TransmissionFunction:
         kernel = self.get_array(x)
         kernel = kernel[(None,) * (len(x.shape) - 2)]
 
-        x._array = fft2_convolve(x._array, kernel, overwrite_x=overwrite_x)
+        x._array = fft2_convolve(x._array, kernel, overwrite_x=in_place)
         return x

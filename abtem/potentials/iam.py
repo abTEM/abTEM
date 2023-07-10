@@ -38,10 +38,10 @@ from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.integrals.base import ProjectionIntegratorPlan
-from abtem.core.integrals.gaussians import GaussianProjectionIntegrals
-from abtem.core.integrals.infinite import InfinitePotentialProjections
-from abtem.core.integrals.quadrature import ProjectionQuadratureRule
+
+from abtem.integrals.gaussians import GaussianProjectionIntegrals
+from abtem.integrals.infinite import InfinitePotentialProjections
+from abtem.integrals.quadrature import ProjectionQuadratureRule
 from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
@@ -59,7 +59,8 @@ from abtem.slicing import (
 
 if TYPE_CHECKING:
     from abtem.waves import Waves, BaseWaves
-    from abtem.core.parametrizations.base import Parametrization
+    from abtem.parametrizations.base import Parametrization
+    from abtem.integrals import ProjectionIntegratorPlan
 
 
 class BasePotential(

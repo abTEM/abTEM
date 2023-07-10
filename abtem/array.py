@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import warnings
+from abc import ABCMeta
 from contextlib import nullcontext, contextmanager
 from functools import partial
 from numbers import Number
@@ -25,6 +26,8 @@ from abtem.core.axes import (
     AxisMetadata,
     OrdinalAxis,
     AxesMetadataList,
+    NonLinearAxis,
+    LinearAxis,
 )
 from abtem.core.backend import (
     get_array_module,
@@ -38,7 +41,7 @@ from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
     unpack_blockwise_args,
-    concatenate_array_blocks
+    concatenate_array_blocks,
 )
 from abtem.core.utils import (
     normalize_axes,
@@ -55,6 +58,49 @@ try:
     import tifffile
 except ImportError:
     tifffile = None
+
+
+def _to_hyperspy_axes_metadata(axes_metadata, shape):
+    hyperspy_axes = []
+
+    if not isinstance(shape, (list, tuple)):
+        shape = (shape,)
+
+    for metadata, n in zip(axes_metadata, shape):
+        hyperspy_axes.append({"size": n})
+
+        axes_mapping = {
+            "sampling": "scale",
+            "units": "units",
+            "label": "name",
+            "offset": "offset",
+        }
+
+        if isinstance(metadata, OrdinalAxis):
+            # TODO : when hyperspy supports arbitrary (non-uniform) DataAxis this should be updated
+
+            if len(metadata.values) > 1:
+                sampling = metadata.values[1] - metadata.values[0]
+            else:
+                sampling = 1.0
+
+            if metadata.units is None:
+                units = ""
+            else:
+                units = metadata.units
+
+            metadata = LinearAxis(
+                label=metadata.label,
+                units=units,
+                sampling=sampling,
+                offset=metadata.values[0],
+            )
+
+        for attr, mapped_attr in axes_mapping.items():
+            if hasattr(metadata, attr):
+                hyperspy_axes[-1][mapped_attr] = getattr(metadata, attr)
+
+    return hyperspy_axes
 
 
 class ComputableList(list):
@@ -227,7 +273,7 @@ def _validate_lazy(lazy):
 T = TypeVar("T", bound="ArrayObject")
 
 
-class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
+class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     A base class for simulation objects described by an array and associated metadata.
 
@@ -337,7 +383,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
         array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
         metadata: dict,
-    ):
+    ) -> T:
         """
         Creates array object from a given array and metadata.
 
@@ -1236,6 +1282,49 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin):
 
         self._check_axes_metadata()
         return self
+
+    def to_hyperspy(self):
+        """Convert measurement to a Hyperspy signal."""
+
+        try:
+            import hyperspy.api as hs
+        except ImportError:
+            raise ImportError(
+                "This functionality of abTEM requires Hyperspy, see https://hyperspy.org/."
+            )
+
+        if self._base_dims == 1:
+            signal_type = hs.signals.Signal1D
+        elif self._base_dims == 2:
+            signal_type = hs.signals.Signal2D
+        else:
+            raise RuntimeError()
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_shape,
+        )
+        ensemble_axes_metadata = _to_hyperspy_axes_metadata(
+            self.ensemble_axes_metadata,
+            self.ensemble_shape,
+        )
+
+        xp = get_array_module(self.device)
+
+        base_axes = tuple_range(offset=0, length=len(self.base_shape))
+        ensemble_axes = tuple_range(
+            offset=len(self.base_shape),
+            length=len(self.ensemble_shape),
+        )
+
+        array = xp.transpose(self.array, ensemble_axes + base_axes[::-1])
+
+        s = signal_type(array, axes=ensemble_axes_metadata + axes_base[::-1])
+
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def _stack(self, arrays, axis_metadata, axis):
         xp = get_array_module(arrays[0].array)

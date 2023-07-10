@@ -11,6 +11,7 @@ from abtem.measurements import ReciprocalSpaceLineProfiles, RealSpaceLineProfile
 from abtem.array import concatenate
 import os
 
+
 def get_data_path():
     this_file = os.path.abspath(os.path.dirname(__file__))
     return os.path.join(this_file, "data")
@@ -53,31 +54,151 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     def scaled_parameters(self, symbol) -> np.ndarray:
         pass
 
-    def potential(self, symbol: str, charge: float = 0.0):
+    def potential(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        Radial electrostatic potential for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        electrostatic_potential : callable
+            Function describing electrostatic potential parameterized by the radial distance to the core [Å].
+        """
         return self.get_function("potential", symbol, charge)
 
-    def scattering_factor(self, symbol: str, charge: float = 0.0):
+    def scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        Radial scattering factor for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        scattering_factor : callable
+            Function describing scattering parameterized by the squared reciprocal radial distance to the core [1/Å^2].
+        """
         return self.get_function("scattering_factor", symbol, charge)
 
-    def projected_potential(self, symbol: str, charge: float = 0.0):
+    def projected_potential(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        Analytical infinite projection of radial electrostatic potential for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        projected_potential : callable
+            Function describing projected electrostatic potential parameterized by the radial distance to the core [Å].
+        """
         return self.get_function("projected_potential", symbol, charge)
 
-    def projected_scattering_factor(self, symbol: str, charge: float = 0.0):
+    def projected_scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        Analytical infinite projection of radial scattering factor for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        projected_scattering_factor : callable
+            Function describing projected scattering parameterized by the squared reciprocal radial distance to the core
+            [1/Å^2].
+        """
         return self.get_function("projected_scattering_factor", symbol, charge)
 
-    def charge(self, symbol: str, charge: float = 0.0):
+    def charge(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        Radial charge distribution for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        charge : callable
+            Function describing charge parameterized by the radial distance to the core [Å].
+        """
         return self.get_function("charge", symbol, charge)
 
-    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
+    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        X-ray scattering factor for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        x_ray_scattering_factor : callable
+        """
         return self.get_function("x_ray_scattering_factor", symbol, charge)
 
-    def finite_projected_potential(self, symbol: str, charge: float = 0.0):
+    def finite_projected_potential(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        X-ray scattering factor for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        x_ray_scattering_factor : callable
+        """
         return self.get_function("finite_projected_potential", symbol, charge)
 
-    def finite_projected_scattering_factor(self, symbol: str, charge: float = 0.0):
+    def finite_projected_scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
+        """
+        Analytical infinite projection of radial scattering factor for given chemical symbol and charge.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+
+        Returns
+        -------
+        projected_scattering_factor : callable
+            Function describing projected scattering parameterized by the squared reciprocal radial distance to the core
+            [1/Å^2].
+        """
         return self.get_function("finite_projected_scattering_factor", symbol, charge)
 
-    def get_function(self, name: str, symbol: str, charge: float = 0.0):
+    def get_function(self, name: str, symbol: str, charge: float = 0.0) -> callable:
         """
         Returns the line profiles for a parameterized function for one or more element.
 
@@ -86,9 +207,10 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         name : {'potential', 'projected_potential', 'charge', 'finite_projected_potential', 'scattering_factor',
                 'projected_scattering_factor', 'x_ray_scattering_factor', 'finite_projected_scattering_factor'}
             Name of the function to return.
-
-
-
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
         """
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]

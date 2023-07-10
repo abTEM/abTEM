@@ -1,8 +1,8 @@
-from abtem.core.parametrizations.lobato import LobatoParametrization
-from abtem.core.parametrizations.kirkland import KirklandParametrization
-from abtem.core.parametrizations.peng import PengParametrization
-from abtem.core.parametrizations.waasmaier_kirfel import WaasmaierKirfelParametrization
-from abtem.core.parametrizations.ewald import EwaldParametrization
+"""Module to describe analytical potential parametrizations."""
+from abtem.parametrizations.lobato import LobatoParametrization
+from abtem.parametrizations.kirkland import KirklandParametrization
+from abtem.parametrizations.peng import PengParametrization
+from abtem.parametrizations.ewald import EwaldParametrization
 
 named_parametrizations = {
     "ewald": EwaldParametrization,

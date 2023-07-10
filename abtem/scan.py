@@ -250,11 +250,8 @@ class CustomScan(BaseScan):
     @staticmethod
     def _from_partitioned_args_func(*args, **kwargs):
         scan = unpack_blockwise_args(args)
-
         positions = scan[0]["positions"]
-
-        new_scan = CustomScan(positions)
-
+        new_scan = CustomScan(positions, **kwargs)
         new_scan = _wrap_with_array(new_scan, 1)
         return new_scan
 
@@ -488,7 +485,7 @@ class LineScan(BaseScan):
         """
 
         if isinstance(center, Atom):
-            position = (center.x, center.y)
+            center = (center.x, center.y)
 
         direction = np.array((np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))))
 
@@ -625,11 +622,13 @@ class LineScan(BaseScan):
     def ensemble_shape(self):
         return self.shape
 
-    def _out_ensemble_shape(self, array_object) -> tuple[int, ...]:
+    def _out_ensemble_shape(
+        self, array_object: ArrayObject, index: int = 0
+    ) -> tuple[int, ...]:
         return self.ensemble_shape + array_object.ensemble_shape
 
     def _out_ensemble_axes_metadata(
-        self, array_object: ArrayObject | T
+        self, array_object: ArrayObject | T, index: int = 0
     ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
         return [*self.ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
@@ -942,7 +941,7 @@ class GridScan(HasGridMixin, BaseScan):
         end = (x_scan["end"], y_scan["end"])
         gpts = (x_scan["gpts"], y_scan["gpts"])
         endpoint = (x_scan["endpoint"], y_scan["endpoint"])
-        new_scan = cls(start=start, end=end, gpts=gpts, endpoint=endpoint)
+        new_scan = cls(start=start, end=end, gpts=gpts, endpoint=endpoint, **kwargs)
         new_scan = _wrap_with_array(new_scan, 2)
         return new_scan
 

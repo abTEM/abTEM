@@ -181,10 +181,10 @@ def _reflection_condition_mask(hkl: np.ndarray, centering: str):
         return _I_reflection_conditions(hkl)
     elif centering == "A":
         return _A_reflection_conditions(hkl)
-    elif centering == "A":
-        return _A_reflection_conditions(hkl)
-    elif centering == "A":
-        return _A_reflection_conditions(hkl)
+    elif centering == "B":
+        return _B_reflection_conditions(hkl)
+    elif centering == "C":
+        return _C_reflection_conditions(hkl)
     else:
         raise ValueError("lattice centering must be one of P, I, F, A, B or C")
 

@@ -199,9 +199,7 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
     # print(waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)))
     #
     assert np.all(
-        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0001
-    ) or np.allclose(
-        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)), 1.00002
+        waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0002
     )
 
 

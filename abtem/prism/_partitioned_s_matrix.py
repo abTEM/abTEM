@@ -5,7 +5,7 @@ from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import ifft2
 from abtem.core.grid import spatial_frequencies
-from abtem.prism.natural_neighbors import pairwise_weights
+from abtem.prism._natural_neighbors import pairwise_weights
 from abtem.transfer import CTF
 
 

@@ -1,3 +1,4 @@
+"""Module to describe projection integrals using numerical quadrature rules."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
@@ -9,8 +10,8 @@ from scipy.optimize import brentq
 
 from abtem.core.backend import cp, get_array_module
 from abtem.core.grid import disc_meshgrid
-from abtem.core.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
-from abtem.core.parametrizations import validate_parametrization
+from abtem.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
+from abtem.parametrizations import validate_parametrization
 
 if cp is not None:
     from abtem.core._cuda import (
@@ -20,7 +21,7 @@ else:
     interpolate_radial_functions_cuda = None
 
 if TYPE_CHECKING:
-    from abtem.core.parametrizations.base import Parametrization
+    from abtem.parametrizations.base import Parametrization
 
 
 @jit(nopython=True, nogil=True)
@@ -63,7 +64,7 @@ def interpolate_radial_functions(
 
 
 class ProjectionIntegralTable(ProjectionIntegrator):
-    def __init__(self, radial_gpts, limits, values):
+    def __init__(self, radial_gpts: np.ndarray, limits: np.ndarray, values: np.ndarray):
         assert values.shape[0] == len(limits)
         assert values.shape[1] == len(radial_gpts)
 
@@ -72,20 +73,18 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         self._values = values
 
     @property
-    def radial_gpts(self):
+    def radial_gpts(self) -> np.ndarray:
         return self._radial_gpts
 
     @property
-    def limits(self):
+    def limits(self) -> np.ndarray:
         return self._limits
 
     @property
-    def values(self):
+    def values(self) -> np.ndarray:
         return self._values
 
-    def integrate(
-        self, a: float | np.ndarray, b: float | np.ndarray
-    ) -> np.ndarray:
+    def integrate(self, a: float | np.ndarray, b: float | np.ndarray) -> np.ndarray:
         f = interp1d(
             self.limits, self.values, axis=0, kind="linear", fill_value="extrapolate"
         )
@@ -125,9 +124,9 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         radial_potential = xp.asarray(self.integrate(a, b))
 
         positions = xp.asarray(positions, dtype=np.float32)
-        if False:
-            sampling = xp.array(sampling, dtype=xp.float32)
-            positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
+
+        # sampling = xp.array(sampling, dtype=xp.float32)
+        # positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
 
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = (
@@ -158,8 +157,8 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         return array
 
 
-def cutoff(func, tolerance, a, b) -> float:
-    return brentq(f=lambda r: func(r) - tolerance, a=a, b=b)  # noqa
+def cutoff(func: callable, tolerance: float, a: float, b: float) -> float:
+    return brentq(f=lambda r: func(r) - tolerance, a=a, b=b)
 
 
 class ProjectionQuadratureRule(ProjectionIntegratorPlan):
@@ -172,7 +171,7 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         quad_order: int = 8,
     ):
         """
-        The atomic
+        Integration plan for calculating projection integrals
 
         Parameters
         ----------
@@ -198,31 +197,37 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
 
     @property
     def parametrization(self):
+        """The potential parametrization describing the radial dependence of the potential."""
         return self._parametrization
 
     @property
     def quad_order(self):
+        """Order of quadrature integration."""
         return self._quad_order
 
     @property
     def cutoff_tolerance(self) -> float:
+        """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
         return self._cutoff_tolerance
 
     @property
     def integration_step(self) -> float:
+        """The step size between integration limits used for calculating the integral table."""
         return self._integration_step
 
-    def cutoff(self, symbol) -> float:
+    def cutoff(self, symbol: str) -> float:
         return cutoff(
             self.parametrization.potential(symbol), self.cutoff_tolerance, a=1e-3, b=1e3
-        )  # noqa
+        )
 
-    def radial_gpts(self, inner_cutoff, cutoff) -> np.ndarray:
+    @staticmethod
+    def _radial_gpts(inner_cutoff: float, cutoff: float) -> np.ndarray:
         num_points = int(np.ceil(cutoff / inner_cutoff))
         return np.geomspace(inner_cutoff, cutoff, num_points)
 
-    def _taper_values(self, radial_gpts, cutoff):
-        taper_start = self._taper * cutoff
+    @staticmethod
+    def _taper_values(radial_gpts: np.ndarray, cutoff: float, taper: float):
+        taper_start = taper * cutoff
         taper_mask = radial_gpts > taper_start
         taper_values = np.ones_like(radial_gpts)
         taper_values[taper_mask] = (
@@ -233,11 +238,13 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         ) / 2
         return taper_values
 
-    def _integral_limits(self, cutoff):
+    def _integral_limits(self, cutoff: float):
         limits = np.linspace(-cutoff, 0, int(np.ceil(cutoff / self._integration_step)))
         return np.concatenate((limits, -limits[::-1][1:]))
 
-    def build_integral_table(self, symbol, inner_limit) -> ProjectionIntegralTable:
+    def build_integral_table(
+        self, symbol: str, inner_limit: float
+    ) -> ProjectionIntegralTable:
         """
         Build table of projection integrals of the radial atomic potential.
 
@@ -254,7 +261,7 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         potential = self.parametrization.potential(symbol)
         cutoff = self.cutoff(symbol)
 
-        radial_gpts = self.radial_gpts(inner_limit, cutoff)
+        radial_gpts = self._radial_gpts(inner_limit, cutoff)
         limits = self._integral_limits(cutoff)
 
         projection = lambda z: potential(
@@ -271,7 +278,7 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
                 table[j] + integrate.fixed_quad(projection, a, b, n=self._quad_order)[0]
             )
 
-        table = table * self._taper_values(radial_gpts, cutoff)[None]
+        table = table * self._taper_values(radial_gpts, cutoff, self._taper)[None]
 
         return ProjectionIntegralTable(radial_gpts, limits[1:], table)
 
@@ -281,6 +288,6 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-    ):
+    ) -> ProjectionIntegralTable:
         inner_limit = min(sampling) / 2
         return self.build_integral_table(symbol, inner_limit)

@@ -1,6 +1,6 @@
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, reproduce_failure
+from hypothesis import given
 
 import strategies as abtem_st
 from abtem import PixelatedDetector, AnnularDetector
@@ -106,7 +106,7 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
     assert exit_waves.shape[0] == potential.num_frozen_phonons
     assert exit_waves.gpts == potential.gpts
 
-
+#@reproduce_failure('6.80.0', b'AXicY2BAAkwwBqNFAwNhwEqacrhqQkwgAACZyAF9')
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -124,9 +124,12 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 @pytest.mark.parametrize(
     "scan",
     [
-        GridScan(),
-        LineScan(),
-        CustomScan(),
+        abtem_st.grid_scan,
+        abtem_st.line_scan,
+        abtem_st.custom_scan
+        #GridScan(),
+        #LineScan(),
+        #CustomScan(),
     ],
 )
 @pytest.mark.parametrize(
@@ -138,22 +141,30 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons, lazy):
     probe = data.draw(waves_builder(allow_distribution=False))
     detector = data.draw(detector())
+    scan = data.draw(scan())
 
     potential = data.draw(
         abtem_st.potential(no_frozen_phonons=not frozen_phonons, ensemble_mean=False)
     )
-    scan.match_probe(probe)
+    #scan.match_probe(probe)
+    probe.grid.match(potential)
 
     if isinstance(scan, CustomScan) and isinstance(detector, AnnularDetector):
         return
 
+    measurement_shape = detector._out_shape(probe)
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 
-    measurement_shape = detector._out_shape(probe)
-    assert (
-        measurement.shape
-        == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-    )
+    try:
+        assert (
+            measurement.shape
+            == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+        )
+    except:
+        print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
+        print(measurement.shape)
+        raise
+
     assert measurement.dtype == detector._out_dtype(probe)
     assert type(measurement) == detector._out_type(probe.build(scan))
 

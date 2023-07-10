@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from abtem.array import T
 from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
@@ -17,12 +18,10 @@ from abtem.measurements import (
     Images,
     RealSpaceLineProfiles,
     _scanned_measurement_type,
-    _polar_detector_bins,
+    _polar_detector_bins, _scan_shape,
 )
-from abtem.array import T
 from abtem.transform import ArrayObjectTransform
 from abtem.visualize import discrete_cmap
-
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
@@ -228,8 +227,12 @@ class AnnularDetector(BaseDetector):
     ) -> list[AxisMetadata]:
         return []
 
+    def _out_ensemble_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
+        ensemble_shape = super()._out_ensemble_shape(waves, index) # noqa
+        return ensemble_shape[:-len(_scan_shape(waves))]
+
     def _out_base_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
-        return ()
+        return _scan_shape(waves)
 
     def _out_dtype(self, array_object, index: int = 0) -> np.dtype.base:
         return np.float32
@@ -282,7 +285,7 @@ class AnnularDetector(BaseDetector):
         -------
         measurement : Images
         """
-        return self.apply(waves)
+        return self.apply(waves) # noqa
 
     def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
@@ -468,7 +471,7 @@ class _AbstractRadialDetector(BaseDetector):
 
         return measurement.array
 
-    def detect(self, waves: Waves):
+    def detect(self, waves: Waves) -> PolarMeasurements:
         """
         Detect the given waves producing polar measurements.
 
@@ -481,7 +484,7 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         measurement : PolarMeasurements
         """
-        return self.apply(waves)
+        return self.apply(waves) # noqa
 
     def get_detector_regions(self, waves: BaseWaves = None):
         """
@@ -844,13 +847,13 @@ class PixelatedDetector(BaseDetector):
         else:
             return Images
 
-    def _out_metadata(self, waves: BaseWaves, index=0) -> dict:
+    def _out_metadata(self, waves: Waves, index: int = 0) -> dict:
         metadata = super()._out_metadata(waves, index=0)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return metadata
 
-    def _calculate_new_array(self, waves):
+    def _calculate_new_array(self, waves: Waves):
         """
         Detect the given waves producing diffraction patterns.
 
@@ -889,7 +892,7 @@ class PixelatedDetector(BaseDetector):
         -------
         measurement : DiffractionPatterns
         """
-        return self.apply(waves)
+        return self.apply(waves) # noqa
 
 
 class WavesDetector(BaseDetector):

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import itertools
-from abc import abstractmethod
+from abc import abstractmethod, ABCMeta
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Iterator, TypeVar
+from typing import TYPE_CHECKING, Iterator
 
 import dask.array as da
 import numpy as np
 
+from abtem.array import T
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks, validate_chunks
@@ -32,10 +33,10 @@ from abtem.distributions import (
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
-    from abtem.array import ArrayObject, T
+    from abtem.array import ArrayObject
 
 
-class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
+class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     _allow_base_chunks: bool = False
 
     @property
@@ -123,7 +124,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         -------
         measurement_shape : tuple of int
         """
-        return *self.ensemble_shape, *array_object.ensemble_shape
+        return self.ensemble_shape + array_object.ensemble_shape
 
     def _out_base_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
         """
@@ -141,9 +142,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         return array_object.base_shape
 
     def _out_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
-        return *self._out_ensemble_shape(array_object), *self._out_base_shape(
-            array_object, index
-        )
+        ensemble_shape = self._out_ensemble_shape(array_object)
+        base_shape = self._out_base_shape(array_object, index)
+        return ensemble_shape + base_shape
 
     def _out_base_axes_metadata(
         self, array_object: T, index: int = 0
@@ -213,7 +214,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
 
     def _pack_multiple_outputs(
         self, array_object: T, new_arrays: np.ndarray | da.core.Array
-    ) -> tuple[T, ...]:
+    ):
 
         is_lazy = isinstance(new_arrays, da.core.Array)
         # if is_lazy:
@@ -271,7 +272,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin):
         self,
         array_object: T,
         new_array: np.ndarray,
-    ) -> T:
+    ):
 
         ensemble_axes_metadata = self._out_ensemble_axes_metadata(array_object)
 
@@ -590,7 +591,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
 class ReciprocalSpaceMultiplication(WavesTransform):
     """
-
+    Wave function transformation for multiplying each member of an ensemble of wave functions with an array.
 
     Parameters
     ----------
@@ -611,6 +612,7 @@ class ReciprocalSpaceMultiplication(WavesTransform):
 
     @property
     def in_place(self) -> bool:
+        """The array representing the waves may be modified in-place."""
         return self._in_place
 
     @abstractmethod

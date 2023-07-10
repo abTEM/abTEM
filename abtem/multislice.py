@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from abtem.core.antialias import AntialiasAperture
-from abtem.core.antialias import antialias_aperture
+from abtem.antialias import AntialiasAperture
+from abtem.antialias import antialias_aperture
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import validate_chunks
@@ -25,7 +25,8 @@ from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
     BasePotential,
     TransmissionFunction,
-    PotentialArray, _validate_potential,
+    PotentialArray,
+    _validate_potential,
 )
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
@@ -119,7 +120,8 @@ class FresnelPropagator:
 
         return self._array
 
-    def _calculate_array(self, waves: "Waves", thickness: float) -> np.ndarray:
+    @staticmethod
+    def _calculate_array(waves: Waves, thickness: float) -> np.ndarray:
 
         array = _fresnel_propagator_array(
             thickness=thickness,
@@ -296,7 +298,8 @@ def multislice_step(
     transpose: bool = False,
 ) -> Waves:
     """
-    Calculate one step of the multislice algorithm for the given batch of wave functions through a given potential slice.
+    Calculate one step of the multislice algorithm for the given batch of wave functions through a given potential
+    slice.
 
     Parameters
     ----------
@@ -331,7 +334,7 @@ def multislice_step(
             energy=waves.energy
         )
         transmission_function = antialias_aperture.bandlimit(
-            transmission_function, overwrite_x=True
+            transmission_function, in_place=False
         )
 
     thickness = transmission_function.slice_thickness[0]
@@ -364,13 +367,10 @@ def _update_measurements(
     for i, detector in enumerate(detectors):
         new_measurement = detector.detect(waves)
 
-        #if detector in measurements:
         if additive:
             measurements[i].array[measurement_index] += new_measurement.array
         else:
             measurements[i].array[measurement_index] = new_measurement.array
-        # else:
-        #     measurements[i] = new_measurement
 
     return measurements
 
@@ -488,7 +488,6 @@ def multislice_and_detect(
                         detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
                         for detector in detectors
                     ]
-
 
                 else:
                     measurements = _update_measurements(
@@ -637,19 +636,23 @@ class MultisliceTransform(ArrayObjectTransform):
         return len(self._detectors)
 
     @property
-    def potential(self):
+    def potential(self) -> BasePotential:
+        """Electrostatic potential for each multislice slice."""
         return self._potential
 
     @property
-    def detectors(self):
+    def detectors(self) -> list[BaseDetector]:
+        """List of detectors defining how the wave functions should be converted to measurements."""
         return self._detectors
 
     @property
-    def conjugate(self):
+    def conjugate(self) -> bool:
+        """Use the complex conjugate of the transmission function."""
         return self._conjugate
 
     @property
-    def transpose(self):
+    def transpose(self) -> bool:
+        """Reverse the order of propagation and transmission."""
         return self._transpose
 
     @property
@@ -691,6 +694,9 @@ class MultisliceTransform(ArrayObjectTransform):
     def _out_type(self, waves, index: bool = 0):
         return self.detectors[index]._out_type(waves)
 
+    def _out_ensemble_shape(self, waves, index: bool = 0):
+        return self.ensemble_shape + self.detectors[index]._out_ensemble_shape(waves, index=index)
+
     def _out_base_shape(self, waves, index: bool = 0):
         return self.detectors[index]._out_base_shape(waves)
 
@@ -708,7 +714,6 @@ class MultisliceTransform(ArrayObjectTransform):
 
     @staticmethod
     def _multislice_transform_member(*args, potential_partial, **kwargs):
-
         args = unpack_blockwise_args(args)
 
         potential = potential_partial(*args)

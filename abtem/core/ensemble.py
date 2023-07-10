@@ -63,7 +63,7 @@ def unpack_blockwise_args(args):
 
 
 
-class Ensemble(metaclass=ABCMeta):
+class Ensemble:
 
     @property
     def ensemble_shape(self) -> tuple[int, ...]:

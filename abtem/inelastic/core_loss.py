@@ -544,7 +544,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from ase import Atoms
 
-from abtem.core.antialias import AntialiasAperture
+from abtem.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module, copy_to_device
 from abtem.core.complex import complex_exponential
 from abtem.measurements import Images

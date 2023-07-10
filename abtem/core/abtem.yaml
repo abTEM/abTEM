@@ -1,5 +1,5 @@
 device: cpu
-fft: fftw
+fft: mkl
 local_diagnostics:
   progress_bar: true
 dask:
@@ -24,7 +24,7 @@ warnings:
   overspecified-grid: true
 extended_repr: false
 antialias:
-  taper: 0.
+  taper: 0.05
   cutoff: 0.6666666
 visualize:
   real_space_units: "Angstrom"

@@ -12,14 +12,17 @@ from abtem.distributions import (
     BaseDistribution,
     MultidimensionalDistribution,
     EnsembleFromDistributions,
-    from_values, _validate_distribution,
+    from_values,
+    _validate_distribution,
 )
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
 
 
-def validate_tilt(tilt):
+def _validate_tilt(
+    tilt: BaseDistribution | tuple[float, float] | np.ndarray
+) -> BeamTilt | CompositeArrayObjectTransform:
     """Validate that the given tilt is correctly defined."""
     if isinstance(tilt, MultidimensionalDistribution):
         raise NotImplementedError
@@ -43,6 +46,7 @@ def validate_tilt(tilt):
 
     return tilt
 
+
 def _get_tilt_axes(waves):
     return tuple(
         i
@@ -50,12 +54,13 @@ def _get_tilt_axes(waves):
         if hasattr(axis, "tilt")
     )
 
+
 def precession_tilts(
-        precession_angle: float,
-        num_samples: int,
-        min_azimuth: float = 0.0,
-        max_azimuth: float = 2 * np.pi,
-        endpoint: bool = False,
+    precession_angle: float,
+    num_samples: int,
+    min_azimuth: float = 0.0,
+    max_azimuth: float = 2 * np.pi,
+    endpoint: bool = False,
 ):
     """
     Tilts for electron precession at a given precession angle.
@@ -65,14 +70,18 @@ def precession_tilts(
     precession_angle : float
         Precession angle.
     num_samples : int
-
-    min_azimuth
-    max_azimuth
+        Number of tilt samples.
+    min_azimuth : float, optional
+        Minmimum azimuthal angle [rad]. Default is 0.
+    max_azimuth : float, optional
+        Maximum azimuthal angle [rad]. Default is $2 \\pi$.
     endpoint
+        If True, end is `max_azimuth`. Otherwise, it is not included. Default is False.
 
     Returns
     -------
-
+    array_of_tilts : 2D array
+        Array of xy-tilt angles [rad].
     """
     azimuthal_angles = np.linspace(
         min_azimuth, max_azimuth, num=num_samples, endpoint=endpoint
@@ -84,7 +93,41 @@ def precession_tilts(
     return np.array([tilt_x, tilt_y], dtype=float).T
 
 
-class BeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
+class BaseBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
+    def apply(self, waves: Waves, in_place: bool = False) -> Waves:
+        """
+        Apply tilt(s) to (an ensemble of) wave function(s).
+
+        Parameters
+        ----------
+        waves : Waves
+            The waves to transform.
+        in_place: bool, optional
+            If True, the array representing the waves may be modified in-place.
+
+        Returns
+        -------
+        waves_with_tilt : Waves
+        """
+        xp = get_array_module(waves.device)
+
+        array = waves.array[(None,) * len(self.ensemble_shape)]
+
+        if waves.is_lazy:
+            array = da.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
+        else:
+            array = xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
+
+        kwargs = waves._copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        kwargs["metadata"] = {**kwargs["metadata"], **self.metadata}
+        kwargs["ensemble_axes_metadata"] = (
+            self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+        )
+        return waves.__class__(**kwargs)
+
+
+class BeamTilt(BaseBeamTilt):
     """
     Class describing beam tilt.
 
@@ -128,27 +171,8 @@ class BeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
                 )
             ]
 
-    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
-        """Apply tilt(s) to (an ensamble of) wave function(s)."""
-        xp = get_array_module(waves.device)
 
-        array = waves.array[(None,) * len(self.ensemble_shape)]
-
-        if waves.is_lazy:
-            array = da.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
-        else:
-            array = xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
-
-        kwargs = waves._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        kwargs["metadata"] = {**kwargs["metadata"], **self.metadata}
-        kwargs["ensemble_axes_metadata"] = (
-                self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-        )
-        return waves.__class__(**kwargs)
-
-
-class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
+class AxisAlignedBeamTilt(BaseBeamTilt):
     """
     Class describing tilt(s) aligned with an axis.
 
@@ -160,9 +184,7 @@ class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
         Cartesian axis, should be either 'x' or 'y'.
     """
 
-    def __init__(
-            self, tilt: float | BaseDistribution = 0.0, direction: str = "x"
-    ):
+    def __init__(self, tilt: float | BaseDistribution = 0.0, direction: str = "x"):
 
         if isinstance(tilt, (np.ndarray, list, tuple)):
             tilt = _validate_distribution(tilt)
@@ -175,7 +197,8 @@ class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
         super().__init__(distributions=("tilt",))
 
     @property
-    def direction(self):
+    def direction(self) -> str:
+        """Tilt direction."""
         return self._direction
 
     @property
@@ -204,25 +227,3 @@ class AxisAlignedBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
             ]
         else:
             return []
-
-    def apply(self, waves: "Waves", in_place: bool = False) -> "Waves":
-        """Apply tilt(s) to (an ensamble of) wave function(s)."""
-        xp = get_array_module(waves.device)
-
-        if self.tilt == 0.:
-            return waves
-
-        array = waves.array[(None,) * len(self.ensemble_shape)]
-
-        if waves.is_lazy:
-            array = da.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
-        else:
-            array = xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
-
-        kwargs = waves._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        kwargs["metadata"] = {**kwargs["metadata"], **self.metadata}
-        kwargs["ensemble_axes_metadata"] = (
-                self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-        )
-        return waves.__class__(**kwargs)

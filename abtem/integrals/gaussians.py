@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 from scipy.special import erf
 
 from abtem.core.backend import get_array_module
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import polar_spatial_frequencies
-from abtem.core.integrals.base import ProjectionIntegratorPlan, ProjectionIntegrator
-from abtem.core.integrals.infinite import superpose_deltas, sinc
-from abtem.core.integrals.quadrature import cutoff
-from abtem.core.parametrizations import validate_parametrization
+from abtem.integrals.base import ProjectionIntegratorPlan, ProjectionIntegrator
+from abtem.integrals.infinite import superpose_deltas, sinc
+from abtem.integrals.quadrature import cutoff
+from abtem.parametrizations import validate_parametrization
+
+
+if TYPE_CHECKING:
+    from abtem.parametrizations.base import Parametrization
 
 
 class GaussianScatteringFactors(ProjectionIntegrator):
@@ -95,15 +101,16 @@ class GaussianScatteringFactors(ProjectionIntegrator):
         if fourier_space:
             return array
         else:
-            return ifft2(array / sinc(self.gpts, sampling, device)).real  #
+            return ifft2(array / sinc(self.gpts, sampling, device)).real
+
 
 
 class GaussianProjectionIntegrals(ProjectionIntegratorPlan):
     def __init__(
         self,
-        gaussian_parametrization="peng",
-        correction_parametrization="lobato",
-        cutoff_tolerance=1e-3,
+        gaussian_parametrization: str | Parametrization = "peng",
+        correction_parametrization: str | Parametrization = "lobato",
+        cutoff_tolerance: float = 1e-3,
     ):
 
         self._gaussian_parametrization = validate_parametrization(
@@ -133,7 +140,7 @@ class GaussianProjectionIntegrals(ProjectionIntegratorPlan):
     def correction_parametrization(self):
         return self._correction_parametrization
 
-    def cutoff(self, symbol:str) -> float:
+    def cutoff(self, symbol: str) -> float:
         return cutoff(
             self.gaussian_parametrization.potential(symbol),
             self.cutoff_tolerance,

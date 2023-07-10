@@ -1,18 +1,17 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume, reproduce_failure
+from hypothesis import given, assume
 
 import strategies as abtem_st
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
 from utils import gpu, assert_array_matches_device
-import matplotlib.pyplot as plt
 
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("device", [gpu, "cpu"])
 def test_prism_matches_probe(data, lazy, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device))
 
@@ -26,8 +25,10 @@ def test_prism_matches_probe(data, lazy, device):
         probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
     )
 
+    s_matrix_diffraction_patterns.compute()
+    probe_diffraction_patterns.compute()
     assert np.allclose(
-        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array,
+        s_matrix_diffraction_patterns.compute().array, probe_diffraction_patterns.compute().array,
     )
 
 

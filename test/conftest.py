@@ -4,7 +4,7 @@ from abtem import config
 
 config.set({"local_diagnostics.progress_bar": False})
 
-settings.register_profile("dev", max_examples=10, print_blob=True, deadline=None,
+settings.register_profile("dev", max_examples=20, print_blob=True, deadline=None,
                           suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large))
 settings.load_profile("dev")
 

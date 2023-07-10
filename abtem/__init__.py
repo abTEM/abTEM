@@ -1,10 +1,9 @@
 """Main abTEM module."""
-from abtem import distributions
 from abtem._version import __version__
+from abtem import distributions
 from abtem.atoms import orthogonalize_cell, standardize_cell
 from abtem.potentials.charge_density import ChargeDensityPotential
-from abtem.core import axes
-from abtem.core import config
+from abtem.core import axes, config
 from abtem.array import concatenate, stack, from_zarr
 from abtem.detectors import (
     AnnularDetector,
@@ -20,7 +19,7 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
     PolarMeasurements,
-    IndexedDiffractionPatterns
+    IndexedDiffractionPatterns,
 )
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.inelastic.phonons import FrozenPhonons, AtomsEnsemble

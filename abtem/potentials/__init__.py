@@ -1,1 +1,1 @@
-"""Module for describing electrostatic potentials."""
+"""Module to describe electrostatic potentials."""

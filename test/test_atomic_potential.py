@@ -3,10 +3,10 @@ import numpy as np
 import pytest
 from hypothesis import given
 
-from abtem.core.integrals.gaussians import GaussianProjectionIntegrals
-from abtem.core.integrals import ProjectionQuadratureRule
+from abtem.integrals import GaussianProjectionIntegrals
+from abtem.integrals import ProjectionQuadratureRule
 
-from abtem.core.parametrizations import LobatoParametrization, KirklandParametrization, PengParametrization
+from abtem.parametrizations import LobatoParametrization, KirklandParametrization, PengParametrization
 
 
 @given(atomic_number=st.integers(min_value=1, max_value=98))
