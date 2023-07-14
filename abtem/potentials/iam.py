@@ -1389,10 +1389,10 @@ class CrystalPotential(_PotentialBuilder):
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 if self.seeds is not None:
                     seeds = self.seeds[start:stop]
+                    array.itemset(i, (potential_unit, self.seeds[start:stop]))
                 else:
                     seeds = None
-
-                array.itemset(i, (potential_unit, self.seeds[start:stop]))
+                    array.itemset(i, (potential_unit, self.seeds))
 
         return (array,)
 
