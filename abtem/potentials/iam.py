@@ -1391,7 +1391,7 @@ class CrystalPotential(_PotentialBuilder):
                     seeds = self.seeds[start:stop]
                 else:
                     seeds = None
-                
+
                 array.itemset(i, (potential_unit, self.seeds))
 
         return (array,)
