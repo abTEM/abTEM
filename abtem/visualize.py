@@ -1356,7 +1356,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         size_y = size_x * aspect
 
         self.fig.set_size_inches((size_x, size_y))
-        self.fig.subplots_adjust(left=0, bottom=0, right=1, top=1)
+        self.fig.subplots_adjust(left=0, bottom=0, right=1., top=1)
 
 
 class MeasurementVisualization2D(BaseMeasurementVisualization2D):

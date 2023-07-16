@@ -1065,7 +1065,7 @@ class PotentialArray(BasePotential, ArrayObject):
 
         Returns
         -------
-        transmissionfunction : TransmissionFunction
+        transmission_function : TransmissionFunction
             Transmission function for the wave function through the potential slice.
         """
 
