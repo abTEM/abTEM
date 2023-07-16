@@ -1392,7 +1392,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                array.itemset(i, (potential_unit, seeds))
+                array.itemset(i, (potential_unit, self.seeds))
 
         return (array,)
 
