@@ -1278,9 +1278,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The axis to set.
         """
 
+        old_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
+
         self.ensemble_axes_metadata[axis] = axes_metadata
 
-        self._check_axes_metadata()
+        try:
+            self._check_axes_metadata()
+        except RuntimeError:
+            self._ensemble_axes_metadata = old_axes_metadata
+
         return self
 
     def to_hyperspy(self):
