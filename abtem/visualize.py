@@ -504,8 +504,11 @@ def _set_update_indices_callback(sliders, visualization, callbacks):
 
 
 def _make_continuous_button(sliders):
+
+    continuous_update = config.get("visualize.continuous_update", False)
+
     continuous_update_checkbox = widgets.ToggleButton(
-        description="Continuous update", value=False
+        description="Continuous update", value=continuous_update
     )
     for slider in sliders:
         link((continuous_update_checkbox, "value"), (slider, "continuous_update"))
@@ -1096,7 +1099,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         self._column_titles = []
         self._row_titles = []
         self._artists = None
-        self._autoscale = None
+        self._autoscale = config.get("visualize.autoscale", False)
         self._common_scale = common_scale
         self._size_bars = []
 
@@ -1419,6 +1422,9 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             figsize=figsize,
             interact=interact,
         )
+
+        if cmap is None:
+            cmap = config.get("visualize.cmap", "viridis")
 
         self._normalization = None
         self._cmap = cmap

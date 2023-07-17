@@ -948,7 +948,7 @@ def _reduce_ensemble(ensemble):
     if isinstance(ensemble, (list, tuple)):
         outputs = [_reduce_ensemble(x) for x in ensemble]
 
-        if isinstance(ensemble, ComputableList):
+        if hasattr(ensemble, "compute"):
             outputs = ComputableList(outputs)
 
         return outputs
