@@ -1123,6 +1123,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform_partial,
         num_transform_args,
     ):
+
         args = unpack_blockwise_args(args[:-1]) + (args[-1],)
 
         transform = transform_partial(*args[:num_transform_args]).item()
@@ -1230,15 +1231,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             num_ensemble_dims = len(transform._out_ensemble_shape(self))
 
-            if transform._num_outputs > 1:
-                chunks = chunks[:num_ensemble_dims]
-                symbols = tuple_range(num_ensemble_dims)
-                meta = np.array((), dtype=object)
-            else:
-                base_shape = transform._out_base_shape(self)
-                symbols = tuple_range(num_ensemble_dims + len(base_shape))
-                chunks = chunks[: -len(base_shape)] + base_shape
-                meta = transform._out_meta(self)
+            # if transform._num_outputs > 4:
+            #     chunks = chunks[:num_ensemble_dims]
+            #     symbols = tuple_range(num_ensemble_dims)
+            #     meta = np.array((), dtype=object)
+            # else:
+
+            base_shape = transform._out_base_shape(self)
+            symbols = tuple_range(num_ensemble_dims + len(base_shape))
+            chunks = chunks[: -len(base_shape)] + base_shape
+            meta = transform._out_meta(self)
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Increasing number of chunks")
@@ -1260,7 +1262,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             if transform._num_outputs > 1:
                 outputs = transform._pack_multiple_outputs(self, new_array)
-                return ComputableList(outputs)
+                outputs = ComputableList(outputs)
+
+                return outputs
             else:
                 return transform._pack_single_output(self, new_array)
         else:

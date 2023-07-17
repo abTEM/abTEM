@@ -101,11 +101,7 @@ class BaseTransferFunction(
         max_angle: float = None,
         gpts: int | tuple[int, int] = None,
     ):
-        """
-
-
-
-        """
+        """ """
         from abtem.measurements import DiffractionPatterns
 
         if (self.sampling is None) or (max_angle is not None):
@@ -359,7 +355,12 @@ class Aperture(BaseAperture):
 
         semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
 
-        if self.soft and self.grid.check_is_defined(False):
+        if (
+            self.soft
+            and self.grid.check_is_defined(False)
+            and not np.isscalar(alpha)
+            and not np.isscalar(phi)
+        ):
             aperture = soft_aperture(
                 alpha, phi, semiangle_cutoff, self.angular_sampling
             )

@@ -292,7 +292,7 @@ class AnnularDetector(BaseDetector):
     ) -> np.ndarray:
 
         array = _polar_detector_bins(
-            gpts=waves.gpts,
+            gpts=waves._gpts_within_angle("cutoff"),
             sampling=waves.angular_sampling,
             inner=self.inner,
             outer=self.outer,

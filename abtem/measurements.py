@@ -1240,7 +1240,7 @@ class Images(_BaseMeasurement2D):
         kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def tile(self, repetitions: tuple[int, int]) -> "Images":
+    def tile(self, repetitions: tuple[int, int]) -> Images:
         """
         Tile image(s).
 
@@ -1262,7 +1262,7 @@ class Images(_BaseMeasurement2D):
         )
         return self.__class__(**kwargs)
 
-    def diffractograms(self) -> "DiffractionPatterns":
+    def diffractograms(self) -> DiffractionPatterns:
         """
         Calculate diffractograms (i.e. power spectra) from image(s).
 
