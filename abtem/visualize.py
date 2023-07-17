@@ -426,9 +426,19 @@ def _validate_axes(
 
 
 def _format_options(options):
-    return [
-        f"{option:.3f}" if isinstance(option, float) else option for option in options
-    ]
+
+    formatted_options = []
+    for option in options:
+        if isinstance(option, float):
+            formatted_options.append(f"{option:.3f}")
+        elif isinstance(option, tuple):
+            formatted_options.append(
+                ", ".join(tuple(f"{value:.3f}" for value in option))
+            )
+        else:
+            formatted_options.append(option)
+
+    return formatted_options
 
 
 def discrete_cmap(num_colors, base_cmap):
