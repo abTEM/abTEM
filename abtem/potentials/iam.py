@@ -60,7 +60,7 @@ from abtem.slicing import (
 if TYPE_CHECKING:
     from abtem.waves import Waves, BaseWaves
     from abtem.parametrizations.base import Parametrization
-    from abtem.integrals import ProjectionIntegratorPlan
+    from abtem.integrals.base import ProjectionIntegratorPlan
 
 
 class BasePotential(
