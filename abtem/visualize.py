@@ -1286,7 +1286,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
         self._cbars = cbars
 
-    def set_sizebars(
+    def set_scalebars(
         self,
         axes: tuple[int, ...] = ((-1, 0),),
         label="",
