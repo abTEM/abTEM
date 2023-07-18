@@ -99,7 +99,7 @@ def polar_coordinates(x, y):
     """Calculate a polar grid for a given Cartesian grid."""
     xp = get_array_module(x)
     alpha = xp.sqrt(x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2)
-    phi = xp.arctan2(x.reshape((-1, 1)), y.reshape((1, -1)))
+    phi = xp.arctan2(y.reshape((1, -1)), x.reshape((-1, 1)))
     return alpha, phi
 
 
