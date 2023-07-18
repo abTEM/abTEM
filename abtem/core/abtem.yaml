@@ -1,5 +1,5 @@
 device: cpu
-fft: mkl
+fft: fftw
 local_diagnostics:
   progress_bar: true
 dask:

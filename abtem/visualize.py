@@ -1158,7 +1158,9 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
             self._normalization[i] = norm
 
-    def get_global_vmin_vmax(self, vmin=None, vmax=None):
+    def get_global_vmin_vmax(
+        self, vmin: float = None, vmax: float = None
+    ) -> tuple[float, float]:
         measurements = self._get_indexed_measurements()
 
         if measurements.is_complex:
@@ -1172,7 +1174,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
         return vmin, vmax
 
-    def _update_vmin_vmax(self, vmin=None, vmax=None):
+    def _update_vmin_vmax(self, vmin:float=None, vmax:float=None):
         for norm, measurement in zip(
             self._normalization.ravel(), self.generate_measurements(keepdims=False)
         ):
@@ -1369,7 +1371,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         size_y = size_x * aspect
 
         self.fig.set_size_inches((size_x, size_y))
-        self.fig.subplots_adjust(left=0, bottom=0, right=1., top=1)
+        self.fig.subplots_adjust(left=0, bottom=0, right=1.0, top=1)
 
 
 class MeasurementVisualization2D(BaseMeasurementVisualization2D):
@@ -1400,7 +1402,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
     def __init__(
         self,
-        measurements: "_BaseMeasurement2D",
+        measurements: _BaseMeasurement2D,
         ax: Axes = None,
         cbar: bool = False,
         cmap: str = None,
@@ -1423,7 +1425,10 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             interact=interact,
         )
 
-        if cmap is None:
+
+        if cmap is None and measurements.is_complex:
+            cmap = config.get("visualize.phase_cmap", "hsluv")
+        elif cmap is None:
             cmap = config.get("visualize.cmap", "viridis")
 
         self._normalization = None

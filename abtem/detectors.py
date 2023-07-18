@@ -12,6 +12,7 @@ from abtem.array import T
 from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
+from abtem.core.ensemble import _wrap_with_array
 from abtem.measurements import (
     DiffractionPatterns,
     PolarMeasurements,
@@ -86,9 +87,14 @@ class BaseDetector(ArrayObjectTransform):
     def _partition_args(self, chunks: Chunks = None, lazy: bool = True):
         return ()
 
+    @classmethod
+    def _from_partition_args_func(cls, *args, **kwargs):
+        detector = cls(**kwargs)
+        return _wrap_with_array(detector)
+
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs()
-        return partial(self.__class__, **kwargs)
+        return partial(self._from_partition_args_func, **kwargs)
 
     def _out_meta(self, waves: Waves, index=0) -> np.ndarray:
         """

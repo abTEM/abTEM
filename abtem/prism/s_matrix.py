@@ -207,8 +207,12 @@ class BaseSMatrix(BaseWaves):
 
         if ctf is None:
             ctf = CTF(energy=self.energy, semiangle_cutoff=self.semiangle_cutoff)
-        else:
+        elif isinstance(ctf, dict):
+            ctf = CTF(energy=self.energy, semiangle_cutoff=self.semiangle_cutoff, **ctf)
+        elif isinstance(ctf, CTF):
             ctf = ctf.copy()
+        else:
+            raise ValueError()
 
         if plane == "exit":
             defocus = 0.0

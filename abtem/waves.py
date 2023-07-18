@@ -924,11 +924,15 @@ class Waves(BaseWaves, ArrayObject):
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
 
+        potential = _validate_potential(potential, self)
+
         multislice_transform = MultisliceTransform(
             potential=potential, detectors=detectors
         )
 
-        return self.apply_transform(transform=multislice_transform)
+        waves = self.apply_transform(transform=multislice_transform)
+
+        return _reduce_ensemble(waves)
 
     def show(self, complex_images:bool=False, **kwargs):
         """

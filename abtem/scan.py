@@ -34,7 +34,7 @@ def _validate_scan(scan: np.ndarray | BaseScan, probe: Probe = None) -> BaseScan
         scan = CustomScan(np.zeros((0, 2)), squeeze=True)
 
     if not isinstance(scan, BaseScan):
-        scan = CustomScan(scan)
+        scan = CustomScan(scan, squeeze=True)
 
     if probe is not None:
         scan = scan.copy()
