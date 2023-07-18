@@ -614,10 +614,10 @@ def _make_power_scale_slider(visualization):
     return power_scale_slider
 
 
-def _get_joined_titles(measurement, formatting):
+def _get_joined_titles(measurement, formatting, **kwargs):
     titles = []
     for axes_metadata in measurement.ensemble_axes_metadata:
-        titles.append(axes_metadata.format_title(formatting))
+        titles.append(axes_metadata.format_title(formatting, **kwargs))
     return "\n".join(titles)
 
 
@@ -968,6 +968,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         borderpad: float = 0.1,
         prop: dict = None,
         formatting: str = ".3g",
+        units: str = None,
         **kwargs,
     ):
 
@@ -980,8 +981,17 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 labels = [f"${label}$" for label in labels]
         elif labels == "metadata":
             labels = []
+
             for i, measurement in self.generate_measurements(keepdims=True):
-                labels.append(_get_joined_titles(measurement, formatting))
+                titles = []
+                for axes_metadata in measurement.ensemble_axes_metadata:
+                    titles.append(
+                        axes_metadata.format_title(formatting, units=units, **kwargs)
+                    )
+                labels.append("\n".join(titles))
+
+            # for i, measurement in self.generate_measurements(keepdims=True):
+            #     labels.append(_get_joined_titles(measurement, formatting))
         elif (
             not isinstance(labels, (tuple, list))
             and len(labels) != np.array(self.axes).size
@@ -1022,6 +1032,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         for anchored_text, (i, measurement) in zip(
             self._metadata_labels, self.generate_measurements(keepdims=True)
         ):
+
             label = _get_joined_titles(measurement, anchored_text.formatting)
             anchored_text.txt.set_text(label)
 
@@ -1176,7 +1187,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
         return vmin, vmax
 
-    def _update_vmin_vmax(self, vmin:float=None, vmax:float=None):
+    def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
         for norm, measurement in zip(
             self._normalization.ravel(), self.generate_measurements(keepdims=False)
         ):
@@ -1290,8 +1301,8 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
     def set_scalebars(
         self,
-        axes: tuple[int, ...] = ((-1, 0),),
-        label="",
+        panel_loc: tuple[int, ...] = ((-1, 0),),
+        label: str = "",
         size: float = None,
         loc: str = "lower right",
         borderpad: float = 0.5,
@@ -1303,6 +1314,20 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
         frameon: bool = False,
         **kwargs,
     ):
+
+        if panel_loc == "all":
+            panel_loc = np.ndindex(self.axes.shape)  # noqa
+            panel_loc = tuple(panel_loc)
+        elif panel_loc == "upper left":
+            panel_loc = ((0, -1),)
+        elif panel_loc == "upper right":
+            panel_loc = ((-1, -1),)
+        elif panel_loc == "lower left":
+            panel_loc = ((0, 0),)
+        elif panel_loc == "lower right":
+            panel_loc = ((-1, 0),)
+        else:
+            panel_loc = ((0, 0),)
 
         conversion = _get_conversion_factor(
             self._xunits, self.measurements.axes_metadata[-2].units
@@ -1332,7 +1357,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             size_bar.remove()
 
         self._size_bars = []
-        for ax in axes:
+        for ax in panel_loc:
             ax = self.axes[ax]
             anchored_size_bar = AnchoredSizeBar(
                 ax.transData,
@@ -1426,7 +1451,6 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
             figsize=figsize,
             interact=interact,
         )
-
 
         if cmap is None and measurements.is_complex:
             cmap = config.get("visualize.phase_cmap", "hsluv")
