@@ -644,6 +644,8 @@ class MeasurementVisualization(metaclass=ABCMeta):
                 style="sci", scilimits=(-3, 3), axis="both", useMathText=True
             )
 
+        self.fig.canvas.header_visible = False
+
     @property
     def fig(self):
         return self._axes[0, 0].get_figure()
