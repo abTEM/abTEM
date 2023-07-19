@@ -1314,6 +1314,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             self.base_axes_metadata,
             self.base_shape,
         )
+
         ensemble_axes_metadata = _to_hyperspy_axes_metadata(
             self.ensemble_axes_metadata,
             self.ensemble_shape,
@@ -1321,11 +1322,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         xp = get_array_module(self.device)
 
-        base_axes = tuple_range(offset=0, length=len(self.base_shape))
         ensemble_axes = tuple_range(
-            offset=len(self.base_shape),
+            offset=0,
             length=len(self.ensemble_shape),
         )
+
+        base_axes = tuple_range(offset=len(ensemble_axes), length=len(self.base_shape))
 
         array = xp.transpose(self.array, ensemble_axes + base_axes[::-1])
 
