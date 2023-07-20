@@ -429,7 +429,7 @@ class LineScan(BaseScan):
 
     @property
     def angle(self):
-        """Angle of the line from `start` to `end` and the x-axis [deg.]."""
+        """Angle of the line from `start` to `end` and the `x`-axis [deg.]."""
         direction = self.direction
         return np.arctan2(direction[1], direction[0])
 

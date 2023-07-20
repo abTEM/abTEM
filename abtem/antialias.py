@@ -1,3 +1,4 @@
+"""Module for describing antialiasing objects."""
 from __future__ import annotations
 
 import numpy as np
@@ -20,14 +21,14 @@ def antialias_aperture(
 ) -> np.ndarray:
 
     """
-    Array defining Fourier space antialias aperture.
+    Array defining a Fourier-space antialiasing aperture.
 
     Parameters
     ----------
     gpts : two int, optional
-        Number of grid points in x and y describing the antialias aperture.
+        Number of grid points in `x` and `y` describing the antialiasing aperture.
     sampling : two float, optional
-        Reciprocal space sampling in x and y of the antialias aperture. Units are arbitrary.
+        Reciprocal-space sampling in `x` and `y` of the antialiasing aperture. Units are arbitrary.
 
     Returns
     -------

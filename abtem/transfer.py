@@ -39,6 +39,8 @@ if TYPE_CHECKING:
 class BaseTransferFunction(
     ReciprocalSpaceMultiplication, HasAcceleratorMixin, HasGridMixin
 ):
+    """Base class for transfer functions."""
+
     def __init__(
         self,
         energy: float = None,
@@ -105,7 +107,6 @@ class BaseTransferFunction(
         from abtem.measurements import DiffractionPatterns
 
         if (self.sampling is None) or (max_angle is not None):
-
             if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
                 max_angle = self._max_semiangle_cutoff
 
@@ -552,7 +553,6 @@ class TemporalEnvelope(BaseTransferFunction):
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
     ):
-
         self._accelerator = Accelerator(energy=energy)
         self._focal_spread = _validate_distribution(focal_spread)
         super().__init__(
@@ -1076,7 +1076,6 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         sampling: float | tuple[float, float] = None,
         **kwargs,
     ):
-
         super().__init__(
             distributions=polar_symbols,
             energy=energy,
@@ -1264,7 +1263,6 @@ class CTF(_HasAberrations, BaseAperture):
         wiener_snr: float = 0.0,
         **kwargs,
     ):
-
         super().__init__(
             distributions=polar_symbols
             + (
@@ -1411,7 +1409,6 @@ class CTF(_HasAberrations, BaseAperture):
         self._wiener_snr = value
 
     def _evaluate_to_match(self, component, alpha, phi):
-
         expanded_axes = ()
         for i, axis_metadata in enumerate(self.ensemble_axes_metadata):
             expand = all([a != axis_metadata for a in component.ensemble_axes_metadata])
@@ -1423,7 +1420,6 @@ class CTF(_HasAberrations, BaseAperture):
         return np.expand_dims(array, expanded_axes)
 
     def _evaluate_from_angular_grid(self, alpha, phi, keep_all: bool = False):
-
         match_dims = tuple(range(-len(alpha.shape), 0))
 
         array = self._aberrations._evaluate_from_angular_grid(alpha, phi)

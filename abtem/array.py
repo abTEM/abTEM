@@ -767,7 +767,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         elif not isinstance(items, tuple):
             raise NotImplementedError(
-                "indices must be integers or slices or a tuple of integers or slices or None"
+                "Indices must be integers or slices or a tuple of integers or slices or None."
             )
 
         if keepdims:
@@ -784,7 +784,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if len(tuple(item for item in items if item is not None)) > len(
             self.ensemble_shape
         ):
-            raise RuntimeError("base axes cannot be indexed")
+            raise RuntimeError("Base axes cannot be indexed.")
 
         expanded_axes_metadata = [
             axis_metadata.copy() for axis_metadata in self.ensemble_axes_metadata
@@ -932,7 +932,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         **kwargs,
     ):
         """
-        Turn a lazy abTEM object into its in-memory equivalent.
+        Turn a lazy *ab*TEM object into its in-memory equivalent.
 
         Parameters
         ----------
@@ -1090,12 +1090,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """
         if tifffile is None:
             raise RuntimeError(
-                "This functionality of abTEM requires tifffile, see https://github.com/cgohlke/tifffile/"
+                "This functionality of abTEM requires tifffile, see https://github.com/cgohlke/tifffile."
             )
 
         array = self.array
         if self.is_lazy:
-            warnings.warn("lazy arrays are computed in memory before writing to tiff")
+            warnings.warn("Lazy arrays are computed in memory before writing to tiff.")
             array = array.compute()
 
         return tifffile.imwrite(
@@ -1110,7 +1110,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         url : str
             Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
             s3:// for remote data.
-        chunks :  tuple of ints or tuples of ints
+        chunks : tuple of ints or tuples of ints
             Passed to dask.array.from_array(), allows setting the chunks on initialisation, if the chunking scheme in
             the on-disc dataset is not optimal for the calculations to follow.
         """
@@ -1190,8 +1190,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             if not transform._allow_base_chunks and self._has_base_chunks:
                 raise RuntimeError(
-                    f"transform {transform.__class__} not implemented for array object with chunks along base axes, "
-                    f"compute first or use the method `.no_base_chunks` to rechunk"
+                    f"Transform {transform.__class__} not implemented for array object with chunks along base axes, "
+                    f"compute first or use the method `.no_base_chunks` to rechunk."
                 )
 
             if isinstance(max_batch, int):
@@ -1243,7 +1243,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             meta = transform._out_meta(self)
 
             with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message="Increasing number of chunks")
+                warnings.filterwarnings("ignore", message="Increasing number of chunks.")
                 new_array = da.blockwise(
                     self._apply_transform,
                     symbols,
@@ -1300,7 +1300,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             import hyperspy.api as hs
         except ImportError:
             raise ImportError(
-                "This functionality of abTEM requires Hyperspy, see https://hyperspy.org/."
+                "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
             )
 
         if self._base_dims == 1:

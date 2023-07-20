@@ -73,7 +73,6 @@ T = TypeVar("T", bound="BaseMeasurement")
 def _scanned_measurement_type(
     measurement: BaseMeasurements | BaseWaves,
 ) -> Type["BaseMeasurements"]:
-
     if len(_scan_shape(measurement)) == 1:
         return RealSpaceLineProfiles
 
@@ -117,7 +116,6 @@ def _reduced_scanned_images_or_line_profiles(
         )
 
     elif _scanned_measurement_type(old_measurement) is Images:
-
         ensemble_axes_metadata = old_measurement.ensemble_axes_metadata[:-2]
 
         sampling = (
@@ -190,7 +188,6 @@ def _annular_detector_mask(
     fftshift: bool = False,
     xp=np,
 ) -> np.ndarray | list[np.ndarray]:
-
     kx, ky = spatial_frequencies(
         gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
     )
@@ -316,7 +313,6 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         ensemble_axes_metadata: list[AxisMetadata],
         metadata: dict,
     ):
-
         super().__init__(
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
@@ -738,7 +734,6 @@ class _BaseMeasurement2D(BaseMeasurements):
         )
 
         if self.is_lazy:
-
             depth = tuple(
                 min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
             )
@@ -930,7 +925,6 @@ class Images(_BaseMeasurement2D):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: Dict = None,
     ):
-
         if np.isscalar(sampling):
             sampling = (float(sampling),) * 2
         else:
@@ -1001,7 +995,6 @@ class Images(_BaseMeasurement2D):
 
     @property
     def extent(self) -> tuple[float, float]:
-
         return (
             self.sampling[0] * self.base_shape[0],
             self.sampling[1] * self.base_shape[1],
@@ -1016,7 +1009,6 @@ class Images(_BaseMeasurement2D):
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
-
         return [
             RealSpaceAxis(
                 label="x", sampling=self.sampling[0], units="Å", _tex_label="$x$"
@@ -1314,7 +1306,6 @@ class _BaseMeasurement1D(BaseMeasurements):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         self._sampling = sampling
 
         super().__init__(
@@ -1623,7 +1614,6 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         super().__init__(
             array=array,
             sampling=sampling,
@@ -1929,7 +1919,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         if np.isscalar(sampling):
             sampling = (float(sampling),) * 2
         else:
@@ -2067,7 +2056,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         max_index: int = None,
         centering: str = "P",
     ) -> IndexedDiffractionPatterns:
-
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
 
@@ -2222,7 +2210,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
-
         xp = get_array_module(array)
         v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(
             array.shape[-2:], new_gpts, sampling, new_sampling, xp
@@ -2274,7 +2261,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
             sampling, gpts = adjusted_gpts(sampling, self.sampling, self.base_shape)
         else:
-
             if np.isscalar(gpts):
                 gpts = (gpts,) * 2
 
@@ -2303,7 +2289,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     def _check_integration_limits(self, inner: float, outer: float):
-
         if inner > outer:
             raise RuntimeError(
                 f"Inner detection ({inner} mrad) angle cannot exceed the outer detection angle."
@@ -3344,6 +3329,28 @@ class PolarMeasurements(BaseMeasurements):
 
 
 class IndexedDiffractionPatterns(BaseMeasurements):
+    """
+    Diffraction patterns indexed by their Miller indices.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        1D or greater array of type `float`. The last axis represents the diffraction spots and should have the same
+        length as the number of miller indices, any preceding axis represents an ensemble axis.
+    miller_indices : np.ndarray
+        The miller indices of the diffraction spots as an N x 3 array where N is the number of miller indices. The
+        order of the miller indices must correspond to the array of intensities. The second axis represents each
+        hkl miller index.
+    positions : np.ndarray
+        The reciprocal space coordinates of the diffraction spots as an N x 3 array. The first axis represents
+        miller indices and the order of the items must correspond to the array of intensities. The second axis
+        represents the reciprocal space positions in x, y and z [1/Å].
+    ensemble_axes_metadata : list of AxisMetadata, optional
+        List of metadata associated with the ensemble axes. The length and item order must match the ensemble axes.
+    metadata : dict, optional
+        A dictionary defining measurement metadata.
+    """
+
     _base_dims = 1
 
     def __init__(
@@ -3354,28 +3361,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-        """
-        Diffraction patterns indexed by their Miller indices.
-
-        Parameters
-        ----------
-        array : np.ndarray
-            1D or greater array of type `float`. The last axis represents the diffraction spots and should have the same
-            length as the number of miller indices, any preceding axis represents an ensemble axis.
-        miller_indices : np.ndarray
-            The miller indices of the diffraction spots as an N x 3 array where N is the number of miller indices. The
-            order of the miller indices must correspond to the array of intensities. The second axis represents each
-            hkl miller index.
-        positions : np.ndarray
-            The reciprocal space coordinates of the diffraction spots as an N x 3 array. The first axis represents
-            miller indices and the order of the items must correspond to the array of intensities. The second axis
-            represents the reciprocal space positions in x, y and z [1/Å].
-        ensemble_axes_metadata : list of AxisMetadata, optional
-            List of metadata associated with the ensemble axes. The length and item order must match the ensemble axes.
-        metadata : dict, optional
-            A dictionary defining measurement metadata.
-        """
-
         assert len(miller_indices) == array.shape[-1]
         assert len(miller_indices) == len(positions)
 
@@ -3445,7 +3430,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
-
         kwargs = super()._unpack_kwargs(attrs)
         kwargs["miller_indices"] = np.array(kwargs["miller_indices"], dtype=int)
         kwargs["positions"] = np.array(kwargs["positions"], dtype=np.float32)
