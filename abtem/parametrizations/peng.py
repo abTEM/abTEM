@@ -52,11 +52,13 @@ class PengParametrization(Parametrization):
         "finite_projected_scattering_factor": finite_projected_scattering_factor,
     }
 
-    def __init__(self, sigmas: dict[str, float] = None):
-        path = os.path.join(get_data_path(), "peng_high.json")
+    def __init__(self, parameters: str = None, sigmas: dict[str, float] = None):
 
-        with open(path, 'r') as f:
-            parameters = json.load(f)
+        if parameters is None:
+            path = os.path.join(get_data_path(), "peng_high.json")
+
+            with open(path, "r") as f:
+                parameters = json.load(f)
 
         super().__init__(parameters=parameters, sigmas=sigmas)
 
