@@ -229,8 +229,8 @@ class BasePotential(
         if project:
             return self.project().show(**kwargs)
         else:
-            if "explode" not in kwargs.keys():
-                kwargs["explode"] = True
+            #if "explode" not in kwargs.keys():
+            #    kwargs["explode"] = True
 
             return self.to_images().show(**kwargs)
 
