@@ -934,7 +934,7 @@ class Waves(BaseWaves, ArrayObject):
 
         return _reduce_ensemble(waves)
 
-    def show(self, complex_images:bool=False, **kwargs):
+    def show(self, complex_images: bool = False, **kwargs):
         """
         Show the wave-function intensities.
 
