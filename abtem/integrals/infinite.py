@@ -156,6 +156,5 @@ class InfinitePotentialProjections(ProjectionIntegratorPlan):
         if symbol in self.parametrization.sigmas.keys():
             sigma = self.parametrization.sigmas[symbol]
             f = f * xp.exp(-xp.asarray(k2, dtype=xp.float32) * (xp.pi * sigma / xp.sqrt(3 / 2)) ** 2)
-            print(f.dtype)
 
         return ProjectedScatteringFactors(f)
