@@ -1,6 +1,6 @@
 :warning: **Major update** :warning: Warning: the recent update to the main branch marks a major change in *ab*TEM which may break some code, this change will come in full effect on the next release. 
 
-You can install the current main branch using `pip install git+https://github.com/abtem/abtem` and check the new [documentation](https://abtem.github.io/doc/intro.html). After the next release you can still install the current release by visting this [repository](https://github.com/abTEM/abTEM-legacy).
+You can install the current main branch using `pip install git+https://github.com/abtem/abtem` and check the new [documentation](https://abtem.github.io/doc/intro.html). After the next release you can still install the old one by visiting this [repository](https://github.com/abTEM/abTEM-legacy).
 
 # abTEM: transmission electron microscopy from first principles
 
