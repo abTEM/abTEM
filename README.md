@@ -2,7 +2,7 @@
 
 You can install the current main branch using `pip install git+https://github.com/abtem/abtem` and check the new [documentation](https://abtem.github.io/doc/intro.html). After the next release you can still install the old one by visiting this [repository](https://github.com/abTEM/abTEM-legacy).
 
-# abTEM: transmission electron microscopy from first principles
+# *ab*TEM: transmission electron microscopy from first principles
 
 [![PyPI version](https://badge.fury.io/py/abtem.svg)](https://badge.fury.io/py/abtem)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
