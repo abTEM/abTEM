@@ -39,9 +39,9 @@ from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGridMixin
 
-from abtem.integrals.gaussians import GaussianProjectionIntegrals
-from abtem.integrals.infinite import InfinitePotentialProjections
-from abtem.integrals.quadrature import ProjectionQuadratureRule
+from abtem.integrals import GaussianProjectionIntegrals
+from abtem.integrals import ProjectedScatteringFactors
+from abtem.integrals import ProjectionQuadratureRule
 from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
@@ -59,8 +59,8 @@ from abtem.slicing import (
 
 if TYPE_CHECKING:
     from abtem.waves import Waves, BaseWaves
-    from abtem.parametrizations.base import Parametrization
-    from abtem.integrals.base import ProjectionIntegratorPlan
+    from abtem.parametrizations import Parametrization
+    from abtem.integrals import ProjectionIntegratorPlan
 
 
 class BasePotential(
@@ -429,6 +429,7 @@ class _PotentialBuilder(BasePotential):
                 meta=xp.array((), dtype=np.float32),
             )
 
+
         else:
             xp = get_array_module(self.device)
 
@@ -447,6 +448,7 @@ class _PotentialBuilder(BasePotential):
                     ):
 
                         array[i + (j,)] = slic.array[0]
+
             else:
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
                     array[j] = slic.array[0]
@@ -488,10 +490,6 @@ class Potential(_PotentialBuilder):
     projection : 'finite' or 'infinite', optional
         If 'finite' the 3D potential is numerically integrated between the slice boundaries. If 'infinite' (default),
         the infinite potential projection of each atom will be assigned to a single slice.
-    integral_method : {'quadrature', 'analytic'}, optional
-        Specifies whether to perform projection integrals in real space or reciprocal space. By default, finite
-        projection integrals are computed in real space and infinite projection integrals are performed in reciprocal
-        space.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
@@ -534,7 +532,6 @@ class Potential(_PotentialBuilder):
         slice_thickness: float | tuple[float, ...] = 1,
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
-        integral_method: str = None,
         exit_planes: int | tuple[int, ...] = None,
         plane: str
         | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
@@ -561,21 +558,11 @@ class Potential(_PotentialBuilder):
 
             self._frozen_phonons = atoms
 
-        if projection == "infinite" and integral_method is None:
-            integral_method = "analytic"
-
-        elif projection == "finite" and integral_method is None:
-            integral_method = "quadrature"
-
         if integrator is None:
-            if projection == "finite" and integral_method == "quadrature":
+            if projection == "finite":
                 integrator = ProjectionQuadratureRule(parametrization=parametrization)
-            elif projection == "finite" and integral_method == "analytic":
-                integrator = GaussianProjectionIntegrals(
-                    correction_parametrization=parametrization
-                )
-            elif projection == "infinite" and integral_method == "analytic":
-                integrator = InfinitePotentialProjections(
+            elif projection == "infinite":
+                integrator = ProjectedScatteringFactors(
                     parametrization=parametrization
                 )
             else:
@@ -772,6 +759,9 @@ class Potential(_PotentialBuilder):
                         array[i] += new_array
                     else:
                         array = new_array[None]
+
+
+
 
             if array is None:
                 array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)

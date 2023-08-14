@@ -292,7 +292,7 @@ class AxesGrid:
         self._col_sizes["cbar_spacing"].fixed_size = spacing
         self._row_sizes["cbar_spacing"].fixed_size = spacing
 
-    def set_axes_padding(self, padding: tuple[float, float] = (0.0, 0.0)):
+    def set_axes_padding(self, padding: float | tuple[float, float] = (0.0, 0.0)):
         if np.isscalar(padding):
             padding = (padding,) * 2
 
@@ -495,7 +495,7 @@ def _set_update_indices_callback(sliders, visualization, callbacks):
             indices += (idx,)
 
         with sliders[0].hold_trait_notifications():
-            visualization.set_indices(indices)
+            visualization.set_ensemble_indices(indices)
 
     for slider in sliders:
         slider.observe(update_indices, "value")
@@ -631,7 +631,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self._measurements = measurements.to_cpu()
         self._axes = axes
         self._axes_types = axes_types
-        self._indices = self._validate_indices()
+        self._indices = self._validate_ensemble_indices()
         self._column_titles = []
         self._row_titles = []
         self._panel_labels = []
@@ -664,7 +664,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def adjust_axes_position(self, rect):
         self.axes.divider.set_position(rect)
 
-    def generate_measurements(self, keepdims: bool = True):
+    def _generate_measurements(self, keepdims: bool = True):
         indexed_measurements = self._get_indexed_measurements()
 
         shape = tuple(
@@ -687,7 +687,15 @@ class MeasurementVisualization(metaclass=ABCMeta):
             )
             yield axes_index, indexed_measurements.get_items(indices, keepdims=keepdims)
 
-    def set_axes_padding(self, padding: tuple[float, float] = (0.0, 0.0)):
+    def set_axes_padding(self, padding: float | tuple[float, float] = (0.0, 0.0)):
+        """
+        Set the padding between the axes in an :class:`.AxesGrid`.
+
+        Parameters
+        ----------
+        padding : float or tuple of float
+            The padding along columns and rows.
+        """
         self._axes.set_axes_padding(padding)
 
     def _get_axes_from_axes_types(self, axes_type):
@@ -698,8 +706,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
         )
 
     def _get_indexed_measurements(self, keepdims: bool = True):
-
-        # print(self._indices, self._measurements.shape)
         indexed = self.measurements.get_items(self._indices, keepdims=keepdims)
 
         if keepdims:
@@ -736,11 +742,17 @@ class MeasurementVisualization(metaclass=ABCMeta):
             if not len(indexed_measurements.ensemble_shape):
                 return
 
-            axes_metadata = indexed_measurements.ensemble_axes_metadata[0]
+            # TODO: same for row titles
+            j = 0
+            for j, axes_type in enumerate(self.axes_types):
+                if not axes_type == "overlay":
+                    break
+
+            axes_metadata = indexed_measurements.ensemble_axes_metadata[j]
 
             if hasattr(axes_metadata, "to_nonlinear_axis"):
                 axes_metadata = axes_metadata.to_nonlinear_axis(
-                    indexed_measurements.ensemble_shape[0]
+                    indexed_measurements.ensemble_shape[j]
                 )
 
             titles = []
@@ -750,7 +762,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
                         format, units=units, include_label=i == 0
                     )
                 )
-                if i == indexed_measurements.ensemble_shape[0]:
+                if i == indexed_measurements.ensemble_shape[j]:
                     break
 
         elif isinstance(titles, str):
@@ -765,6 +777,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
             column_title.remove()
 
         column_titles = []
+
         for i, ax in enumerate(self.axes[:, -1]):
             annotation = ax.annotate(
                 titles[i],
@@ -793,18 +806,19 @@ class MeasurementVisualization(metaclass=ABCMeta):
         if label is None:
             label = self._get_default_xlabel(units=self._xunits)
 
-        for ax in np.array(self.axes).ravel():
-            ax.set_xlabel(label)
+        for i, j in np.ndindex(self.axes.shape):  # noqa
+            if j == 0:
+                ax = self.axes[i, j]
+                ax.set_xlabel(label)
 
     def set_ylabels(self, label: str = None):
         if label is None:
             label = self._get_default_ylabel(units=self._yunits)
 
-        for i, ax in enumerate(np.array(self.axes).ravel()):
-            # print(self.axes.shape[0], i, i % self.axes.shape[0])
-            # if i % self.axes.shape[0] == 1:
-
-            ax.set_ylabel(label)
+        for i, j in np.ndindex(self.axes.shape):  # noqa
+            if i == 0:
+                ax = self.axes[i, j]
+                ax.set_ylabel(label)
 
     @abstractmethod
     def set_xlim(self):
@@ -823,6 +837,14 @@ class MeasurementVisualization(metaclass=ABCMeta):
         pass
 
     def set_xunits(self, units: str = None):
+        """
+        Set the units for the x-axis.
+
+        Parameters
+        ----------
+        units : str
+            The name of the units. Must be compatible with existing units.
+        """
         if units is None:
             self._xunits = self._get_default_xunits()
         else:
@@ -832,6 +854,14 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self.set_xlim()
 
     def set_yunits(self, units: str = None):
+        """
+        Set the units for the y-axis.
+
+        Parameters
+        ----------
+        units : str
+            The name of the units. Must be compatible with existing units.
+        """
         if units is None:
             self._yunits = self._get_default_yunits()
         else:
@@ -843,14 +873,31 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def set_row_titles(
         self,
         titles: str | list[str] = None,
-        pad: float = 0.0,
+        shift: float = 0.0,
         format: str = ".3g",
         units: str = None,
-        fontsize=12,
         **kwargs,
     ):
+        """
+        Set the titles for the rows of the grid of axes.
 
+        Parameters
+        ----------
+        titles : str or list of str, optional
+            If given as list, each item is given as a title for a row, the list must have the same length as the number
+            of rows. If given as string the same title is given to all rows. If not given the titles are derived from
+            the axes metadata.
+        shift : float, optional
+            Horizontal shift of the title positions.
+        format : str, optional
+            String formatting of titles derived from axes metadata.
+        units : str, optional
+            The units used for titles derived from axes metadata.
+        """
         indexed_measurements = self._get_indexed_measurements()
+
+        if not "fontsize" in kwargs:
+            kwargs.update({"fontsize": 12})
 
         if titles is None:
             if not len(indexed_measurements.ensemble_shape) > 1:
@@ -884,13 +931,12 @@ class MeasurementVisualization(metaclass=ABCMeta):
             annotation = ax.annotate(
                 titles[i],
                 xy=(0, 0.5),
-                xytext=(-ax.yaxis.labelpad - pad, 0),
+                xytext=(-ax.yaxis.labelpad - shift, 0),
                 xycoords=ax.yaxis.label,
                 textcoords="offset points",
                 ha="right",
                 va="center",
                 rotation=90,
-                fontsize=fontsize,
                 **kwargs,
             )
             row_titles.append(annotation)
@@ -921,7 +967,10 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def axes(self):
         return self._axes
 
-    def _validate_indices(self, indices: tuple = ()):
+    def _validate_ensemble_indices(self, indices: int | tuple[int, ...] = ()):
+        if isinstance(indices, int):
+            indices = (indices,)
+
         num_ensemble_dims = len(self.measurements.ensemble_shape)
         explode_axes = self._get_axes_from_axes_types("explode")
         overlay_axes = self._get_axes_from_axes_types("overlay")
@@ -949,9 +998,18 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
         return tuple(validated_indices)
 
-    def set_indices(self, indices=()):
+    def set_ensemble_indices(self, indices: int | tuple[int, ...] = ()):
+        """
+        Set the indices into the ensemble dimensions to select the visualized ensemble members. Interactive
+        visualization are updated.
 
-        self._indices = self._validate_indices(indices)
+        Parameters
+        ----------
+        indices : int or tuple of int
+
+        """
+
+        self._indices = self._validate_ensemble_indices(indices)
         self.update_artists()
         self.update_panel_labels()
 
@@ -982,7 +1040,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         elif labels == "metadata":
             labels = []
 
-            for i, measurement in self.generate_measurements(keepdims=True):
+            for i, measurement in self._generate_measurements(keepdims=True):
                 titles = []
                 for axes_metadata in measurement.ensemble_axes_metadata:
                     titles.append(
@@ -1030,7 +1088,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
 
     def update_panel_labels(self):
         for anchored_text, (i, measurement) in zip(
-            self._metadata_labels, self.generate_measurements(keepdims=True)
+            self._metadata_labels, self._generate_measurements(keepdims=True)
         ):
 
             label = _get_joined_titles(measurement, anchored_text.formatting)
@@ -1045,7 +1103,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         **kwargs,
     ):
         def update(i):
-            self.set_indices((i,))
+            self.set_ensemble_indices((i,))
             if adjust_scale:
                 self._update_vmin_vmax()
 
@@ -1157,7 +1215,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             vmin, vmax = self.get_global_vmin_vmax(vmin=vmin, vmax=vmax)
 
         self._normalization = np.zeros(self.axes.shape, dtype=object)
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
 
             if power == 1.0:
                 norm = colors.Normalize(vmin=vmin, vmax=vmax)
@@ -1189,7 +1247,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
 
     def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
         for norm, measurement in zip(
-            self._normalization.ravel(), self.generate_measurements(keepdims=False)
+            self._normalization.ravel(), self._generate_measurements(keepdims=False)
         ):
 
             norm.vmin = vmin
@@ -1210,7 +1268,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             ax.set_ylim(ylim)
 
     def _update_power(self, power: float = 1.0):
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             artists = self._artists[i]
             norm = self._normalization[i]
 
@@ -1273,7 +1331,7 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
     def set_cbars(self, **kwargs):
         cbars = defaultdict(list)
 
-        for i, _ in self.generate_measurements():
+        for i, _ in self._generate_measurements():
             ax = self.axes[i]
             images = self._artists[i]
 
@@ -1582,7 +1640,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
         images = np.zeros(self.axes.shape + (artists_per_axes,), dtype=object)
 
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             ax = self.axes[i]
             norm = self._normalization[i]
 
@@ -1602,7 +1660,7 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
     def update_artists(self):
 
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             images = self._artists[i]
 
             if self._domain_coloring:
@@ -1733,12 +1791,14 @@ class MeasurementVisualization1D(MeasurementVisualization):
     def _get_default_yunits(self):
         return self.measurements.metadata.get("units", "")
 
-    def set_xlim(self):
+    def set_xlim(self, xlim=None):
         extent = self.measurements._plot_extent(self._xunits)
-
         margin = (extent[1] - extent[0]) * 0.05
-        for i, measurement in self.generate_measurements():
-            self.axes[i].set_xlim([-extent[0] - margin, extent[1] + margin])
+        if xlim is None:
+            xlim = [-extent[0] - margin, extent[1] + margin]
+
+        for i, measurement in self._generate_measurements():
+            self.axes[i].set_xlim(xlim)
             artists = self.artists[i]
             for artist in artists:
                 x = self._get_xdata()
@@ -1757,7 +1817,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         else:
             common_ylim = ylim
 
-        for i, measurement in self.generate_measurements():
+        for i, measurement in self._generate_measurements():
 
             if not self._common_scale and common_ylim is None:
                 y_lim = _get_extent(measurement)
@@ -1776,7 +1836,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         elif loc == "all":
             loc = indices
 
-        for i, _ in self.generate_measurements():
+        for i, _ in self._generate_measurements():
 
             if i in loc:
                 self.axes[i].legend(**kwargs)
@@ -1784,7 +1844,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
     def set_artists(self):
 
         artists = np.zeros(self.axes.shape, dtype=object)
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             ax = self.axes[i]
             x = self._get_xdata()
             new_lines = []
@@ -1917,7 +1977,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         return positions
 
     def _update_scales(self):
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             artists = self._artists[i]
             norm = self._normalization[i]
             scales = self._get_scales(measurement, norm)
@@ -1940,17 +2000,13 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
                 artist.remove()
 
         self._artists = np.zeros(self.axes.shape, dtype=object)
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             ax = self.axes[i]
 
             norm = self._normalization[i]
 
-            # print(measurement.intensities.max())
-
             scales = self._get_scales(measurement, norm)
             positions = self._get_positions(measurement)
-
-            # print(scales)
 
             if self._cmap not in plt.colormaps():
                 cmap = ListedColormap([self._cmap])
@@ -2000,7 +2056,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         return self._reciprocal_space_axes[-1].units
 
     def set_xlim(self):
-        for i, measurement in self.generate_measurements():
+        for i, measurement in self._generate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
                 _get_conversion_factor(self._xunits, self._get_default_xunits()) * x_lim
@@ -2008,7 +2064,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             self.axes[i].set_xlim([-x_lim, x_lim])
 
     def set_ylim(self):
-        for i, measurement in self.generate_measurements():
+        for i, measurement in self._generate_measurements():
             x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
             x_lim = (
                 _get_conversion_factor(self._xunits, self._get_default_xunits()) * x_lim
@@ -2031,7 +2087,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         #     artist.set(offsets=positions)
 
     def update_artists(self):
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             artists = self._artists[i]
             norm = self._normalization[i]
 
@@ -2056,7 +2112,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         if self._miller_index_annotations is None:
             self.set_miller_index_annotations()
 
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             visibility = measurement.intensities > self._annotation_threshold
             for annotation, visible in zip(self._miller_index_annotations, visibility):
                 annotation.set_visible(visible)
@@ -2071,7 +2127,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
         self._annotation_threshold = threshold
         self._miller_index_annotations = []
-        for i, measurement in self.generate_measurements(keepdims=False):
+        for i, measurement in self._generate_measurements(keepdims=False):
             ax = self.axes[i]
             norm = self._normalization[i]
             visibility = measurement.intensities > threshold
