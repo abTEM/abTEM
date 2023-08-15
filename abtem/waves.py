@@ -789,7 +789,7 @@ class Waves(BaseWaves, ArrayObject):
             if normalize:
                 array = array / np.prod(array.shape[-2:])
 
-            array = fft2(array, overwrite_x=False)
+            array = fft2(xp.fft.ifftshift(array), overwrite_x=False)
 
             if array.shape[-2:] != new_gpts:
                 array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)

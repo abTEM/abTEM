@@ -589,7 +589,7 @@ class Zernike(BaseAperture):
         phase_shift = self.phase_shift
 
         amplitude = xp.asarray(alpha < semiangle_cutoff, dtype = "float")
-        hole_array = xp.asarray(alpha > center_hole_cutoff, dtype = "float")
+        hole_array = xp.asarray(xp.logical_and(alpha > center_hole_cutoff,alpha < semiangle_cutoff), dtype = "float")
         phase = xp.exp(1j * phase_shift * hole_array)
         array = amplitude * phase
 
