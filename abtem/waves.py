@@ -1133,7 +1133,6 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
             new_axis=tuple_range(2, len(waves_builder.ensemble_shape)),
             chunks=blocks.chunks + waves_builder.gpts,
             wrapped=False,
-            enforce_ndim=True,
         )
 
         return Waves(
