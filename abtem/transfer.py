@@ -525,6 +525,7 @@ class Vortex(BaseAperture):
 
         return array
 
+
 class Zernike(BaseAperture):
     """
     Zernike aperture.
@@ -572,8 +573,8 @@ class Zernike(BaseAperture):
     def center_hole_cutoff(self) -> float:
         """Cutoff semiangle of aperture hole."""
         return self._center_hole_cutoff
-    
-    @property  
+
+    @property
     def phase_shift(self) -> float:
         """Phase shift of Zernike film."""
         return self._phase_shift
@@ -585,15 +586,19 @@ class Zernike(BaseAperture):
         alpha = xp.array(alpha)
 
         semiangle_cutoff = self.semiangle_cutoff / 1e3
-        center_hole_cutoff = self.center_hole_cutoff/1e3
+        center_hole_cutoff = self.center_hole_cutoff / 1e3
         phase_shift = self.phase_shift
 
-        amplitude = xp.asarray(alpha < semiangle_cutoff, dtype = "float")
-        phase_array = xp.asarray(xp.logical_and(alpha > center_hole_cutoff, alpha < semiangle_cutoff), dtype = "float")
+        amplitude = xp.asarray(alpha < semiangle_cutoff, dtype=np.float32)
+        phase_array = xp.asarray(
+            xp.logical_and(alpha > center_hole_cutoff, alpha < semiangle_cutoff),
+            dtype=np.float32,
+        )
         phase = xp.exp(1.0j * phase_shift * phase_array)
         array = amplitude * phase
 
         return array
+
 
 class TemporalEnvelope(BaseTransferFunction):
     """
