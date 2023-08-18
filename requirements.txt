@@ -1,4 +1,3 @@
-cupy
 numpy
 Pillow
 pandas
@@ -6,7 +5,7 @@ matplotlib
 pyfftw
 scipy
 numba
-dask
+dask>=2022.12.1
 distributed
 zarr
 ase
