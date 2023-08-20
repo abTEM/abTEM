@@ -682,6 +682,17 @@ def cutoff(func: callable, tolerance: float, a: float, b: float) -> float:
     return f
 
 
+def cutoff_taper(radial_gpts, cutoff, taper):
+    taper_start = taper * cutoff
+    taper_mask = radial_gpts > taper_start
+    taper_values = np.ones_like(radial_gpts)
+    taper_values[taper_mask] = (
+        np.cos(np.pi * (radial_gpts[taper_mask] - taper_start) / (cutoff - taper_start))
+        + 1.0
+    ) / 2
+    return taper_values
+
+
 class ProjectionQuadratureRule(ProjectionIntegratorPlan):
     """
     Projection integration plan for calculating finite projection integrals based on Gaussian quadrature rule.
