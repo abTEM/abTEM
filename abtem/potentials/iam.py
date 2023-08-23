@@ -7,7 +7,7 @@ from functools import partial
 from functools import reduce
 from numbers import Number
 from operator import mul
-from typing import Sequence, TYPE_CHECKING
+from typing import Sequence, TYPE_CHECKING, Type
 
 import dask
 import dask.array as da
@@ -38,10 +38,6 @@ from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGridMixin
-
-from abtem.integrals import GaussianProjectionIntegrals
-from abtem.integrals import ProjectedScatteringFactors
-from abtem.integrals import ProjectionQuadratureRule
 from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
@@ -49,6 +45,8 @@ from abtem.inelastic.phonons import (
     _validate_seeds,
     AtomsEnsemble,
 )
+from abtem.integrals import ProjectedScatteringFactors
+from abtem.integrals import ProjectionQuadratureRule
 from abtem.measurements import Images
 from abtem.slicing import (
     _validate_slice_thickness,
@@ -298,6 +296,7 @@ def _require_cell_transform(cell, box, plane, origin):
 class _FieldBuilder(BaseField):
     def __init__(
         self,
+        array_object : Type[FieldArray],
         slice_thickness: float | tuple[float, ...],
         exit_planes: int | tuple[int, ...],
         cell: np.ndarray | Cell,
@@ -310,6 +309,7 @@ class _FieldBuilder(BaseField):
         periodic: bool = True,
         device: str = None,
     ):
+        self._array_object = array_object
         if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
             axes = plane_to_axes(plane)
             cell = cell[:, list(axes)]
@@ -384,7 +384,7 @@ class _FieldBuilder(BaseField):
         last_slice: int = None,
         max_batch: int | str = 1,
         lazy: bool = None,
-    ) -> PotentialArray:
+    ) -> FieldArray:
         """
         Build the potential.
 
@@ -418,14 +418,14 @@ class _FieldBuilder(BaseField):
 
             xp = get_array_module(self.device)
             chunks = validate_chunks(self.ensemble_shape, self._default_ensemble_chunks)
-            chunks = chunks + ((len(self),), (self.gpts[0],), (self.gpts[1],))
+            chunks = chunks + self.base_shape
 
             if self.ensemble_shape:
                 new_axis = tuple(
-                    range(len(self.ensemble_shape), len(self.ensemble_shape) + 3)
+                    range(len(self.ensemble_shape), len(self.ensemble_shape) + len(self.base_shape))
                 )
             else:
-                new_axis = tuple(range(1, 3))
+                new_axis = tuple(range(1, len(self.base_shape)))
 
             array = blocks.map_blocks(
                 self._wrap_build_potential,
@@ -440,7 +440,7 @@ class _FieldBuilder(BaseField):
             xp = get_array_module(self.device)
 
             array = xp.zeros(
-                self.ensemble_shape + (last_slice - first_slice,) + self.gpts,
+                self.ensemble_shape + (last_slice - first_slice,) + self.base_shape[1:],
                 dtype=xp.float32,
             )
 
@@ -459,7 +459,7 @@ class _FieldBuilder(BaseField):
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
                     array[j] = slic.array[0]
 
-        potential = PotentialArray(
+        potential = self._array_object(
             array,
             sampling=(self.sampling[0], self.sampling[1]),
             slice_thickness=self.slice_thickness[first_slice:last_slice],
@@ -472,7 +472,8 @@ class _FieldBuilder(BaseField):
 class _FieldBuilderFromAtoms(_FieldBuilder):
     def __init__(
         self,
-        atoms: Atoms | BaseFrozenPhonons = None,
+        atoms: Atoms | BaseFrozenPhonons,
+        array_object: Type[FieldArray],
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
         slice_thickness: float | tuple[float, ...] = 1,
@@ -489,8 +490,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
         self._sliced_atoms = None
+        self._array_object = array_object
 
         super().__init__(
+            array_object=array_object,
             gpts=gpts,
             sampling=sampling,
             cell=self._frozen_phonons.cell,
@@ -514,14 +517,17 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return len(self.frozen_phonons)
 
     @property
-    def integrator(self) -> ProjectionIntegratorPlan:
+    def integrator(self):
         """The integrator determining how the projection integrals for each slice is calculated."""
         return self._integrator
 
     def _cutoffs(self):
         atoms = self.frozen_phonons.atoms
         unique_numbers = np.unique(atoms.numbers)
-        return tuple(self._integrator.cutoff(chemical_symbols[number]) for number in unique_numbers)
+        return tuple(
+            self._integrator.cutoff(chemical_symbols[number])
+            for number in unique_numbers
+        )
 
     def get_transformed_atoms(self):
         """
@@ -608,6 +614,131 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         return self._sliced_atoms
 
+    def generate_slices(
+        self, first_slice: int = 0, last_slice: int = None, return_depth: float = False
+    ):
+        """
+        Generate the slices for the potential.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice of the generated potential.
+        last_slice : int, optional
+            Index of the last slice of the generated potential.
+        return_depth : bool
+            If True, return the depth of each generated slice.
+
+        Yields
+        ------
+        slices : generator of np.ndarray
+            Generator for the array of slices.
+        """
+        if last_slice is None:
+            last_slice = len(self)
+
+        xp = get_array_module(self.device)
+
+        sliced_atoms = self.get_sliced_atoms()
+
+        numbers = np.unique(sliced_atoms.atoms.numbers)
+
+        integrators = {
+            number: self.integrator.build(
+                chemical_symbols[number],
+                gpts=self.gpts,
+                sampling=self.sampling,
+                device=self.device,
+            )
+            for number in numbers
+        }
+
+        exit_plane_after = self._exit_plane_after
+
+        cumulative_thickness = np.cumsum(self.slice_thickness)
+
+        for start, stop in generate_chunks(
+            last_slice - first_slice, chunks=1, start=first_slice
+        ):
+
+            if len(numbers) > 1 or stop - start > 1:
+                array = xp.zeros((stop - start,) + self.base_shape[1:], dtype=np.float32)
+            else:
+                array = None
+
+            for i, slice_idx in enumerate(range(start, stop)):
+
+                for Z, integrator in integrators.items():
+                    atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
+
+                    new_array = integrator.integrate_on_grid(
+                        atoms,
+                        a=sliced_atoms.slice_limits[slice_idx][0],
+                        b=sliced_atoms.slice_limits[slice_idx][1],
+                        gpts=self.gpts,
+                        sampling=self.sampling,
+                        device=self.device,
+                    )
+
+                    if array is not None:
+                        array[i] += new_array
+                    else:
+                        array = new_array[None]
+
+            if array is None:
+                array = xp.zeros((stop - start,) + self.base_shape[1:], dtype=np.float32)
+
+            #array -= array.min()
+
+            exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+
+            potential_array = self._array_object(
+                array,
+                slice_thickness=self.slice_thickness[start:stop],
+                exit_planes=exit_planes,
+                extent=self.extent,
+            )
+
+            if return_depth:
+                depth = cumulative_thickness[stop - 1]
+                yield depth, potential_array
+            else:
+                yield potential_array
+
+    @property
+    def ensemble_axes_metadata(self):
+        return self.frozen_phonons.ensemble_axes_metadata
+
+    @property
+    def ensemble_shape(self) -> tuple[int, ...]:
+        return self.frozen_phonons.ensemble_shape
+
+    @classmethod
+    def _from_partitioned_args_func(cls, *args, frozen_phonons_partial, **kwargs):
+        args = unpack_blockwise_args(args)
+
+        frozen_phonons = frozen_phonons_partial(*args)
+        frozen_phonons = frozen_phonons.item()
+
+        new_potential = cls(frozen_phonons, **kwargs)
+
+        ndims = max(len(new_potential.ensemble_shape), 1)
+        new_potential = _wrap_with_array(new_potential, ndims)
+        return new_potential
+
+    def _from_partitioned_args(self, *args, **kwargs):
+        frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
+        kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
+
+        return partial(
+            self._from_partitioned_args_func,
+            frozen_phonons_partial=frozen_phonons_partial,
+            **kwargs,
+        )
+
+    def _partition_args(self, chunks: Chunks = (1,), lazy: bool = True):
+        return self.frozen_phonons._partition_args(chunks, lazy=lazy)
+
 
 class _PotentialBuilder(BasePotential):
     pass
@@ -690,7 +821,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         configuration file.
     """
 
-    _exclude_from_copy = ("parametrization", "projection", "integral_method")
+    _exclude_from_copy = ("parametrization", "projection")
 
     def __init__(
         self,
@@ -720,6 +851,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
 
         super().__init__(
             atoms=atoms,
+            array_object=PotentialArray,
             gpts=gpts,
             sampling=sampling,
             slice_thickness=slice_thickness,
@@ -729,165 +861,11 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             origin=origin,
             box=box,
             periodic=periodic,
-            integrator=integrator
+            integrator=integrator,
         )
 
-    def generate_slices(
-        self, first_slice: int = 0, last_slice: int = None, return_depth: float = False
-    ):
-        """
-        Generate the slices for the potential.
 
-        Parameters
-        ----------
-        first_slice : int, optional
-            Index of the first slice of the generated potential.
-        last_slice : int, optional
-            Index of the last slice of the generated potential.
-        return_depth : bool
-            If True, return the depth of each generated slice.
-
-        Yields
-        ------
-        slices : generator of np.ndarray
-            Generator for the array of slices.
-        """
-        if last_slice is None:
-            last_slice = len(self)
-
-        xp = get_array_module(self.device)
-
-        sliced_atoms = self.get_sliced_atoms()
-
-        numbers = np.unique(sliced_atoms.atoms.numbers)
-
-        integrators = {
-            number: self.integrator.build(
-                chemical_symbols[number],
-                gpts=self.gpts,
-                sampling=self.sampling,
-                device=self.device,
-            )
-            for number in numbers
-        }
-
-        exit_plane_after = self._exit_plane_after
-
-        cum_thickness = np.cumsum(self.slice_thickness)
-
-        for start, stop in generate_chunks(
-            last_slice - first_slice, chunks=1, start=first_slice
-        ):
-
-            if len(numbers) > 1 or stop - start > 1:
-                array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
-            else:
-                array = None
-
-            for i, slice_idx in enumerate(range(start, stop)):
-
-                for Z, integrator in integrators.items():
-                    atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
-
-                    new_array = integrator.integrate_on_grid(
-                        positions=atoms.positions,
-                        a=sliced_atoms.slice_limits[slice_idx][0],
-                        b=sliced_atoms.slice_limits[slice_idx][1],
-                        gpts=self.gpts,
-                        sampling=self.sampling,
-                        device=self.device,
-                    )
-
-                    if array is not None:
-                        array[i] += new_array
-                    else:
-                        array = new_array[None]
-
-            if array is None:
-                array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
-
-            array -= array.min()
-
-            exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
-
-            potential_array = PotentialArray(
-                array,
-                slice_thickness=self.slice_thickness[start:stop],
-                exit_planes=exit_planes,
-                extent=self.extent,
-            )
-
-            if return_depth:
-                depth = cum_thickness[stop - 1]
-                yield depth, potential_array
-            else:
-                yield potential_array
-
-    @property
-    def ensemble_axes_metadata(self):
-        return self.frozen_phonons.ensemble_axes_metadata
-
-    @property
-    def ensemble_shape(self) -> tuple[int, ...]:
-        return self.frozen_phonons.ensemble_shape
-
-    @classmethod
-    def _from_partitioned_args_func(cls, *args, frozen_phonons_partial, **kwargs):
-        args = unpack_blockwise_args(args)
-
-        frozen_phonons = frozen_phonons_partial(*args)
-        frozen_phonons = frozen_phonons.item()
-
-        new_potential = cls(frozen_phonons, **kwargs)
-
-        ndims = max(len(new_potential.ensemble_shape), 1)
-        new_potential = _wrap_with_array(new_potential, ndims)
-        return new_potential
-
-    def _from_partitioned_args(self, *args, **kwargs):
-        frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
-        kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
-
-        return partial(
-            self._from_partitioned_args_func,
-            frozen_phonons_partial=frozen_phonons_partial,
-            **kwargs,
-        )
-
-    def _partition_args(self, chunks: Chunks = (1,), lazy: bool = True):
-        return self.frozen_phonons._partition_args(chunks, lazy=lazy)
-
-
-class PotentialArray(BasePotential, ArrayObject):
-    """
-    The potential array represents slices of the electrostatic potential as an array. All other potentials build
-    potential arrays.
-
-    Parameters
-    ----------
-    array: 3D np.ndarray
-        The array representing the potential slices. The first dimension is the slice index and the last two are the
-        spatial dimensions.
-    slice_thickness: float
-        The thicknesses of potential slices [Å]. If a float, the thickness is the same for all slices.
-        If a sequence, the length must equal the length of the potential array.
-    extent: one or two float, optional
-        Lateral extent of the potential [Å].
-    sampling: one or two float, optional
-        Lateral sampling of the potential [1 / Å].
-    exit_planes : int or tuple of int, optional
-        The `exit_planes` argument can be used to calculate thickness series.
-        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
-        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
-        an integer a measurement will be collected every `exit_planes` number of slices.
-    ensemble_axes_metadata : list of AxesMetadata
-        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
-    metadata : dict
-        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
-        from the waves.
-    """
-
-    _base_dims = 3
+class FieldArray(BaseField, ArrayObject):
 
     def __init__(
         self,
@@ -900,8 +878,9 @@ class PotentialArray(BasePotential, ArrayObject):
         metadata: dict = None,
     ):
         self._slice_thickness = _validate_slice_thickness(
-            slice_thickness, num_slices=array.shape[-3]
+            slice_thickness, num_slices=array.shape[-self._base_dims]
         )
+
         self._exit_planes = _validate_exit_planes(
             exit_planes, len(self._slice_thickness)
         )
@@ -929,38 +908,6 @@ class PotentialArray(BasePotential, ArrayObject):
     def exit_planes(self) -> tuple[int, ...]:
         return self._exit_planes
 
-    def __getitem__(self, items):
-        if isinstance(items, (Number, slice)):
-            items = (items,)
-
-        ensemble_items = items[: len(self.ensemble_shape)]
-        slic_items = items[len(self.ensemble_shape) :]
-
-        if len(ensemble_items):
-            potential_array = super().__getitem__(ensemble_items)
-        else:
-            potential_array = self
-
-        if len(slic_items) == 0:
-            return potential_array
-
-        padded_items = (slice(None),) * len(potential_array.ensemble_shape) + slic_items
-
-        array = potential_array._array[padded_items]
-        slice_thickness = np.array(potential_array.slice_thickness)[slic_items]
-
-        if len(array.shape) < len(potential_array.shape):
-            array = array[
-                (slice(None),) * len(potential_array.ensemble_shape) + (None,)
-            ]
-            slice_thickness = slice_thickness[None]
-
-        kwargs = potential_array._copy_kwargs(exclude=("array", "slice_thickness"))
-        kwargs["array"] = array
-        kwargs["slice_thickness"] = slice_thickness
-        kwargs["sampling"] = None
-        return potential_array.__class__(**kwargs)
-
     def build(
         self,
         first_slice: int = 0,
@@ -970,7 +917,7 @@ class PotentialArray(BasePotential, ArrayObject):
     ):
         raise RuntimeError("potential is already built")
 
-    def generate_slices(self, first_slice=0, last_slice=None):
+    def generate_slices(self, first_slice:int=0, last_slice:int=None):
         """
         Generate the slices for the potential.
 
@@ -1011,7 +958,157 @@ class PotentialArray(BasePotential, ArrayObject):
 
             yield slic
 
-    def transmission_function(self, energy: float) -> "TransmissionFunction":
+    def __getitem__(self, items):
+        if isinstance(items, (Number, slice)):
+            items = (items,)
+
+        ensemble_items = items[: len(self.ensemble_shape)]
+        slic_items = items[len(self.ensemble_shape) :]
+
+        if len(ensemble_items):
+            potential_array = super().__getitem__(ensemble_items)
+        else:
+            potential_array = self
+
+        if len(slic_items) == 0:
+            return potential_array
+
+        padded_items = (slice(None),) * len(potential_array.ensemble_shape) + slic_items
+
+        array = potential_array._array[padded_items]
+        slice_thickness = np.array(potential_array.slice_thickness)[slic_items]
+
+        if len(array.shape) < len(potential_array.shape):
+            array = array[
+                (slice(None),) * len(potential_array.ensemble_shape) + (None,)
+            ]
+            slice_thickness = slice_thickness[None]
+
+        kwargs = potential_array._copy_kwargs(exclude=("array", "slice_thickness"))
+        kwargs["array"] = array
+        kwargs["slice_thickness"] = slice_thickness
+        kwargs["sampling"] = None
+        return potential_array.__class__(**kwargs)
+
+    def tile(self, repetitions: tuple[int, int] | tuple[int, int, int]):
+        """
+        Tile the potential.
+
+        Parameters
+        ----------
+        repetitions: two or three int
+            The number of repetitions of the potential along each axis. NOTE: if three integers are given, the first
+            represents the number of repetitions along the `z`-axis.
+
+        Returns
+        -------
+        PotentialArray object
+            The tiled potential.
+        """
+        if len(repetitions) == 2:
+            repetitions = tuple(repetitions) + (1,)
+
+        new_array = np.tile(
+            self.array, (repetitions[2], repetitions[0], repetitions[1])
+        )
+
+        new_extent = (self.extent[0] * repetitions[0], self.extent[1] * repetitions[1])
+        new_slice_thickness = tuple(np.tile(self.slice_thickness, repetitions[2]))
+
+        return self.__class__(
+            array=new_array,
+            slice_thickness=new_slice_thickness,
+            extent=new_extent,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+        )
+
+    def to_hyperspy(self):
+        return self.to_images().to_hyperspy()
+
+    def to_images(self):
+        """Convert slices of the potential to a stack of images."""
+        metadata = {"label": "potential", "units": "eV / e"}
+
+        return Images(
+            array=self._array,
+            sampling=(self.sampling[0], self.sampling[1]),
+            metadata=metadata,
+            ensemble_axes_metadata=self.axes_metadata[:-2],
+        )
+
+    def project(self) -> Images:
+        """
+        Create a 2D array representing a projected image of the potential(s).
+
+        Returns
+        -------
+        images : Images
+            One or more images of the projected potential(s).
+        """
+        metadata = {"label": "potential", "units": "eV / e"}
+        array = self.array.sum(-3)
+        array -= array.min((-2, -1), keepdims=True)
+
+        return Images(
+            array=array,
+            sampling=self.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+
+class PotentialArray(BasePotential, FieldArray):
+    """
+    The potential array represents slices of the electrostatic potential as an array. All other potentials build
+    potential arrays.
+
+    Parameters
+    ----------
+    array: 3D np.ndarray
+        The array representing the potential slices. The first dimension is the slice index and the last two are the
+        spatial dimensions.
+    slice_thickness: float
+        The thicknesses of potential slices [Å]. If a float, the thickness is the same for all slices.
+        If a sequence, the length must equal the length of the potential array.
+    extent: one or two float, optional
+        Lateral extent of the potential [Å].
+    sampling: one or two float, optional
+        Lateral sampling of the potential [1 / Å].
+    exit_planes : int or tuple of int, optional
+        The `exit_planes` argument can be used to calculate thickness series.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
+        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
+        an integer a measurement will be collected every `exit_planes` number of slices.
+    ensemble_axes_metadata : list of AxesMetadata
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+    metadata : dict
+        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
+        from the waves.
+    """
+
+    _base_dims = 3
+
+    def __init__(
+        self,
+        array: np.ndarray | da.core.Array,
+        slice_thickness: float | tuple[float, ...] = None,
+        extent: float | tuple[float, float] = None,
+        sampling: float | tuple[float, float] = None,
+        exit_planes: int | tuple[int, ...] = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
+        super().__init__(
+            array=array,
+            slice_thickness=slice_thickness,
+            extent=extent,
+            sampling=sampling,
+            exit_planes=exit_planes,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    def transmission_function(self, energy: float) -> TransmissionFunction:
         """
         Calculate the transmission functions for each slice for a specific energy.
 
@@ -1048,42 +1145,7 @@ class PotentialArray(BasePotential, ArrayObject):
         )
         return t
 
-    def tile(self, repetitions: tuple[int, int] | tuple[int, int, int]):
-        """
-        Tile the potential.
-
-        Parameters
-        ----------
-        multiples: two or three int
-            The number of repetitions of the potential along each axis. NOTE: if three integers are given, the first
-            represents the number of repetitions along the `z`-axis.
-
-        Returns
-        -------
-        PotentialArray object
-            The tiled potential.
-        """
-        if len(repetitions) == 2:
-            repetitions = tuple(repetitions) + (1,)
-
-        new_array = np.tile(
-            self.array, (repetitions[2], repetitions[0], repetitions[1])
-        )
-
-        new_extent = (self.extent[0] * repetitions[0], self.extent[1] * repetitions[1])
-        new_slice_thickness = tuple(np.tile(self.slice_thickness, repetitions[2]))
-
-        return self.__class__(
-            array=new_array,
-            slice_thickness=new_slice_thickness,
-            extent=new_extent,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-        )
-
-    def to_hyperspy(self):
-        return self.to_images().to_hyperspy()
-
-    def transmit(self, waves: "Waves", conjugate: bool = False) -> "Waves":
+    def transmit(self, waves: Waves, conjugate: bool = False) -> Waves:
         """
         Transmit a wave function through a potential slice.
 
@@ -1103,37 +1165,6 @@ class PotentialArray(BasePotential, ArrayObject):
         transmission_function = self.transmission_function(waves.energy)
 
         return transmission_function.transmit(waves, conjugate=conjugate)
-
-    def to_images(self):
-        """Convert slices of the potential to a stack of images."""
-        metadata = {"label": "potential", "units": "eV / e"}
-
-        return Images(
-            array=self._array,
-            sampling=(self.sampling[0], self.sampling[1]),
-            metadata=metadata,
-            ensemble_axes_metadata=self.axes_metadata[:-2],
-        )
-
-    def project(self) -> Images:
-        """
-        Create a 2D array representing a projected image of the potential(s).
-
-        Returns
-        -------
-        images : Images
-            One or more images of the projected potential(s).
-        """
-        metadata = {"label": "potential", "units": "eV / e"}
-        array = self.array.sum(-3)
-        array -= array.min((-2, -1), keepdims=True)
-
-        return Images(
-            array=array,
-            sampling=self.sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=metadata,
-        )
 
 
 class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
@@ -1167,7 +1198,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self._accelerator = Accelerator(energy=energy)
         super().__init__(array, slice_thickness, extent, sampling)
 
-    def get_chunk(self, first_slice, last_slice) -> "TransmissionFunction":
+    def get_chunk(self, first_slice, last_slice) -> TransmissionFunction:
         array = self.array[first_slice:last_slice]
         if len(array.shape) == 2:
             array = array[None]
@@ -1178,7 +1209,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             energy=self.energy,
         )
 
-    def transmission_function(self, energy) -> "TransmissionFunction":
+    def transmission_function(self, energy) -> TransmissionFunction:
         """
         Calculate the transmission functions for each slice for a specific energy.
 

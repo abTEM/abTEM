@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 
+import dask.array as da
 import numpy as np
 from ase import Atoms
 from scipy.integrate import trapezoid
@@ -10,8 +11,7 @@ from scipy.interpolate import interp1d
 from scipy.ndimage import map_coordinates
 from scipy.optimize import brentq
 
-from abtem.core.axes import ThicknessAxis, RealSpaceAxis, OrdinalAxis
-from abtem.core.backend import get_array_module
+from abtem.core.axes import ThicknessAxis, RealSpaceAxis, OrdinalAxis, AxisMetadata
 from abtem.core.grid import disc_meshgrid
 from abtem.core.utils import get_data_path
 from abtem.inelastic.phonons import BaseFrozenPhonons
@@ -19,6 +19,7 @@ from abtem.integrals import cutoff_taper
 from abtem.potentials.iam import (
     BaseField,
     _FieldBuilderFromAtoms,
+    FieldArray,
 )
 
 
@@ -120,67 +121,73 @@ class ParametrizedMagneticFieldInterpolator:
         self._slice_limits = slice_limits
         self._cutoff = np.max([np.max(np.abs(x)), np.max(np.abs(y))])
 
-    def integrate_on_grid(self, position, a, b, theta, phi, gpts, sampling):
-        pixel_position = np.floor(position / sampling).astype(int)
-        subpixel_position = position / sampling - pixel_position
-
+    def integrate_on_grid(self, atoms, a, b, gpts, sampling, device):
+        B = np.zeros((3, gpts[0], gpts[1]))
         radius_out = int(np.floor(self._cutoff / np.min(sampling)))
         radius_in = len(self._x) // 2
-
         indices = disc_meshgrid(radius_out)
 
-        R = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
-        points = np.zeros((len(indices), 3))
-        points[:, :2] = R.dot(indices.T).T
-        points[:, 2] = (
-            (theta - self._theta.min()) / self._theta.ptp() * (len(self._theta) - 1)
-        )
-        points[:, 0] = (
-            points[:, 0] * radius_in / radius_out + radius_in + subpixel_position[0]
-        )
-        points[:, 1] = (
-            points[:, 1] * radius_in / radius_out + radius_in + subpixel_position[1]
-        )
+        for atom in atoms:
+            position = atom.position[:2]
+            a = a - atom.position[2]
+            b = b - atom.position[2]
+            theta = 0
+            phi = 0
 
-        slice_index_a = np.searchsorted(self._slice_limits, a)
-        slice_index_b = np.searchsorted(self._slice_limits, b)
+            pixel_position = np.floor(position / sampling).astype(int)
+            subpixel_position = position / sampling - pixel_position
 
-        b1_integrals_xy = (
-            self._b1_integrals_xy[slice_index_b] - self._b1_integrals_xy[slice_index_a]
-        )
-        b1_term_xy = map_coordinates(b1_integrals_xy, points.T, cval=0.0, order=1)
+            R = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
+            points = np.zeros((len(indices), 3))
+            points[:, :2] = R.dot(indices.T).T
+            points[:, 2] = (
+                (theta - self._theta.min()) / self._theta.ptp() * (len(self._theta) - 1)
+            )
+            points[:, 0] = (
+                points[:, 0] * radius_in / radius_out + radius_in + subpixel_position[0]
+            )
+            points[:, 1] = (
+                points[:, 1] * radius_in / radius_out + radius_in + subpixel_position[1]
+            )
+            slice_index_a = np.searchsorted(self._slice_limits, a)
+            slice_index_b = min(np.searchsorted(self._slice_limits, b), len(self._b1_integrals_xy) - 1)
 
-        b1_integrals_z = (
-            self._b1_integrals_z[slice_index_b] - self._b1_integrals_z[slice_index_a]
-        )
-        b1_term_z = map_coordinates(b1_integrals_z, points.T, cval=0.0, order=1)
+            b1_integrals_xy = (
+                self._b1_integrals_xy[slice_index_b] - self._b1_integrals_xy[slice_index_a]
+            )
+            b1_term_xy = map_coordinates(b1_integrals_xy, points.T, cval=0.0, order=1)
 
-        b2_integrals = (
-            self._b2_integrals[slice_index_b] - self._b2_integrals[slice_index_a]
-        )
-        b2_term = map_coordinates(b2_integrals, points[:, :-1].T, cval=0.0, order=1)
+            b1_integrals_z = (
+                self._b1_integrals_z[slice_index_b] - self._b1_integrals_z[slice_index_a]
+            )
+            b1_term_z = map_coordinates(b1_integrals_z, points.T, cval=0.0, order=1)
 
-        magnetic_moment = unit_vector_from_angles(theta, phi)
-        x = (indices[:, 0] + subpixel_position[0]) * sampling[0]
-        y = (indices[:, 1] + subpixel_position[1]) * sampling[1]
+            b2_integrals = (
+                self._b2_integrals[slice_index_b] - self._b2_integrals[slice_index_a]
+            )
+            b2_term = map_coordinates(b2_integrals, points[:, :-1].T, cval=0.0, order=1)
 
-        Bx = b1_term_xy * x + b2_term * magnetic_moment[0]
-        By = b1_term_xy * y + b2_term * magnetic_moment[1]
-        Bz = b1_term_z + b2_term * magnetic_moment[2]
+            magnetic_moment = unit_vector_from_angles(theta, phi)
+            x = (indices[:, 0] + subpixel_position[0]) * sampling[0]
+            y = (indices[:, 1] + subpixel_position[1]) * sampling[1]
 
-        indices[:, 0] = indices[:, 0] + pixel_position[0]
-        indices[:, 1] = indices[:, 1] + pixel_position[1]
+            Bx = b1_term_xy * x + b2_term * magnetic_moment[0]
+            By = b1_term_xy * y + b2_term * magnetic_moment[1]
+            Bz = b1_term_z + b2_term * magnetic_moment[2]
 
-        mask = (
-            (indices[:, 0] >= 0)
-            * (indices[:, 1] >= 0)
-            * (indices[:, 0] < gpts[0])
-            * (indices[:, 1] < gpts[1])
-        )
-        indices = indices[mask]
+            shifted_indices = indices.copy()
+            shifted_indices[:, 0] = shifted_indices[:, 0] + pixel_position[0]
+            shifted_indices[:, 1] = shifted_indices[:, 1] + pixel_position[1]
 
-        B = np.zeros((3, gpts[0], gpts[1]))
-        B[(slice(None), indices[:, 0], indices[:, 1])] = [Bx[mask], By[mask], Bz[mask]]
+            mask = (
+                (shifted_indices[:, 0] >= 0)
+                * (shifted_indices[:, 1] >= 0)
+                * (shifted_indices[:, 0] < gpts[0])
+                * (shifted_indices[:, 1] < gpts[1])
+            )
+            shifted_indices = shifted_indices[mask]
+
+            B[(slice(None), shifted_indices[:, 0], shifted_indices[:, 1])] += [Bx[mask], By[mask], Bz[mask]]
         return B
 
 
@@ -201,7 +208,7 @@ class MagneticFieldIntegrator:
         cutoff=4,
         step_size: float = 0.01,
         slice_thickness: float = 0.1,
-        gpts: int = 64,
+        gpts: int = 51,
         inclination_gpts: int = 32,
         radial_gpts: int = 100,
     ):
@@ -213,6 +220,10 @@ class MagneticFieldIntegrator:
         self._gpts = gpts
         self._inclination_gpts = inclination_gpts
         self._radial_gpts = radial_gpts
+
+    @property
+    def parametrization(self):
+        return self._parametrization
 
     @property
     def finite(self):
@@ -284,7 +295,7 @@ class MagneticFieldIntegrator:
         integrals = trapezoid(2 * b2(r), x=z, axis=-1)
         return integrals
 
-    def build(self, symbol: str):
+    def build(self, symbol: str, gpts, sampling, device):
         x, y = self._grid_coordinates(symbol)
         theta = np.linspace(0, np.pi / 2, self._inclination_gpts)
 
@@ -339,28 +350,24 @@ class MagneticFieldIntegrator:
         return Bx, By, Bz
 
 
-class BaseVectorField(BaseField):
-
-    _vector_axis_label = ""
-
+class BaseMagneticField(BaseField):
     @property
     def base_shape(self):
         """Shape of the base axes of the potential."""
         return (
-            3,
             self.num_slices,
+            3,
         ) + self.gpts
 
     @property
     def base_axes_metadata(self):
         """List of AxisMetadata for the base axes."""
         return [
-            OrdinalAxis(
-                label=self._vector_axis_label,
-                values=("x", "y", "z"),
-            ),
             ThicknessAxis(
                 label="z", values=tuple(np.cumsum(self.slice_thickness)), units="Å"
+            ),
+            OrdinalAxis(
+                values=("Bx", "By", "Bz"),
             ),
             RealSpaceAxis(
                 label="x", sampling=self.sampling[0], units="Å", endpoint=False
@@ -371,10 +378,33 @@ class BaseVectorField(BaseField):
         ]
 
 
-class MagneticField(_FieldBuilderFromAtoms, BaseVectorField):
+class MagneticFieldArray(BaseMagneticField, FieldArray):
 
-    _vector_axis_label = "B"
+    _base_dims = 4
 
+    def __init__(
+        self,
+        array: np.ndarray | da.core.Array,
+        slice_thickness: float | tuple[float, ...] = None,
+        extent: float | tuple[float, float] = None,
+        sampling: float | tuple[float, float] = None,
+        exit_planes: int | tuple[int, ...] = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
+        super().__init__(
+            array=array,
+            slice_thickness=slice_thickness,
+            extent=extent,
+            sampling=sampling,
+            exit_planes=exit_planes,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+
+class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
+    _exclude_from_copy = ("parametrization",)
     def __init__(
         self,
         atoms: Atoms | BaseFrozenPhonons = None,
@@ -397,6 +427,7 @@ class MagneticField(_FieldBuilderFromAtoms, BaseVectorField):
 
         super().__init__(
             atoms=atoms,
+            array_object=MagneticFieldArray,
             gpts=gpts,
             sampling=sampling,
             slice_thickness=slice_thickness,
@@ -408,26 +439,3 @@ class MagneticField(_FieldBuilderFromAtoms, BaseVectorField):
             periodic=periodic,
             integrator=integrator,
         )
-
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
-
-        if last_slice is None:
-            last_slice = len(self)
-
-        xp = get_array_module(self.device)
-
-        sliced_atoms = self.get_sliced_atoms()
-
-        return sliced_atoms
-
-        # numbers = np.unique(sliced_atoms.atoms.numbers)
-        #
-        # integrators = {
-        #     number: self.integrator.build(
-        #         chemical_symbols[number],
-        #         gpts=self.gpts,
-        #         sampling=self.sampling,
-        #         device=self.device,
-        #     )
-        #     for number in numbers
-        # }
