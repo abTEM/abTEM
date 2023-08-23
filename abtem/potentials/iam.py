@@ -63,22 +63,10 @@ if TYPE_CHECKING:
     from abtem.integrals import ProjectionIntegratorPlan
 
 
-class BasePotential(
-    Ensemble,
-    HasGridMixin,
-    EqualityMixin,
-    CopyMixin,
-):
-    """Base class of all potentials. Documented in the subclasses."""
-
-    @property
-    def base_shape(self):
-        """Shape of the base axes of the potential."""
-        return (self.num_slices,) + self.gpts
-
+class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin):
     @property
     @abstractmethod
-    def num_frozen_phonons(self):
+    def num_configurations(self):
         """Number of frozen phonons in the ensemble of potentials."""
         pass
 
@@ -233,6 +221,15 @@ class BasePotential(
                 kwargs["explode"] = True
 
             return self.to_images().show(**kwargs)
+
+
+class BasePotential(BaseField):
+    """Base class of all potentials. Documented in the subclasses."""
+
+    @property
+    def base_shape(self):
+        """Shape of the base axes of the potential."""
+        return (self.num_slices,) + self.gpts
 
 
 def _validate_potential(
@@ -429,7 +426,6 @@ class _PotentialBuilder(BasePotential):
                 meta=xp.array((), dtype=np.float32),
             )
 
-
         else:
             xp = get_array_module(self.device)
 
@@ -555,16 +551,13 @@ class Potential(_PotentialBuilder):
             else:
                 raise ValueError()
         else:
-
             self._frozen_phonons = atoms
 
         if integrator is None:
             if projection == "finite":
                 integrator = ProjectionQuadratureRule(parametrization=parametrization)
             elif projection == "infinite":
-                integrator = ProjectedScatteringFactors(
-                    parametrization=parametrization
-                )
+                integrator = ProjectedScatteringFactors(parametrization=parametrization)
             else:
                 raise NotImplementedError
 
@@ -590,7 +583,7 @@ class Potential(_PotentialBuilder):
         return self._frozen_phonons
 
     @property
-    def num_frozen_phonons(self) -> int:
+    def num_configurations(self) -> int:
         """Size of the ensemble of atomic configurations representing frozen phonons."""
         return len(self.frozen_phonons)
 
@@ -760,9 +753,6 @@ class Potential(_PotentialBuilder):
                     else:
                         array = new_array[None]
 
-
-
-
             if array is None:
                 array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
 
@@ -846,7 +836,9 @@ class PotentialArray(BasePotential, ArrayObject):
         A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
         from the waves.
     """
+
     _base_dims = 3
+
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
@@ -867,13 +859,12 @@ class PotentialArray(BasePotential, ArrayObject):
 
         super().__init__(
             array=array,
-
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
 
     @property
-    def num_frozen_phonons(self):
+    def num_configurations(self):
         indices = _find_axes_type(self, FrozenPhononsAxis)
         if indices:
             return reduce(mul, tuple(self.array.shape[i] for i in indices))
@@ -1230,7 +1221,7 @@ class CrystalPotential(_PotentialBuilder):
             self._seeds = _validate_seeds(seeds, num_frozen_phonons)
 
         if (
-            (potential_unit.num_frozen_phonons == 1)
+            (potential_unit.num_configurations == 1)
             and (num_frozen_phonons is not None)
             and (num_frozen_phonons > 1)
         ):
@@ -1274,10 +1265,10 @@ class CrystalPotential(_PotentialBuilder):
         if self._seeds is None:
             return ()
         else:
-            return (self.num_frozen_phonons,)
+            return (self.num_configurations,)
 
     @property
-    def num_frozen_phonons(self):
+    def num_configurations(self):
         if self._seeds is None:
             return 1
         else:
@@ -1338,11 +1329,18 @@ class CrystalPotential(_PotentialBuilder):
         else:
             num_frozen_phonons = None
 
-        new = cls(potential_unit=potential, seeds=seed, num_frozen_phonons=num_frozen_phonons, **kwargs)
+        new = cls(
+            potential_unit=potential,
+            seeds=seed,
+            num_frozen_phonons=num_frozen_phonons,
+            **kwargs,
+        )
         return _wrap_with_array(new)
 
     def _from_partitioned_args(self):
-        kwargs = self._copy_kwargs(exclude=("potential_unit", "seeds", "num_frozen_phonons"))
+        kwargs = self._copy_kwargs(
+            exclude=("potential_unit", "seeds", "num_frozen_phonons")
+        )
         output = partial(self._from_partitioned_args_func, **kwargs)
         return output
 
@@ -1371,9 +1369,8 @@ class CrystalPotential(_PotentialBuilder):
             array = da.concatenate(arrays)
         else:
 
-
             potential_unit = self.potential_unit
-            #if self.potential_unit.array:
+            # if self.potential_unit.array:
             #    atoms = atoms.compute()
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):

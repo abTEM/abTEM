@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from scipy.integrate import cumulative_trapezoid, trapezoid
-from scipy.interpolate import interp1d, RegularGridInterpolator
-from scipy.ndimage import map_coordinates
-from scipy.optimize import fsolve, brentq
-
-from abtem.core.grid import disc_meshgrid
-from abtem.core.utils import get_data_path
-import os
 import json
+import os
+
 import numpy as np
+from scipy.integrate import cumulative_trapezoid, trapezoid
+from scipy.interpolate import interp1d
+from scipy.ndimage import map_coordinates
+from scipy.optimize import brentq
+
+from abtem.core.ensemble import Ensemble
+from abtem.core.grid import disc_meshgrid, HasGridMixin
+from abtem.core.utils import get_data_path, EqualityMixin, CopyMixin
 from abtem.integrals import cutoff_taper
 
 
@@ -96,27 +98,6 @@ def radial_cutoff(func, tolerance=1e-3):
     return brentq(lambda x: func(x) - tolerance, a=1e-3, b=1e3)
 
 
-def perpendicular_b1_integrals(
-    x, y, integration_step, magnetic_moment, parameters, r_cut
-):
-    r_interp = np.linspace(0, r_cut, 100)
-    b1 = radial_prefactor_b1(r_interp, parameters)
-    nz = int(np.ceil(r_cut * 2 / integration_step))
-    dz = r_cut * 2 / nz
-
-    x = x[:, None, None]
-    y = y[None, :, None]
-    z = np.linspace(-r_cut, r_cut, nz)[None, None]
-
-    r = np.sqrt(x**2 + y**2 + z**2)
-    mr = x * magnetic_moment[0] + y * magnetic_moment[1] + z * magnetic_moment[2]
-
-    integrals = b1(r) * mr * 2
-    integrals = cumulative_trapezoid(integrals, dx=dz, axis=-1, initial=0)
-    integrals = integrals * x
-    return integrals
-
-
 def polar2cartesian(polar):
     return np.stack(
         [polar[:, 0] * np.cos(polar[:, 1]), polar[:, 0] * np.sin(polar[:, 1])], axis=-1
@@ -183,7 +164,7 @@ class ParametrizedMagneticFieldInterpolator:
 
     def integrate_on_grid(self, position, a, b, theta, phi, gpts, sampling):
         pixel_position = np.floor(position / sampling).astype(int)
-        subpixel_position = (position / sampling - pixel_position)
+        subpixel_position = position / sampling - pixel_position
 
         radius_out = int(np.floor(self._cutoff / np.min(sampling)))
         radius_in = len(self._x) // 2
@@ -196,8 +177,12 @@ class ParametrizedMagneticFieldInterpolator:
         points[:, 2] = (
             (theta - self._theta.min()) / self._theta.ptp() * (len(self._theta) - 1)
         )
-        points[:, 0] = points[:, 0] * radius_in / radius_out + radius_in + subpixel_position[0]
-        points[:, 1] = points[:, 1] * radius_in / radius_out + radius_in + subpixel_position[1]
+        points[:, 0] = (
+            points[:, 0] * radius_in / radius_out + radius_in + subpixel_position[0]
+        )
+        points[:, 1] = (
+            points[:, 1] * radius_in / radius_out + radius_in + subpixel_position[1]
+        )
 
         slice_index_a = np.searchsorted(self._slice_limits, a)
         slice_index_b = np.searchsorted(self._slice_limits, b)
@@ -368,6 +353,19 @@ class IntegratedParametrizedMagneticField:
         return Bx, By, Bz
 
 
+class BaseField(
+    Ensemble,
+    HasGridMixin,
+    EqualityMixin,
+    CopyMixin,
+):
+    @property
+    def base_shape(self):
+        """Shape of the base axes of the potential."""
+        return (self.num_slices,) + (3,) + self.gpts
+
+
 class ParametrizedMagneticField:
     def __init__(self, atoms, gpts, sampling, slice_thickness, parametrization="lyon"):
-        pass
+        self._atoms = atoms
+        self._

@@ -575,7 +575,7 @@ class GPAWPotential(_PotentialBuilder):
         return self._frozen_phonons.ensemble_axes_metadata
 
     @property
-    def num_frozen_phonons(self):
+    def num_configurations(self):
         return len(self.calculators)
 
     @property
