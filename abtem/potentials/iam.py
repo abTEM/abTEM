@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import warnings
-from abc import abstractmethod
+from abc import abstractmethod, ABCMeta
 from functools import partial
 from functools import reduce
 from numbers import Number
@@ -63,7 +63,12 @@ if TYPE_CHECKING:
     from abtem.integrals import ProjectionIntegratorPlan
 
 
-class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin):
+class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
+    @property
+    @abstractmethod
+    def base_shape(self) -> tuple[int, ...]:
+        pass
+
     @property
     @abstractmethod
     def num_configurations(self):
@@ -71,19 +76,9 @@ class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin):
         pass
 
     @property
+    @abstractmethod
     def base_axes_metadata(self):
-        """List of AxisMetadata for the base axes."""
-        return [
-            ThicknessAxis(
-                label="z", values=tuple(np.cumsum(self.slice_thickness)), units="Å"
-            ),
-            RealSpaceAxis(
-                label="x", sampling=self.sampling[0], units="Å", endpoint=False
-            ),
-            RealSpaceAxis(
-                label="y", sampling=self.sampling[1], units="Å", endpoint=False
-            ),
-        ]
+        pass
 
     def _get_exit_planes_axes_metadata(self):
         return ThicknessAxis(label="z", values=tuple(self.exit_thicknesses))
@@ -231,6 +226,21 @@ class BasePotential(BaseField):
         """Shape of the base axes of the potential."""
         return (self.num_slices,) + self.gpts
 
+    @property
+    def base_axes_metadata(self):
+        """List of AxisMetadata for the base axes."""
+        return [
+            ThicknessAxis(
+                label="z", values=tuple(np.cumsum(self.slice_thickness)), units="Å"
+            ),
+            RealSpaceAxis(
+                label="x", sampling=self.sampling[0], units="Å", endpoint=False
+            ),
+            RealSpaceAxis(
+                label="y", sampling=self.sampling[1], units="Å", endpoint=False
+            ),
+        ]
+
 
 def _validate_potential(
     potential: Atoms | BasePotential, waves: BaseWaves = None
@@ -265,7 +275,27 @@ def _validate_exit_planes(exit_planes, num_slices):
     return exit_planes
 
 
-class _PotentialBuilder(BasePotential):
+def _require_cell_transform(cell, box, plane, origin):
+
+    if box == tuple(np.diag(cell)):
+        return False
+
+    if not is_cell_orthogonal(cell):
+        return True
+
+    if box is not None:
+        return True
+
+    if plane != "xy":
+        return True
+
+    if origin != (0.0, 0.0, 0.0):
+        return True
+
+    return False
+
+
+class _FieldBuilder(BaseField):
     def __init__(
         self,
         slice_thickness: float | tuple[float, ...],
@@ -280,8 +310,7 @@ class _PotentialBuilder(BasePotential):
         periodic: bool = True,
         device: str = None,
     ):
-
-        if self._require_cell_transform(cell, box=box, plane=plane, origin=origin):
+        if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
             axes = plane_to_axes(plane)
             cell = cell[:, list(axes)]
             box = tuple(best_orthogonal_cell(cell))
@@ -340,26 +369,7 @@ class _PotentialBuilder(BasePotential):
         """The origin relative to the provided atoms mapped to the origin of the potential."""
         return self._origin
 
-    def _require_cell_transform(self, cell, box, plane, origin):
-
-        if box == tuple(np.diag(cell)):
-            return False
-
-        if not is_cell_orthogonal(cell):
-            return True
-
-        if box is not None:
-            return True
-
-        if plane != "xy":
-            return True
-
-        if origin != (0.0, 0.0, 0.0):
-            return True
-
-        return False
-
-    def __getitem__(self, item) -> "PotentialArray":
+    def __getitem__(self, item) -> PotentialArray:
         return self.build(lazy=False)[item]
 
     @staticmethod
@@ -459,108 +469,24 @@ class _PotentialBuilder(BasePotential):
         return potential
 
 
-class Potential(_PotentialBuilder):
-    """
-    Calculate the electrostatic potential of a set of atoms or frozen phonon configurations. The potential is calculated
-    with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic potentials.
-
-    Parameters
-    ----------
-    atoms : ase.Atoms or abtem.FrozenPhonons
-        Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
-        the electrostatic potential(s).
-    gpts : one or two int, optional
-        Number of grid points in `x` and `y` describing each slice of the potential. Provide either "sampling" (spacing
-        between consecutive grid points) or "gpts" (total number of grid points).
-    sampling : one or two float, optional
-        Sampling of the potential in `x` and `y` [1 / Å]. Provide either "sampling" or "gpts".
-    slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
-        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
-        supercell. The slice thickness may be given as a sequence of values for each slice, in which case an error will
-        be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
-    parametrization : 'lobato' or 'kirkland', optional
-        The potential parametrization describes the radial dependence of the potential for each element. Two of the
-        most accurate parametrizations are available (by Lobato et al. and Kirkland; default is 'lobato').
-        See the citation guide for references.
-    projection : 'finite' or 'infinite', optional
-        If 'finite' the 3D potential is numerically integrated between the slice boundaries. If 'infinite' (default),
-        the infinite potential projection of each atom will be assigned to a single slice.
-    exit_planes : int or tuple of int, optional
-        The `exit_planes` argument can be used to calculate thickness series.
-        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
-        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
-        an integer a measurement will be collected every `exit_planes` number of slices.
-    plane : str or two tuples of three float, optional
-        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
-        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
-        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
-        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
-        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
-    origin : three float, optional
-        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to
-        translating the atoms. The default is (0., 0., 0.).
-    box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
-        If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
-        necessary to preserve periodicity, determined by the `periodic` keyword.
-    periodic : bool, True
-        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is
-        transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine
-        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
-        potential, which may not preserve periodicity.
-    integrator : ProjectionIntegrator, optional
-        Provide a custom integrator for the projection integrals of the potential slicing.
-    device : str, optional
-        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
-        configuration file.
-    """
-
-    _exclude_from_copy = ("parametrization", "projection", "integral_method")
-
+class _FieldBuilderFromAtoms(_FieldBuilder):
     def __init__(
         self,
         atoms: Atoms | BaseFrozenPhonons = None,
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
         slice_thickness: float | tuple[float, ...] = 1,
-        parametrization: str | Parametrization = "lobato",
-        projection: str = "infinite",
         exit_planes: int | tuple[int, ...] = None,
         plane: str
         | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: tuple[float, float, float] = None,
         periodic: bool = True,
-        integrator: ProjectionIntegratorPlan = None,
+        integrator=None,
         device: str = None,
     ):
 
-        if isinstance(atoms, Atoms):
-            atoms = atoms.copy()
-            atoms.calc = None
-
-        if not hasattr(atoms, "randomize"):
-
-            if isinstance(atoms, (list, tuple)):
-                self._frozen_phonons = AtomsEnsemble(atoms)
-            elif isinstance(atoms, Atoms):
-                self._frozen_phonons = DummyFrozenPhonons(atoms)
-            else:
-                raise ValueError()
-        else:
-            self._frozen_phonons = atoms
-
-        if integrator is None:
-            if projection == "finite":
-                integrator = ProjectionQuadratureRule(parametrization=parametrization)
-            elif projection == "infinite":
-                integrator = ProjectedScatteringFactors(parametrization=parametrization)
-            else:
-                raise NotImplementedError
-
+        self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
         self._sliced_atoms = None
 
@@ -595,7 +521,7 @@ class Potential(_PotentialBuilder):
     def _cutoffs(self):
         atoms = self.frozen_phonons.atoms
         unique_numbers = np.unique(atoms.numbers)
-        return tuple(self._integrator.cutoff(number) for number in unique_numbers)
+        return tuple(self._integrator.cutoff(chemical_symbols[number]) for number in unique_numbers)
 
     def get_transformed_atoms(self):
         """
@@ -681,6 +607,130 @@ class Potential(_PotentialBuilder):
         self._sliced_atoms = self._prepare_atoms()
 
         return self._sliced_atoms
+
+
+class _PotentialBuilder(BasePotential):
+    pass
+
+
+def _validate_frozen_phonons(atoms):
+    if isinstance(atoms, Atoms):
+        atoms = atoms.copy()
+        atoms.calc = None
+
+    if not hasattr(atoms, "randomize"):
+        if isinstance(atoms, (list, tuple)):
+            frozen_phonons = AtomsEnsemble(atoms)
+        elif isinstance(atoms, Atoms):
+            frozen_phonons = DummyFrozenPhonons(atoms)
+        else:
+            raise ValueError()
+    else:
+        frozen_phonons = atoms
+
+    return frozen_phonons
+
+
+class Potential(_FieldBuilderFromAtoms, BasePotential):
+    """
+    Calculate the electrostatic potential of a set of atoms or frozen phonon configurations. The potential is calculated
+    with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic potentials.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms or abtem.FrozenPhonons
+        Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
+        the electrostatic potential(s).
+    gpts : one or two int, optional
+        Number of grid points in `x` and `y` describing each slice of the potential. Provide either "sampling" (spacing
+        between consecutive grid points) or "gpts" (total number of grid points).
+    sampling : one or two float, optional
+        Sampling of the potential in `x` and `y` [1 / Å]. Provide either "sampling" or "gpts".
+    slice_thickness : float or sequence of float, optional
+        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
+        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
+        supercell. The slice thickness may be given as a sequence of values for each slice, in which case an error will
+        be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
+    parametrization : 'lobato' or 'kirkland', optional
+        The potential parametrization describes the radial dependence of the potential for each element. Two of the
+        most accurate parametrizations are available (by Lobato et al. and Kirkland; default is 'lobato').
+        See the citation guide for references.
+    projection : 'finite' or 'infinite', optional
+        If 'finite' the 3D potential is numerically integrated between the slice boundaries. If 'infinite' (default),
+        the infinite potential projection of each atom will be assigned to a single slice.
+    exit_planes : int or tuple of int, optional
+        The `exit_planes` argument can be used to calculate thickness series.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
+        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
+        an integer a measurement will be collected every `exit_planes` number of slices.
+    plane : str or two tuples of three float, optional
+        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
+        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
+        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
+        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
+        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+    origin : three float, optional
+        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to
+        translating the atoms. The default is (0., 0., 0.).
+    box : three float, optional
+        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
+        If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
+        necessary to preserve periodicity, determined by the `periodic` keyword.
+    periodic : bool, True
+        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is
+        transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine
+        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
+        potential, which may not preserve periodicity.
+    integrator : ProjectionIntegrator, optional
+        Provide a custom integrator for the projection integrals of the potential slicing.
+    device : str, optional
+        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
+        configuration file.
+    """
+
+    _exclude_from_copy = ("parametrization", "projection", "integral_method")
+
+    def __init__(
+        self,
+        atoms: Atoms | BaseFrozenPhonons = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
+        slice_thickness: float | tuple[float, ...] = 1,
+        parametrization: str | Parametrization = "lobato",
+        projection: str = "infinite",
+        exit_planes: int | tuple[int, ...] = None,
+        plane: str
+        | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: tuple[float, float, float] = None,
+        periodic: bool = True,
+        integrator: ProjectionIntegratorPlan = None,
+        device: str = None,
+    ):
+
+        if integrator is None:
+            if projection == "finite":
+                integrator = ProjectionQuadratureRule(parametrization=parametrization)
+            elif projection == "infinite":
+                integrator = ProjectedScatteringFactors(parametrization=parametrization)
+            else:
+                raise NotImplementedError
+
+        super().__init__(
+            atoms=atoms,
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            device=device,
+            plane=plane,
+            origin=origin,
+            box=box,
+            periodic=periodic,
+            integrator=integrator
+        )
 
     def generate_slices(
         self, first_slice: int = 0, last_slice: int = None, return_depth: float = False

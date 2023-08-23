@@ -10,16 +10,13 @@ import dask.array as da
 import numpy as np
 
 from abtem.core import config
-#from abtem.core.axes import AxisMetadata, AxesMetadataList
+from abtem.core.axes import AxisMetadata, AxesMetadataList
 from abtem.core.chunks import (
     chunk_ranges,
     validate_chunks,
     Chunks,
 )
 from abtem.core.utils import tuple_range, interleave
-
-if TYPE_CHECKING:
-    from abtem.core.axes import AxisMetadata, AxesMetadataList
 
 
 def _wrap_with_array(x, ndims:int=None):

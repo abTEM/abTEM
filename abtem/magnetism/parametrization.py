@@ -4,15 +4,22 @@ import json
 import os
 
 import numpy as np
-from scipy.integrate import cumulative_trapezoid, trapezoid
+from ase import Atoms
+from scipy.integrate import trapezoid
 from scipy.interpolate import interp1d
 from scipy.ndimage import map_coordinates
 from scipy.optimize import brentq
 
-from abtem.core.ensemble import Ensemble
-from abtem.core.grid import disc_meshgrid, HasGridMixin
-from abtem.core.utils import get_data_path, EqualityMixin, CopyMixin
+from abtem.core.axes import ThicknessAxis, RealSpaceAxis, OrdinalAxis
+from abtem.core.backend import get_array_module
+from abtem.core.grid import disc_meshgrid
+from abtem.core.utils import get_data_path
+from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
+from abtem.potentials.iam import (
+    BaseField,
+    _FieldBuilderFromAtoms,
+)
 
 
 def get_parameters():
@@ -98,55 +105,6 @@ def radial_cutoff(func, tolerance=1e-3):
     return brentq(lambda x: func(x) - tolerance, a=1e-3, b=1e3)
 
 
-def polar2cartesian(polar):
-    return np.stack(
-        [polar[:, 0] * np.cos(polar[:, 1]), polar[:, 0] * np.sin(polar[:, 1])], axis=-1
-    )
-
-
-def cartesian2polar(cartesian):
-    return np.stack(
-        [
-            np.linalg.norm(cartesian, axis=1),
-            np.arctan2(cartesian[:, 1], cartesian[:, 0]),
-        ],
-        axis=-1,
-    )
-
-
-class CartesianGridInterpolator:
-    def __init__(self, points, values, method="linear"):
-        self.limits = np.array([[min(x), max(x)] for x in points])
-        self.values = np.asarray(values, dtype=float)
-        self.order = {"nearest": 0, "linear": 1, "cubic": 3, "quintic": 5}[method]
-
-    def __call__(self, xi):
-        """
-        `xi` here is an array-like (an array or a list) of points.
-
-        Each "point" is an ndim-dimensional array_like, representing
-        the coordinates of a point in ndim-dimensional space.
-        """
-        # transpose the xi array into the ``map_coordinates`` convention
-        # which takes coordinates of a point along columns of a 2D array.
-        # xi = np.asarray(xi)
-
-        # convert from data coordinates to pixel coordinates
-        ns = self.values.shape
-
-        coords = [
-            (val - lo) * (n - 1) / (hi - lo)
-            for val, n, (lo, hi) in zip(xi.T, ns, self.limits)
-        ]
-
-        # a = (np.array(ns) - 1) / np.diff(self.limits, axis=1)[None, :, 0]
-        # xi = xi.T
-        # xi -= self.limits[:, 0, None]
-        # coords = xi - self.limits[None, :, 0]
-
-        return map_coordinates(self.values, coords, order=self.order, cval=0.0)
-
-
 class ParametrizedMagneticFieldInterpolator:
     def __init__(
         self, slice_limits, x, y, theta, b1_integrals_xy, b1_integrals_z, b2_integrals
@@ -226,11 +184,21 @@ class ParametrizedMagneticFieldInterpolator:
         return B
 
 
-class IntegratedParametrizedMagneticField:
+class LyonParametrization:
+    def __init__(self):
+        self._parameters = get_parameters()
+
+    @property
+    def parameters(self):
+        return self._parameters
+
+
+class MagneticFieldIntegrator:
     def __init__(
         self,
         parametrization: str = "lyon",
-        cutoff_tolerance: float = 1e-3,
+        # cutoff_tolerance: float = 1e-3,
+        cutoff=4,
         step_size: float = 0.01,
         slice_thickness: float = 0.1,
         gpts: int = 64,
@@ -238,7 +206,8 @@ class IntegratedParametrizedMagneticField:
         radial_gpts: int = 100,
     ):
         self._parametrization = parametrization
-        self._cutoff_tolerance = cutoff_tolerance
+        # self._cutoff_tolerance = cutoff_tolerance
+        self._cutoff = cutoff
         self._step_size = step_size
         self._slice_thickness = slice_thickness
         self._gpts = gpts
@@ -246,8 +215,15 @@ class IntegratedParametrizedMagneticField:
         self._radial_gpts = radial_gpts
 
     @property
-    def cutoff(self):
-        return 6
+    def finite(self):
+        return True
+
+    @property
+    def periodic(self):
+        return False
+
+    def cutoff(self, symbol):
+        return self._cutoff
 
     @property
     def gpts(self):
@@ -258,21 +234,30 @@ class IntegratedParametrizedMagneticField:
         return get_parameters()
 
     def _radial_prefactor_b1(self, symbol):
-        r = np.linspace(0, self.cutoff, self._radial_gpts)
+        r = np.linspace(0, self.cutoff(symbol), self._radial_gpts)
         return radial_prefactor_b1(r, np.array(self.parameters[symbol]))
 
     def _radial_prefactor_b2(self, symbol):
-        r = np.linspace(0, self.cutoff, self._radial_gpts)
+        r = np.linspace(0, self.cutoff(symbol), self._radial_gpts)
         return radial_prefactor_b2(r, np.array(self.parameters[symbol]))
 
-    def _grid_coordinates(self):
-        return (np.linspace(-self.cutoff, self.cutoff, self.gpts),) * 2
+    def _grid_coordinates(self, symbol):
+        cutoff = self.cutoff(symbol)
+        return (np.linspace(-cutoff, cutoff, self.gpts),) * 2
 
     def _integration_coordinates(self, a, b):
         z = np.arange(a, b + self._step_size / 2, self._step_size)
         return z
 
-    def _b1_integrals(self, symbol, a, b, x, y, theta):
+    def _b1_integrals(
+        self,
+        symbol: str,
+        a: float,
+        b: float,
+        x: np.ndarray,
+        y: np.ndarray,
+        theta: np.ndarray,
+    ):
         b1 = self._radial_prefactor_b1(symbol)
         magnetic_moment = unit_vector_from_angles(theta, 0.0)
         z = self._integration_coordinates(a, b)
@@ -290,18 +275,20 @@ class IntegratedParametrizedMagneticField:
         )
         return integrals_xy, integrals_z
 
-    def _b2_integrals(self, symbol, a, b, x, y):
+    def _b2_integrals(
+        self, symbol: str, a: float, b: float, x: np.ndarray, y: np.ndarray
+    ):
         b2 = self._radial_prefactor_b2(symbol)
         z = self._integration_coordinates(a, b)
         r = np.sqrt(x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None] ** 2)
         integrals = trapezoid(2 * b2(r), x=z, axis=-1)
         return integrals
 
-    def build(self, symbol):
-        x, y = self._grid_coordinates()
+    def build(self, symbol: str):
+        x, y = self._grid_coordinates(symbol)
         theta = np.linspace(0, np.pi / 2, self._inclination_gpts)
 
-        n = np.ceil(self.cutoff / self._slice_thickness)
+        n = np.ceil(self.cutoff(symbol) / self._slice_thickness)
         slice_cutoff = n * self._slice_thickness
         slice_limits = np.linspace(-slice_cutoff, slice_cutoff, int(n) * 2 + 1)
 
@@ -313,7 +300,6 @@ class IntegratedParametrizedMagneticField:
             b1_integrals = self._b1_integrals(symbol, a, b, x, y, theta)
             b1_integrals_xy[i] = b1_integrals_xy[i - 1] + b1_integrals[0]
             b1_integrals_z[i] = b1_integrals_z[i - 1] + b1_integrals[1]
-
             b2_integrals[i] = b2_integrals[i - 1] + self._b2_integrals(
                 symbol, a, b, x, y
             )
@@ -332,7 +318,7 @@ class IntegratedParametrizedMagneticField:
         b1 = self._radial_prefactor_b1(symbol)
         b2 = self._radial_prefactor_b2(symbol)
 
-        x, y = self._grid_coordinates()
+        x, y = self._grid_coordinates(symbol)
         z = self._integration_coordinates(a, b)
         magnetic_moment = unit_vector_from_angles(theta, phi)
 
@@ -353,19 +339,95 @@ class IntegratedParametrizedMagneticField:
         return Bx, By, Bz
 
 
-class BaseField(
-    Ensemble,
-    HasGridMixin,
-    EqualityMixin,
-    CopyMixin,
-):
+class BaseVectorField(BaseField):
+
+    _vector_axis_label = ""
+
     @property
     def base_shape(self):
         """Shape of the base axes of the potential."""
-        return (self.num_slices,) + (3,) + self.gpts
+        return (
+            3,
+            self.num_slices,
+        ) + self.gpts
+
+    @property
+    def base_axes_metadata(self):
+        """List of AxisMetadata for the base axes."""
+        return [
+            OrdinalAxis(
+                label=self._vector_axis_label,
+                values=("x", "y", "z"),
+            ),
+            ThicknessAxis(
+                label="z", values=tuple(np.cumsum(self.slice_thickness)), units="Å"
+            ),
+            RealSpaceAxis(
+                label="x", sampling=self.sampling[0], units="Å", endpoint=False
+            ),
+            RealSpaceAxis(
+                label="y", sampling=self.sampling[1], units="Å", endpoint=False
+            ),
+        ]
 
 
-class ParametrizedMagneticField:
-    def __init__(self, atoms, gpts, sampling, slice_thickness, parametrization="lyon"):
-        self._atoms = atoms
-        self._
+class MagneticField(_FieldBuilderFromAtoms, BaseVectorField):
+
+    _vector_axis_label = "B"
+
+    def __init__(
+        self,
+        atoms: Atoms | BaseFrozenPhonons = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
+        slice_thickness: float | tuple[float, ...] = 1,
+        parametrization: str = "lyon",
+        exit_planes: int | tuple[int, ...] = None,
+        plane: str
+        | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: tuple[float, float, float] = None,
+        periodic: bool = True,
+        integrator=None,
+        device: str = None,
+    ):
+
+        if integrator is None:
+            raise NotImplementedError
+
+        super().__init__(
+            atoms=atoms,
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            device=device,
+            plane=plane,
+            origin=origin,
+            box=box,
+            periodic=periodic,
+            integrator=integrator,
+        )
+
+    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        xp = get_array_module(self.device)
+
+        sliced_atoms = self.get_sliced_atoms()
+
+        return sliced_atoms
+
+        # numbers = np.unique(sliced_atoms.atoms.numbers)
+        #
+        # integrators = {
+        #     number: self.integrator.build(
+        #         chemical_symbols[number],
+        #         gpts=self.gpts,
+        #         sampling=self.sampling,
+        #         device=self.device,
+        #     )
+        #     for number in numbers
+        # }
