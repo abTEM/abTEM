@@ -181,60 +181,52 @@ class ParametrizedMagneticFieldInterpolator:
         self._slice_limits = slice_limits
         self._cutoff = np.max([np.max(np.abs(x)), np.max(np.abs(y))])
 
-    def integrate_on_grid(self, a, b, theta, phi, gpts, sampling):
-        magnetic_moment = unit_vector_from_angles(theta, phi)
+    def integrate_on_grid(self, position, a, b, theta, phi, gpts, sampling):
+        pixel_position = np.floor(position / sampling).astype(int)
+        subpixel_position = (position / sampling - pixel_position)
 
-        radius = int(np.floor(self._cutoff / np.min(sampling)))
-        indices = disc_meshgrid(radius)
-        n = len(self._x) // 2
+        radius_out = int(np.floor(self._cutoff / np.min(sampling)))
+        radius_in = len(self._x) // 2
+
+        indices = disc_meshgrid(radius_out)
 
         R = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
         points = np.zeros((len(indices), 3))
         points[:, :2] = R.dot(indices.T).T
-        points[:, 2] = (theta - self._theta.min()) / self._theta.ptp() * (len(self._theta) - 1)
-
-        x = indices[:, 0] * sampling[0]
-        y = indices[:, 1] * sampling[1]
-
-        points[:, 0] *= n / radius
-        points[:, 1] *= n / radius
-        points[:, 0] += n
-        points[:, 1] += n
+        points[:, 2] = (
+            (theta - self._theta.min()) / self._theta.ptp() * (len(self._theta) - 1)
+        )
+        points[:, 0] = points[:, 0] * radius_in / radius_out + radius_in + subpixel_position[0]
+        points[:, 1] = points[:, 1] * radius_in / radius_out + radius_in + subpixel_position[1]
 
         slice_index_a = np.searchsorted(self._slice_limits, a)
         slice_index_b = np.searchsorted(self._slice_limits, b)
 
-        b1_term_xy_a = map_coordinates(
-            self._b1_integrals_xy[slice_index_a], points.T, cval=0.0, order=1
+        b1_integrals_xy = (
+            self._b1_integrals_xy[slice_index_b] - self._b1_integrals_xy[slice_index_a]
         )
-        b1_term_xy_b = map_coordinates(
-            self._b1_integrals_xy[slice_index_b], points.T, cval=0.0, order=1
-        )
-        b1_term_xy = b1_term_xy_b - b1_term_xy_a
+        b1_term_xy = map_coordinates(b1_integrals_xy, points.T, cval=0.0, order=1)
 
-        b1_term_z_a = map_coordinates(
-            self._b1_integrals_z[slice_index_a], points.T, cval=0.0, order=1
+        b1_integrals_z = (
+            self._b1_integrals_z[slice_index_b] - self._b1_integrals_z[slice_index_a]
         )
-        b1_term_z_b = map_coordinates(
-            self._b1_integrals_z[slice_index_b], points.T, cval=0.0, order=1
-        )
-        b1_term_z = b1_term_z_b - b1_term_z_a
+        b1_term_z = map_coordinates(b1_integrals_z, points.T, cval=0.0, order=1)
 
-        b2_term_a = map_coordinates(
-            self._b2_integrals[slice_index_a], points[:, :-1].T, cval=0.0, order=1
+        b2_integrals = (
+            self._b2_integrals[slice_index_b] - self._b2_integrals[slice_index_a]
         )
-        b2_term_b = map_coordinates(
-            self._b2_integrals[slice_index_b], points[:, :-1].T, cval=0.0, order=1
-        )
-        b2_term = b2_term_b - b2_term_a
+        b2_term = map_coordinates(b2_integrals, points[:, :-1].T, cval=0.0, order=1)
 
-        pixel_shift = (32, 32)
+        magnetic_moment = unit_vector_from_angles(theta, phi)
+        x = (indices[:, 0] + subpixel_position[0]) * sampling[0]
+        y = (indices[:, 1] + subpixel_position[1]) * sampling[1]
+
         Bx = b1_term_xy * x + b2_term * magnetic_moment[0]
         By = b1_term_xy * y + b2_term * magnetic_moment[1]
         Bz = b1_term_z + b2_term * magnetic_moment[2]
 
-        indices[:, 0] = indices[:, 0] + pixel_shift[0]
-        indices[:, 1] = indices[:, 1] + pixel_shift[1]
+        indices[:, 0] = indices[:, 0] + pixel_position[0]
+        indices[:, 1] = indices[:, 1] + pixel_position[1]
 
         mask = (
             (indices[:, 0] >= 0)
@@ -246,7 +238,6 @@ class ParametrizedMagneticFieldInterpolator:
 
         B = np.zeros((3, gpts[0], gpts[1]))
         B[(slice(None), indices[:, 0], indices[:, 1])] = [Bx[mask], By[mask], Bz[mask]]
-
         return B
 
 
