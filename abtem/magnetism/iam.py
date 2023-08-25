@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
-
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -13,9 +10,12 @@ from scipy.optimize import brentq
 
 from abtem.core.axes import ThicknessAxis, RealSpaceAxis, OrdinalAxis, AxisMetadata
 from abtem.core.grid import disc_meshgrid
-from abtem.core.utils import get_data_path
+
+
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
+from abtem.magnetism.parametrizations import LyonParametrization
+
 from abtem.potentials.iam import (
     BaseField,
     _FieldBuilderFromAtoms,
@@ -23,20 +23,11 @@ from abtem.potentials.iam import (
 )
 
 
-def get_parameters():
-    path = os.path.join(get_data_path(__file__), "lyon.json")
-
-    with open(path, "r") as f:
-        parameters = json.load(f)
-
-    return parameters
-
-
 def radial_prefactor_b1(r, parameters):
     r = r[:, None]
     a = parameters[None, :, 0]
     b = parameters[None, :, 1]
-    ni = (np.arange(0, 4) / 2 + 3)[None]
+    ni = (np.arange(0, 5) / 2 + 3)[None]
     b1 = a * ni * r ** (ni - 2) / (r**ni + b) ** 2
     b1 = b1.sum(-1)
     b1 = b1 * cutoff_taper(r[:, 0], np.max(r), 0.85)
@@ -48,7 +39,7 @@ def radial_prefactor_b2(r, parameters):
     r = r[:, None]
     a = parameters[None, :, 0]
     b = parameters[None, :, 1]
-    ni = (np.arange(0, 4) / 2 + 3)[None]
+    ni = (np.arange(0, 5) / 2 + 3)[None]
     b2 = a * (2 * b - (ni - 2) * r**ni) / (r**ni + b) ** 2
     b2 = b2.sum(-1)
     b2 = b2 * cutoff_taper(r[:, 0], np.max(r), 0.85)
@@ -96,8 +87,8 @@ def magnetic_field_on_grid(
     mr = np.sum(r_vec * magnetic_moment[None, None, None], axis=-1)
 
     B = (
-        b1(r)[..., None] * r_vec * mr[..., None] * 2
-        + b2(r)[..., None] * 2 * magnetic_moment[None, None, None]
+        b1(r)[..., None] * r_vec * mr[..., None]
+        + b2(r)[..., None] * magnetic_moment[None, None, None]
     )
     return B
 
@@ -106,59 +97,199 @@ def radial_cutoff(func, tolerance=1e-3):
     return brentq(lambda x: func(x) - tolerance, a=1e-3, b=1e3)
 
 
+def index_mask(indices, shape):
+    mask = (indices[:, 0] >= 0) * (indices[:, 0] < shape[0])
+
+    for i, n in enumerate(shape[1:], start=1):
+        mask *= (indices[:, i] >= 0) * (indices[:, i] < n)
+
+    return mask
+
+
+def rotate_points_2d(points, phi):
+    R = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
+    points = R.dot(points.T).T
+    return points
+
+
+def cartesian2polar_3d(v):
+    r = np.linalg.norm(v)
+    theta = np.arccos(v[2] / r)
+    xy_magnitude = np.linalg.norm(v[:2])
+    if xy_magnitude > 0.0:
+        phi = np.sign(v[1]) * np.arccos(v[0] / xy_magnitude)
+    else:
+        phi = 0.0
+
+    return [r, theta, phi]
+
+
 class ParametrizedMagneticFieldInterpolator:
     def __init__(
-        self, slice_limits, x, y, theta, b1_integrals_xy, b1_integrals_z, b2_integrals
+        self,
+        slice_limits,
+        sampling_xy,
+        theta,
+        b1_integrals_xy,
+        b1_integrals_z,
+        b2_integrals,
     ):
         method = "linear"
 
-        self._x = x
-        self._y = y
         self._theta = theta
         self._b1_integrals_xy = b1_integrals_xy
         self._b1_integrals_z = b1_integrals_z
         self._b2_integrals = b2_integrals
         self._slice_limits = slice_limits
-        self._cutoff = np.max([np.max(np.abs(x)), np.max(np.abs(y))])
+        self._sampling_xy = sampling_xy
+
+        # self._cutoff = np.max([np.max(np.abs(x)), np.max(np.abs(y))])
+
+    # def integrate_on_grid(self, atoms, a, b, gpts, sampling, device):
+    #     B = np.zeros((3, gpts[0], gpts[1]))
+    #     radius_out = int(np.ceil(self._cutoff / np.min(sampling)))
+    #     radius_in = len(self._x) // 2
+    #     indices = disc_meshgrid(radius_out)
+    #
+    #     positions = atoms.positions
+    #     magnetic_moments = atoms.get_array("magnetic_moments")
+    #     points = np.zeros((len(indices), 3))
+    #
+    #     for position, magnetic_moment in zip(positions, magnetic_moments):
+    #         pixel_position = np.round(position[:2] / sampling).astype(int)
+    #         subpixel_position = position[:2] / sampling - pixel_position
+    #
+    #         magnitude, theta, phi = cartesian2polar_3d(magnetic_moment)
+    #         points[:, :2] = rotate_points_2d(indices, phi)
+    #         points[:, 2] = (
+    #             (theta - self._theta.min()) / self._theta.ptp() * (len(self._theta) - 1)
+    #         )
+    #
+    #         zoom = radius_in / (self._cutoff / sampling[0]) * .997
+    #
+    #         points[:, 0] = points[:, 0] * zoom + radius_in - zoom * subpixel_position[0]
+    #         points[:, 1] = points[:, 1] * zoom + radius_in - zoom * subpixel_position[1]
+    #
+    #         shifted_a = a - position[2]
+    #         shifted_b = b - position[2]
+    #         slice_index_a = np.searchsorted(self._slice_limits, shifted_a)
+    #         slice_index_b = min(
+    #             np.searchsorted(self._slice_limits, shifted_b),
+    #             len(self._b1_integrals_xy) - 1,
+    #         )
+    #
+    #         b1_integrals_xy = (
+    #             self._b1_integrals_xy[slice_index_b]
+    #             - self._b1_integrals_xy[slice_index_a]
+    #         )
+    #         b1_term_xy = map_coordinates(b1_integrals_xy, points.T, cval=0.0, order=1)
+    #
+    #         b1_integrals_z = (
+    #             self._b1_integrals_z[slice_index_b]
+    #             - self._b1_integrals_z[slice_index_a]
+    #         )
+    #         b1_term_z = map_coordinates(b1_integrals_z, points.T, cval=0.0, order=1)
+    #
+    #         b2_integrals = (
+    #             self._b2_integrals[slice_index_b] - self._b2_integrals[slice_index_a]
+    #         )
+    #         b2_term = map_coordinates(b2_integrals, points[:, :-1].T, cval=0.0, order=1)
+    #
+    #         x = (indices[:, 0] - subpixel_position[0]) * sampling[0]
+    #         y = (indices[:, 1] - subpixel_position[1]) * sampling[1]
+    #
+    #         Bx = b1_term_xy * x * magnitude + b2_term * magnetic_moment[0]
+    #         By = b1_term_xy * y * magnitude + b2_term * magnetic_moment[1]
+    #         Bz = b1_term_z * magnitude + b2_term * magnetic_moment[2]
+    #
+    #         shifted_indices = indices.copy()
+    #         shifted_indices[:, 0] = shifted_indices[:, 0] + pixel_position[0]
+    #         shifted_indices[:, 1] = shifted_indices[:, 1] + pixel_position[1]
+    #
+    #         mask = index_mask(shifted_indices, gpts)
+    #
+    #         shifted_indices = shifted_indices[mask]
+    #
+    #         B[(slice(None), shifted_indices[:, 0], shifted_indices[:, 1])] += [
+    #             Bx[mask],
+    #             By[mask],
+    #             Bz[mask],
+    #         ]
+    #
+    #     return B
+
+    def _pixel_coordinates_in(self):
+        pixel_coordinates = np.arange(0, self._b1_integrals_xy.shape[1])
+        return pixel_coordinates
+
+    def _xy_coordinates_in(self):
+        pixel_coordinates = self._pixel_coordinates_in()
+        shift = len(pixel_coordinates) // 2
+        return (pixel_coordinates - shift) * self._sampling_xy
+
+    def _cutoff_in(self):
+        return (len(self._pixel_coordinates_in()) // 2) * self._sampling_xy
+
+    def _xy_coordinates_out(self, sampling):
+        x = symmetric_arange(self._cutoff_in(), sampling[0])
+        y = symmetric_arange(self._cutoff_in(), sampling[1])
+        return x, y
+
+    def _pixel_coordinates_out(self, sampling):
+        x, y = self._xy_coordinates_out(sampling)
+        x = np.arange(0, len(x))
+        y = np.arange(0, len(y))
+        return x, y
 
     def integrate_on_grid(self, atoms, a, b, gpts, sampling, device):
         B = np.zeros((3, gpts[0], gpts[1]))
-        radius_out = int(np.floor(self._cutoff / np.min(sampling)))
-        radius_in = len(self._x) // 2
-        indices = disc_meshgrid(radius_out)
 
-        for atom in atoms:
-            position = atom.position[:2]
-            a = a - atom.position[2]
-            b = b - atom.position[2]
-            theta = 0
-            phi = 0
+        positions = atoms.positions
+        magnetic_moments = atoms.get_array("magnetic_moments")
 
-            pixel_position = np.floor(position / sampling).astype(int)
-            subpixel_position = position / sampling - pixel_position
+        x_pixel, y_pixel = self._pixel_coordinates_out(sampling)
+        pixel_center = len(x_pixel) // 2, len(y_pixel) // 2
 
-            R = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
-            points = np.zeros((len(indices), 3))
-            points[:, :2] = R.dot(indices.T).T
+        x_pixel, y_pixel = np.meshgrid(x_pixel, y_pixel, indexing="ij")
+        x_pixel = x_pixel.ravel() - pixel_center[0]
+        y_pixel = y_pixel.ravel() - pixel_center[1]
+        indices = np.array([x_pixel.ravel(), y_pixel.ravel()]).T
+
+        points = np.zeros((len(indices), 3))
+
+        x, y = indices[:, 0] * sampling[0], indices[:, 1] * sampling[1]
+
+        for position, magnetic_moment in zip(positions, magnetic_moments):
+            pixel_position = np.round(position[:2] / sampling).astype(int)
+            subpixel_position = position[:2] / sampling - pixel_position
+
+            magnitude, theta, phi = cartesian2polar_3d(magnetic_moment)
+
+            points[:, :2] = rotate_points_2d(indices[:, :2], phi)
+            points[:, 0] += pixel_center[0] - subpixel_position[0]
+            points[:, 1] += pixel_center[1] - subpixel_position[1]
+
             points[:, 2] = (
                 (theta - self._theta.min()) / self._theta.ptp() * (len(self._theta) - 1)
             )
-            points[:, 0] = (
-                points[:, 0] * radius_in / radius_out + radius_in + subpixel_position[0]
+
+            shifted_a = a - position[2]
+            shifted_b = b - position[2]
+            slice_index_a = np.searchsorted(self._slice_limits, shifted_a)
+            slice_index_b = min(
+                np.searchsorted(self._slice_limits, shifted_b),
+                len(self._b1_integrals_xy) - 1,
             )
-            points[:, 1] = (
-                points[:, 1] * radius_in / radius_out + radius_in + subpixel_position[1]
-            )
-            slice_index_a = np.searchsorted(self._slice_limits, a)
-            slice_index_b = min(np.searchsorted(self._slice_limits, b), len(self._b1_integrals_xy) - 1)
 
             b1_integrals_xy = (
-                self._b1_integrals_xy[slice_index_b] - self._b1_integrals_xy[slice_index_a]
+                self._b1_integrals_xy[slice_index_b]
+                - self._b1_integrals_xy[slice_index_a]
             )
             b1_term_xy = map_coordinates(b1_integrals_xy, points.T, cval=0.0, order=1)
 
             b1_integrals_z = (
-                self._b1_integrals_z[slice_index_b] - self._b1_integrals_z[slice_index_a]
+                self._b1_integrals_z[slice_index_b]
+                - self._b1_integrals_z[slice_index_a]
             )
             b1_term_z = map_coordinates(b1_integrals_z, points.T, cval=0.0, order=1)
 
@@ -167,37 +298,36 @@ class ParametrizedMagneticFieldInterpolator:
             )
             b2_term = map_coordinates(b2_integrals, points[:, :-1].T, cval=0.0, order=1)
 
-            magnetic_moment = unit_vector_from_angles(theta, phi)
-            x = (indices[:, 0] + subpixel_position[0]) * sampling[0]
-            y = (indices[:, 1] + subpixel_position[1]) * sampling[1]
-
-            Bx = b1_term_xy * x + b2_term * magnetic_moment[0]
-            By = b1_term_xy * y + b2_term * magnetic_moment[1]
-            Bz = b1_term_z + b2_term * magnetic_moment[2]
+            Bx = (
+                b1_term_xy * (x - subpixel_position[0] * sampling[0]) * magnitude
+                + b2_term * magnetic_moment[0]
+            )
+            By = (
+                b1_term_xy * (y - subpixel_position[0] * sampling[0]) * magnitude
+                + b2_term * magnetic_moment[1]
+            )
+            Bz = b1_term_z * magnitude + b2_term * magnetic_moment[2]
 
             shifted_indices = indices.copy()
             shifted_indices[:, 0] = shifted_indices[:, 0] + pixel_position[0]
             shifted_indices[:, 1] = shifted_indices[:, 1] + pixel_position[1]
+            mask = index_mask(shifted_indices, gpts)
 
-            mask = (
-                (shifted_indices[:, 0] >= 0)
-                * (shifted_indices[:, 1] >= 0)
-                * (shifted_indices[:, 0] < gpts[0])
-                * (shifted_indices[:, 1] < gpts[1])
-            )
             shifted_indices = shifted_indices[mask]
 
-            B[(slice(None), shifted_indices[:, 0], shifted_indices[:, 1])] += [Bx[mask], By[mask], Bz[mask]]
+            B[(slice(None), shifted_indices[:, 0], shifted_indices[:, 1])] += [
+                Bx[mask],
+                By[mask],
+                Bz[mask],
+            ]
+
         return B
 
 
-class LyonParametrization:
-    def __init__(self):
-        self._parameters = get_parameters()
-
-    @property
-    def parameters(self):
-        return self._parameters
+def symmetric_arange(cutoff, sampling):
+    cutoff = np.ceil(cutoff / sampling) * sampling
+    values = np.arange(0, cutoff + sampling / 2, sampling)
+    return np.concatenate([-values[::-1][:-1], values])
 
 
 class MagneticFieldIntegrator:
@@ -208,17 +338,17 @@ class MagneticFieldIntegrator:
         cutoff=4,
         step_size: float = 0.01,
         slice_thickness: float = 0.1,
-        gpts: int = 51,
-        inclination_gpts: int = 32,
+        xy_sampling: int = 51,
+        inclination_sampling: int = 32,
         radial_gpts: int = 100,
     ):
-        self._parametrization = parametrization
+        self._parametrization = LyonParametrization()
         # self._cutoff_tolerance = cutoff_tolerance
         self._cutoff = cutoff
         self._step_size = step_size
         self._slice_thickness = slice_thickness
-        self._gpts = gpts
-        self._inclination_gpts = inclination_gpts
+        self._xy_sampling = xy_sampling
+        self._inclination_sampling = inclination_sampling
         self._radial_gpts = radial_gpts
 
     @property
@@ -237,24 +367,20 @@ class MagneticFieldIntegrator:
         return self._cutoff
 
     @property
-    def gpts(self):
-        return self._gpts
-
-    @property
-    def parameters(self):
-        return get_parameters()
+    def xy_sampling(self):
+        return self._xy_sampling
 
     def _radial_prefactor_b1(self, symbol):
         r = np.linspace(0, self.cutoff(symbol), self._radial_gpts)
-        return radial_prefactor_b1(r, np.array(self.parameters[symbol]))
+        return radial_prefactor_b1(r, np.array(self.parametrization.parameters[symbol]))
 
     def _radial_prefactor_b2(self, symbol):
         r = np.linspace(0, self.cutoff(symbol), self._radial_gpts)
-        return radial_prefactor_b2(r, np.array(self.parameters[symbol]))
+        return radial_prefactor_b2(r, np.array(self.parametrization.parameters[symbol]))
 
-    def _grid_coordinates(self, symbol):
+    def _xy_coordinates(self, symbol):
         cutoff = self.cutoff(symbol)
-        return (np.linspace(-cutoff, cutoff, self.gpts),) * 2
+        return symmetric_arange(cutoff, self._xy_sampling)
 
     def _integration_coordinates(self, a, b):
         z = np.arange(a, b + self._step_size / 2, self._step_size)
@@ -277,10 +403,10 @@ class MagneticFieldIntegrator:
             x[:, None, None, None] * magnetic_moment[None, None, None, :, 0]
             + z[None, None, :, None] * magnetic_moment[None, None, None, :, 2]
         )
-        integrals_xy = trapezoid(b1(r)[..., None] * mr * 2, x=z, axis=-2)
+        integrals_xy = trapezoid(b1(r)[..., None] * mr, x=z, axis=-2)
 
         integrals_z = trapezoid(
-            b1(r)[..., None] * mr * 2 * z[None, None, :, None],
+            b1(r)[..., None] * mr * z[None, None, :, None],
             x=z,
             axis=-2,
         )
@@ -292,12 +418,12 @@ class MagneticFieldIntegrator:
         b2 = self._radial_prefactor_b2(symbol)
         z = self._integration_coordinates(a, b)
         r = np.sqrt(x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None] ** 2)
-        integrals = trapezoid(2 * b2(r), x=z, axis=-1)
+        integrals = trapezoid(b2(r), x=z, axis=-1)
         return integrals
 
     def build(self, symbol: str, gpts, sampling, device):
-        x, y = self._grid_coordinates(symbol)
-        theta = np.linspace(0, np.pi / 2, self._inclination_gpts)
+        x = y = self._xy_coordinates(symbol)
+        theta = np.arange(0, np.pi / 2, self._inclination_sampling)
 
         n = np.ceil(self.cutoff(symbol) / self._slice_thickness)
         slice_cutoff = n * self._slice_thickness
@@ -308,6 +434,7 @@ class MagneticFieldIntegrator:
         b2_integrals = np.zeros((len(slice_limits), len(x), len(y)))
 
         for i, (a, b) in enumerate(zip(slice_limits[:-1], slice_limits[1:]), start=1):
+            # print(a,b)
             b1_integrals = self._b1_integrals(symbol, a, b, x, y, theta)
             b1_integrals_xy[i] = b1_integrals_xy[i - 1] + b1_integrals[0]
             b1_integrals_z[i] = b1_integrals_z[i - 1] + b1_integrals[1]
@@ -317,21 +444,19 @@ class MagneticFieldIntegrator:
 
         return ParametrizedMagneticFieldInterpolator(
             slice_limits,
-            x,
-            y,
+            self._xy_sampling,
             theta,
             b1_integrals_xy,
             b1_integrals_z,
             b2_integrals,
         )
 
-    def integrate_magnetic_field(self, symbol, a, b, theta, phi):
+    def integrate_magnetic_field(self, symbol, a, b, magnetic_moment):
         b1 = self._radial_prefactor_b1(symbol)
         b2 = self._radial_prefactor_b2(symbol)
 
-        x, y = self._grid_coordinates(symbol)
+        x = y = self._xy_coordinates(symbol)
         z = self._integration_coordinates(a, b)
-        magnetic_moment = unit_vector_from_angles(theta, phi)
 
         r = np.sqrt(x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None] ** 2)
         mr = (
@@ -340,12 +465,12 @@ class MagneticFieldIntegrator:
             + z[None, None] * magnetic_moment[2]
         )
 
-        integrals = trapezoid(b1(r) * mr * 2, x=z, axis=-1)
-        integrals2 = trapezoid(2 * b2(r), x=z, axis=-1)
+        integrals = trapezoid(b1(r) * mr, x=z, axis=-1)
+        integrals2 = trapezoid(b2(r), x=z, axis=-1)
         Bx = integrals * x[:, None] + magnetic_moment[0] * integrals2
         By = integrals * y[None, :] + magnetic_moment[1] * integrals2
 
-        integrals = trapezoid(b1(r) * mr * 2 * z[None, None], x=z, axis=-1)
+        integrals = trapezoid(b1(r) * mr * z[None, None], x=z, axis=-1)
         Bz = integrals + magnetic_moment[2] * integrals2
         return Bx, By, Bz
 
@@ -405,6 +530,7 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
 
 class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
     _exclude_from_copy = ("parametrization",)
+
     def __init__(
         self,
         atoms: Atoms | BaseFrozenPhonons = None,
