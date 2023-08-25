@@ -10,7 +10,7 @@ from scipy.ndimage import map_coordinates
 from scipy.optimize import brentq
 
 from abtem.core.axes import ThicknessAxis, RealSpaceAxis, OrdinalAxis, AxisMetadata
-from abtem.core.grid import disc_meshgrid
+from abtem.core.grid import disk_meshgrid
 
 
 from abtem.inelastic.phonons import BaseFrozenPhonons
@@ -160,7 +160,7 @@ class QuasiDipoleFieldInterpolator:
         b: float,
         gpts: tuple[int, int],
         sampling: [float, float],
-        device: str,
+        device: str = "cpu",
     ):
         positions = atoms.positions
         magnetic_moments = atoms.get_array("magnetic_moments")

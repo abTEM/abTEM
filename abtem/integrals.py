@@ -18,7 +18,7 @@ from abtem.core.backend import cp, get_array_module
 from abtem.core.backend import cupyx
 from abtem.core.backend import device_name_from_array_module
 from abtem.core.fft import fft2, ifft2
-from abtem.core.grid import disc_meshgrid
+from abtem.core.grid import disk_meshgrid
 from abtem.core.grid import polar_spatial_frequencies
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import EqualityMixin, CopyMixin
@@ -467,9 +467,18 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
                 * (xp.pi * sigma / xp.sqrt(3 / 2)) ** 2
             )
 
-        self._scattering_factors[symbol] = f
-
         return f
+
+    def get_scattering_factor(self, symbol, gpts, sampling, device):
+        try:
+            scattering_factor = self.scattering_factors[symbol]
+        except KeyError:
+            scattering_factor = self._calculate_scattering_factor(
+                symbol, gpts, sampling, device
+            )
+            self._scattering_factors[symbol] = scattering_factor
+
+        return scattering_factor
 
     @property
     def scattering_factors(self) -> dict[str, np.ndarray]:
@@ -490,17 +499,11 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=xp.float32)
 
-        print("----")
         array = xp.zeros(gpts, dtype=xp.float32)
         for number in np.unique(atoms.numbers):
-            print(number)
-            symbol = chemical_symbols[number]
-            try:
-                scattering_factor = self.scattering_factors[symbol]
-            except KeyError:
-                scattering_factor = self._calculate_scattering_factor(
-                    symbol, gpts, sampling, device
-                )
+            scattering_factor = self.get_scattering_factor(
+                chemical_symbols[number], gpts, sampling, device
+            )
 
             positions = atoms.positions[atoms.numbers == number]
 
@@ -510,7 +513,7 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
             temp_array = superpose_deltas(positions, temp_array).astype(xp.complex64)
 
-            temp_array += fft2(temp_array, overwrite_x=True)
+            temp_array = fft2(temp_array, overwrite_x=True)
 
             temp_array *= scattering_factor / sinc(gpts, sampling, device)
 
@@ -727,24 +730,10 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         limits = np.linspace(-cutoff, 0, int(np.ceil(cutoff / self._integration_step)))
         return np.concatenate((limits, -limits[::-1][1:]))
 
-    def build_integral_table(
+    def _calculate_integral_table(
         self, symbol: str, sampling: tuple[float, float]
     ) -> ProjectionIntegralTable:
-        """
-        Build table of projection integrals of the radial atomic potential.
 
-        Parameters
-        ----------
-        symbol : str
-            Chemical symbol to build the integral table.
-        inner_limit : float, optional
-            Smallest radius from the core at which to calculate the projection integral [Å].
-
-        Returns
-        -------
-        projection_integral_table :
-            ProjectionIntegralTable
-        """
         potential = self.parametrization.potential(symbol)
         cutoff = self.cutoff(symbol)
 
@@ -772,6 +761,32 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
 
         return self._tables[symbol]
 
+    def get_integral_table(self, symbol, sampling):
+        """
+        Build table of projection integrals of the radial atomic potential.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol to build the integral table.
+        inner_limit : float, optional
+            Smallest radius from the core at which to calculate the projection integral [Å].
+
+        Returns
+        -------
+        projection_integral_table :
+            ProjectionIntegralTable
+        """
+        try:
+            scattering_factor = self.tables[symbol]
+        except KeyError:
+            scattering_factor = self._calculate_integral_table(
+                symbol, sampling
+            )
+            self._tables[symbol] = scattering_factor
+
+        return scattering_factor
+
     def integrate_on_grid(
         self,
         atoms: Atoms,
@@ -782,29 +797,11 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         device: str = "cpu",
     ) -> np.ndarray:
 
-        # assert len(a) == len(b) == len(positions)
-        # assert len(a.shape) == 1
-        # assert len(b.shape) == 1
-
         xp = get_array_module(device)
         array = xp.zeros(gpts, dtype=xp.float32)
 
-        # if np.isscalar(a):
-        #     a = np.array([a] * len(atoms))
-        #
-        # if np.isscalar(b):
-        #     b = np.array([b] * len(atoms))
-
-        assert len(sampling) == 2
-
         for number in np.unique(atoms.numbers):
-            symbol = chemical_symbols[number]
-            try:
-                table = self.tables[symbol]
-            except KeyError:
-                table = self.build_integral_table(
-                    symbol, sampling
-                )
+            table = self.get_integral_table(chemical_symbols[number], sampling)
 
             positions = atoms.positions[atoms.numbers == number]
 
@@ -812,7 +809,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             shifted_b = b - positions[:, 2]
 
             disk_indices = xp.asarray(
-                disc_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
+                disk_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
             )
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
 
@@ -826,7 +823,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 xp.diff(radial_potential, axis=1) / xp.diff(table.radial_gpts)[None]
             )
 
-            #temp_array = xp.zeros(gpts, dtype=xp.float32)
+            # temp_array = xp.zeros(gpts, dtype=xp.float32)
             if xp is cp:
                 interpolate_radial_functions_cuda(
                     array=array,
@@ -848,6 +845,6 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     radial_derivative=radial_potential_derivative,
                 )
 
-            #array
+            # array
 
         return array
