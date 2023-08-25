@@ -3,6 +3,7 @@ from __future__ import annotations
 import dask.array as da
 import numpy as np
 from ase import Atoms
+from ase.data import chemical_symbols
 from scipy.integrate import trapezoid
 from scipy.interpolate import interp1d
 from scipy.ndimage import map_coordinates
@@ -124,18 +125,16 @@ def cartesian2polar_3d(v):
     return [r, theta, phi]
 
 
-class ParametrizedMagneticFieldInterpolator:
+class QuasiDipoleFieldInterpolator:
     def __init__(
         self,
-        slice_limits,
-        sampling_xy,
-        inclination_sampling,
-        b1_integrals_xy,
-        b1_integrals_z,
-        b2_integrals,
+        slice_limits: np.ndarray,
+        sampling_xy: float,
+        inclination_sampling: float,
+        b1_integrals_xy: np.ndarray,
+        b1_integrals_z: np.ndarray,
+        b2_integrals: np.ndarray,
     ):
-        method = "linear"
-
         self._inclination_sampling = inclination_sampling
         self._b1_integrals_xy = b1_integrals_xy
         self._b1_integrals_z = b1_integrals_z
@@ -154,7 +153,15 @@ class ParametrizedMagneticFieldInterpolator:
         y = np.arange(0, ny)
         return x, y
 
-    def integrate_on_grid(self, atoms, a, b, gpts, sampling, device):
+    def integrate_on_grid(
+        self,
+        atoms: Atoms,
+        a: float,
+        b: float,
+        gpts: tuple[int, int],
+        sampling: [float, float],
+        device: str,
+    ):
         positions = atoms.positions
         magnetic_moments = atoms.get_array("magnetic_moments")
 
@@ -176,8 +183,7 @@ class ParametrizedMagneticFieldInterpolator:
 
             magnitude, theta, phi = cartesian2polar_3d(magnetic_moment)
 
-            points[:, :2] = indices[:, :2]
-            points[:, :2] *= np.array(sampling) / self._sampling_xy
+            points[:, :2] = indices[:, :2] * np.array(sampling) / self._sampling_xy
             points[:, :2] = rotate_points_2d(points[:, :2], phi)
             points[:, :2] += pixel_center_in - subpixel_position
             points[:, 2] = theta / self._inclination_sampling
@@ -225,16 +231,16 @@ def symmetric_arange(cutoff, sampling):
     return np.concatenate([-values[::-1][:-1], values])
 
 
-class MagneticFieldIntegrator:
+class QuasiDipoleProjectionIntegrals:
     def __init__(
         self,
         parametrization: str = "lyon",
         # cutoff_tolerance: float = 1e-3,
         cutoff=4,
         step_size: float = 0.01,
-        slice_thickness: float = 0.1,
-        xy_sampling: int = 51,
-        inclination_sampling: int = 32,
+        slice_thickness: float = 0.2,
+        xy_sampling: int = 0.1,
+        inclination_sampling: int = np.pi / 10,
         radial_gpts: int = 100,
     ):
         self._parametrization = LyonParametrization()
@@ -316,7 +322,7 @@ class MagneticFieldIntegrator:
         integrals = trapezoid(b2(r), x=z, axis=-1)
         return integrals
 
-    def build(self, symbol: str, gpts, sampling, device):
+    def build_magnetic_field_interpolator(self, symbol: str):
         x = y = self._xy_coordinates(symbol)
         theta = np.arange(0, np.pi / 2, self._inclination_sampling)
 
@@ -336,7 +342,7 @@ class MagneticFieldIntegrator:
                 symbol, a, b, x, y
             )
 
-        return ParametrizedMagneticFieldInterpolator(
+        return QuasiDipoleFieldInterpolator(
             slice_limits,
             self._xy_sampling,
             self._inclination_sampling,
@@ -443,7 +449,7 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
     ):
 
         if integrator is None:
-            raise NotImplementedError
+            integrator = QuasiDipoleProjectionIntegrals(parametrization=parametrization)
 
         super().__init__(
             atoms=atoms,
@@ -459,3 +465,16 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
             periodic=periodic,
             integrator=integrator,
         )
+
+    def _build_integrators(self):
+        numbers = np.unique(self.frozen_phonons.atomic_numbers)
+        integrators = {
+            number: self.integrator.build(
+                chemical_symbols[number],
+                gpts=self.gpts,
+                sampling=self.sampling,
+                device=self.device,
+            )
+            for number in numbers
+        }
+        return integrators
