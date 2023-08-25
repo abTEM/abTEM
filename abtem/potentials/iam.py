@@ -45,8 +45,7 @@ from abtem.inelastic.phonons import (
     _validate_seeds,
     AtomsEnsemble,
 )
-from abtem.integrals import ProjectedScatteringFactors
-from abtem.integrals import ProjectionQuadratureRule
+from abtem.integrals import ScatteringFactorProjectionIntegrals, QuadratureProjectionIntegrals
 from abtem.measurements import Images
 from abtem.slicing import (
     _validate_slice_thickness,
@@ -58,7 +57,7 @@ from abtem.slicing import (
 if TYPE_CHECKING:
     from abtem.waves import Waves, BaseWaves
     from abtem.parametrizations import Parametrization
-    from abtem.integrals import ProjectionIntegratorPlan
+    from abtem.integrals import FieldIntegrator
 
 
 class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -643,16 +642,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         numbers = np.unique(sliced_atoms.atoms.numbers)
 
-        integrators = {
-            number: self.integrator.build(
-                chemical_symbols[number],
-                gpts=self.gpts,
-                sampling=self.sampling,
-                device=self.device,
-            )
-            for number in numbers
-        }
-
         exit_plane_after = self._exit_plane_after
 
         cumulative_thickness = np.cumsum(self.slice_thickness)
@@ -668,22 +657,22 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
             for i, slice_idx in enumerate(range(start, stop)):
 
-                for Z, integrator in integrators.items():
-                    atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
+                #for Z, integrator in integrators.items():
+                atoms = sliced_atoms.get_atoms_in_slices(slice_idx)
 
-                    new_array = integrator.integrate_on_grid(
-                        atoms,
-                        a=sliced_atoms.slice_limits[slice_idx][0],
-                        b=sliced_atoms.slice_limits[slice_idx][1],
-                        gpts=self.gpts,
-                        sampling=self.sampling,
-                        device=self.device,
-                    )
+                new_array = self._integrator.integrate_on_grid(
+                    atoms,
+                    a=sliced_atoms.slice_limits[slice_idx][0],
+                    b=sliced_atoms.slice_limits[slice_idx][1],
+                    gpts=self.gpts,
+                    sampling=self.sampling,
+                    device=self.device,
+                )
 
-                    if array is not None:
-                        array[i] += new_array
-                    else:
-                        array = new_array[None]
+                if array is not None:
+                    array[i] += new_array
+                else:
+                    array = new_array[None]
 
             if array is None:
                 array = xp.zeros((stop - start,) + self.base_shape[1:], dtype=np.float32)
@@ -837,15 +826,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: tuple[float, float, float] = None,
         periodic: bool = True,
-        integrator: ProjectionIntegratorPlan = None,
+        integrator: FieldIntegrator = None,
         device: str = None,
     ):
 
         if integrator is None:
             if projection == "finite":
-                integrator = ProjectionQuadratureRule(parametrization=parametrization)
+                integrator = QuadratureProjectionIntegrals(parametrization=parametrization)
             elif projection == "infinite":
-                integrator = ProjectedScatteringFactors(parametrization=parametrization)
+                integrator = ScatteringFactorProjectionIntegrals(parametrization=parametrization)
             else:
                 raise NotImplementedError
 
@@ -1046,13 +1035,15 @@ class FieldArray(BaseField, ArrayObject):
             One or more images of the projected potential(s).
         """
         metadata = {"label": "potential", "units": "eV / e"}
-        array = self.array.sum(-3)
-        array -= array.min((-2, -1), keepdims=True)
+        array = self.array.sum(-self._base_dims)
+        #array -= array.min((-2, -1), keepdims=True)
+
+        ensemble_axes_metadata = self.ensemble_axes_metadata + self.base_axes_metadata[1:-2]
 
         return Images(
             array=array,
             sampling=self.sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
 
