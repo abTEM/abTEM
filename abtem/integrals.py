@@ -11,15 +11,13 @@ from ase.data import chemical_symbols
 from numba import jit
 from scipy import integrate
 from scipy.interpolate import interp1d
-from scipy.optimize import brentq, fsolve
-from scipy.special import erf
+from scipy.optimize import brentq
 
 from abtem.core.backend import cp, get_array_module
 from abtem.core.backend import cupyx
 from abtem.core.backend import device_name_from_array_module
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import disk_meshgrid
-from abtem.core.grid import polar_spatial_frequencies
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.parametrizations import validate_parametrization
@@ -57,8 +55,8 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def integrate_on_grid(
         self,
         positions: np.ndarray,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
@@ -98,57 +96,12 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         projections."""
         return self._finite
 
-    # @abstractmethod
-    # def build(
-    #     self,
-    #     symbol: str,
-    #     gpts: tuple[int, int],
-    #     sampling: tuple[float, float],
-    #     device: str,
-    # ):
-    #     """
-    #     Build projection integrator for given chemical symbol, grid and device.
-    #
-    #     Parameters
-    #     ----------
-    #     symbol : str
-    #         Chemical symbol to build the projection integrator for.
-    #     gpts : two int
-    #         Number of grid points in `x` and `y` describing each slice of the potential.
-    #     sampling : two float
-    #         Sampling of the potential in `x` and `y` [1 / Å].
-    #     device : str, optional
-    #         The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
-    #         configuration file.
-    #
-    #     Returns
-    #     -------
-    #     projection_integrator : ProjectionIntegrator
-    #         The projection integrator for the specified chemical symbol.
-    #     """
-    #     pass
-
     @abstractmethod
     def cutoff(self, symbol: str) -> float:
         """Radial cutoff of the potential for the given chemical symbol."""
         pass
 
 
-# class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
-#     """
-#     The ProjectionIntegratorPlan facilitates the creation of :class:`.ProjectionIntegrator` objects using the ``.build``
-#     method given a grid and a chemical symbol.
-#
-#     Parameters
-#     ----------
-#
-#     """
-#
-#     def __init__(self, periodic: bool, finite: bool):
-#         self._periodic = periodic
-#         self._finite = finite
-
-#
 # class GaussianScatteringFactors(ProjectionIntegrator):
 #     def __init__(
 #         self,
@@ -488,8 +441,8 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     def integrate_on_grid(
         self,
         atoms: Atoms,
-        a: np.ndarray,
-        b: np.ndarray,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
@@ -780,9 +733,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         try:
             scattering_factor = self.tables[symbol]
         except KeyError:
-            scattering_factor = self._calculate_integral_table(
-                symbol, sampling
-            )
+            scattering_factor = self._calculate_integral_table(symbol, sampling)
             self._tables[symbol] = scattering_factor
 
         return scattering_factor

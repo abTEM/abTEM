@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -10,11 +12,12 @@ from scipy.ndimage import map_coordinates
 from scipy.optimize import brentq
 
 from abtem.core.axes import ThicknessAxis, RealSpaceAxis, OrdinalAxis, AxisMetadata
+from abtem.core.backend import get_array_module
 from abtem.core.grid import disk_meshgrid
 
 
 from abtem.inelastic.phonons import BaseFrozenPhonons
-from abtem.integrals import cutoff_taper
+from abtem.integrals import cutoff_taper, FieldIntegrator
 from abtem.magnetism.parametrizations import LyonParametrization
 
 from abtem.potentials.iam import (
@@ -141,6 +144,7 @@ class QuasiDipoleFieldInterpolator:
         self._b2_integrals = b2_integrals
         self._slice_limits = slice_limits
         self._sampling_xy = sampling_xy
+        self._n = 0
 
     def _cutoff(self):
         return (self._b1_integrals_xy.shape[1] // 2) * self._sampling_xy
@@ -231,7 +235,7 @@ def symmetric_arange(cutoff, sampling):
     return np.concatenate([-values[::-1][:-1], values])
 
 
-class QuasiDipoleProjectionIntegrals:
+class QuasiDipoleProjectionIntegrals(FieldIntegrator):
     def __init__(
         self,
         parametrization: str = "lyon",
@@ -243,7 +247,11 @@ class QuasiDipoleProjectionIntegrals:
         inclination_sampling: int = np.pi / 10,
         radial_gpts: int = 100,
     ):
-        self._parametrization = LyonParametrization()
+        if parametrization == "lyon":
+            self._parametrization = LyonParametrization()
+        else:
+            raise NotImplementedError
+
         # self._cutoff_tolerance = cutoff_tolerance
         self._cutoff = cutoff
         self._step_size = step_size
@@ -251,6 +259,9 @@ class QuasiDipoleProjectionIntegrals:
         self._xy_sampling = xy_sampling
         self._inclination_sampling = inclination_sampling
         self._radial_gpts = radial_gpts
+        self._interpolators = {}
+
+        super().__init__(periodic=False, finite=True)
 
     @property
     def parametrization(self):
@@ -322,7 +333,7 @@ class QuasiDipoleProjectionIntegrals:
         integrals = trapezoid(b2(r), x=z, axis=-1)
         return integrals
 
-    def build_magnetic_field_interpolator(self, symbol: str):
+    def _calculate_interpolator(self, symbol: str):
         x = y = self._xy_coordinates(symbol)
         theta = np.arange(0, np.pi / 2, self._inclination_sampling)
 
@@ -350,6 +361,36 @@ class QuasiDipoleProjectionIntegrals:
             b1_integrals_z,
             b2_integrals,
         )
+
+    def get_interpolator(self, symbol:str):
+        try:
+            interpolator = self._interpolators[symbol]
+        except KeyError:
+            interpolator = self._calculate_interpolator(
+                symbol
+            )
+            self._interpolators[symbol] = interpolator
+
+        return interpolator
+
+    def integrate_on_grid(
+        self,
+        atoms: Atoms,
+        a: float,
+        b: float,
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
+        device: str = "cpu",
+    ) -> np.ndarray:
+
+        xp = get_array_module(device)
+        array = xp.zeros((3,) + gpts, dtype=xp.float32)
+
+        for number in np.unique(atoms.numbers):
+            interpolator = self.get_interpolator(chemical_symbols[number])
+            array += interpolator.integrate_on_grid(atoms, a, b, gpts, sampling, device)
+
+        return array
 
     def integrate_magnetic_field(self, symbol, a, b, magnetic_moment):
         b1 = self._radial_prefactor_b1(symbol)
@@ -465,16 +506,3 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
             periodic=periodic,
             integrator=integrator,
         )
-
-    def _build_integrators(self):
-        numbers = np.unique(self.frozen_phonons.atomic_numbers)
-        integrators = {
-            number: self.integrator.build(
-                chemical_symbols[number],
-                gpts=self.gpts,
-                sampling=self.sampling,
-                device=self.device,
-            )
-            for number in numbers
-        }
-        return integrators
