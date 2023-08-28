@@ -526,6 +526,80 @@ class Vortex(BaseAperture):
         return array
 
 
+class Zernike(BaseAperture):
+    """
+    Zernike aperture.
+
+    Parameters
+    ----------
+    center_hole_cutoff : float
+        Cutoff semiangle of aperture hole [mrad].
+    phase_shift: float
+        Phase shift of Zernike film [rad]
+    semiangle_cutoff : float
+        The cutoff semiangle of the aperture [mrad].
+    energy : float, optional
+        Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+    """
+
+    def __init__(
+        self,
+        center_hole_cutoff: float,
+        phase_shift: float,
+        semiangle_cutoff: float,
+        energy: float = None,
+        extent: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
+    ):
+        self._center_hole_cutoff = center_hole_cutoff
+        self._phase_shift = phase_shift
+
+        super().__init__(
+            energy=energy,
+            semiangle_cutoff=semiangle_cutoff,
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+        )
+
+    @property
+    def center_hole_cutoff(self) -> float:
+        """Cutoff semiangle of aperture hole."""
+        return self._center_hole_cutoff
+
+    @property
+    def phase_shift(self) -> float:
+        """Phase shift of Zernike film."""
+        return self._phase_shift
+
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
+        xp = get_array_module(alpha)
+        alpha = xp.array(alpha)
+
+        semiangle_cutoff = self.semiangle_cutoff / 1e3
+        center_hole_cutoff = self.center_hole_cutoff / 1e3
+        phase_shift = self.phase_shift
+
+        amplitude = xp.asarray(alpha < semiangle_cutoff, dtype=np.float32)
+        phase_array = xp.asarray(
+            xp.logical_and(alpha > center_hole_cutoff, alpha < semiangle_cutoff),
+            dtype=np.float32,
+        )
+        phase = xp.exp(1.0j * phase_shift * phase_array)
+        array = amplitude * phase
+
+        return array
+
+
 class TemporalEnvelope(BaseTransferFunction):
     """
     Envelope function for simulating partial temporal coherence in the quasi-coherent approximation.
