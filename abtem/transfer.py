@@ -1191,7 +1191,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         if cp is not None:
             weights = cp.asnumpy(weights)
 
-        if weights is not None and not np.all(weights != 1.0):
+        if weights is not None or np.all(weights == 1.0):
             array = xp.asarray(weights, dtype=xp.float32) * array
 
         return array
