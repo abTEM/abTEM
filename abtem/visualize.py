@@ -1819,11 +1819,12 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
         for i, measurement in self._generate_measurements():
 
-            if not self._common_scale and common_ylim is None:
-                y_lim = _get_extent(measurement)
+            if common_ylim is None:
+                ylim = _get_extent(measurement)
             else:
-                y_lim = common_ylim
-            self.axes[i].set_ylim(y_lim)
+                ylim = common_ylim
+
+            self.axes[i].set_ylim(ylim)
 
     def set_legends(self, loc: str = "first", **kwargs):
 
@@ -1877,7 +1878,54 @@ class MeasurementVisualization1D(MeasurementVisualization):
         )
 
     def update_artists(self):
-        pass
+
+        for i, measurements in self._generate_measurements(keepdims=False):
+            lines = self._artists[i]
+            for line, measurement in zip(lines, measurements):
+                y = measurement.array
+                x = self._get_xdata()
+                line.set_data(x, y)
+
+    @property
+    def widgets(self):
+        if widgets is None:
+            raise ipywidgets_not_installed
+
+        canvas = self.fig.canvas
+
+        def index_update_callback(change):
+            pass
+            # if self._autoscale:
+            #     vmin, vmax = self.get_global_vmin_vmax()
+            #     self._update_vmin_vmax(vmin, vmax)
+
+        sliders = _make_indexing_sliders(
+            self, self.axes_types, callbacks=(index_update_callback,)
+        )
+        #power_scale_button = _make_power_scale_slider(self)
+        #scale_button = _make_scale_button(self)
+        #autoscale_button = _make_autoscale_button(self)
+        #continuous_update_button = _make_continuous_button(sliders)
+
+        #scale_button.layout = widgets.Layout(width="20%")
+        #autoscale_button.layout = widgets.Layout(width="30%")
+        #continuous_update_button.layout = widgets.Layout(width="50%")
+
+        # scale_box = widgets.VBox(
+        #     [widgets.HBox([scale_button, autoscale_button, continuous_update_button])]
+        # )
+        # scale_box.layout = widgets.Layout(width="300px")
+
+        gui = widgets.VBox(
+            [
+                widgets.VBox(sliders),
+                #scale_box,
+                # vmin_vmax_slider,
+                #power_scale_button,
+            ]
+        )
+
+        return widgets.HBox([gui, canvas])
 
 
 class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
