@@ -1017,6 +1017,22 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def update_artists(self):
         pass
 
+    def get_global_vmin_vmax(
+        self, vmin: float = None, vmax: float = None
+    ) -> tuple[float, float]:
+        measurements = self._get_indexed_measurements()
+
+        if measurements.is_complex:
+            measurements = measurements.abs()
+
+        if vmin is None:
+            vmin = float(np.nanmin(measurements.array))
+
+        if vmax is None:
+            vmax = float(np.nanmax(measurements.array))
+
+        return vmin, vmax
+
     def set_panel_labels(
         self,
         labels: str = "metadata",
@@ -1228,30 +1244,6 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             norm.autoscale_None(measurement.array[np.isnan(measurement.array) == 0])
 
             self._normalization[i] = norm
-
-    def get_global_vmin_vmax(
-        self, vmin: float = None, vmax: float = None
-    ) -> tuple[float, float]:
-        measurements = self._get_indexed_measurements()
-
-        if measurements.is_complex:
-            measurements = measurements.abs()
-
-        if vmin is None:
-            vmin = float(np.nanmin(measurements.array))
-
-        if vmax is None:
-            vmax = float(np.nanmax(measurements.array))
-
-        return vmin, vmax
-
-    def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
-        for norm, measurement in zip(
-            self._normalization.ravel(), self._generate_measurements(keepdims=False)
-        ):
-
-            norm.vmin = vmin
-            norm.vmax = vmax
 
     def add_area_indicator(self, area_indicator, panel="first", **kwargs):
 
@@ -1758,6 +1750,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self.set_artists()
         self.set_xunits()
         self.set_yunits()
+        self._autoscale = config.get("visualize.autoscale", False)
 
         if self.ncols > 1:
             self.set_column_titles()
@@ -1842,6 +1835,11 @@ class MeasurementVisualization1D(MeasurementVisualization):
             if i in loc:
                 self.axes[i].legend(**kwargs)
 
+    def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
+        self.set_ylim([vmin,vmax])
+        #for _, measurement in self._generate_measurements(keepdims=False):
+        #    self.set_ylim([measurement.min(), measurement.max()])
+
     def set_artists(self):
 
         artists = np.zeros(self.axes.shape, dtype=object)
@@ -1894,32 +1892,31 @@ class MeasurementVisualization1D(MeasurementVisualization):
         canvas = self.fig.canvas
 
         def index_update_callback(change):
-            pass
-            # if self._autoscale:
-            #     vmin, vmax = self.get_global_vmin_vmax()
-            #     self._update_vmin_vmax(vmin, vmax)
+            if self._autoscale:
+                vmin, vmax = self.get_global_vmin_vmax()
+                self._update_vmin_vmax(vmin, vmax)
 
         sliders = _make_indexing_sliders(
             self, self.axes_types, callbacks=(index_update_callback,)
         )
         #power_scale_button = _make_power_scale_slider(self)
-        #scale_button = _make_scale_button(self)
-        #autoscale_button = _make_autoscale_button(self)
-        #continuous_update_button = _make_continuous_button(sliders)
+        scale_button = _make_scale_button(self)
+        autoscale_button = _make_autoscale_button(self)
+        continuous_update_button = _make_continuous_button(sliders)
 
-        #scale_button.layout = widgets.Layout(width="20%")
-        #autoscale_button.layout = widgets.Layout(width="30%")
-        #continuous_update_button.layout = widgets.Layout(width="50%")
+        scale_button.layout = widgets.Layout(width="20%")
+        autoscale_button.layout = widgets.Layout(width="30%")
+        continuous_update_button.layout = widgets.Layout(width="50%")
 
-        # scale_box = widgets.VBox(
-        #     [widgets.HBox([scale_button, autoscale_button, continuous_update_button])]
-        # )
-        # scale_box.layout = widgets.Layout(width="300px")
+        scale_box = widgets.VBox(
+            [widgets.HBox([scale_button, autoscale_button, continuous_update_button])]
+        )
+        scale_box.layout = widgets.Layout(width="300px")
 
         gui = widgets.VBox(
             [
                 widgets.VBox(sliders),
-                #scale_box,
+                scale_box,
                 # vmin_vmax_slider,
                 #power_scale_button,
             ]
