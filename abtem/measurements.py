@@ -1588,6 +1588,11 @@ class _BaseMeasurement1D(BaseMeasurements):
         if legend:
             visualization.set_legends()
 
+        if interact and display:
+            from IPython.display import display as ipython_display
+
+            ipython_display(visualization.widgets)
+
         return visualization
 
 
