@@ -373,24 +373,24 @@ class QuasiDipoleProjectionIntegrals(FieldIntegrator):
 
         return interpolator
 
-    def integrate_on_grid(
-        self,
-        atoms: Atoms,
-        a: float,
-        b: float,
-        gpts: tuple[int, int],
-        sampling: tuple[float, float],
-        device: str = "cpu",
-    ) -> np.ndarray:
-
-        xp = get_array_module(device)
-        array = xp.zeros((3,) + gpts, dtype=xp.float32)
-
-        for number in np.unique(atoms.numbers):
-            interpolator = self.get_interpolator(chemical_symbols[number])
-            array += interpolator.integrate_on_grid(atoms, a, b, gpts, sampling, device)
-
-        return array
+    # def integrate_on_grid(
+    #     self,
+    #     atoms: Atoms,
+    #     a: float,
+    #     b: float,
+    #     gpts: tuple[int, int],
+    #     sampling: tuple[float, float],
+    #     device: str = "cpu",
+    # ) -> np.ndarray:
+    #
+    #     xp = get_array_module(device)
+    #     array = xp.zeros((3,) + gpts, dtype=xp.float32)
+    #
+    #     for number in np.unique(atoms.numbers):
+    #         interpolator = self.get_interpolator(chemical_symbols[number])
+    #         array += interpolator.integrate_on_grid(atoms, a, b, gpts, sampling, device)
+    #
+    #     return array
 
     def integrate_magnetic_field(self, symbol, a, b, magnetic_moment):
         b1 = self._radial_prefactor_b1(symbol)
@@ -400,6 +400,7 @@ class QuasiDipoleProjectionIntegrals(FieldIntegrator):
         z = self._integration_coordinates(a, b)
 
         r = np.sqrt(x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None] ** 2)
+
         mr = (
             x[:, None, None] * magnetic_moment[0]
             + y[None, :, None] * magnetic_moment[1]
@@ -408,12 +409,53 @@ class QuasiDipoleProjectionIntegrals(FieldIntegrator):
 
         integrals = trapezoid(b1(r) * mr, x=z, axis=-1)
         integrals2 = trapezoid(b2(r), x=z, axis=-1)
+
+
         Bx = integrals * x[:, None] + magnetic_moment[0] * integrals2
         By = integrals * y[None, :] + magnetic_moment[1] * integrals2
 
         integrals = trapezoid(b1(r) * mr * z[None, None], x=z, axis=-1)
         Bz = integrals + magnetic_moment[2] * integrals2
         return Bx, By, Bz
+
+    def integrate_on_grid(
+        self,
+        atoms: Atoms,
+        a: float,
+        b: float,
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
+        device: str = "cpu",
+    ) -> np.ndarray:
+        positions = atoms.positions
+        magnetic_moments = atoms.get_array("magnetic_moments")
+
+        x = y = self._xy_coordinates(symbol)
+        r = np.sqrt(x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None] ** 2)
+
+        b1 = self._radial_prefactor_b1(symbol)
+        b2 = self._radial_prefactor_b2(symbol)
+
+
+        z = self._integration_coordinates(a, b)
+
+
+
+
+        #x_pixel, y_pixel = self._pixel_coordinates(sampling)
+        #pixel_center = np.array([len(x_pixel) // 2, len(y_pixel) // 2])
+
+        #x_pixel, y_pixel = np.meshgrid(x_pixel, y_pixel, indexing="ij")
+        #indices = np.array([x_pixel.ravel(), y_pixel.ravel()]).T
+        #indices[:, :2] -= pixel_center
+
+        #x, y = indices[:, 0] * sampling[0], indices[:, 1] * sampling[1]
+        #pixel_center_in = np.array((self._b1_integrals_xy.shape[1] // 2,) * 2)
+
+        #points = np.zeros((len(indices), 3))
+        #B = np.zeros((3, gpts[0], gpts[1]))
+        #for position, magnetic_moment in zip(positions, magnetic_moments):
+
 
 
 class BaseMagneticField(BaseField):
