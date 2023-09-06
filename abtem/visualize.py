@@ -4,8 +4,7 @@ from __future__ import annotations
 import string
 from abc import abstractmethod, ABCMeta
 from collections import defaultdict
-from typing import TYPE_CHECKING, Sequence
-
+from typing import TYPE_CHECKING, Sequence, Iterable
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -448,13 +447,39 @@ def discrete_cmap(num_colors, base_cmap):
     return matplotlib.colors.LinearSegmentedColormap.from_list("", colors, num_colors)
 
 
-def _make_indexing_sliders(
-    visualization, axes_types, continuous_update: bool = False, callbacks=()
+# def _check_ensemble_axes_equal(masurements):
+
+
+def make_sliders_from_ensemble_axes(
+    visualizations: MeasurementVisualization | Sequence[MeasurementVisualization],
+    axes_types: tuple[str, ...],
+    continuous_update: bool = False,
+    callbacks: tuple[callable, ...] = (),
 ):
+
+    if not isinstance(visualizations, Sequence):
+        visualizations = [visualizations]
+
+    ensemble_axes_metadata = visualizations[0].measurements.ensemble_axes_metadata
+    ensemble_shape = visualizations[0].measurements.ensemble_shape
+
+    for visualization in visualizations[1:]:
+        if not isinstance(visualization, MeasurementVisualization):
+            raise ValueError()
+
+        if not (
+            (
+                visualization.measurements.ensemble_axes_metadata
+                == ensemble_axes_metadata
+            )
+            and (visualization.measurements.ensemble_shape == ensemble_shape)
+        ):
+            raise ValueError()
+
     sliders = []
     for axes_metadata, n, axes_type in zip(
-        visualization.measurements.ensemble_axes_metadata,
-        visualization.measurements.ensemble_shape,
+        ensemble_axes_metadata,
+        ensemble_shape,
         axes_types,
     ):
         options = _format_options(axes_metadata.coordinates(n))
@@ -480,12 +505,13 @@ def _make_indexing_sliders(
                 )
             )
 
-    _set_update_indices_callback(sliders, visualization, callbacks)
+    for visualization in visualizations:
+        _set_update_indices_callback(sliders, visualization, callbacks)
 
     return sliders
 
 
-def _set_update_indices_callback(sliders, visualization, callbacks):
+def _set_update_indices_callback(sliders, visualization, callbacks=()):
     def update_indices(change):
         indices = ()
         for slider in sliders:
@@ -496,6 +522,9 @@ def _set_update_indices_callback(sliders, visualization, callbacks):
 
         with sliders[0].hold_trait_notifications():
             visualization.set_ensemble_indices(indices)
+            if visualization._autoscale:
+                vmin, vmax = visualization.get_global_vmin_vmax()
+                visualization._update_vmin_vmax(vmin, vmax)
 
     for slider in sliders:
         slider.observe(update_indices, "value")
@@ -627,6 +656,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         measurements: BaseMeasurements,
         axes: AxesGrid | np.ndarray,
         axes_types: Sequence[str] = (),
+        autoscale: bool= False,
     ):
         self._measurements = measurements.to_cpu()
         self._axes = axes
@@ -638,6 +668,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         self._metadata_labels = np.array([])
         self._xunits = None
         self._yunits = None
+        self._autoscale = autoscale
 
         for ax in np.array(self.axes).ravel():
             ax.ticklabel_format(
@@ -645,6 +676,14 @@ class MeasurementVisualization(metaclass=ABCMeta):
             )
 
         self.fig.canvas.header_visible = False
+
+    @property
+    def autoscale(self):
+        return self._autoscale
+
+    @autoscale.setter
+    def autoscale(self, value):
+        self._autoscale = value
 
     @property
     def fig(self):
@@ -1017,22 +1056,6 @@ class MeasurementVisualization(metaclass=ABCMeta):
     def update_artists(self):
         pass
 
-    def get_global_vmin_vmax(
-        self, vmin: float = None, vmax: float = None
-    ) -> tuple[float, float]:
-        measurements = self._get_indexed_measurements()
-
-        if measurements.is_complex:
-            measurements = measurements.abs()
-
-        if vmin is None:
-            vmin = float(np.nanmin(measurements.array))
-
-        if vmax is None:
-            vmax = float(np.nanmax(measurements.array))
-
-        return vmin, vmax
-
     def set_panel_labels(
         self,
         labels: str = "metadata",
@@ -1244,6 +1267,30 @@ class BaseMeasurementVisualization2D(MeasurementVisualization):
             norm.autoscale_None(measurement.array[np.isnan(measurement.array) == 0])
 
             self._normalization[i] = norm
+
+    def get_global_vmin_vmax(
+        self, vmin: float = None, vmax: float = None
+    ) -> tuple[float, float]:
+        measurements = self._get_indexed_measurements()
+
+        if measurements.is_complex:
+            measurements = measurements.abs()
+
+        if vmin is None:
+            vmin = float(np.nanmin(measurements.array))
+
+        if vmax is None:
+            vmax = float(np.nanmax(measurements.array))
+
+        return vmin, vmax
+
+    def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
+        for norm, measurement in zip(
+            self._normalization.ravel(), self._generate_measurements(keepdims=False)
+        ):
+
+            norm.vmin = vmin
+            norm.vmax = vmax
 
     def add_area_indicator(self, area_indicator, panel="first", **kwargs):
 
@@ -1650,23 +1697,36 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
 
         self._artists = images
 
-    def update_artists(self):
+    def _update_domain_coloring_alpha(self, values, image, normalization):
+        alpha = normalization(values)
+        alpha = np.clip(alpha, a_min=0, a_max=1)
+        image.set_alpha(alpha)
 
+    def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
+        super()._update_vmin_vmax(vmin=vmin, vmax=vmax)
+        if self._domain_coloring:
+            for i, measurement in self._generate_measurements(keepdims=False):
+                images = self._artists[i]
+                abs_array = np.abs(measurement.array).T
+                self._update_domain_coloring_alpha(
+                    abs_array, images[0], self._normalization[i]
+                )
+
+    def update_artists(self):
         for i, measurement in self._generate_measurements(keepdims=False):
             images = self._artists[i]
 
-            if self._domain_coloring:
-                array = measurement.array
-                abs_array = np.abs(array)
-                alpha = self._normalization[i](abs_array)
-                alpha = np.clip(alpha, a_min=0, a_max=1)
+            array = measurement.array.T
 
-                images[0].set_alpha(alpha)
+            if self._domain_coloring:
+                abs_array = np.abs(array)
+                self._update_domain_coloring_alpha(
+                    abs_array, images[0], self._normalization[i]
+                )
                 images[0].set_data(np.angle(array))
                 images[1].set_data(abs_array)
             else:
-
-                images.set_data(measurement.array.T)
+                images.set_data(array)
 
     @property
     def widgets(self):
@@ -1680,8 +1740,9 @@ class MeasurementVisualization2D(BaseMeasurementVisualization2D):
                 vmin, vmax = self.get_global_vmin_vmax()
                 self._update_vmin_vmax(vmin, vmax)
 
-        sliders = _make_indexing_sliders(
-            self, self.axes_types, callbacks=(index_update_callback,)
+        sliders = make_sliders_from_ensemble_axes(
+            self,
+            self.axes_types,  # callbacks=(index_update_callback,)
         )
         power_scale_button = _make_power_scale_slider(self)
         scale_button = _make_scale_button(self)
@@ -1750,7 +1811,6 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self.set_artists()
         self.set_xunits()
         self.set_yunits()
-        self._autoscale = config.get("visualize.autoscale", False)
 
         if self.ncols > 1:
             self.set_column_titles()
@@ -1812,12 +1872,11 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
         for i, measurement in self._generate_measurements():
 
-            if common_ylim is None:
-                ylim = _get_extent(measurement)
+            if not self._common_scale and common_ylim is None:
+                y_lim = _get_extent(measurement)
             else:
-                ylim = common_ylim
-
-            self.axes[i].set_ylim(ylim)
+                y_lim = common_ylim
+            self.axes[i].set_ylim(y_lim)
 
     def set_legends(self, loc: str = "first", **kwargs):
 
@@ -1834,11 +1893,6 @@ class MeasurementVisualization1D(MeasurementVisualization):
 
             if i in loc:
                 self.axes[i].legend(**kwargs)
-
-    def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
-        self.set_ylim([vmin,vmax])
-        #for _, measurement in self._generate_measurements(keepdims=False):
-        #    self.set_ylim([measurement.min(), measurement.max()])
 
     def set_artists(self):
 
@@ -1876,53 +1930,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         )
 
     def update_artists(self):
-
-        for i, measurements in self._generate_measurements(keepdims=False):
-            lines = self._artists[i]
-            for line, measurement in zip(lines, measurements):
-                y = measurement.array
-                x = self._get_xdata()
-                line.set_data(x, y)
-
-    @property
-    def widgets(self):
-        if widgets is None:
-            raise ipywidgets_not_installed
-
-        canvas = self.fig.canvas
-
-        def index_update_callback(change):
-            if self._autoscale:
-                vmin, vmax = self.get_global_vmin_vmax()
-                self._update_vmin_vmax(vmin, vmax)
-
-        sliders = _make_indexing_sliders(
-            self, self.axes_types, callbacks=(index_update_callback,)
-        )
-        #power_scale_button = _make_power_scale_slider(self)
-        scale_button = _make_scale_button(self)
-        autoscale_button = _make_autoscale_button(self)
-        continuous_update_button = _make_continuous_button(sliders)
-
-        scale_button.layout = widgets.Layout(width="20%")
-        autoscale_button.layout = widgets.Layout(width="30%")
-        continuous_update_button.layout = widgets.Layout(width="50%")
-
-        scale_box = widgets.VBox(
-            [widgets.HBox([scale_button, autoscale_button, continuous_update_button])]
-        )
-        scale_box.layout = widgets.Layout(width="300px")
-
-        gui = widgets.VBox(
-            [
-                widgets.VBox(sliders),
-                scale_box,
-                # vmin_vmax_slider,
-                #power_scale_button,
-            ]
-        )
-
-        return widgets.HBox([gui, canvas])
+        pass
 
 
 class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
@@ -2257,7 +2265,7 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
 
         canvas = self.fig.canvas
 
-        sliders = _make_indexing_sliders(self, self.axes_types)
+        sliders = make_sliders_from_ensemble_axes(self, self.axes_types)
 
         def index_update_callback(change):
             if self._autoscale:

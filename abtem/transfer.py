@@ -127,7 +127,7 @@ class BaseTransferFunction(
         array = ctf._evaluate_kernel()
         xp = get_array_module(array)
         diffraction_patterns = DiffractionPatterns(
-            xp.fft.fftshift(array),
+            xp.fft.fftshift(array, axes=(-2, -1)),
             sampling=ctf.reciprocal_space_sampling,
             ensemble_axes_metadata=ctf.ensemble_axes_metadata,
             fftshift=False,
