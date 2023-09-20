@@ -657,7 +657,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
             for i, slice_idx in enumerate(range(start, stop)):
 
-                #for Z, integrator in integrators.items():
                 atoms = sliced_atoms.get_atoms_in_slices(slice_idx)
 
                 new_array = self._integrator.integrate_on_grid(
