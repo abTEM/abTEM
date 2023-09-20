@@ -271,7 +271,7 @@ class QuasiDipoleProjections:
         # cutoff_tolerance: float = 1e-3,
         cutoff=4,
         integration_steps: float = 0.01,
-        sampling: int = 0.1,
+        sampling: float = 0.1,
         slice_thickness: float = 0.1,
     ):
         self._parametrization = LyonParametrization()
@@ -321,29 +321,6 @@ class QuasiDipoleProjections:
         cutoff = self.cutoff(symbol)
         z = np.arange(-cutoff, cutoff + self._step_size / 2, self._step_size)
         return z
-
-    def integrate_magnetic_field(self, symbol, a, b, magnetic_moment):
-        b1 = self._radial_prefactor_b1(symbol)
-        b2 = self._radial_prefactor_b2(symbol)
-
-        x = y = self._xy_coordinates(symbol)
-        z = np.arange(a, b + self._step_size / 2, self._step_size)
-
-        r = np.sqrt(x[:, None, None] ** 2 + y[None, :, None] ** 2 + z[None, None] ** 2)
-        mr = (
-            x[:, None, None] * magnetic_moment[0]
-            + y[None, :, None] * magnetic_moment[1]
-            + z[None, None] * magnetic_moment[2]
-        )
-
-        integrals = trapezoid(b1(r) * mr, x=z, axis=-1)
-        integrals2 = trapezoid(b2(r), x=z, axis=-1)
-        Bx = integrals * x[:, None] + magnetic_moment[0] * integrals2
-        By = integrals * y[None, :] + magnetic_moment[1] * integrals2
-
-        integrals = trapezoid(b1(r) * mr * z[None, None], x=z, axis=-1)
-        Bz = integrals + magnetic_moment[2] * integrals2
-        return Bx, By, Bz
 
     def _calculate_integral_table(self, symbol):
         b1_radial = self._radial_prefactor_b1(symbol)
