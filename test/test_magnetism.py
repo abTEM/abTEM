@@ -2,7 +2,7 @@ import numpy as np
 from ase import Atoms
 from scipy.integrate import trapezoid
 
-from abtem.magnetism.iam import QuasiDipoleProjections, MagneticField
+from abtem.magnetism.iam import QuasiDipoleFieldProjections, MagneticField
 
 
 def integrate_magnetic_field(quasi_dipole_projector, symbol, a, b, magnetic_moment):
@@ -41,7 +41,7 @@ def test_magnetic_field():
 
     atoms.set_array("magnetic_moments", m)
 
-    quasi_dipole_projector = QuasiDipoleProjections(
+    quasi_dipole_projector = QuasiDipoleFieldProjections(
         cutoff=2,
         sampling=0.05,
         slice_thickness=0.01,

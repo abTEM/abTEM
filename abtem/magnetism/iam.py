@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from abc import abstractmethod
+
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -18,6 +20,18 @@ from abtem.potentials.iam import (
     _FieldBuilderFromAtoms,
     FieldArray,
 )
+
+
+def radial_prefactor_a(r, parameters):
+    r = r[:, None]
+    a = parameters[None, :, 0]
+    b = parameters[None, :, 1]
+    ni = (np.arange(0, 5) / 2 + 3)[None]
+    a = a / (r**ni + b)
+    a = a.sum(-1)
+    a = a * cutoff_taper(r[:, 0], np.max(r), 0.85)
+    a = interp1d(r[:, 0], a, fill_value=0.0, bounds_error=False)
+    return a
 
 
 def radial_prefactor_b1(r, parameters):
@@ -127,83 +141,42 @@ def symmetric_arange(cutoff, sampling):
     return np.concatenate([-values[::-1][:-1], values])
 
 
-class B1IntegralTables:
-    def __init__(self, x, slice_limits, b1xx, b1xy, b1xz, b1zz, b2):
-        self._x = x
-        self._slice_limits = slice_limits
-        self._b1xx = b1xx
-        self._b1xy = b1xy
-        self._b1xz = b1xz
-        self._b1zz = b1zz
-        self._b2 = b2
-
-    def integrate(self, a, b, magnetic_moment):
-
-        i = np.searchsorted(self._slice_limits, a, side="left")
-        j = np.searchsorted(self._slice_limits, b, side="left")
-
-        b1xx = self._b1xx[j] - self._b1xx[i]
-        b1xy = self._b1xy[j] - self._b1xy[i]
-        b1xz = self._b1xz[j] - self._b1xz[i]
-        b1zz = self._b1zz[j] - self._b1zz[i]
-        b2 = self._b2[j] - self._b2[i]
-
-        Bx = (
-            (b1xx + b2) * magnetic_moment[0]
-            + b1xy * magnetic_moment[1]
-            + b1xz * magnetic_moment[2]
-        )
-
-        By = (
-            b1xy * magnetic_moment[0]
-            + (b1xx.T + b2) * magnetic_moment[1]
-            + b1xz.T * magnetic_moment[2]
-        )
-
-        Bz = (
-            b1xz * magnetic_moment[0]
-            + b1xz.T * magnetic_moment[1]
-            + (b2 + b1zz) * magnetic_moment[2]
-        )
-
-        return Bx, By, Bz
-
-
 @jit(nopython=True, fastmath=True, nogil=True, cache=True)
-def interpolate_quasi_dipole_projection_integrals(
-    array,
+def interpolate_quasi_dipole_field_projections(
+    magnetic_field,
     sampling,
     positions,
     magnetic_moments,
     slice_limits,
     integral_limits,
     integral_sampling,
-    b1xx,
-    b1xy,
-    b1xz,
-    b1zz,
-    b2,
+    # b1xx,
+    # b1xy,
+    # b1xz,
+    # b1zz,
+    # b2,
+    tables,
 ):
     scale_x = sampling[0] / integral_sampling[0]
     scale_y = sampling[1] / integral_sampling[1]
-    nx = b1xx.shape[1]
-    ny = b1xx.shape[2]
+    nx = tables.shape[2]
+    ny = tables.shape[3]
     rx = int(np.floor(nx // 2 / scale_x))
-    ry = int(np.floor(ny// 2 / scale_y))
+    ry = int(np.floor(ny // 2 / scale_y))
 
     for position, magnetic_moment in zip(positions, magnetic_moments):
-        #i, j = np.searchsorted(integral_limits, slice_limits - position[2])
         shifted_limits = slice_limits - position[2]
         i = np.argmin(np.abs(integral_limits - shifted_limits[0]))
         j = np.argmin(np.abs(integral_limits - shifted_limits[1]))
+        j = min(tables.shape[1] - 1, j)
 
-        j = min(b1xx.shape[0] - 1, j)
-
-        b1xxi = b1xx[j] - b1xx[i]
-        b1xyi = b1xy[j] - b1xy[i]
-        b1xzi = b1xz[j] - b1xz[i]
-        b1zzi = b1zz[j] - b1zz[i]
-        b2i = b2[j] - b2[i]
+        b1xxi = tables[0, j] - tables[0, i]
+        b1yyi = b1xxi.T
+        b1xyi = tables[1, j] - tables[1, i]
+        b1xzi = tables[2, j] - tables[2, i]
+        b1yzi = b1xzi.T
+        b1zzi = tables[3, j] - tables[3, i]
+        b2i = tables[4, j] - tables[4, i]
 
         Bx = (
             (b1xxi + b2i) * magnetic_moment[0]
@@ -213,60 +186,61 @@ def interpolate_quasi_dipole_projection_integrals(
 
         By = (
             b1xyi * magnetic_moment[0]
-            + (b1xxi.T + b2i) * magnetic_moment[1]
+            + (b1yyi + b2i) * magnetic_moment[1]
             + b1xzi.T * magnetic_moment[2]
         )
 
         Bz = (
             b1xzi * magnetic_moment[0]
-            + b1xzi.T * magnetic_moment[1]
+            + b1yzi * magnetic_moment[1]
             + (b2i + b1zzi) * magnetic_moment[2]
         )
 
         left = max(int(round(position[0] / sampling[0])) - rx, 0)
-        right = min(int(round(position[0] / sampling[0])) + rx, array.shape[1])
+        right = min(int(round(position[0] / sampling[0])) + rx, magnetic_field.shape[1])
         bottom = max(int(round(position[1] / sampling[1])) - ry, 0)
-        top = min(int(round(position[1] / sampling[1])) + ry, array.shape[2])
-        shift_x = position[0] / integral_sampling[0] - nx // 2
-        shift_y = position[1] / integral_sampling[1] - ny // 2
+        top = min(int(round(position[1] / sampling[1])) + ry, magnetic_field.shape[2])
+        shift_x = np.float32(position[0] / integral_sampling[0] - nx // 2)
+        shift_y = np.float32(position[1] / integral_sampling[1] - ny // 2)
 
         for i in range(left, right):
-            x = i * scale_x - shift_x
+            x = np.float32(i * scale_x) - shift_x
             xf = np.floor(x)
             wx1 = x - xf
-            wx0 = 1 - wx1
+            wx0 = np.float32(1) - wx1
 
             for j in range(bottom, top):
-                y = j * scale_y - shift_y
+                y = np.float32(j * scale_y) - shift_y
                 yf = np.floor(y)
                 wy1 = y - yf
-                wy0 = 1 - wy1
+                wy0 = np.float32(1) - wy1
 
-                array[0, i, j] += (
+                magnetic_field[0, i, j] += (
                     Bx[int(xf), int(yf)] * wx0 * wy0
                     + Bx[int(xf) + 1, int(yf)] * wx1 * wy0
                     + Bx[int(xf), int(yf) + 1] * wx0 * wy1
                     + Bx[int(xf) + 1, int(yf) + 1] * wx1 * wy1
                 )
-                array[1, i, j] += (
+                magnetic_field[1, i, j] += (
                     By[int(xf), int(yf)] * wx0 * wy0
                     + By[int(xf) + 1, int(yf)] * wx1 * wy0
                     + By[int(xf), int(yf) + 1] * wx0 * wy1
                     + By[int(xf) + 1, int(yf) + 1] * wx1 * wy1
                 )
-                array[2, i, j] += (
+                magnetic_field[2, i, j] += (
                     Bz[int(xf), int(yf)] * wx0 * wy0
                     + Bz[int(xf) + 1, int(yf)] * wx1 * wy0
                     + Bz[int(xf), int(yf) + 1] * wx0 * wy1
                     + Bz[int(xf) + 1, int(yf) + 1] * wx1 * wy1
                 )
 
-    return array
+    return magnetic_field
 
 
 class QuasiDipoleProjections:
     def __init__(
         self,
+        interpolation_func,
         parametrization: str = "lyon",
         # cutoff_tolerance: float = 1e-3,
         cutoff=4,
@@ -275,16 +249,25 @@ class QuasiDipoleProjections:
         slice_thickness: float = 0.1,
     ):
         self._parametrization = LyonParametrization()
-        # self._cutoff_tolerance = cutoff_tolerance
         self._cutoff = cutoff
         self._step_size = integration_steps
         self._slice_thickness = slice_thickness
         self._sampling = sampling
-        ##self._inclination_sampling = inclination_sampling
-        ##self._radial_gpts = radial_gpts
-
+        self._interpolation_func = interpolation_func
         self._tables = {}
-        # self._integrals =
+
+    def cutoff(self, symbol):
+        return self._cutoff
+
+    def _xy_coordinates(self, symbol):
+        cutoff = self.cutoff(symbol)
+        return symmetric_arange(cutoff, self._sampling)
+
+    def _slice_limits(self, symbol):
+        n = np.ceil(self.cutoff(symbol) / self._slice_thickness)
+        slice_cutoff = n * self._slice_thickness
+        slice_limits = np.linspace(-slice_cutoff, slice_cutoff, int(n) * 2 + 1)
+        return slice_limits
 
     @property
     def parametrization(self):
@@ -298,72 +281,13 @@ class QuasiDipoleProjections:
     def periodic(self):
         return False
 
-    def cutoff(self, symbol):
-        return self._cutoff
-
     @property
     def sampling(self):
         return self._sampling
 
-    def _radial_prefactor_b1(self, symbol):
-        r = np.linspace(0, self.cutoff(symbol), 100)
-        return radial_prefactor_b1(r, np.array(self.parametrization.parameters[symbol]))
-
-    def _radial_prefactor_b2(self, symbol):
-        r = np.linspace(0, self.cutoff(symbol), 100)
-        return radial_prefactor_b2(r, np.array(self.parametrization.parameters[symbol]))
-
-    def _xy_coordinates(self, symbol):
-        cutoff = self.cutoff(symbol)
-        return symmetric_arange(cutoff, self._sampling)
-
-    def _integration_coordinates(self, symbol):
-        cutoff = self.cutoff(symbol)
-        z = np.arange(-cutoff, cutoff + self._step_size / 2, self._step_size)
-        return z
-
+    @abstractmethod
     def _calculate_integral_table(self, symbol):
-        b1_radial = self._radial_prefactor_b1(symbol)
-        b2_radial = self._radial_prefactor_b2(symbol)
-        x = self._xy_coordinates(symbol)
-
-        n = np.ceil(self.cutoff(symbol) / self._slice_thickness)
-        slice_cutoff = n * self._slice_thickness
-        slice_limits = np.linspace(-slice_cutoff, slice_cutoff, int(n) * 2 + 1)
-
-        shape = (len(slice_limits),) + (len(x),) * 2
-        b1xx = np.zeros(shape)
-        b1xy = np.zeros(shape)
-
-        b1xz = np.zeros(shape)
-        b1zz = np.zeros(shape)
-
-        b2 = np.zeros(shape)
-
-        for i, (a, b) in enumerate(zip(slice_limits[:-1], slice_limits[1:]), start=1):
-            n = int(np.round((b - a) / self._step_size)) + 1
-            z = np.linspace(a, b, n)
-            r = np.sqrt(
-                x[:, None, None] ** 2 + x[None, :, None] ** 2 + z[None, None] ** 2
-            )
-
-            b1xx[i] = b1xx[i - 1] + trapezoid(
-                b1_radial(r) * x[:, None, None] ** 2, x=z, axis=-1
-            )
-            b1xy[i] = b1xy[i - 1] + trapezoid(
-                b1_radial(r) * x[:, None, None] * x[None, :, None], x=z, axis=-1
-            )
-
-            b1xz[i] = b1xz[i - 1] + trapezoid(
-                b1_radial(r) * x[:, None, None] * z[None, None, :], x=z, axis=-1
-            )
-            b1zz[i] = b1zz[i - 1] + trapezoid(
-                b1_radial(r) * z[None, None, :] ** 2, x=z, axis=-1
-            )
-
-            b2[i] = b2[i - 1] + trapezoid(b2_radial(r), x=z, axis=-1)
-
-        return B1IntegralTables(x, slice_limits, b1xx, b1xy, b1xz, b1zz, b2)
+        pass
 
     def get_integral_table(self, symbol: str):
         try:
@@ -373,6 +297,64 @@ class QuasiDipoleProjections:
             self._tables[symbol] = table
 
         return table
+
+
+class QuasiDipoleFieldProjections(QuasiDipoleProjections):
+    def __init__(
+        self,
+        parametrization: str = "lyon",
+        # cutoff_tolerance: float = 1e-3,
+        cutoff=4,
+        integration_steps: float = 0.01,
+        sampling: float = 0.1,
+        slice_thickness: float = 0.1,
+    ):
+
+        super().__init__(
+            interpolate_quasi_dipole_field_projections,
+            parametrization,
+            cutoff,
+            integration_steps,
+            sampling,
+            slice_thickness,
+        )
+
+    def _calculate_integral_table(self, symbol):
+        r = np.linspace(0, self.cutoff(symbol), 100)
+        parameters = np.array(self.parametrization.parameters[symbol])
+        b1_radial = radial_prefactor_b1(r, parameters)
+        b2_radial = radial_prefactor_b2(r, parameters)
+
+        x = self._xy_coordinates(symbol)
+        slice_limits = self._slice_limits(symbol)
+
+        shape = (5, len(slice_limits), *(len(x),) * 2)
+
+        tables = np.zeros(shape, dtype=np.float32)
+        for i, (a, b) in enumerate(zip(slice_limits[:-1], slice_limits[1:]), start=1):
+            n = int(np.round((b - a) / self._step_size)) + 1
+            z = np.linspace(a, b, n)
+            r = np.sqrt(
+                x[:, None, None] ** 2 + x[None, :, None] ** 2 + z[None, None] ** 2
+            )
+
+            tables[0, i] = tables[0, i - 1] + trapezoid(
+                b1_radial(r) * x[:, None, None] ** 2, x=z, axis=-1
+            )
+            tables[1, i] = tables[1, i - 1] + trapezoid(
+                b1_radial(r) * x[:, None, None] * x[None, :, None], x=z, axis=-1
+            )
+
+            tables[2, i] = tables[2, i - 1] + trapezoid(
+                b1_radial(r) * x[:, None, None] * z[None, None, :], x=z, axis=-1
+            )
+            tables[3, i] = tables[3, i - 1] + trapezoid(
+                b1_radial(r) * z[None, None, :] ** 2, x=z, axis=-1
+            )
+
+            tables[4, i] = tables[4, i - 1] + trapezoid(b2_radial(r), x=z, axis=-1)
+
+        return tables
 
     def integrate_on_grid(
         self,
@@ -389,31 +371,24 @@ class QuasiDipoleProjections:
 
         b1_integrals = self.get_integral_table("Fe")
 
-        table = self._tables["Fe"]
-        integral_limits = table._slice_limits
-        b1xx = table._b1xx
-        b1xy = table._b1xy
-        b1xz = table._b1xz
-        b1zz = table._b1zz
-        b2 = table._b2
-
+        integral_limits = self._slice_limits("Fe")
         slice_limits = np.array([a, b])
+        tables = self._tables["Fe"]
 
         integral_sampling = (self._sampling,) * 2
 
-        array = np.zeros((3,) + gpts)
-        interpolate_quasi_dipole_projection_integrals(array,
-                                                      sampling,
-                                                      positions,
-                                                      magnetic_moments,
-                                                      slice_limits,
-                                                      integral_limits,
-                                                      integral_sampling,
-                                                      b1xx,
-                                                      b1xy,
-                                                      b1xz,
-                                                      b1zz,
-                                                      b2)
+        array = np.zeros((3,) + gpts, dtype=np.float32)
+
+        self._interpolation_func(
+            array,
+            sampling,
+            positions,
+            magnetic_moments,
+            slice_limits,
+            integral_limits,
+            integral_sampling,
+            tables,
+        )
 
         return array
 
@@ -447,6 +422,30 @@ class BaseMagneticField(BaseField):
 
 
 class MagneticFieldArray(BaseMagneticField, FieldArray):
+    _base_dims = 4
+
+    def __init__(
+        self,
+        array: np.ndarray | da.core.Array,
+        slice_thickness: float | tuple[float, ...] = None,
+        extent: float | tuple[float, float] = None,
+        sampling: float | tuple[float, float] = None,
+        exit_planes: int | tuple[int, ...] = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
+        super().__init__(
+            array=array,
+            slice_thickness=slice_thickness,
+            extent=extent,
+            sampling=sampling,
+            exit_planes=exit_planes,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+
+class VectorPotentialArray(BaseMagneticField, FieldArray):
 
     _base_dims = 4
 
@@ -492,7 +491,7 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
     ):
 
         if integrator is None:
-            integrator = QuasiDipoleProjections(parametrization=parametrization)
+            integrator = QuasiDipoleFieldProjections(parametrization=parametrization)
 
         super().__init__(
             atoms=atoms,
@@ -509,15 +508,41 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
             integrator=integrator,
         )
 
-    def _build_integrators(self):
-        numbers = np.unique(self.frozen_phonons.atomic_numbers)
-        integrators = {
-            number: self.integrator.build(
-                chemical_symbols[number],
-                gpts=self.gpts,
-                sampling=self.sampling,
-                device=self.device,
-            )
-            for number in numbers
-        }
-        return integrators
+
+class VectorPotential(_FieldBuilderFromAtoms, BaseMagneticField):
+    _exclude_from_copy = ("parametrization",)
+
+    def __init__(
+        self,
+        atoms: Atoms | BaseFrozenPhonons = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[float, float] = None,
+        slice_thickness: float | tuple[float, ...] = 1,
+        parametrization: str = "lyon",
+        exit_planes: int | tuple[int, ...] = None,
+        plane: str
+        | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: tuple[float, float, float] = None,
+        periodic: bool = True,
+        integrator=None,
+        device: str = None,
+    ):
+
+        if integrator is None:
+            integrator = QuasiDipoleFieldProjections(parametrization=parametrization)
+
+        super().__init__(
+            atoms=atoms,
+            array_object=VectorPotentialArray,
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            device=device,
+            plane=plane,
+            origin=origin,
+            box=box,
+            periodic=periodic,
+            integrator=integrator,
+        )
