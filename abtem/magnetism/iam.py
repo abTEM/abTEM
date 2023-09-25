@@ -142,6 +142,60 @@ def symmetric_arange(cutoff, sampling):
 
 
 @jit(nopython=True, fastmath=True, nogil=True, cache=True)
+def bilinear_weighted_sum(array, x, y, wx0, wx1, wy0, wy1):
+    return (
+        array[x, y] * wx0 * wy0
+        + array[x + 1, y] * wx1 * wy0
+        + array[x, y + 1] * wx0 * wy1
+        + array[x + 1, y + 1] * wx1 * wy1
+    )
+
+
+@jit(nopython=True, fastmath=True, nogil=True, cache=True)
+def interpolate(array_out, array_in, position, sampling_out, sampling_in):
+    nx = array_in.shape[1]
+    ny = array_in.shape[2]
+
+    scale_x = sampling_out[0] / sampling_in[0]
+    scale_y = sampling_out[1] / sampling_in[1]
+    region_x = int(np.floor(nx // 2 / scale_x))
+    region_y = int(np.floor(ny // 2 / scale_y))
+
+    left = max(int(round(position[0] / sampling_out[0])) - region_x, 0)
+    right = min(
+        int(round(position[0] / sampling_out[0])) + region_x, array_out.shape[1]
+    )
+
+    bottom = max(int(round(position[1] / sampling_out[1])) - region_y, 0)
+    top = min(int(round(position[1] / sampling_out[1])) + region_y, array_out.shape[2])
+
+    shift_x = np.float32(position[0] / sampling_in[0] - nx // 2)
+    shift_y = np.float32(position[1] / sampling_in[1] - ny // 2)
+
+    for i in range(left, right):
+        x = np.float32(i * scale_x) - shift_x
+        xf = np.floor(x)
+        wx1 = x - xf
+        wx0 = np.float32(1) - wx1
+
+        for j in range(bottom, top):
+            y = np.float32(j * scale_y) - shift_y
+            yf = np.floor(y)
+            wy1 = y - yf
+            wy0 = np.float32(1) - wy1
+
+            array_out[0, i, j] += bilinear_weighted_sum(
+                array_in[0], int(xf), int(yf), wx0, wx1, wy0, wy1
+            )
+            array_out[1, i, j] += bilinear_weighted_sum(
+                array_in[1], int(xf), int(yf), wx0, wx1, wy0, wy1
+            )
+            array_out[2, i, j] += bilinear_weighted_sum(
+                array_in[2], int(xf), int(yf), wx0, wx1, wy0, wy1
+            )
+
+
+@jit(nopython=True, fastmath=True, nogil=True, cache=True)
 def interpolate_quasi_dipole_field_projections(
     magnetic_field,
     sampling,
@@ -157,13 +211,8 @@ def interpolate_quasi_dipole_field_projections(
     # b2,
     tables,
 ):
-    scale_x = sampling[0] / integral_sampling[0]
-    scale_y = sampling[1] / integral_sampling[1]
-    nx = tables.shape[2]
-    ny = tables.shape[3]
-    rx = int(np.floor(nx // 2 / scale_x))
-    ry = int(np.floor(ny // 2 / scale_y))
 
+    B = np.zeros((3, tables.shape[2], tables.shape[3]))
     for position, magnetic_moment in zip(positions, magnetic_moments):
         shifted_limits = slice_limits - position[2]
         i = np.argmin(np.abs(integral_limits - shifted_limits[0]))
@@ -178,61 +227,25 @@ def interpolate_quasi_dipole_field_projections(
         b1zzi = tables[3, j] - tables[3, i]
         b2i = tables[4, j] - tables[4, i]
 
-        Bx = (
+        B[0] = (
             (b1xxi + b2i) * magnetic_moment[0]
             + b1xyi * magnetic_moment[1]
             + b1xzi * magnetic_moment[2]
         )
 
-        By = (
+        B[1] = (
             b1xyi * magnetic_moment[0]
             + (b1yyi + b2i) * magnetic_moment[1]
             + b1xzi.T * magnetic_moment[2]
         )
 
-        Bz = (
+        B[2] = (
             b1xzi * magnetic_moment[0]
             + b1yzi * magnetic_moment[1]
             + (b2i + b1zzi) * magnetic_moment[2]
         )
 
-        left = max(int(round(position[0] / sampling[0])) - rx, 0)
-        right = min(int(round(position[0] / sampling[0])) + rx, magnetic_field.shape[1])
-        bottom = max(int(round(position[1] / sampling[1])) - ry, 0)
-        top = min(int(round(position[1] / sampling[1])) + ry, magnetic_field.shape[2])
-        shift_x = np.float32(position[0] / integral_sampling[0] - nx // 2)
-        shift_y = np.float32(position[1] / integral_sampling[1] - ny // 2)
-
-        for i in range(left, right):
-            x = np.float32(i * scale_x) - shift_x
-            xf = np.floor(x)
-            wx1 = x - xf
-            wx0 = np.float32(1) - wx1
-
-            for j in range(bottom, top):
-                y = np.float32(j * scale_y) - shift_y
-                yf = np.floor(y)
-                wy1 = y - yf
-                wy0 = np.float32(1) - wy1
-
-                magnetic_field[0, i, j] += (
-                    Bx[int(xf), int(yf)] * wx0 * wy0
-                    + Bx[int(xf) + 1, int(yf)] * wx1 * wy0
-                    + Bx[int(xf), int(yf) + 1] * wx0 * wy1
-                    + Bx[int(xf) + 1, int(yf) + 1] * wx1 * wy1
-                )
-                magnetic_field[1, i, j] += (
-                    By[int(xf), int(yf)] * wx0 * wy0
-                    + By[int(xf) + 1, int(yf)] * wx1 * wy0
-                    + By[int(xf), int(yf) + 1] * wx0 * wy1
-                    + By[int(xf) + 1, int(yf) + 1] * wx1 * wy1
-                )
-                magnetic_field[2, i, j] += (
-                    Bz[int(xf), int(yf)] * wx0 * wy0
-                    + Bz[int(xf) + 1, int(yf)] * wx1 * wy0
-                    + Bz[int(xf), int(yf) + 1] * wx0 * wy1
-                    + Bz[int(xf) + 1, int(yf) + 1] * wx1 * wy1
-                )
+        interpolate(magnetic_field, B, position, sampling, integral_sampling)
 
     return magnetic_field
 

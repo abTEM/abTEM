@@ -2,12 +2,14 @@ import numpy as np
 from ase import Atoms
 from scipy.integrate import trapezoid
 
-from abtem.magnetism.iam import QuasiDipoleFieldProjections, MagneticField
+from abtem.magnetism.iam import QuasiDipoleFieldProjections, MagneticField, radial_prefactor_b1, radial_prefactor_b2
 
 
 def integrate_magnetic_field(quasi_dipole_projector, symbol, a, b, magnetic_moment):
-    b1 = quasi_dipole_projector._radial_prefactor_b1(symbol)
-    b2 = quasi_dipole_projector._radial_prefactor_b2(symbol)
+    r = np.linspace(0, quasi_dipole_projector.cutoff(symbol), 100)
+    parameters = np.array(quasi_dipole_projector.parametrization.parameters[symbol])
+    b1 = radial_prefactor_b1(r, parameters)
+    b2 = radial_prefactor_b2(r, parameters)
 
     x = y = quasi_dipole_projector._xy_coordinates(symbol)
     z = np.arange(
