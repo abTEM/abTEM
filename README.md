@@ -1,6 +1,4 @@
-:warning: **Major update** :warning: Warning: the recent update to the main branch marks a major change in *ab*TEM which may break some code, this change will come in full effect on the next release. 
-
-You can install the current main branch using `pip install git+https://github.com/abtem/abtem` and check the new [documentation](https://abtem.github.io/doc/intro.html). After the next release you can still install the old one by visiting this [repository](https://github.com/abTEM/abTEM-legacy).
+:warning: **Major update** :warning: Warning: the recent update to the main branch marks a major change in *ab*TEM which may break some code. You can still install the old version by using this [repository](https://github.com/abTEM/abTEM-legacy).
 
 # *ab*TEM: transmission electron microscopy from first principles
 
@@ -10,7 +8,7 @@ You can install the current main branch using `pip install git+https://github.co
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
 [![DOI](https://zenodo.org/badge/205110910.svg)](https://zenodo.org/badge/latestdoi/205110910)
 
-[**Docs**](https://abtem.readthedocs.io/en/latest/index.html)
+[**Docs**](https://abtem.github.io/doc/intro.html)
 | [**Install Guide**](https://abtem.readthedocs.io/en/latest/install.html)
 | [**Examples**](https://github.com/jacobjma/abTEM/tree/master/examples)
 
