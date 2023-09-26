@@ -28,7 +28,7 @@ from abtem.core.axes import (
     ReciprocalSpaceAxis,
     LinearAxis,
     NonLinearAxis,
-    ScanAxis,
+    ScanAxis, OrdinalAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
@@ -672,10 +672,16 @@ class _BaseMeasurement2D(BaseMeasurements):
             array = array.mean(-1)
             metadata["width"] = width
 
+        ensemble_axes_metadata = self.ensemble_axes_metadata
+
+        for axis in ensemble_axes_metadata:
+            if isinstance(axis, OrdinalAxis):
+                axis._default_type = "overlay"
+
         return self._get_1d_equivalent()(
             array=array,
             sampling=scan.sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
 
