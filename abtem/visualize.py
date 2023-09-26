@@ -656,7 +656,7 @@ class MeasurementVisualization(metaclass=ABCMeta):
         measurements: BaseMeasurements,
         axes: AxesGrid | np.ndarray,
         axes_types: Sequence[str] = (),
-        autoscale: bool= False,
+        autoscale: bool = False,
     ):
         self._measurements = measurements.to_cpu()
         self._axes = axes
@@ -832,6 +832,14 @@ class MeasurementVisualization(metaclass=ABCMeta):
             column_titles.append(annotation)
 
         self._column_titles = column_titles
+
+    def set_xlim(self, *args, **kwargs):
+        for ax in np.array(self.axes).ravel():
+            ax.set_xlim(args, **kwargs)
+
+    def set_ylim(self, *args, **kwargs):
+        for ax in np.array(self.axes).ravel():
+            ax.set_ylim(args, **kwargs)
 
     @abstractmethod
     def _get_default_xlabel(self, units=None):
@@ -1897,8 +1905,8 @@ class MeasurementVisualization1D(MeasurementVisualization):
                 self.axes[i].legend(**kwargs)
 
     def _update_vmin_vmax(self, vmin: float = None, vmax: float = None):
-        self.set_ylim([vmin,vmax])
-        #for _, measurement in self._generate_measurements(keepdims=False):
+        self.set_ylim([vmin, vmax])
+        # for _, measurement in self._generate_measurements(keepdims=False):
         #    self.set_ylim([measurement.min(), measurement.max()])
 
     def set_artists(self):
@@ -1958,9 +1966,10 @@ class MeasurementVisualization1D(MeasurementVisualization):
         #         self._update_vmin_vmax(vmin, vmax)
 
         sliders = make_sliders_from_ensemble_axes(
-            self, self.axes_types, #callbacks=(index_update_callback,)
+            self,
+            self.axes_types,  # callbacks=(index_update_callback,)
         )
-        #power_scale_button = _make_power_scale_slider(self)
+        # power_scale_button = _make_power_scale_slider(self)
         scale_button = _make_scale_button(self)
         autoscale_button = _make_autoscale_button(self)
         continuous_update_button = _make_continuous_button(sliders)
@@ -1979,7 +1988,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
                 widgets.VBox(sliders),
                 scale_box,
                 # vmin_vmax_slider,
-                #power_scale_button,
+                # power_scale_button,
             ]
         )
 
@@ -2061,6 +2070,8 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
         self.set_yunits()
         self.set_xlabels()
         self.set_ylabels()
+        self.set_xlim()
+        self.set_ylim()
 
     def _get_scales(self, indexed_diffraction_spots, norm):
         conversion = _get_conversion_factor(self._xunits, self._get_default_xunits())
@@ -2161,21 +2172,43 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     def _get_default_yunits(self):
         return self._reciprocal_space_axes[-1].units
 
-    def set_xlim(self):
-        for i, measurement in self._generate_measurements():
-            x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
-            x_lim = (
-                _get_conversion_factor(self._xunits, self._get_default_xunits()) * x_lim
-            )
-            self.axes[i].set_xlim([-x_lim, x_lim])
+    def set_xlim(self, xlim=None):
 
-    def set_ylim(self):
+        if xlim is not None:
+            common_xlim = True
+        else:
+            common_xlim = False
+
         for i, measurement in self._generate_measurements():
-            x_lim = np.abs(measurement.positions[:, 0]).max() * 1.1
-            x_lim = (
-                _get_conversion_factor(self._xunits, self._get_default_xunits()) * x_lim
-            )
-            self.axes[i].set_xlim([-x_lim, x_lim])
+            if common_xlim is False:
+                xlim = np.abs(measurement.positions[:, 0]).max() * 1.2
+                xlim = (
+                    _get_conversion_factor(self._xunits, self._get_default_xunits())
+                    * xlim
+                )
+                xlim = [-xlim, xlim]
+
+            if xlim is not None:
+                self.axes[i].set_xlim(xlim)
+
+    def set_ylim(self, ylim=None):
+
+        if ylim is not None:
+            common_ylim = True
+        else:
+            common_ylim = False
+
+        for i, measurement in self._generate_measurements():
+            if common_ylim is False:
+                ylim = np.abs(measurement.positions[:, 1]).max() * 1.2
+                ylim = (
+                    _get_conversion_factor(self._xunits, self._get_default_xunits())
+                    * ylim
+                )
+                ylim = [-ylim, ylim]
+
+            if ylim is not None:
+                self.axes[i].set_ylim(ylim)
 
     def set_xunits(self, units: str = None):
         super().set_xunits(units)
