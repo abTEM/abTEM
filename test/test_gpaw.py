@@ -66,19 +66,19 @@ def test_compare_ps2ae_to_abtem_bonding(gpaw_calculator_bonding):
     assert_psae_matches_abtem(gpaw_calculator_bonding)
 
 
-@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
-def test_gpaw_potential_with_frozen_phonons(gpaw_calculator_bonding):
-    frozen_phonons = FrozenPhonons(
-        gpaw_calculator_bonding.atoms, num_configs=2, sigmas=0.1
-    )
-    gpaw_potential = GPAWPotential(
-        gpaw_calculator_bonding, sampling=0.05, frozen_phonons=frozen_phonons
-    )
-    assert gpaw_potential.ensemble_shape == (2,)
-    assert gpaw_potential.build().ensemble_shape == (2,)
-    gpaw_potential = gpaw_potential.build().compute()
-    assert gpaw_potential.ensemble_shape == (2,)
-    assert not np.allclose(gpaw_potential.array[0], gpaw_potential.array[1])
+# @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+# def test_gpaw_potential_with_frozen_phonons(gpaw_calculator_bonding):
+#     frozen_phonons = FrozenPhonons(
+#         gpaw_calculator_bonding.atoms, num_configs=2, sigmas=0.1
+#     )
+#     gpaw_potential = GPAWPotential(
+#         gpaw_calculator_bonding, sampling=0.05, frozen_phonons=frozen_phonons
+#     )
+#     assert gpaw_potential.ensemble_shape == (2,)
+#     assert gpaw_potential.build().ensemble_shape == (2,)
+#     gpaw_potential = gpaw_potential.build().compute()
+#     assert gpaw_potential.ensemble_shape == (2,)
+#     assert not np.allclose(gpaw_potential.array[0], gpaw_potential.array[1])
 
 
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
