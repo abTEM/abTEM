@@ -27,7 +27,7 @@ $ pip install abtem
 ```
 
 For detailed instructions on installing *ab*TEM,
-see [the installation guide](https://abtem.readthedocs.io/en/latest/install.html).
+see [the installation guide](https://abtem.github.io/doc/intro.html).
 
 ## Getting started
 
