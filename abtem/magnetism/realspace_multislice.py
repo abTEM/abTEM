@@ -1,8 +1,15 @@
-import numpy as np
-from numba import stencil, njit
-import scipy.ndimage
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
-from abtem.core.energy import energy2sigma, energy2wavelength
+import numpy as np
+import scipy.ndimage
+from numba import stencil, njit
+
+from abtem.core.energy import energy2sigma
+
+if TYPE_CHECKING:
+    from abtem.waves import Waves
+    from abtem.potentials.iam import PotentialArray
 
 
 @njit(parallel=True, fastmath=True)
@@ -19,12 +26,14 @@ def anisotropic_5_point_stencil(array_in, array_out=None):
 
 
 @njit(parallel=True, fastmath=True)
-def isotropic_9_point_stencil(array_in, c=1., array_out=None):
+def isotropic_9_point_stencil(
+    array_in, prefactor: float = 1.0, array_out: np.ndarray = None
+):
     @stencil
     def _stencil_func(a, c):
-        c1 = np.complex128(1.0 / 6.0 * c)
-        c2 = np.complex128(2.0 / 3.0 * c)
-        c3 = np.complex128(-10.0 / 3.0 * c)
+        c1 = np.complex128(1.0 / 6.0 * prefactor)
+        c2 = np.complex128(2.0 / 3.0 * prefactor)
+        c3 = np.complex128(-10.0 / 3.0 * prefactor)
         return (
             c1 * (a[1, 1] + a[1, -1] + a[-1, -1] + a[-1, 1])
             + c2 * (a[1, 0] + a[0, -1] + a[-1, 0] + a[0, 1])
@@ -32,16 +41,16 @@ def isotropic_9_point_stencil(array_in, c=1., array_out=None):
         )
 
     if array_out is not None:
-        return _stencil_func(array_in, c, out=array_out)
+        return _stencil_func(array_in, prefactor, out=array_out)
     else:
-        return _stencil_func(array_in, c)
+        return _stencil_func(array_in, prefactor)
 
 
-def make_3x3_stencil(c1, c2, c3):
+def make_3x3_stencil_array(c1, c2, c3):
     return np.array([[c1, c2, c1], [c2, c3, c2], [c1, c2, c1]])
 
 
-def make_5x5_stencil(c1, c2, c3, c4, c5, c6):
+def make_5x5_stencil_array(c1, c2, c3, c4, c5, c6):
     return np.array(
         [
             [c1, c2, c3, c2, c1],
@@ -53,61 +62,112 @@ def make_5x5_stencil(c1, c2, c3, c4, c5, c6):
     )
 
 
-def make_stencil(template):
-    if template == "ani5":
-        args = [0, 1, -4]
+def make_7x7_stencil_array(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10):
+    return np.array(
+        [
+            [c1, c2, c3, c4, c3, c2, c1],
+            [c2, c5, c6, c7, c6, c5, c2],
+            [c3, c6, c8, c9, c8, c6, c3],
+            [c4, c7, c9, c10, c9, c7, c4],
+            [c3, c6, c8, c9, c8, c6, c3],
+            [c2, c5, c6, c7, c6, c5, c2],
+            [c1, c2, c3, c4, c3, c2, c1],
+        ]
+    )
+
+def make_9x9_stencil_array(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10):
+    return np.array(
+        [
+            [c1, c2, c3, c4, c5, c4, c3, c2, c1],
+            [c2, c6, c7, c8, c9, c8, c7, c6, c2],
+            [c3, c7, c9, c9, c8, c6, c3, c7, c3],
+            [c4, c8, c10, c10, c9, c7, c4, c8, c4],
+            [c5, c9, c9, c10, c9, c7, c4, c9, c6],
+            [c4, c8, c10, c10, c9, c7, c4, c8, c4],
+            [c3, c7, c8, c9, c8, c6, c3, c7, c3],
+            [c2, c6, c7, c8, c9, c5, c2, c6, c2],
+            [c1, c2, c3, c4, c5, c4, c3, c2, c1],
+        ]
+    )
+
+
+
+def make_stencil_array(template):
+    if template == "anisotropic_5":
+        coefficients = [0, 1, -4]
         size = 3
-    elif template == "iso9":
-        args = [1 / 6, 2 / 3, -10 / 3]
+    elif template == "isotropic_9":
+        coefficients = [1 / 6, 2 / 3, -10 / 3]
         size = 3
-    elif template == "ani9":
-        args = [0, 0, -1 / 12, 0, 4 / 3, -5]
+    elif template == "anisotropic_9":
+        coefficients = [0, 0, -1 / 12, 0, 4 / 3, -5]
         size = 5
-    elif template == "iso17":
-        args = [-1 / 120, 0, -1 / 15, 2 / 15, 16 / 15, -9 / 2]
+    elif template == "isotropic_17":
+        coefficients = [-1 / 120, 0, -1 / 15, 2 / 15, 16 / 15, -9 / 2]
         size = 5
-    elif template == "iso21":
-        args = [0, -1 / 30, -1 / 60, 4 / 15, 13 / 15, -21 / 5]
+    elif template == "isotropic_21":
+        coefficients = [0, -1 / 30, -1 / 60, 4 / 15, 13 / 15, -21 / 5]
         size = 5
+    elif template == "anisotropic_13":
+        coefficients = [0, 0, 0, 1 / 90, 0, 0, -3 / 20, 0, 3 / 2, -49 / 18]
+        size = 7
+    elif template == "anisotropic_13":
+        coefficients = [-1 / 560, 8 / 315, -1 / 5, 8 / 5, -205 / 72]
     else:
         raise ValueError()
 
     if size == 3:
-        return make_3x3_stencil(*args)
+        return make_3x3_stencil_array(*coefficients)
     elif size == 5:
-        return make_5x5_stencil(*args)
+        return make_5x5_stencil_array(*coefficients)
+    elif size == 7:
+        return make_7x7_stencil_array(*coefficients)
     else:
         raise RuntimeError
 
 
-def laplace(array, c):
-    stencil = make_stencil("iso21") * c
+def laplace(array, prefactor, stencil):
+    stencil = make_stencil_array(stencil) * prefactor
     return scipy.ndimage.convolve(array, stencil, mode="wrap")
 
 
+def _multislice_step(
+    waves: np.ndarray,
+    prefactor: complex,
+    transmission_function: np.ndarray,
+    num_terms: int,
+    stencil: str,
+):
+    temp = laplace(waves, prefactor, stencil) + transmission_function * waves
+    waves += temp
+    for i in range(2, num_terms + 1):
+        temp = (laplace(temp, prefactor, stencil) + temp * transmission_function) / i
+        waves += temp
+    return waves
 
-def step(array, potential_slice, sampling, dz, energy, m):
-    wavelength = energy2wavelength(energy)
-    c = 1.0j * wavelength * dz / (4 * np.pi) / np.prod(sampling)
 
-    transmission_function = potential_slice * 1.0j * energy2sigma(200e3)
+def multislice_step(
+    waves: Waves,
+    potential_slice: PotentialArray,
+    num_terms: int = 1,
+    stencil: str = "isotropic_9",
+):
+    if num_terms < 1:
+        raise ValueError()
 
-    temp = laplace(array, c) + transmission_function * array
-    array += temp
-    for i in range(2, m + 1):
-        temp = (laplace(temp, c) + temp * transmission_function) / i
-        array += temp
+    wavelength = waves.wavelength
 
-    return array
+    prefactor = (
+        1.0j
+        * wavelength
+        * potential_slice.thickness
+        / (4 * np.pi)
+        / np.prod(waves.sampling)
+    )
 
-# def step(array, potential_slice, sampling, dz, wavelength, m):
-#     potential_slice = potential_slice * 1.j * energy2sigma(200e3)
+    transmission_function = 1.0j * potential_slice.array[0] * energy2sigma(waves.energy)
 
-#     temp = potential_slice
-#     array += temp
-#     for i in range(2, m + 1):
-#         temp = temp * potential_slice / i
-#         print(i)
-#         array += temp
-
-#     return array
+    waves._array = _multislice_step(
+        waves.array, prefactor, transmission_function, num_terms, stencil
+    )
+    return waves

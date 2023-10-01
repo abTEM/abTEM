@@ -2172,7 +2172,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
     def _get_default_yunits(self):
         return self._reciprocal_space_axes[-1].units
 
-    def set_xlim(self, xlim=None):
+    def set_xlim(self, xlim: tuple[float, float] = None):
+        """
+        Set the x-axis view limits.
+        """
 
         if xlim is not None:
             common_xlim = True
@@ -2191,8 +2194,10 @@ class DiffractionSpotsVisualization(BaseMeasurementVisualization2D):
             if xlim is not None:
                 self.axes[i].set_xlim(xlim)
 
-    def set_ylim(self, ylim=None):
-
+    def set_ylim(self, ylim: tuple[float, float] = None):
+        """
+        Set the y-axis view limits.
+        """
         if ylim is not None:
             common_ylim = True
         else:
