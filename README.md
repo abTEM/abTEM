@@ -4,12 +4,11 @@
 
 [![PyPI version](https://badge.fury.io/py/abtem.svg)](https://badge.fury.io/py/abtem)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Documentation Status](https://readthedocs.org/projects/abtem/badge/?version=latest)](https://abtem.readthedocs.io/en/latest/?badge=latest)
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
 [![DOI](https://zenodo.org/badge/205110910.svg)](https://zenodo.org/badge/latestdoi/205110910)
 
 [**Docs**](https://abtem.github.io/doc/intro.html)
-| [**Install Guide**](https://abtem.readthedocs.io/en/latest/install.html)
+| [**Install Guide**](https://abtem.github.io/doc/getting_started/install.html)
 | [**Examples**](https://github.com/jacobjma/abTEM/tree/master/examples)
 
 *ab*TEM (pronounced "ab-tem", as in "*ab initio*") provides a Python API for running simulations of (scanning)
@@ -28,7 +27,7 @@ $ pip install abtem
 ```
 
 For detailed instructions on installing *ab*TEM,
-see [the installation guide](https://abtem.readthedocs.io/en/latest/install.html).
+see [the installation guide](https://abtem.github.io/doc/intro.html).
 
 ## Getting started
 

@@ -53,7 +53,7 @@ def test_gaussian_projection_integrals(parameters):
     a = -np.inf
     b = np.inf
 
-    gaussian_scattering_factors = gaussian_projection_integrals.gaussian_scattering_factors('C', gpts, sampling)
+    gaussian_scattering_factors = gaussian_projection_integrals.build('C', gpts, sampling)
 
     projections = gaussian_scattering_factors.integrate_on_grid(
         positions,
@@ -79,7 +79,7 @@ def test_finite_gaussian_projection_integrals(fourier_space):
     a = -.2
     b = .2
 
-    gaussian_scattering_factors = gaussian_projection_integrals.gaussian_scattering_factors('C', gpts, sampling)
+    gaussian_scattering_factors = gaussian_projection_integrals.build('C', gpts, sampling)
 
     projections = gaussian_scattering_factors.integrate_on_grid(
         positions,
@@ -141,7 +141,7 @@ def test_finite_projections():
 
     quadrature_potential = table.integrate_on_grid(positions, a, b, gpts, sampling)
 
-    gaussian_scattering_factors = gaussian_projection_integrals.gaussian_scattering_factors(symbol, gpts, sampling)
+    gaussian_scattering_factors = gaussian_projection_integrals.build(symbol, gpts, sampling)
 
     gaussian_potential = gaussian_scattering_factors.integrate_on_grid(positions, a, b, gpts, sampling)
 

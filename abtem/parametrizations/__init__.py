@@ -30,7 +30,8 @@ def validate_sigmas(sigmas: float | dict) -> dict:
         sigmas = {
             chemical_symbol: sigmas for chemical_symbol in chemical_symbols.keys()
         }
-    elif sigmas is not None:
+
+    if not isinstance(sigmas, dict):
         raise ValueError()
     return sigmas
 
