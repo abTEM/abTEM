@@ -6,6 +6,7 @@ import scipy.ndimage
 from numba import stencil, njit
 
 from abtem.core.energy import energy2sigma
+import math
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -46,102 +47,85 @@ def isotropic_9_point_stencil(
         return _stencil_func(array_in, prefactor)
 
 
-def make_3x3_stencil_array(c1, c2, c3):
-    return np.array([[c1, c2, c1], [c2, c3, c2], [c1, c2, c1]])
+def _get_central_offsets(derivative, accuracy):
+    assert accuracy % 2 == 0
+    num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
+    num_side = num_central // 2
+    offsets = list(range(-num_side, num_side + 1))
+    return offsets
 
 
-def make_5x5_stencil_array(c1, c2, c3, c4, c5, c6):
-    return np.array(
-        [
-            [c1, c2, c3, c2, c1],
-            [c2, c4, c5, c4, c2],
-            [c3, c5, c6, c5, c3],
-            [c2, c4, c5, c4, c2],
-            [c1, c2, c3, c2, c1],
-        ]
-    )
+def _build_matrix(offsets):
+    A = [([1 for _ in offsets])]
+    for i in range(1, len(offsets)):
+        A.append([j ** i for j in offsets])
+
+    return np.array(A, dtype=float)
 
 
-def make_7x7_stencil_array(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10):
-    return np.array(
-        [
-            [c1, c2, c3, c4, c3, c2, c1],
-            [c2, c5, c6, c7, c6, c5, c2],
-            [c3, c6, c8, c9, c8, c6, c3],
-            [c4, c7, c9, c10, c9, c7, c4],
-            [c3, c6, c8, c9, c8, c6, c3],
-            [c2, c5, c6, c7, c6, c5, c2],
-            [c1, c2, c3, c4, c3, c2, c1],
-        ]
-    )
-
-def make_9x9_stencil_array(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10):
-    return np.array(
-        [
-            [c1, c2, c3, c4, c5, c4, c3, c2, c1],
-            [c2, c6, c7, c8, c9, c8, c7, c6, c2],
-            [c3, c7, c9, c9, c8, c6, c3, c7, c3],
-            [c4, c8, c10, c10, c9, c7, c4, c8, c4],
-            [c5, c9, c9, c10, c9, c7, c4, c9, c6],
-            [c4, c8, c10, c10, c9, c7, c4, c8, c4],
-            [c3, c7, c8, c9, c8, c6, c3, c7, c3],
-            [c2, c6, c7, c8, c9, c5, c2, c6, c2],
-            [c1, c2, c3, c4, c5, c4, c3, c2, c1],
-        ]
-    )
+def _build_rhs(offsets, derivative):
+    b = [0 for _ in offsets]
+    b[derivative] = math.factorial(derivative)
+    return np.array(b, dtype=float)
 
 
-
-def make_stencil_array(template):
-    if template == "anisotropic_5":
-        coefficients = [0, 1, -4]
-        size = 3
-    elif template == "isotropic_9":
-        coefficients = [1 / 6, 2 / 3, -10 / 3]
-        size = 3
-    elif template == "anisotropic_9":
-        coefficients = [0, 0, -1 / 12, 0, 4 / 3, -5]
-        size = 5
-    elif template == "isotropic_17":
-        coefficients = [-1 / 120, 0, -1 / 15, 2 / 15, 16 / 15, -9 / 2]
-        size = 5
-    elif template == "isotropic_21":
-        coefficients = [0, -1 / 30, -1 / 60, 4 / 15, 13 / 15, -21 / 5]
-        size = 5
-    elif template == "anisotropic_13":
-        coefficients = [0, 0, 0, 1 / 90, 0, 0, -3 / 20, 0, 3 / 2, -49 / 18]
-        size = 7
-    elif template == "anisotropic_13":
-        coefficients = [-1 / 560, 8 / 315, -1 / 5, 8 / 5, -205 / 72]
-    else:
-        raise ValueError()
-
-    if size == 3:
-        return make_3x3_stencil_array(*coefficients)
-    elif size == 5:
-        return make_5x5_stencil_array(*coefficients)
-    elif size == 7:
-        return make_7x7_stencil_array(*coefficients)
-    else:
-        raise RuntimeError
+def _finite_difference_coefficients(derivative, accuracy):
+    offsets = _get_central_offsets(derivative, accuracy)
+    A = _build_matrix(offsets)
+    b = _build_rhs(offsets, derivative)
+    coefs = np.linalg.solve(A, b)
+    return coefs
 
 
-def laplace(array, prefactor, stencil):
-    stencil = make_stencil_array(stencil) * prefactor
-    return scipy.ndimage.convolve(array, stencil, mode="wrap")
+def _laplace_stencil_array(accuracy):
+    coefficients = _finite_difference_coefficients(2, accuracy)
+    stencil = np.zeros((len(coefficients),) * 2)
+
+    stencil[len(coefficients)//2, :] = coefficients
+    stencil[:, len(coefficients) // 2] += coefficients
+    return stencil
 
 
-def _multislice_step(
+def _laplace_operator_func(accuracy, prefactor, dtype=np.complex128):
+    c = _finite_difference_coefficients(2, accuracy)
+    c = c * prefactor
+    c = c.astype(dtype)
+    c = np.roll(c, -(len(c) // 2))
+    n = len(c) // 2
+
+    @stencil(neighborhood=((-n, n + 1), (-n, n + 1)))
+    def stencil_func(a):
+        cumul = dtype(0.)
+        for i in range(-n, n + 1):
+            cumul += c[i] * a[i, 0] + c[i] * a[0, i]
+        return cumul
+
+    @njit(parallel=True, fastmath=True)
+    def _laplace_stencil(a):
+        return stencil_func(a)
+
+    return _laplace_stencil
+
+
+def _laplace_operator_func_slow(accuracy, prefactor):
+    stencil = _laplace_stencil_array(accuracy) * prefactor
+    def func(array):
+        return scipy.ndimage.convolve(array, stencil, mode="wrap")
+    return func
+    #stencil = make_stencil_array(stencil) * prefactor
+    #return scipy.ndimage.convolve(array, stencil, mode="wrap")
+
+
+def _multislice_exponential_series(
     waves: np.ndarray,
-    prefactor: complex,
     transmission_function: np.ndarray,
     num_terms: int,
-    stencil: str,
+    laplace: callable,
 ):
-    temp = laplace(waves, prefactor, stencil) + transmission_function * waves
+    temp = laplace(waves) + waves * transmission_function
     waves += temp
     for i in range(2, num_terms + 1):
-        temp = (laplace(temp, prefactor, stencil) + temp * transmission_function) / i
+        temp = (laplace(temp) + temp * transmission_function) / i
         waves += temp
     return waves
 
@@ -149,25 +133,25 @@ def _multislice_step(
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
+    laplace: callable,
     num_terms: int = 1,
-    stencil: str = "isotropic_9",
 ):
+
     if num_terms < 1:
         raise ValueError()
 
-    wavelength = waves.wavelength
-
     prefactor = (
         1.0j
-        * wavelength
+        * waves.wavelength
         * potential_slice.thickness
         / (4 * np.pi)
         / np.prod(waves.sampling)
     )
 
+
     transmission_function = 1.0j * potential_slice.array[0] * energy2sigma(waves.energy)
 
-    waves._array = _multislice_step(
-        waves.array, prefactor, transmission_function, num_terms, stencil
+    waves._array = _multislice_exponential_series(
+        waves.array, transmission_function, num_terms, laplace
     )
     return waves
