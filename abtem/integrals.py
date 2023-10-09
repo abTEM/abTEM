@@ -552,9 +552,7 @@ def interpolate_radial_functions(
 class ProjectionIntegralTable(ProjectionIntegrator):
     """
     A ProjectionIntegrator calculating finite projections of radial potential parametrizations. An integral table
-    for each
-
-     used to evaluate the projection integrals for each atom in a slice given p integral limits.
+    for each used to evaluate the projection integrals for each atom in a slice given p integral limits.
     The projected potential evaluated along the
 
     Parameters
@@ -563,7 +561,6 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         The points along a radial in the `xy`-plane where the projection integrals of the integral table are evaluated.
     limits : array
         The points along the projection direction where the projection integrals are evaluated.
-    values : array
     """
 
     def __init__(self, radial_gpts: np.ndarray, limits: np.ndarray, values: np.ndarray):

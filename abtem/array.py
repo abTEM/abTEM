@@ -932,7 +932,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         **kwargs,
     ):
         """
-        Turn a lazy *ab*TEM object into its in-memory equivalent.
+        Turn a lazy *ab*\TEM object into its in-memory equivalent.
 
         Parameters
         ----------
@@ -940,7 +940,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             Display a progress bar in the terminal or notebook during computation. The progress bar is only displayed
             with a local scheduler.
         profiler : bool
-            Return Profiler class used to profile Dask’s execution at the task level. Only execution with a local
+            Return Profiler class used to profile Dask's execution at the task level. Only execution with a local
             is profiled.
         resource_profiler : bool
             Return ResourceProfiler class is used to profile Dask’s execution at the resource level.
