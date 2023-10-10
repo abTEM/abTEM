@@ -191,7 +191,11 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 #             return ifft2(array / sinc(shape, sampling, device)).real
 #
 #
-# class GaussianProjectionIntegrals(ProjectionIntegratorPlan):
+
+#class GaussianProjectionIntegrals(FieldIntegrator):
+
+
+# class GaussianProjectionIntegrals(FieldIntegrator):
 #     """
 #     Parameters
 #     ----------
@@ -225,6 +229,10 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 #
 #         self._cutoff_tolerance = cutoff_tolerance
 #
+#         self._gaussian_scattering_factors = None
+#         self._error_function_scales = None
+#         self._correction_scattering_factors = None
+#
 #         super().__init__(periodic=True, finite=True)
 #
 #     @property
@@ -248,6 +256,54 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 #             a=1e-3,
 #             b=1e3,
 #         )  # noqa
+#
+#     def _integrate_gaussian_scattering_factors(self, positions, a, b, sampling, device):
+#         xp = get_array_module(device)
+#
+#         a = a - positions[:, 2]
+#         b = b - positions[:, 2]
+#
+#         positions = (positions[:, :2] / sampling).astype(xp.float32)
+#
+#         weights = (
+#             np.abs(
+#                 erf(self._error_function_scales[:, None] * b[None])
+#                 - erf(self._error_function_scales[:, None] * a[None])
+#             )
+#             / 2
+#         )
+#
+#         array = xp.zeros(
+#             self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
+#         )
+#
+#         for i in range(5):
+#             temp = xp.zeros_like(array, dtype=xp.complex64)
+#
+#             superpose_deltas(positions, temp, weights=weights[i])
+#
+#             array += fft2(temp, overwrite_x=False) * self._gaussian_scattering_factors[
+#                 i
+#             ].astype(xp.complex64)
+#
+#         return array
+#
+#     def _integrate_correction_factors(self, positions, a, b, sampling, device):
+#         xp = get_array_module(device)
+#
+#         temp = xp.zeros(
+#             self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
+#         )
+#
+#         positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
+#
+#         positions = (positions[:, :2] / sampling).astype(xp.float32)
+#
+#         superpose_deltas(positions, temp)
+#
+#         return fft2(
+#             temp, overwrite_x=False
+#         ) * self._correction_scattering_factors.astype(xp.complex64)
 #
 #     def build(
 #         self,
