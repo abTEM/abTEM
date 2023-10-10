@@ -140,14 +140,6 @@ def multislice_step(
     if num_terms < 1:
         raise ValueError()
 
-    prefactor = (
-        1.0j
-        * waves.wavelength
-        * potential_slice.thickness
-        / (4 * np.pi)
-        / np.prod(waves.sampling)
-    )
-
 
     transmission_function = 1.0j * potential_slice.array[0] * energy2sigma(waves.energy)
 
