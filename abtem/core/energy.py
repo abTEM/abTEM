@@ -5,8 +5,10 @@ import numpy as np
 from ase import units
 
 from abtem.core.utils import EqualityMixin, CopyMixin
+
 if TYPE_CHECKING:
     from abtem.waves import Waves
+
 
 def relativistic_mass_correction(energy: float) -> float:
     return 1 + units._e * energy / (units._me * units._c**2)
@@ -163,7 +165,9 @@ class Accelerator(EqualityMixin, CopyMixin):
         ):
             raise RuntimeError("Inconsistent energies")
 
-    def match(self, other: Accelerator | HasAcceleratorMixin, check_match:bool=False):
+    def match(
+        self, other: Accelerator | HasAcceleratorMixin, check_match: bool = False
+    ):
         """
         Set the parameters of this accelerator to match another accelerator.
 

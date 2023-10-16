@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
+from math import erf
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -192,7 +193,69 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 #
 #
 
-#class GaussianProjectionIntegrals(FieldIntegrator):
+class GaussianProjectionIntegrals(FieldIntegrator):
+
+    def __init__(self, parametrization: str | Parametrization = "lobato"):
+        self._parametrization = validate_parametrization(parametrization)
+        self._scattering_factors = {}
+        super().__init__(periodic=True, finite=False)
+
+    def integrate_on_grid(
+        self,
+        atoms: Atoms,
+        a: float,
+        b: float,
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
+        device: str = "cpu",
+        fourier_space: bool = False,
+    ):
+        xp = get_array_module(device)
+        if len(atoms) == 0:
+            return xp.zeros(gpts, dtype=xp.float32)
+
+        array = xp.zeros(gpts, dtype=xp.float32)
+        for number in np.unique(atoms.numbers):
+            pass
+
+    def _integrate_gaussian_scattering_factors(self, positions, a, b, sampling, device):
+        xp = get_array_module(device)
+
+        a = a - positions[:, 2]
+        b = b - positions[:, 2]
+
+        parameters = xp.array(
+            self._parametrization.scaled_parameters(
+                symbol, "projected_scattering_factor"
+            )
+        )
+
+
+        positions = (positions[:, :2] / sampling).astype(xp.float32)
+
+        weights = (
+            np.abs(
+                erf(self._error_function_scales[:, None] * b[None])
+                - erf(self._error_function_scales[:, None] * a[None])
+            )
+            / 2
+        )
+
+        array = xp.zeros(
+            self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
+        )
+
+        for i in range(5):
+            temp = xp.zeros_like(array, dtype=xp.complex64)
+
+            superpose_deltas(positions, temp, weights=weights[i])
+
+            array += fft2(temp, overwrite_x=False) * self._gaussian_scattering_factors[
+                i
+            ].astype(xp.complex64)
+
+        return array
+
 
 
 # class GaussianProjectionIntegrals(FieldIntegrator):
@@ -851,7 +914,5 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     radial_functions=radial_potential,
                     radial_derivative=radial_potential_derivative,
                 )
-
-            # array
 
         return array

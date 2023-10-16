@@ -1246,7 +1246,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         return waves
 
 
-class CrystalPotential(_PotentialBuilder):
+class CrystalPotential(_FieldBuilder, BasePotential):
     """
     The crystal potential may be used to represent a potential consisting of a repeating unit. This may allow
     calculations to be performed with lower computational cost by calculating the potential unit once and repeating it.
@@ -1317,6 +1317,7 @@ class CrystalPotential(_PotentialBuilder):
         box = extent + (potential_unit.thickness * repetitions[2],)
         slice_thickness = potential_unit.slice_thickness * repetitions[2]
         super().__init__(
+            array_object=PotentialArray,
             gpts=gpts,
             cell=Cell(np.diag(box)),
             slice_thickness=slice_thickness,
