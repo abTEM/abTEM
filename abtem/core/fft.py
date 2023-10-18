@@ -1,10 +1,5 @@
 from typing import Tuple
 
-try:
-    import pyfftw
-except (ModuleNotFoundError, ImportError):
-    pyfftw = None
-
 import dask.array as da
 import numpy as np
 
@@ -13,6 +8,13 @@ from abtem.core.backend import get_array_module, check_cupy_is_installed
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
 from threadpoolctl import threadpool_limits
+import warnings
+
+
+try:
+    import pyfftw
+except (ModuleNotFoundError, ImportError):
+    pyfftw = None
 
 try:
     import mkl_fft
@@ -22,6 +24,13 @@ except ModuleNotFoundError:
 try:
     import cupy as cp
 except ModuleNotFoundError:
+    cp = None
+except ImportError:
+    if config.get("device") == "gpu":
+        warnings.warn(
+            "The CuPy library could not be imported. Please check your installation, or change your configuration to "
+            "use CPU."
+        )
     cp = None
 
 
@@ -62,7 +71,6 @@ def _new_fftw_object(array: np.ndarray, name: str, flags=()):
 
 
 class CachedFFTWConvolution:
-
     def __init__(self):
         self._fftw_forward = None
         self._fftw_backward = None
@@ -87,7 +95,11 @@ class CachedFFTWConvolution:
 
 
 def get_fftw_object(
-    array: np.ndarray, name: str, allow_new_wisdom: bool = True, overwrite_x=False, axes=(-2,-1)
+    array: np.ndarray,
+    name: str,
+    allow_new_wisdom: bool = True,
+    overwrite_x=False,
+    axes=(-2, -1),
 ):
     direction = _fft_name_to_fftw_direction(name)
 
