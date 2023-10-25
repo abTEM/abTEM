@@ -403,6 +403,43 @@ class KirklandParametrization(Parametrization):
 
         super().__init__(parameters=parameters, sigmas=sigmas)
 
+    def fit(self, Z, k, f, guess=None):
+        def reshape_parameters(p):
+            p = p.reshape((4, 3))
+            return p
+
+        def apply_constraint(p):
+            p = p.copy()
+            p = np.abs(p)
+            return p
+
+        def make_residuals_func(k2, target, func):
+            def residuals_func(p):
+                p = reshape_parameters(p)
+                p = apply_constraint(p)
+                return target - func(k2, p)
+
+            return residuals_func
+
+        if guess is None:
+            if chemical_symbols[Z] in self.parameters:
+                guess = self.scaled_parameters(chemical_symbols[Z], "scattering_factor")
+            else:
+                guess = np.array(
+                    validate_parameters("kirkland.json")[chemical_symbols[Z]]
+                )
+
+        func = self._functions["scattering_factor"]
+
+        residuals_func = make_residuals_func(k**2, f, func)
+
+        result = least_squares(residuals_func, guess.ravel())
+        p_optimal = reshape_parameters(result.x)
+        p_optimal = apply_constraint(p_optimal)
+        self.parameters[chemical_symbols[Z]] = p_optimal
+        return p_optimal
+
+
     def scaled_parameters(self, symbol: str, name: str) -> np.ndarray:
         parameters = np.array(self.parameters[symbol])
 
