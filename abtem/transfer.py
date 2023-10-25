@@ -189,7 +189,7 @@ class BaseAperture(BaseTransferFunction):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    def semiangle_cutoff(self, semiangle_cutoff):
+    def semiangle_cutoff(self, semiangle_cutoff:float | BaseDistribution):
         self._semiangle_cutoff = semiangle_cutoff
 
     def _cropped_aperture(self):

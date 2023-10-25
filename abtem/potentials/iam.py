@@ -47,7 +47,7 @@ from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     _validate_seeds,
-    AtomsEnsemble,
+    AtomsEnsemble, _safe_read_atoms,
 )
 from abtem.measurements import Images
 from abtem.slicing import (
@@ -552,10 +552,11 @@ class Potential(_PotentialBuilder):
                 self._frozen_phonons = AtomsEnsemble(atoms)
             elif isinstance(atoms, Atoms):
                 self._frozen_phonons = DummyFrozenPhonons(atoms)
+            elif isinstance(atoms, str):
+                self._frozen_phonons = DummyFrozenPhonons(_safe_read_atoms(atoms))
             else:
                 raise ValueError()
         else:
-
             self._frozen_phonons = atoms
 
         if integrator is None:

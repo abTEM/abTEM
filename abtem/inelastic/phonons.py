@@ -28,7 +28,7 @@ except ImportError:
     Reader = None
 
 
-def _safe_read_atoms(calculator, clean: bool = True):
+def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
     if isinstance(calculator, str):
         with Reader(calculator) as reader:
             atoms = read_atoms(reader.atoms)
