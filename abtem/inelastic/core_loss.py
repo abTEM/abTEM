@@ -1,33 +1,37 @@
 from __future__ import annotations
+
 import contextlib
 import itertools
 import os
-from abc import ABCMeta, abstractmethod
-from typing import Union, Sequence, Tuple, List
+from abc import abstractmethod
+from typing import TYPE_CHECKING
 
-from ase import Atom
+import numpy as np
+from ase import Atom, Atoms
 from ase import units
+from ase.data import chemical_symbols
 from numba import jit
-from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.special import spherical_jn, sph_harm
-import numpy as np
-from abtem.core.axes import OrdinalAxis
+
+from abtem import Images, RealSpaceLineProfiles
+from abtem.array import ArrayObject
+from abtem.core.axes import OrdinalAxis, AxisMetadata
+from abtem.core.backend import copy_to_device
+from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
     HasAcceleratorMixin,
     Accelerator,
     energy2wavelength,
     relativistic_mass_correction,
+    energy2sigma,
 )
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.fft import ifft2
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
 
-from abtem.core.chunks import generate_chunks
-
-from ase.data import chemical_symbols
-
-from abtem.core.electron_configurations import electron_configurations
+if TYPE_CHECKING:
+    from abtem.waves import Waves
 
 azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
 azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
@@ -76,7 +80,7 @@ def check_valid_quantum_number(Z, n, ell):
 class RadialWavefunction:
     def __init__(
         self,
-        n: int,
+        n: int | None,
         l: int,
         energy: float,
         radial_grid: np.ndarray,
@@ -85,6 +89,14 @@ class RadialWavefunction:
         self._n = n
         self._l = l
         self._energy = energy
+
+        if energy >= 0.0:
+            if n is not None:
+                raise ValueError()
+        else:
+            if n is None:
+                raise ValueError()
+
         self._radial_grid = radial_grid
         self._radial_values = radial_values
 
@@ -99,7 +111,7 @@ class RadialWavefunction:
 
     @property
     def bound(self):
-        return self._n > 0
+        return self.n > 0
 
     @property
     def energy(self):
@@ -116,6 +128,50 @@ class RadialWavefunction:
     @property
     def l(self):
         return self._l
+
+    def to_lineprofiles(self, sampling=0.01):
+        r = np.arange(0, self._radial_grid[-1], sampling)
+        return RealSpaceLineProfiles(self(r), sampling=sampling)
+
+    def show(self, **kwargs):
+        return self.to_lineprofiles().show(**kwargs)
+
+
+class AtomicWaveFunction:
+    def __init__(self, radial_wavefunction, ml):
+        self._radial_wavefunction = radial_wavefunction
+        self._ml = ml
+
+    def __call__(self, r):
+        return self._radial_wavefunction(r)
+
+    @property
+    def bound(self):
+        return self._radial_wavefunction.bound
+
+    @property
+    def energy(self):
+        return self._radial_wavefunction.energy
+
+    @property
+    def radial_grid(self):
+        return self._radial_wavefunction.radial_grid
+
+    @property
+    def n(self):
+        return self._radial_wavefunction.n
+
+    @property
+    def l(self):
+        return self._radial_wavefunction.l
+
+    @property
+    def ml(self):
+        return self._ml
+
+    @property
+    def quantum_numbers(self):
+        return self.n, self.l, self.ml
 
 
 @jit(nopython=True)
@@ -181,21 +237,21 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
 
     with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
         ae = AllElectron(chemical_symbols[Z], xcname=xc)
-        ae.f_j[subshell_index] -= 1.0
+        ae.f_j[subshell_index] -= 0.0
         ae.run()
 
     vr = interp1d(ae.r, -2 * ae.vr, fill_value="extrapolate", bounds_error=False)
 
     ef = epsilon / units.Rydberg
 
-    r = np.linspace(1e-6, 100, 1000000)
+    r = np.linspace(1e-16, 10, 1000000)
     f = radial_schroedinger_equation(ef, lprime, r, vr)
 
-    ur = numerov(f, 0.0, 1e-7, r[1] - r[0])
+    ur = numerov(f, 0.0, 1e-12, r[1] - r[0])
     ur = ur / ur.max() / (np.sqrt(np.pi) * ef ** (1 / 4))
 
     return RadialWavefunction(
-        n=0,
+        n=None,
         l=lprime,
         energy=epsilon,
         radial_grid=r,
@@ -267,38 +323,39 @@ class SubshellTransitions(BaseTransitionCollection):
         min_new_l = max(self.l - self.order, 0)
         return np.arange(min_new_l, self.l + self.order + 1)
 
-    def get_bound_wavefunction(self):
-        return calculate_bound_radial_wavefunction(
+    def get_bound_wave_function(self):
+        wave_functions = calculate_bound_radial_wavefunction(
             Z=self.Z, n=self.n, l=self.l, xc=self.xc
         )
+        return wave_functions
 
-    def get_excited_wavefunctions(self):
-        continuum = [
+    def get_excited_wave_functions(self):
+        wave_functions = [
             calculate_continuum_radial_wavefunction(
                 Z=self.Z, n=self.n, l=self.l, lprime=lprime, epsilon=self.epsilon
             )
             for lprime in self.lprimes
         ]
-        return continuum
+        return wave_functions
 
     def get_transition_quantum_numbers(self):
         return [
-            (
-                (bound[0].n, bound[0].l, bound[1]),
-                (excited[0].energy, excited[0].l, excited[1]),
-            )
+            (bound.quantum_numbers, excited.quantum_numbers)
             for (bound, excited) in self.get_transitions()
         ]
 
     def get_transitions(self):
-        bound = self.get_bound_wavefunction()
-        bound_states = [(bound, ml) for ml in np.arange(-bound.l, bound.l + 1)]
+        bound_state = self.get_bound_wave_function()
+        bound_states = [
+            AtomicWaveFunction(bound_state, ml)
+            for ml in np.arange(-bound_state.l, bound_state.l + 1)
+        ]
 
-        excited = self.get_excited_wavefunctions()
+        excited_states = self.get_excited_wave_functions()
         excited_states = [
-            (wave_function, ml)
-            for wave_function in excited
-            for ml in np.arange(-wave_function.l, wave_function.l + 1)
+            AtomicWaveFunction(radial, ml)
+            for radial in excited_states
+            for ml in np.arange(-radial.l, radial.l + 1)
         ]
 
         transitions = []
@@ -306,12 +363,10 @@ class SubshellTransitions(BaseTransitionCollection):
             bound_states, excited_states
         ):
 
-            if self._only_dipole and (
-                not (abs(bound_state[0].l - excited_state[0].l) == 1)
-            ):
+            if self._only_dipole and (not (abs(bound_state.l - excited_state.l) == 1)):
                 continue
 
-            if self._only_dipole and (not (abs(bound_state[1] - excited_state[1]) < 2)):
+            if self._only_dipole and (not (abs(bound_state.ml - excited_state.ml) < 2)):
                 continue
 
             transitions.append((bound_state, excited_state))
@@ -369,10 +424,16 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
     @property
     def ensemble_axes_metadata(self):
         values = [
-            f"{bound} -> {excited}"
+            f"{bound[1:]} → {excited[1:]}"
             for (bound, excited) in self.transition_quantum_numbers
         ]
-        return OrdinalAxis(label="(n, l, ml) -> (l', ml')", values=values)
+        return [
+            OrdinalAxis(
+                values=values,
+                label="(l,ml)→(l',ml')",
+                _tex_label="$(\ell, m_l) → (\ell', m_l')$",
+            )
+        ]
 
     @property
     def transitions(self):
@@ -385,9 +446,9 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
             for (bound, excited) in self._transitions
         ]
 
-    def overlap_integral(self, lprimeprime, bound, excited, k):
-        radial_grid = np.arange(0, np.max(k) * 1.01, 1 / max(self.extent))
-        integration_grid = np.linspace(0, bound.radial_grid[-1], 400000)
+    def _calculate_overlap_integral(self, lprimeprime, bound, excited, k):
+        radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))
+        integration_grid = np.linspace(0, bound.radial_grid[-1], 20000)
 
         values = (
             bound(integration_grid)
@@ -398,21 +459,29 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
             * excited(integration_grid)
         )
 
-        integral = np.trapz(values, integration_grid, axis=1)
+        integral = np.trapz(values, integration_grid, axis=1) / (
+            units.Bohr * np.sqrt(units.Rydberg)
+        )
 
         return interp1d(radial_grid, integral)(k)
 
-    def form_factor(self, bound, excited, k, phi, theta):
+    def _calculate_form_factor(self, bound, excited, k, phi, theta):
         from sympy.physics.wigner import wigner_3j
 
         Hn0 = np.zeros_like(k, dtype=complex)
-        l = bound[0].l
-        lprime = excited[0].l
-        ml = bound[1]  # .ml
-        mlprime = excited[1]  # .ml
+        l = bound.l
+        lprime = excited.l
+        ml = bound.ml
+        mlprime = excited.ml
+
+        mask = k <= np.max(k) * 2 / 3
+
+        # import matplotlib.pyplot as plt
+        # plt.imshow(mask)
+        # plt.show()
 
         for lprimeprime in range(abs(l - lprime), abs(l + lprime) + 1):
-            jq = self.overlap_integral(lprimeprime, bound[0], excited[0], k)
+            jq = self._calculate_overlap_integral(lprimeprime, bound, excited, k)
 
             for mlprimeprime in range(-lprimeprime, lprimeprime + 1):
                 if ml - mlprime - mlprimeprime != 0:
@@ -433,7 +502,7 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
                     continue
 
                 Ylm = sph_harm(mlprimeprime, lprimeprime, phi, theta)
-                Hn0 += prefactor * jq * Ylm
+                Hn0[mask] += prefactor * (jq * Ylm)[mask]
 
         return Hn0
 
@@ -442,25 +511,115 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
         k0 = 1 / energy2wavelength(self.energy)
 
         for i, (bound, excited) in enumerate(self._transitions):
-            energy_loss = bound[0].energy - excited[0].energy
+            energy_loss = bound.energy - excited.energy
+
             kn = 1 / energy2wavelength(self.energy + energy_loss)
+
             kz = k0 - kn
 
-            kt, phi = polar_spatial_frequencies(self.gpts, self.sampling, dtype=float)
-            k = np.sqrt(kt**2 + kz**2)
-            theta = np.pi - np.arctan(kt / kz)
+            kxy, phi = polar_spatial_frequencies(self.gpts, self.sampling, dtype=float)
+            k = np.sqrt(kxy**2 + kz**2)
+            theta = np.pi - np.arctan(kxy / kz)
 
-            array[i] = self.form_factor(bound, excited, k, phi, theta)
+            array[i] = self._calculate_form_factor(bound, excited, k, phi, theta)
 
             if self._orbital_filling_factor:
-                array[i] *= np.sqrt(4 * bound[0].l + 2)
+                array[i] *= np.sqrt(4 * bound.l + 2)
 
             array[i] *= relativistic_mass_correction(self.energy) / (
-                2 * units.Bohr * np.pi**2 * np.sqrt(units.Rydberg) * kn * k**2
+                2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
             )
 
         array = np.fft.ifft2(array) / np.prod(self.sampling)
-        return array
+
+        return TransitionPotentialArray(
+            self.Z,
+            array,
+            energy=self.energy,
+            extent=self.extent,
+            sampling=self.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+        )
+
+    def show(self, **kwargs):
+        return self.build().to_images().show(**kwargs)
+
+
+class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
+    _base_dims = 2
+
+    def __init__(
+        self,
+        Z: int,
+        array: np.ndarray,
+        energy: float = None,
+        extent: float | tuple[float, float] = None,
+        sampling: float | tuple[float, float] = None,
+        ensemble_axes_metadata: list[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
+        self._Z = Z
+        self._grid = Grid(
+            extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
+        )
+        self._accelerator = Accelerator(energy=energy)
+
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    def validate_sites(self, sites: Atoms | Atom):
+        if isinstance(sites, Atoms):
+            sites = sites[sites.numbers == self.Z].positions[:, :2]
+        elif isinstance(sites, Atom):
+            if sites.number == self.Z:
+                sites = sites.position[:2]
+            else:
+                sites = np.zeros((0, 2), dtype=np.float32)
+
+        if len(sites.shape) == 1:
+            sites = sites[None]
+
+        sites = np.array(sites, dtype=np.float32)
+        return sites
+
+    def scatter(self, waves: Waves, sites: Atoms | Atom):
+        self.grid.match(waves)
+        self.accelerator.match(waves)
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
+        positions = self.validate_sites(sites)
+        positions /= self.sampling
+
+        self._array = copy_to_device(self.array, waves.array)
+        positions = copy_to_device(positions, waves.array)
+
+        array = ifft2(
+            self.array[None] * fft_shift_kernel(positions, self.gpts)[:, None]
+        )
+
+        array = array.reshape((-1,) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
+
+        d = waves._copy_kwargs(exclude=("array",))
+        d["array"] = array * waves.array[None]
+        d["ensemble_axes_metadata"] = [
+            {"type": "ensemble", "label": "core ionization"}
+        ] + d["ensemble_axes_metadata"]
+        return waves.__class__(**d)
+
+    def to_images(self):
+        array = np.fft.fftshift(self.array, axes=(-2, -1))
+        return Images(
+            array,
+            sampling=self.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+        )
+
+    def show(self, **kwargs):
+        self.to_images().show(**kwargs)
 
 
 #

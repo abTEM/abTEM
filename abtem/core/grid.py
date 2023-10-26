@@ -393,7 +393,7 @@ class HasGridMixin:
 
 
 def spatial_frequencies(
-    gpts: tuple[int, ...], sampling: tuple[float, ...], return_grid: bool = False, xp=np
+    gpts: tuple[int, ...], sampling: tuple[float, ...], return_grid: bool = False, xp=np, dtype=np.float32
 ):
     """
     Calculate spatial frequencies of a grid.
@@ -414,7 +414,7 @@ def spatial_frequencies(
 
     out = ()
     for n, d in zip(gpts, sampling):
-        out += (xp.fft.fftfreq(n, d).astype(np.float32),)
+        out += (xp.fft.fftfreq(n, d).astype(dtype),)
 
     if return_grid:
         return xp.meshgrid(*out, indexing="ij")
@@ -423,10 +423,10 @@ def spatial_frequencies(
 
 
 def polar_spatial_frequencies(
-    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np
+    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np, dtype=np.float32
 ) -> tuple[np.ndarray, np.ndarray]:
     xp = get_array_module(xp)
-    kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
+    kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp), dtype=dtype)
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
     phi = xp.arctan2(ky[None], kx[:, None])
     return k, phi

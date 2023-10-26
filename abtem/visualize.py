@@ -1788,6 +1788,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         overlay: Sequence[str] | bool = False,
         figsize: tuple[float, float] = None,
         interact: bool = False,
+        **kwargs
     ):
 
         axes_types = _determine_axes_types(
@@ -1816,7 +1817,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         self._column_titles = []
         self._lines = np.array([[]])
         self._common_scale = common_scale
-        self.set_artists()
+        self.set_artists(**kwargs)
         self.set_xunits()
         self.set_yunits()
         self._autoscale = config.get("visualize.autoscale", False)
@@ -1889,7 +1890,6 @@ class MeasurementVisualization1D(MeasurementVisualization):
             self.axes[i].set_ylim(ylim)
 
     def set_legends(self, loc: str = "first", **kwargs):
-
         indices = [index for index in np.ndindex(*self.axes.shape)]
 
         if loc == "first":
@@ -1909,7 +1909,7 @@ class MeasurementVisualization1D(MeasurementVisualization):
         # for _, measurement in self._generate_measurements(keepdims=False):
         #    self.set_ylim([measurement.min(), measurement.max()])
 
-    def set_artists(self):
+    def set_artists(self, **kwargs):
 
         artists = np.zeros(self.axes.shape, dtype=object)
         for i, measurement in self._generate_measurements(keepdims=False):
@@ -1918,17 +1918,18 @@ class MeasurementVisualization1D(MeasurementVisualization):
             new_lines = []
             for _, line_profile in measurement.generate_ensemble(keepdims=True):
 
-                labels = []
-                for axis in line_profile.ensemble_axes_metadata:
-                    labels += [axis.format_title(".3f")]
+                if not "label" in kwargs:
+                    labels = []
+                    for axis in line_profile.ensemble_axes_metadata:
+                        labels += [axis.format_title(".3f")]
 
-                label = "-".join(labels)
+                    kwargs["label"] = "-".join(labels)
 
                 new_lines.append(
                     ax.plot(
                         x,
                         line_profile.array[(0,) * (len(line_profile.shape) - 1)],
-                        label=label,
+                        **kwargs
                     )[0]
                 )
             artists.itemset(i, new_lines)

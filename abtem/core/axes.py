@@ -58,6 +58,7 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
             return latex_float(value, formatting)
         else:
             return f"{value:>{formatting}}"
+
     return value
 
 
@@ -71,19 +72,26 @@ def format_title(
 
     units = _validate_units(units, axes.units)
 
-    if include_label:
-        if axes._tex_label is not None:
-            label = axes._tex_label
-        else:
-            label = axes.label
-        label = f"{label} = "
+    use_tex = config.get("visualize.use_tex", False)
+
+    if include_label and use_tex and (axes._tex_label is not None):
+        label = f"{axes._tex_label} = "
+    elif include_label and (axes.label is not None) and len(axes.label):
+        label = f"{axes.label} = "
     else:
         label = ""
 
-    if config.get("visualize.use_tex", False):
-        return f"{label}${format_value(value, formatting)}$ {_format_units(units)}"
+    if use_tex and (units is not None):
+        units = f" {_format_units(units)}"
+    elif units is not None:
+        units = f" {units}"
     else:
-        return f"{label}{value:>{formatting}} {units}"
+        units = ""
+
+    if use_tex:
+        return f"{label}${format_value(value, formatting)}${units}"
+    else:
+        return f"{label}{value:>{formatting}}{units}"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -220,12 +228,7 @@ class OrdinalAxis(AxisMetadata):
     values: Union[Sequence, ArrayLike] = ()
 
     def format_title(self, formatting, include_label: bool = True, **kwargs):
-        if include_label and len(self.label) > 0:
-            label = f"{self.label} = "
-        else:
-            label = ""
-
-        return f"{label}{self.values[0]}"
+        return format_title(self, formatting=formatting, include_label=include_label, **kwargs)
 
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):
@@ -296,6 +299,7 @@ class NonLinearAxis(OrdinalAxis):
 
     def format_title(self, formatting, **kwargs):
         return format_title(self, formatting=formatting, **kwargs)
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisAlignedTiltAxis(NonLinearAxis):

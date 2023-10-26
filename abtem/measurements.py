@@ -80,10 +80,11 @@ def _scanned_measurement_type(
         return Images
 
     else:
-        raise RuntimeError(
-            f"no measurement type for {measurement.__class__} with {len(_scan_shape(measurement))} scan "
-            f"axes"
-        )
+        return None
+        # raise RuntimeError(
+        #     f"no measurement type for {measurement.__class__} with {len(_scan_shape(measurement))} scan "
+        #     f"axes"
+        # )
 
 
 def _bin_extent(n):
@@ -1582,6 +1583,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             overlay=overlay,
             figsize=figsize,
             interact=interact,
+            **kwargs
         )
 
         if title is not None:
