@@ -9,6 +9,7 @@ from typing import Sequence
 
 import numpy as np
 from ase.data import chemical_symbols
+from scipy.optimize import least_squares
 
 from abtem.array import concatenate
 from abtem.core.axes import OrdinalAxis
@@ -72,6 +73,21 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         self._parameters = validate_parameters(parameters)
         self._sigmas = validate_sigmas(sigmas)
+
+    def to_json(self, file: str):
+        with open(file, "w") as fp:
+            data = {
+                symbol: parameters.tolist()
+                for symbol, parameters in self.parameters.items()
+            }
+            json.dump(data, fp)
+
+    def from_json(self, file: str):
+        with open(file, "r") as fp:
+            self._parameters = {
+                symbol: np.array(parameters)
+                for symbol, parameters in json.load(fp).items()
+            }
 
     @property
     def sigmas(self):
@@ -387,6 +403,43 @@ class KirklandParametrization(Parametrization):
 
         super().__init__(parameters=parameters, sigmas=sigmas)
 
+    def fit(self, Z, k, f, guess=None):
+        def reshape_parameters(p):
+            p = p.reshape((4, 3))
+            return p
+
+        def apply_constraint(p):
+            p = p.copy()
+            p = np.abs(p)
+            return p
+
+        def make_residuals_func(k2, target, func):
+            def residuals_func(p):
+                p = reshape_parameters(p)
+                p = apply_constraint(p)
+                return target - func(k2, p)
+
+            return residuals_func
+
+        if guess is None:
+            if chemical_symbols[Z] in self.parameters:
+                guess = self.scaled_parameters(chemical_symbols[Z], "scattering_factor")
+            else:
+                guess = np.array(
+                    validate_parameters("kirkland.json")[chemical_symbols[Z]]
+                )
+
+        func = self._functions["scattering_factor"]
+
+        residuals_func = make_residuals_func(k**2, f, func)
+
+        result = least_squares(residuals_func, guess.ravel())
+        p_optimal = reshape_parameters(result.x)
+        p_optimal = apply_constraint(p_optimal)
+        self.parameters[chemical_symbols[Z]] = p_optimal
+        return p_optimal
+
+
     def scaled_parameters(self, symbol: str, name: str) -> np.ndarray:
         parameters = np.array(self.parameters[symbol])
 
@@ -440,6 +493,42 @@ class LobatoParametrization(Parametrization):
         self, parameters: str | dict = "lobato.json", sigmas: dict[str, float] = None
     ):
         super().__init__(parameters=parameters, sigmas=sigmas)
+
+    def fit(self, Z, k, f, guess=None):
+        def reshape_parameters(p):
+            p = p.reshape((2, 5))
+            return p
+
+        def apply_constraint(p):
+            p = p.copy()
+            p[1, :] = np.abs(p[1, :])
+            return p
+
+        def make_residuals_func(k2, target, func):
+            def residuals_func(p):
+                p = reshape_parameters(p)
+                p = apply_constraint(p)
+                return target - func(k2, p)
+
+            return residuals_func
+
+        if guess is None:
+            if chemical_symbols[Z] in self.parameters:
+                guess = self.scaled_parameters(chemical_symbols[Z], "scattering_factor")
+            else:
+                guess = np.array(
+                    validate_parameters("lobato.json")[chemical_symbols[Z]]
+                )
+
+        func = self._functions["scattering_factor"]
+
+        residuals_func = make_residuals_func(k**2, f, func)
+
+        result = least_squares(residuals_func, guess.ravel())
+        p_optimal = reshape_parameters(result.x)
+        p_optimal = apply_constraint(p_optimal)
+        self.parameters[chemical_symbols[Z]] = p_optimal
+        return p_optimal
 
     def scaled_parameters(self, symbol: str, name: str) -> np.ndarray:
         parameters = np.array(self.parameters[symbol])

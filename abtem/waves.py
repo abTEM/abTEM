@@ -1469,6 +1469,10 @@ class Probe(_WavesBuilder):
         """The semiangle cutoff [mrad]."""
         return self.aperture.semiangle_cutoff
 
+    @semiangle_cutoff.setter
+    def semiangle_cutoff(self, value):
+        self.aperture.semiangle_cutoff = value
+
     @property
     def aperture(self) -> Aperture:
         """Condenser or probe-forming aperture."""

@@ -39,6 +39,7 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
+from abtem.core import config
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.distributions import BaseDistribution
@@ -3639,7 +3640,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
                 index = axes_metadata.values
             else:
                 index = list(range(len(self.intensities)))
-            return pd.DataFrame(intensities, index=index)
+
+            df = pd.DataFrame(intensities, index=index)
+
+            with config.set({"visualize.use_tex": False}):
+                df.index.name = self.axes_metadata[0].format_label()
+                df.columns.name = self.axes_metadata[1].format_label()
+
+            return df
         else:
             intensities = {
                 _format_miller_indices(hkl): intensity

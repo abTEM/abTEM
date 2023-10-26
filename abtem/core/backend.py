@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import types
+import warnings
 from numbers import Number
 from typing import Union
 
@@ -11,8 +13,16 @@ from abtem.core.config import config
 
 try:
     import cupy as cp
-except:
+except ModuleNotFoundError:
     cp = None
+except ImportError:
+    if config.get("device") == "gpu":
+        warnings.warn(
+            "The CuPy library could not be imported. Please check your installation, or change your configuration to "
+            "use CPU."
+        )
+    cp = None
+
 
 try:
     import cupyx
@@ -20,6 +30,7 @@ except:
     cupyx = None
 
 ArrayModule = Union[types.ModuleType, str]
+
 
 def check_cupy_is_installed():
     if cp is None:

@@ -188,6 +188,10 @@ class BaseAperture(BaseTransferFunction):
         """Semiangle cutoff of the aperture [mrad]."""
         return self._semiangle_cutoff
 
+    @semiangle_cutoff.setter
+    def semiangle_cutoff(self, semiangle_cutoff:float | BaseDistribution):
+        self._semiangle_cutoff = semiangle_cutoff
+
     def _cropped_aperture(self):
         if self._max_semiangle_cutoff == np.inf:
             return self
