@@ -6,15 +6,44 @@ from py4DSTEM.process.utils import electron_wavelength_angstrom, single_atom_sca
 
 from abtem.core.backend import get_array_module
 from abtem.core.constants import kappa
+import pandas as pd
+
+from abtem.parametrizations import validate_parametrization
+
+
+def _F_reflection_conditions(hkl):
+    all_even = (hkl % 2 == 0).all(axis=1)
+    all_odd = (hkl % 2 == 1).all(axis=1)
+    return all_even + all_odd
+
+
+def _I_reflection_conditions(hkl):
+    return (hkl.sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _A_reflection_conditions(hkl):
+    return (hkl[1:].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _B_reflection_conditions(hkl):
+    return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _C_reflection_conditions(hkl):
+    return (hkl[:-1].sum(axis=1) % 2 == 0).all(axis=1)
 
 
 class StructureFactors:
-    def __init__(self, atoms, k_max, parametrization=None):
+    def __init__(self, atoms, k_max, parametrization="lobato"):
         self._atoms = atoms
         self._k_max = k_max
         self._hkl = self._make_hkl_grid()
         self._g_vec = self._hkl @ self._atoms.cell.reciprocal()
         self._array = None
+        self._parametrization = validate_parametrization(parametrization)
+
+    def __len__(self):
+        return len(self._hkl)
 
     def _make_hkl_grid(self):
         num_tile = int(np.ceil(self._k_max / min(self.dg)))
@@ -23,7 +52,8 @@ class StructureFactors:
             int
         )
         ya, xa, za = np.meshgrid(*(indices,) * 3)
-        return np.vstack([xa.ravel(), ya.ravel(), za.ravel()]).T
+        hkl = np.vstack([xa.ravel(), ya.ravel(), za.ravel()]).T
+        return hkl
 
     @property
     def dg(self):
@@ -60,10 +90,14 @@ class StructureFactors:
         f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=np.complex128)
 
         for idx, Z in enumerate(Z_unique):
-            lobato_lookup = single_atom_scatter()
-            lobato_lookup.get_scattering_factor([Z], [1.0], g_unique, units="A")
-            f_e_uniq[idx, :] = lobato_lookup.fe
-            # f_e_uniq[idx, :] = LobatoParametrization().scattering_factor(Z)(g_unique ** 2)
+            # lobato_lookup = single_atom_scatter()
+            # lobato_lookup.get_scattering_factor([Z], [1.0], g_unique, units="A")
+            # f_e_uniq[idx, :] = lobato_lookup.fe
+            # f_e_uniq[idx, :] = LobatoParametrization().scattering_factor(Z)(
+            #    g_unique**2
+            # )
+            scattering_factor = self._parametrization.scattering_factor(Z)
+            f_e_uniq[idx, :] = scattering_factor(g_unique**2)
 
         return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
 
@@ -121,7 +155,9 @@ class BlochWaves:
         sg = excitation_errors(self.structure_factors.g_vec, self.wavelength)
 
         self._included_hkl = np.where(
-            (self.structure_factors.g_vec_length <= k_max) & (np.abs(sg) <= sg_max)
+            (self.structure_factors.g_vec_length <= k_max)
+            & (np.abs(sg) <= sg_max)
+            & _F_reflection_conditions(self.structure_factors.hkl)
         )[0]
 
     @property
@@ -188,7 +224,7 @@ class BlochWaves:
         psi_0[int(np.where((hkl == [0, 0, 0]).all(axis=1))[0])] = 1.0
         return psi_0
 
-    def get_exit_wave(self, thicknesses, return_complex=False, device="cpu"):
+    def get_exit_wave(self, thicknesses, return_complex=False, device="cpu", tol=0.0):
         xp = get_array_module(device)
 
         U_gmh = self.calculate_U_gmh()
@@ -203,11 +239,26 @@ class BlochWaves:
 
         psi_0 = self._make_plane_wave()
 
-        psi = C @ (xp.exp(2.0j * xp.pi * thicknesses * gamma) * (C_inv @ psi_0))
+        psi = [
+            C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * (C_inv @ psi_0))
+            for thickness in thicknesses
+        ]
+
+        psi = xp.stack(psi, axis=0)
 
         if return_complex:
             return psi
         else:
             intensities = xp.abs(psi) ** 2
             intensities = xp.asnumpy(intensities)
+
+            intensities = pd.DataFrame(
+                {
+                    f"{h} {k} {l}": intensity
+                    for ((h, k, l), intensity) in zip(
+                        self.structure_factors.hkl[self.included_hkl], intensities.T
+                    )
+                    if np.any(intensity > tol)
+                }
+            )
             return intensities
