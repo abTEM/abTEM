@@ -2,12 +2,11 @@ import warnings
 
 import cupy as cp
 import numpy as np
-from py4DSTEM.process.utils import electron_wavelength_angstrom, single_atom_scatter
+import pandas as pd
 
 from abtem.core.backend import get_array_module
 from abtem.core.constants import kappa
-import pandas as pd
-
+from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.parametrizations import validate_parametrization
 
 
@@ -96,8 +95,10 @@ class StructureFactors:
             # f_e_uniq[idx, :] = LobatoParametrization().scattering_factor(Z)(
             #    g_unique**2
             # )
+
             scattering_factor = self._parametrization.scattering_factor(Z)
             f_e_uniq[idx, :] = scattering_factor(g_unique**2)
+            f_e_uniq[idx, g_unique > self.k_max] = 0.
 
         return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
 
@@ -134,14 +135,12 @@ class StructureFactors:
 
 
 def excitation_errors(g, wavelength):
-    sg = (2 * g[:, 2] - wavelength * np.sum(g * g, axis=1)) / (
-        2 - 2 * wavelength * g[:, 2]
-    )
+    sg = (2 * g[:, 2] - wavelength * np.sum(g * g, axis=1)) / 2
     return sg
 
 
 class BlochWaves:
-    def __init__(self, structure_factors, energy, sg_max, k_max=None):
+    def __init__(self, structure_factors, energy, sg_max, k_max=None, correct=True):
         self._structure_factors = structure_factors
         self._energy = energy
 
@@ -160,6 +159,8 @@ class BlochWaves:
             & _F_reflection_conditions(self.structure_factors.hkl)
         )[0]
 
+        self.correct = correct
+
     @property
     def included_hkl(self):
         return self._included_hkl
@@ -174,7 +175,7 @@ class BlochWaves:
 
     @property
     def wavelength(self):
-        return electron_wavelength_angstrom(self.energy)
+        return energy2wavelength(self.energy)
 
     def excitation_errors(self):
         g = self.structure_factors.g_vec[self.included_hkl]
@@ -186,6 +187,7 @@ class BlochWaves:
 
     def calculate_U_gmh(self):
         hkl = self.structure_factors.hkl[self.included_hkl]
+        g_vec = self.structure_factors.g_vec[self.included_hkl]
         n_beams = len(hkl)
 
         gmh = np.array(
@@ -204,18 +206,26 @@ class BlochWaves:
             gmh[:, 2] - self.structure_factors.hkl[:, 2].min(),
         ]
 
-        # prefactor = energy2sigma(self.energy) / self.wavelength / np.pi / kappa
+        prefactor = energy2sigma(self.energy) / self.wavelength / np.pi / kappa
 
-        m0c2 = 5.109989461e5
-        prefactor = (m0c2 + self.energy) / m0c2 / np.pi
+        # m0c2 = 5.109989461e5
+        # prefactor = (m0c2 + self.energy) / m0c2 / np.pi
 
         U_gmh = prefactor * U_gmh
-
         U_gmh = U_gmh.reshape((n_beams, n_beams))
 
         sg = self.excitation_errors()
+        diag = 2 / self.wavelength * sg
 
-        np.fill_diagonal(U_gmh, 2 / self.wavelength * sg)
+        if self.correct:
+            U_gmh /= np.sqrt(1 + self.wavelength * g_vec[:, 2][:, None]) * np.sqrt(
+                1 + self.wavelength * g_vec[:, 2][None]
+            )
+
+            diag /= 1 + self.wavelength * g_vec[:, 2]
+
+        np.fill_diagonal(U_gmh, diag)
+
         return U_gmh
 
     def _make_plane_wave(self):
@@ -234,6 +244,13 @@ class BlochWaves:
         v, C = xp.linalg.eigh(U_gmh)
 
         gamma = v * self.wavelength / 2.0
+
+        if self.correct:
+            C = C / xp.sqrt(
+                1
+                + self.wavelength
+                * xp.array(self.structure_factors.g_vec[self.included_hkl][:, 2][:, None])
+            )
 
         C_inv = xp.conjugate(C.T)
 
