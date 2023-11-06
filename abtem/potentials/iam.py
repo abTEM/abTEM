@@ -72,18 +72,18 @@ class BasePotential(
     """Base class of all potentials. Documented in the subclasses."""
 
     @property
-    def base_shape(self):
+    def base_shape(self) -> tuple[int, ...]:
         """Shape of the base axes of the potential."""
         return (self.num_slices,) + self.gpts
 
     @property
     @abstractmethod
-    def num_frozen_phonons(self):
+    def num_frozen_phonons(self) -> int:
         """Number of frozen phonons in the ensemble of potentials."""
         pass
 
     @property
-    def base_axes_metadata(self):
+    def base_axes_metadata(self) -> list[AxisMetadata]:
         """List of AxisMetadata for the base axes."""
         return [
             ThicknessAxis(
@@ -102,7 +102,7 @@ class BasePotential(
 
     @property
     @abstractmethod
-    def exit_planes(self) -> tuple[int]:
+    def exit_planes(self) -> tuple[int, ...]:
         """The "exit planes" of the potential. The indices of slices where a measurement is returned."""
         pass
 
@@ -128,7 +128,6 @@ class BasePotential(
         thicknesses = np.cumsum(self.slice_thickness)
 
         if self.exit_planes[0] == -1:
-
             return tuple(
                 np.insert(
                     thicknesses[np.array(self.exit_planes[1:], dtype=int)], 0, 0.0
@@ -868,7 +867,6 @@ class PotentialArray(BasePotential, ArrayObject):
 
         super().__init__(
             array=array,
-
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
