@@ -667,7 +667,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(axes, Number):
             axes = (axes,)
 
-        axes = tuple(axis if axis >= 0 else len(self) + axis for axis in axes)
+        axes = tuple(axis if axis >= 0 else len(self.shape) + axis for axis in axes)
 
         if self._is_base_axis(axes):
             raise RuntimeError("base axes cannot be reduced")
