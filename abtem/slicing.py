@@ -42,7 +42,6 @@ def _validate_slice_thickness(
     thickness: float = None,
     num_slices: int = None,
 ) -> tuple[float, ...]:
-
     if np.isscalar(slice_thickness):
         if thickness is not None:
             n = np.ceil(thickness / slice_thickness)
@@ -111,7 +110,6 @@ class BaseSlicedAtoms(EqualityMixin):
     """
 
     def __init__(self, atoms: Atoms, slice_thickness: float | np.ndarray | str):
-
         if not is_cell_orthogonal(atoms):
             raise RuntimeError("atoms must have an orthogonal cell")
 
@@ -184,6 +182,15 @@ class BaseSlicedAtoms(EqualityMixin):
 
         pass
 
+    def generate_atoms_in_slices(
+        self, first_slice: int = 0, last_slice: int = None, atomic_number: int = None
+    ):
+        if last_slice is None:
+            last_slice = len(self)
+
+        for i in range(first_slice, last_slice):
+            yield self.get_atoms_in_slices(i, atomic_number=atomic_number)
+
     def __getitem__(self, item: int | slice) -> Atoms:
         return self.get_atoms_in_slices(*_unpack_item(item, len(self)))
 
@@ -204,7 +211,6 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
     """
 
     def __init__(self, atoms: Atoms, slice_thickness: float | tuple[float, ...]):
-
         super().__init__(atoms, slice_thickness)
 
         labels = np.digitize(
@@ -255,7 +261,6 @@ class SlicedAtoms(BaseSlicedAtoms):
         Padding of the atoms along z in each slice included in the slices [Å].
     """
 
-
     def __init__(
         self,
         atoms: Atoms,
@@ -263,7 +268,6 @@ class SlicedAtoms(BaseSlicedAtoms):
         xy_padding: float = 0.0,
         z_padding: float = 0.0,
     ):
-
         super().__init__(atoms, slice_thickness)
         self._xy_padding = xy_padding
         self._z_padding = z_padding
@@ -271,7 +275,6 @@ class SlicedAtoms(BaseSlicedAtoms):
     def get_atoms_in_slices(
         self, first_slice: int, last_slice: int = None, atomic_number: int = None
     ) -> Atoms:
-
         if last_slice is None:
             last_slice = first_slice
 
