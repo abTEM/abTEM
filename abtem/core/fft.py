@@ -50,7 +50,6 @@ def _fft_name_to_fftw_direction(name: str):
 
 
 def _new_fftw_object(array: np.ndarray, name: str, flags=()):
-
     dummy = np.zeros_like(array)
 
     direction = _fft_name_to_fftw_direction(name)
@@ -72,25 +71,27 @@ def _new_fftw_object(array: np.ndarray, name: str, flags=()):
 
 class CachedFFTWConvolution:
     def __init__(self):
-        self._fftw_forward = None
-        self._fftw_backward = None
+        self._fftw_objects = None
+        self._shape = None
 
     def __call__(self, array, kernel, overwrite_x):
+        if array.shape != self._shape:
+            self._fftw_objects = None
 
-        if self._fftw_backward is None:
-            self._fftw_backward = _new_fftw_object(array, "ifft2")
-
-        if self._fftw_forward is None:
-            self._fftw_forward = _new_fftw_object(array, "fft2")
+        if self._fftw_objects is None:
+            fftw_objects = {
+                name: _new_fftw_object(array, name=name) for name in ("ifft2", "fft2")
+            }
+            self._fftw_objects = fftw_objects
 
         if not overwrite_x:
             array = array.copy()
-            self._fftw_forward.update_arrays(array, array)
-            self._fftw_backward.update_arrays(array, array)
+            self._fftw_objects["fft2"].update_arrays(array, array)
+            self._fftw_objects["ifft2"].update_arrays(array, array)
 
-        array = self._fftw_forward()
+        array = self._fftw_objects["fft2"]()
         array *= kernel
-        array = self._fftw_backward()
+        array = self._fftw_objects["ifft2"]()
         return array
 
 
@@ -117,7 +118,6 @@ def get_fftw_object(
             flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
         )
     except RuntimeError as e:
-
         if not str(e) == "No FFTW wisdom is known for this plan.":
             raise
 
