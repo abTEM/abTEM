@@ -233,7 +233,6 @@ def _compute(
     resource_profiler: bool = False,
     **kwargs,
 ):
-
     if config.get("device") == "gpu":
         check_cupy_is_installed()
 
@@ -296,7 +295,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
 
@@ -801,7 +799,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if isinstance(item, Number):
                 metadata = {**metadata, **expanded_axes_metadata[i].item_metadata(item)}
             else:
-
                 axes_metadata += [expanded_axes_metadata[i][item].copy()]
 
         axes_metadata += expanded_axes_metadata[last_indexed:]
@@ -1123,7 +1120,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform_partial,
         num_transform_args,
     ):
-
         args = unpack_blockwise_args(args[:-1]) + (args[-1],)
 
         transform = transform_partial(*args[:num_transform_args]).item()
@@ -1149,7 +1145,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @property
     def _has_base_chunks(self):
-
         if not isinstance(self.array, da.core.Array):
             return False
 
@@ -1187,7 +1182,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """
 
         if self.is_lazy:
-
             if not transform._allow_base_chunks and self._has_base_chunks:
                 raise RuntimeError(
                     f"Transform {transform.__class__} not implemented for array object with chunks along base axes, "
@@ -1243,7 +1237,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             meta = transform._out_meta(self)
 
             with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message="Increasing number of chunks.")
+                warnings.filterwarnings(
+                    "ignore", message="Increasing number of chunks."
+                )
                 new_array = da.blockwise(
                     self._apply_transform,
                     symbols,
@@ -1321,9 +1317,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         xp = get_array_module(self.device)
 
-        base_axes = tuple_range(offset=0, length=len(self.base_shape))
+        base_axes = tuple_range(
+            offset=len(self.ensemble_shape),
+            length=len(self.shape) - len(self.ensemble_shape),
+        )
         ensemble_axes = tuple_range(
-            offset=len(self.base_shape),
+            offset=0,
             length=len(self.ensemble_shape),
         )
 
@@ -1386,7 +1385,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             raise NotImplementedError
 
     def _partition_args(self, chunks: int = None, lazy: bool = True):
-
         if chunks is None and self.is_lazy:
             chunks = self.array.chunks[: -len(self.base_shape)]
         elif chunks is None:
@@ -1433,7 +1431,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
 
             for block_indices, chunk_range in iterate_chunk_ranges(chunks):
-
                 if len(block_indices) == 0:
                     block_indices = 0
                 # blocks.itemset(
