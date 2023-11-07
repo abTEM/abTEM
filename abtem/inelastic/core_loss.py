@@ -18,6 +18,7 @@ from abtem import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis, AxisMetadata
 from abtem.core.backend import copy_to_device
+from abtem.core.chunks import generate_chunks
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
     HasAcceleratorMixin,
@@ -26,7 +27,7 @@ from abtem.core.energy import (
     relativistic_mass_correction,
     energy2sigma,
 )
-from abtem.core.fft import fft_shift_kernel
+from abtem.core.fft import fft_shift_kernel, fft2
 from abtem.core.fft import ifft2
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
 
@@ -284,7 +285,7 @@ class SubshellTransitions(BaseTransitionCollection):
         epsilon: float = 1.0,
         xc: str = "PBE",
     ):
-        # check_valid_quantum_number(Z, n, l)
+        check_valid_quantum_number(Z, n, l)
         self._n = n
         self._l = l
         self._order = order
@@ -293,6 +294,16 @@ class SubshellTransitions(BaseTransitionCollection):
         self._epsilon = epsilon
         self._xc = xc
         super().__init__(Z)
+
+    @property
+    def bound_configuration(self):
+        return electron_configurations[chemical_symbols[self.Z]]
+
+    @property
+    def excited_configuration(self):
+        return remove_electron_from_config_str(
+            electron_configurations[chemical_symbols[self.Z]], self.n, self.l
+        )
 
     @property
     def order(self):
@@ -362,7 +373,6 @@ class SubshellTransitions(BaseTransitionCollection):
         for bound_state, excited_state in itertools.product(
             bound_states, excited_states
         ):
-
             if self._only_dipole and (not (abs(bound_state.l - excited_state.l) == 1)):
                 continue
 
@@ -381,7 +391,7 @@ class SubshellTransitions(BaseTransitionCollection):
         energy: float = None,
     ):
         transitions = self.get_transitions()
-        return SubshellTransitionPotentials(
+        return TransitionPotential(
             self.Z,
             transitions,
             extent=extent,
@@ -392,17 +402,25 @@ class SubshellTransitions(BaseTransitionCollection):
 
 
 class BaseTransitionPotential(HasAcceleratorMixin, HasGridMixin):
-    def __init__(self, Z, extent, gpts, sampling, energy):
+    def __init__(
+        self, Z, extent, gpts, sampling, energy, double_channel: bool = True, **kwargs
+    ):
         self._Z = Z
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
+        self._double_channel = double_channel
+        super().__init__(**kwargs)
+
+    @property
+    def double_channel(self):
+        return self._double_channel
 
     @property
     def Z(self):
         return self._Z
 
 
-class SubshellTransitionPotentials(BaseTransitionPotential):
+class TransitionPotential(BaseTransitionPotential):
     def __init__(
         self,
         Z: int,
@@ -412,10 +430,16 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
         energy: float = None,
+        double_channel: bool = True,
     ):
+        self._Z = Z
         self._orbital_filling_factor = orbital_filling_factor
         self._transitions = transitions
-        super().__init__(Z, extent, gpts, sampling, energy)
+        super().__init__(Z, extent, gpts, sampling, energy, double_channel)
+
+    @property
+    def Z(self):
+        return self._Z
 
     @property
     def ensemble_shape(self):
@@ -476,10 +500,6 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
 
         mask = k <= np.max(k) * 2 / 3
 
-        # import matplotlib.pyplot as plt
-        # plt.imshow(mask)
-        # plt.show()
-
         for lprimeprime in range(abs(l - lprime), abs(l + lprime) + 1):
             jq = self._calculate_overlap_integral(lprimeprime, bound, excited, k)
 
@@ -507,6 +527,9 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
         return Hn0
 
     def build(self):
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
         array = np.zeros((len(self._transitions),) + self.gpts, dtype=complex)
         k0 = 1 / energy2wavelength(self.energy)
 
@@ -539,13 +562,14 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
             extent=self.extent,
             sampling=self.sampling,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
+            double_channel=self.double_channel,
         )
 
     def show(self, **kwargs):
         return self.build().to_images().show(**kwargs)
 
 
-class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
+class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
     _base_dims = 2
 
     def __init__(
@@ -557,14 +581,15 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         sampling: float | tuple[float, float] = None,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
+        double_channel: bool = True,
     ):
-        self._Z = Z
-        self._grid = Grid(
-            extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
-        )
-        self._accelerator = Accelerator(energy=energy)
-
         super().__init__(
+            Z=Z,
+            extent=extent,
+            gpts=array.shape[-2:],
+            sampling=sampling,
+            energy=energy,
+            double_channel=double_channel,
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
@@ -585,7 +610,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         sites = np.array(sites, dtype=np.float32)
         return sites
 
-    def scatter(self, waves: Waves, sites: Atoms | Atom):
+    def scatter(self, waves: Waves, sites: Atoms | Atom | np.ndarray):
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
@@ -598,17 +623,29 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         positions = copy_to_device(positions, waves.array)
 
         array = ifft2(
-            self.array[None] * fft_shift_kernel(positions, self.gpts)[:, None]
+            fft2(self.array)[None] * fft_shift_kernel(positions, self.gpts)[:, None] * energy2sigma(self.energy)
         )
 
         array = array.reshape((-1,) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
 
         d = waves._copy_kwargs(exclude=("array",))
         d["array"] = array * waves.array[None]
-        d["ensemble_axes_metadata"] = [
-            {"type": "ensemble", "label": "core ionization"}
-        ] + d["ensemble_axes_metadata"]
+
+        ensemble_axes_metadata = self.ensemble_axes_metadata
+        d["ensemble_axes_metadata"] = (
+            ensemble_axes_metadata + d["ensemble_axes_metadata"]
+        )
         return waves.__class__(**d)
+
+    def generate_scattered_waves(self, waves, sites, chunks=1):
+        sites = self.validate_sites(sites)
+
+        for start, end in generate_chunks(len(sites), chunks=chunks):
+            if end - start == 0:
+                break
+
+            scattered_waves = self.scatter(waves, sites[start:end])
+            yield sites[start:end], scattered_waves
 
     def to_images(self):
         array = np.fft.fftshift(self.array, axes=(-2, -1))
