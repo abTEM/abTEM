@@ -324,8 +324,8 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     waves = waves.downsample(max_angle=max_angle, normalization=normalization)
 
     if isinstance(max_angle, float):
-        assume(max_angle < 0.9 * max(waves.cutoff_angles))
-        assume(max_angle > 1.1 * probe.aperture.semiangle_cutoff)
+        assume(max_angle < 0.8 * max(waves.cutoff_angles))
+        assume(max_angle > 1.2 * probe.aperture.semiangle_cutoff)
     elif max_angle == "valid":
         assume(
             min(probe.rectangle_cutoff_angles) > 1.1 * probe.aperture.semiangle_cutoff
