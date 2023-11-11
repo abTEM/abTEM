@@ -131,7 +131,6 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         atoms: Atoms,
         num_configs: int = None,
     ):
-
         self._atoms = atoms
         self._num_configs = num_configs
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, None)
@@ -236,6 +235,11 @@ class FrozenPhonons(BaseFrozenPhonons):
         If dict, a displacement standard deviation should be provided for each species. The atomic species can be
         specified as atomic number or a symbol, using the ASE standard.
         If list or array, a displacement standard deviation should be provided for each atom.
+
+        Anistropic displacements may be given by providing a standard deviation for each principal direction.
+        This may be a tuple of three numbers for identical displacements for all atoms. A dict of tuples of three
+        numbers to specify displacements for each species. A list or array with three numbers for each atom.
+
     directions : str, optional
         The displacement directions of the atoms as a string; for example 'xy' (default) for displacement in the `x`-
         and `y`-direction (i.e. perpendicular to the propagation direction).
@@ -283,9 +287,15 @@ class FrozenPhonons(BaseFrozenPhonons):
             for symbol in unique_symbols:
                 new_sigmas[symbol] = sigmas
 
+            anisotropic = False
             sigmas = new_sigmas
 
         elif isinstance(sigmas, dict):
+            anisotropic = any(hasattr(value, "__len__") for value in sigmas.values())
+
+            if anisotropic and not all(len(value) == 3 for value in sigmas.values()):
+                raise RuntimeError("Three values for each element must be given for anisotropic displacements.")
+
             if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
                 raise RuntimeError(
                     "Displacement standard deviation must be provided for all atomic species."
@@ -297,10 +307,22 @@ class FrozenPhonons(BaseFrozenPhonons):
                 raise RuntimeError(
                     "Displacement standard deviation must be provided for all atoms."
                 )
+
+            if len(sigmas.shape) == 2:
+                if sigmas.shape[1] == 3:
+                    anisotropic = True
+                else:
+                    raise RuntimeError(
+                        "Three values for each atom must be given for anisotropic displacements."
+                    )
+            elif len(sigmas.shape) == 1:
+                anisotropic = False
+            else:
+                raise RuntimeError()
         else:
             raise ValueError()
 
-        return sigmas
+        return sigmas, anisotropic
 
     @property
     def ensemble_shape(self):
@@ -355,10 +377,14 @@ class FrozenPhonons(BaseFrozenPhonons):
         return axes
 
     def randomize(self, atoms: Atoms) -> Atoms:
-        sigmas = self._validate_sigmas(atoms)
+        sigmas, anisotropic = self._validate_sigmas(atoms)
 
         if isinstance(sigmas, dict):
-            temp = np.zeros(len(atoms.numbers), dtype=np.float32)
+            if anisotropic:
+                temp = np.zeros((len(atoms.numbers), 3), dtype=np.float32)
+            else:
+                temp = np.zeros(len(atoms.numbers), dtype=np.float32)
+
             for unique in np.unique(atoms.numbers):
                 temp[atoms.numbers == unique] = np.float32(
                     sigmas[chemical_symbols[unique]]
@@ -371,10 +397,16 @@ class FrozenPhonons(BaseFrozenPhonons):
         atoms = atoms.copy()
 
         rng = np.random.default_rng(self.seed[0])
-        r = rng.normal(size=(len(atoms), 3)) / np.sqrt(3)
 
-        for axis in self._axes:
-            atoms.positions[:, axis] += sigmas * r[:, axis]
+        if anisotropic:
+            r = rng.normal(size=(len(atoms), 3))
+            for axis in self._axes:
+                atoms.positions[:, axis] += sigmas[:, axis] * r[:, axis]
+        else:
+            r = rng.normal(size=(len(atoms), 3)) / np.sqrt(3)
+
+            for axis in self._axes:
+                atoms.positions[:, axis] += sigmas * r[:, axis]
 
         return atoms
 
