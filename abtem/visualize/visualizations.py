@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import itertools
-import string
-from abc import abstractmethod, ABCMeta
-from collections import defaultdict
-from typing import TYPE_CHECKING, Sequence, Iterable
+from abc import abstractmethod
+from typing import Sequence
 
+import ipywidgets
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,409 +13,32 @@ from ase import Atoms
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib import colors
-from matplotlib.animation import FuncAnimation
 from matplotlib.axes import Axes
-from matplotlib.collections import PatchCollection, EllipseCollection
-from matplotlib.colors import ListedColormap
+from matplotlib.collections import PatchCollection
+from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Circle
-from mpl_toolkits.axes_grid1 import Size, Divider
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
-from traitlets.traitlets import link
 
 from abtem.atoms import pad_atoms, plane_to_axes
+from abtem.visualize.axes_grid import (
+    _determine_axes_types,
+    _validate_axes,
+    _cbar_orientation,
+)
 from abtem.core import config
-from abtem.core.axes import ReciprocalSpaceAxis, format_label, LinearAxis
 from abtem.core.colors import hsluv_cmap
 from abtem.core.units import _get_conversion_factor
 from abtem.core.utils import label_to_index
-
-try:
-    import ipywidgets
-except ImportError:
-    ipywidgets = None
-
-ipywidgets_not_installed = RuntimeError(
-    "This functionality of abTEM requires ipywidgets, see "
-    "https://ipywidgets.readthedocs.io/en/stable/user_install.html."
+from abtem.visualize.widgets import (
+    make_sliders_from_ensemble_axes,
+    make_scale_button,
+    make_autoscale_button,
+    make_power_scale_slider,
+    make_cmap_dropdown,
+    make_complex_visualization_dropdown,
 )
-
-
-if TYPE_CHECKING:
-    from abtem.measurements import (
-        BaseMeasurements,
-        _BaseMeasurement1D,
-        _BaseMeasurement2D,
-        IndexedDiffractionPatterns,
-    )
-
-
-def _make_default_sizes():
-    sizes = {
-        "cbar_padding_left": Size.Fixed(0.15),
-        "cbar_spacing": Size.Fixed(0.4),
-        "cbar_padding_right": Size.Fixed(0.9),
-        "padding": Size.Fixed(0.1),
-    }
-    return sizes
-
-
-def _cbar_layout(n, sizes):
-    if n == 0:
-        return []
-
-    layout = [sizes["cbar_padding_left"]]
-    for i in range(n):
-        layout.extend([sizes["cbar"]])
-
-        if i < n - 1:
-            layout.extend([sizes["cbar_spacing"]])
-
-    layout.extend([sizes["cbar_padding_right"]])
-    return layout
-
-
-def _make_grid_layout(
-    axes, ncbars: int, sizes: dict, cbar_mode: str = "each", direction: str = "col"
-):
-    sizes_layout = []
-
-    if cbar_mode not in ("single", "each"):
-        raise ValueError()
-
-    for i, ax in enumerate(axes):
-        if direction == "col":
-            sizes_layout.append(Size.AxesX(ax, aspect="axes", ref_ax=axes[0]))
-        elif direction == "row":
-            sizes_layout.append(Size.AxesY(ax, aspect="axes", ref_ax=axes[0]))
-        else:
-            raise ValueError()
-
-        if not "cbar" in sizes:
-            sizes["cbar"] = Size.from_any("5%", sizes_layout[0])
-
-        if cbar_mode == "each":
-            sizes_layout.extend(_cbar_layout(ncbars, sizes))
-
-        if i < len(axes) - 1:
-            sizes_layout.append(sizes["padding"])
-
-    if cbar_mode == "single":
-        sizes_layout.extend(_cbar_layout(ncbars, sizes))
-
-    return sizes_layout
-
-
-class AxesGrid:
-    def __init__(
-        self,
-        fig,
-        ncols: int,
-        nrows: int,
-        ncbars: int = 0,
-        cbar_mode: str = "single",
-        aspect: bool = True,
-        sharex: bool = True,
-        sharey: bool = True,
-        rect: tuple = (0.1, 0.1, 0.85, 0.85),
-        col_sizes: dict = None,
-        row_sizes: dict = None,
-    ):
-        from mpl_toolkits.axes_grid1.mpl_axes import Axes
-
-        self._ncols = ncols
-        self._nrows = nrows
-        self._ncbars = ncbars
-        self._aspect = aspect
-        self._sharex = sharex
-        self._sharey = sharey
-
-        if col_sizes is None:
-            col_sizes = _make_default_sizes()
-
-        if row_sizes is None:
-            row_sizes = _make_default_sizes()
-
-        self._col_sizes = col_sizes
-        self._row_sizes = row_sizes
-
-        axes = []
-        for nx in range(ncols):
-            for ny in range(nrows):
-                if len(axes) > 0:
-                    if sharex:
-                        sharex = axes[0]
-                    else:
-                        sharex = None
-
-                    if sharey:
-                        sharey = axes[0]
-                    else:
-                        sharey = None
-
-                    ax = Axes(fig, rect, sharex=sharex, sharey=sharey)
-                else:
-                    ax = Axes(fig, rect, sharex=None, sharey=None)
-                axes.append(ax)
-
-        for ax in axes:
-            fig.add_axes(ax)
-
-        cols = np.array(axes, dtype=object).reshape((ncols, nrows))[:, 0]
-        rows = np.array(axes, dtype=object).reshape((ncols, nrows))[0]
-
-        col_layout = _make_grid_layout(
-            cols,
-            ncbars=ncbars,
-            sizes=self._col_sizes,
-            cbar_mode=cbar_mode,
-            direction="col",
-        )
-
-        row_layout = _make_grid_layout(
-            rows, ncbars=0, sizes=self._row_sizes, direction="row"
-        )
-
-        self._divider = Divider(
-            fig, rect, horizontal=col_layout, vertical=row_layout, aspect=aspect
-        )
-
-        axes_index = 0
-        caxes_index = 0
-
-        if cbar_mode == "single":
-            caxes = {axes[0]: []}
-        else:
-            caxes = {ax: [] for ax in axes}
-
-        for nx, col_size in enumerate(col_layout):
-            for ny, row_size in enumerate(row_layout):
-                if isinstance(col_size, Size.AxesX) and (
-                    isinstance(row_size, Size.AxesY)
-                ):
-                    ax = axes[axes_index]
-                    ax.set_axes_locator(self._divider.new_locator(nx=nx, ny=ny))
-                    axes_index += 1
-
-                if (
-                    (cbar_mode == "each")
-                    and (col_size is self._col_sizes["cbar"])
-                    and (isinstance(row_size, Size.AxesY))
-                ):
-                    ax = axes[
-                        np.ravel_multi_index(
-                            (caxes_index // (ncbars * nrows), caxes_index % nrows),
-                            (ncols, nrows),
-                        )
-                    ]
-
-                    caxes_index += 1
-
-                    cb_ax = _cbaraxes_class_factory(Axes)(
-                        fig, self._divider.get_position(), orientation="vertical"
-                    )
-
-                    fig.add_axes(cb_ax)
-                    cb_ax.set_axes_locator(self._divider.new_locator(nx=nx, ny=ny))
-                    caxes[ax].append(cb_ax)
-
-                if (
-                    (cbar_mode == "single")
-                    and (len(caxes[axes[0]]) < ncbars)
-                    and (col_size is self._col_sizes["cbar"])
-                    and (isinstance(row_size, Size.AxesY))
-                ):
-                    for i in range(ncbars):
-                        cb_ax = _cbaraxes_class_factory(Axes)(
-                            fig, self._divider.get_position(), orientation="vertical"
-                        )
-                        fig.add_axes(cb_ax)
-                        cb_ax.set_axes_locator(
-                            self._divider.new_locator(nx=nx + i * 2, ny=0, ny1=-1)
-                        )
-                        caxes[axes[0]].append(cb_ax)
-
-        axes = np.array(axes, dtype=object).reshape((ncols, nrows))
-
-        if sharex:
-            for inner_axes in axes[:, 1:]:
-                for ax in inner_axes:
-                    ax._axislines["bottom"].toggle(ticklabels=False, label=False)
-
-        if sharey:
-            for inner_axes in axes[1:]:
-                for ax in inner_axes:
-                    ax._axislines["left"].toggle(ticklabels=False, label=False)
-
-        self._axes = axes
-        self._caxes = caxes
-
-    @property
-    def divider(self):
-        return self._divider
-
-    @property
-    def ncols(self) -> int:
-        return self._axes.shape[0]
-
-    @property
-    def nrows(self) -> int:
-        return self._axes.shape[1]
-
-    def __getitem__(self, item):
-        return self._axes[item]
-
-    def __len__(self):
-        return len(self._axes)
-
-    def item(self):
-        return self._axes.item()
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return self._axes.shape
-
-    def set_cbar_padding(self, padding: tuple[float, float] = (0.1, 0.1)):
-        if np.isscalar(padding):
-            padding = (padding,) * 2
-
-        self._col_sizes["cbar_padding_left"].fixed_size = padding[0]
-        self._row_sizes["cbar_padding_left"].fixed_size = padding[0]
-        self._col_sizes["cbar_padding_right"].fixed_size = padding[1]
-        self._row_sizes["cbar_padding_right"].fixed_size = padding[1]
-
-    def set_cbar_size(self, fraction: float):
-        self._col_sizes["cbar"]._fraction = fraction
-        self._row_sizes["cbar"]._fraction = fraction
-
-    def set_cbar_spacing(self, spacing: float):
-        self._col_sizes["cbar_spacing"].fixed_size = spacing
-        self._row_sizes["cbar_spacing"].fixed_size = spacing
-
-    def set_axes_padding(self, padding: float | tuple[float, float] = (0.0, 0.0)):
-        if np.isscalar(padding):
-            padding = (padding,) * 2
-
-        self._col_sizes["padding"].fixed_size = padding[0]
-        self._row_sizes["padding"].fixed_size = padding[1]
-
-    @property
-    def fig(self):
-        return self._axes[0, 0].get_figure()
-
-
-def _axes_grid_cols_and_rows(ensemble_shape, axes_types):
-    shape = tuple(
-        n
-        for n, axes_type in zip(ensemble_shape, axes_types)
-        if not axes_type in ("index", "range", "overlay")
-    )
-
-    if len(shape) > 0:
-        ncols = shape[0]
-    else:
-        ncols = 1
-
-    if len(shape) > 1:
-        nrows = shape[1]
-    else:
-        nrows = 1
-
-    return ncols, nrows
-
-
-def _determine_axes_types(
-    ensemble_axes_metadata,
-    explode: bool | tuple[bool, ...] | None,
-    overlay: bool | tuple[bool, ...] | None,
-):
-    num_ensemble_axes = len(ensemble_axes_metadata)
-
-    axes_types = []
-    for axis_metadata in ensemble_axes_metadata:
-        if axis_metadata._default_type is not None:
-            axes_types.append(axis_metadata._default_type)
-        else:
-            axes_types.append("index")
-
-    if explode is True:
-        explode = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
-    elif explode is False:
-        explode = ()
-
-    if overlay is True:
-        overlay = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
-    elif overlay is False:
-        overlay = ()
-
-    axes_types = list(axes_types)
-    for i, axis_type in enumerate(axes_types):
-        if explode is not None:
-            if i in explode:
-                axes_types[i] = "explode"
-            else:
-                axes_types[i] = "index"
-
-        if overlay is not None:
-            if i in overlay:
-                axes_types[i] = "overlay"
-            elif i not in explode:
-                axes_types[i] = "index"
-
-    return axes_types
-
-
-def _validate_axes(
-    axes_types,
-    ensemble_shape,
-    ax: Axes = None,
-    explode: bool = False,
-    overlay: bool = False,
-    ncbars: int = 0,
-    common_color_scale: bool = False,
-    figsize: tuple[float, float] = None,
-    ioff: bool = False,
-    aspect: bool = True,
-    sharex: bool = True,
-    sharey: bool = True,
-):
-    if common_color_scale:
-        cbar_mode = "single"
-    else:
-        cbar_mode = "each"
-
-    if ax is None:
-        if ioff:
-            with plt.ioff():
-                fig = plt.figure(figsize=figsize)
-        else:
-            fig = plt.figure(figsize=figsize)
-
-    if ax is None:  # and ("explode" in axes_types):
-        ncols, nrows = _axes_grid_cols_and_rows(ensemble_shape, axes_types)
-
-        axes = AxesGrid(
-            fig=fig,
-            ncols=ncols,
-            nrows=nrows,
-            ncbars=ncbars,
-            cbar_mode=cbar_mode,
-            aspect=aspect,
-            sharex=sharex,
-            sharey=sharey,
-        )
-    # elif ax is None:
-    #    ax = fig.add_subplot()
-    #    axes = np.array([[ax]])
-    else:
-        if explode:
-            raise NotImplementedError("`ax` not implemented with `explode = True`.")
-
-        axes = np.array([[ax]])
-
-    return axes
 
 
 def _format_options(options):
@@ -439,194 +61,6 @@ def discrete_cmap(num_colors, base_cmap):
         base_cmap = plt.get_cmap(base_cmap)
     colors = base_cmap(range(0, num_colors))
     return matplotlib.colors.LinearSegmentedColormap.from_list("", colors, num_colors)
-
-
-def make_sliders_from_ensemble_axes(
-    visualizations: BaseVisualization,
-    axes_types: list[str],
-    continuous_update: bool = False,
-    callbacks: tuple[callable, ...] = (),
-):
-    if not isinstance(visualizations, Sequence):
-        visualizations = [visualizations]
-
-    ensemble_axes_metadata = visualizations[0].ensemble_axes_metadata
-    ensemble_shape = visualizations[0].ensemble_shape
-
-    for visualization in visualizations[1:]:
-        if not isinstance(visualization, MeasurementVisualization):
-            raise ValueError()
-
-        if not (
-            (
-                visualization.measurements.ensemble_axes_metadata
-                == ensemble_axes_metadata
-            )
-            and (visualization.measurements.ensemble_shape == ensemble_shape)
-        ):
-            raise ValueError()
-
-    sliders = []
-    for axes_metadata, n, axes_type in zip(
-        ensemble_axes_metadata,
-        ensemble_shape,
-        axes_types,
-    ):
-        options = _format_options(axes_metadata.coordinates(n))
-
-        with config.set({"visualize.use_tex": False}):
-            label = axes_metadata.format_label()
-
-        if axes_type == "range":
-            sliders.append(
-                ipywidgets.SelectionRangeSlider(
-                    description=label,
-                    options=options,
-                    continuous_update=continuous_update,
-                    index=(0, len(options) - 1),
-                )
-            )
-        elif axes_type == "index":
-            sliders.append(
-                ipywidgets.SelectionSlider(
-                    description=label,
-                    options=options,
-                    continuous_update=continuous_update,
-                )
-            )
-
-    for visualization in visualizations:
-        _set_update_indices_callback(sliders, visualization, callbacks)
-
-    return sliders
-
-
-def _set_update_indices_callback(sliders, visualization, callbacks=()):
-    def update_indices(change):
-        indices = ()
-        for slider in sliders:
-            idx = slider.index
-            if isinstance(idx, tuple):
-                idx = slice(*idx)
-            indices += (idx,)
-
-        with sliders[0].hold_trait_notifications():
-            visualization.set_ensemble_indices(indices)
-            if visualization.autoscale:
-                visualization.set_values_lim()
-
-    for slider in sliders:
-        slider.observe(update_indices, "value")
-        for callback in callbacks:
-            slider.observe(callback, "value")
-
-
-def _make_continuous_button(sliders):
-    continuous_update = config.get("visualize.continuous_update", False)
-
-    continuous_update_checkbox = ipywidgets.ToggleButton(
-        description="Continuous update", value=continuous_update
-    )
-    for slider in sliders:
-        link((continuous_update_checkbox, "value"), (slider, "continuous_update"))
-    return continuous_update_checkbox
-
-
-def _get_max_range(array, axes_types):
-    if np.iscomplexobj(array):
-        array = np.abs(array)
-
-    max_values = array.max(
-        tuple(
-            i for i, axes_type in enumerate(axes_types) if axes_type not in ("range",)
-        )
-    )
-
-    positive_indices = np.where(max_values > 0)[0]
-
-    if len(positive_indices) <= 1:
-        max_value = np.max(max_values)
-    else:
-        max_value = np.sum(max_values[positive_indices])
-
-    return max_value
-
-
-def _make_vmin_vmax_slider(visualization):
-    axes_types = (
-        tuple(visualization._axes_types)
-        + ("base",) * visualization.measurements.num_base_axes
-    )
-
-    max_value = _get_max_range(visualization.measurements.array, axes_types)
-    min_value = -_get_max_range(-visualization.measurements.array, axes_types)
-
-    step = (max_value - min_value) / 1e6
-
-    vmin_vmax_slider = ipywidgets.FloatRangeSlider(
-        value=visualization._get_vmin_vmax(),
-        min=min_value,
-        max=max_value,
-        step=step,
-        disabled=visualization._autoscale,
-        description="Normalization",
-        # readout=False,
-        continuous_update=True,
-    )
-
-    def vmin_vmax_slider_changed(change):
-        vmin, vmax = change["new"]
-        vmax = max(vmax, vmin + step)
-
-        with vmin_vmax_slider.hold_trait_notifications():
-            visualization._update_vmin_vmax(vmin, vmax)
-
-    vmin_vmax_slider.observe(vmin_vmax_slider_changed, "value")
-    return vmin_vmax_slider
-
-
-def _make_scale_button(visualization):
-    scale_button = ipywidgets.Button(description="Scale")
-
-    def scale_button_clicked(*args):
-        visualization.set_values_lim()
-
-    scale_button.on_click(scale_button_clicked)
-    return scale_button
-
-
-def _make_autoscale_button(visualization):
-    def autoscale_button_changed(change):
-        if change["new"]:
-            visualization._autoscale = True
-        else:
-            visualization._autoscale = False
-
-    autoscale_button = ipywidgets.ToggleButton(
-        value=visualization._autoscale,
-        description="Autoscale",
-        tooltip="Autoscale",
-    )
-    autoscale_button.observe(autoscale_button_changed, "value")
-
-    return autoscale_button
-
-
-def _make_power_scale_slider(visualization):
-    def powerscale_slider_changed(change):
-        visualization._update_power(change["new"])
-
-    power_scale_slider = ipywidgets.FloatSlider(
-        value=visualization._get_power(),
-        min=0.01,
-        max=2,
-        step=0.01,
-        description="Power",
-        tooltip="Power",
-    )
-    power_scale_slider.observe(powerscale_slider_changed, "value")
-
-    return power_scale_slider
 
 
 def _get_joined_titles(measurement, formatting, **kwargs):
@@ -692,6 +126,7 @@ class BaseVisualization:
             explode=explode,
             aspect=aspect,
             ncbars=ncbars,
+            common_color_scale=common_scale,
         )
 
         self._indices = self._validate_ensemble_indices()
@@ -701,6 +136,10 @@ class BaseVisualization:
         self._row_titles = []
         self._panel_labels = []
         self._artists = None
+
+    @property
+    def fig(self):
+        return self.axes.fig
 
     @property
     def autoscale(self):
@@ -806,6 +245,21 @@ class BaseVisualization:
         )
 
         array = array.sum(axis=summed_axes)
+
+        if np.iscomplexobj(array) and self._complex_conversion != "none":
+            if self._complex_conversion == "abs":
+                array = np.abs(array)
+            elif self._complex_conversion == "intensity":
+                array = np.abs(array) ** 2
+            elif self._complex_conversion == "phase":
+                array = np.angle(array)
+            elif self._complex_conversion == "real":
+                array = array.real
+            elif self._complex_conversion == "imag":
+                array = array.imag
+            else:
+                raise NotImplementedError
+
         return array
 
     def _get_array_for_axis(self, axis_index):
@@ -855,8 +309,6 @@ class BaseVisualization:
                 value_lim[1] = float(np.nanmax(array))
 
             return value_lim
-            # min_value = array.min()
-            # max_value = array.max()
             # margin = (max_value - min_value) * 0.05
             # return [min_value - margin, max_value + margin]
 
@@ -1125,25 +577,25 @@ class BaseVisualization:
         pass
 
     def make_widgets(self):
-        if ipywidgets is None:
-            raise ipywidgets_not_installed
-
         widgets = {}
         widgets["canvas"] = self.axes.fig.canvas
-        widgets["sliders"] = make_sliders_from_ensemble_axes(
+
+        (
+            sliders,
+            reset_button,
+            continuous_update_button,
+        ) = make_sliders_from_ensemble_axes(
             self,
             self.axes_types,
         )
-        widgets["scale_button"] = _make_scale_button(self)
-        widgets["scale_button"].layout = ipywidgets.Layout(width="20%")
+        scale_button = make_scale_button(self)
+        autoscale_button = make_autoscale_button(self)
 
-        widgets["autoscale_button"] = _make_autoscale_button(self)
-        widgets["autoscale_button"].layout = ipywidgets.Layout(width="30%")
-
-        widgets["continuous_update_button"] = _make_continuous_button(
-            widgets["sliders"]
-        )
-        widgets["continuous_update_button"].layout = ipywidgets.Layout(width="50%")
+        widgets["sliders"] = sliders
+        widgets["reset_button"] = reset_button
+        widgets["continuous_update_button"] = continuous_update_button
+        widgets["scale_button"] = scale_button
+        widgets["autoscale_button"] = autoscale_button
         return widgets
 
     def layout_widgets(self):
@@ -1153,11 +605,16 @@ class BaseVisualization:
             [
                 ipywidgets.HBox(
                     [
-                        widgets["scale_button"],
-                        widgets["autoscale_button"],
+                        widgets["reset_button"],
                         widgets["continuous_update_button"],
                     ]
-                )
+                ),
+                ipywidgets.HBox(
+                    [
+                        widgets["scale_button"],
+                        widgets["autoscale_button"],
+                    ]
+                ),
             ]
         )
         scale_box.layout = ipywidgets.Layout(width="300px")
@@ -1272,15 +729,15 @@ class VisualizationImshow(BaseVisualization):
         power: float = 1,
         vmin: float = None,
         vmax: float = None,
-        cbar:bool = False,
+        cbar: bool = False,
         # figsize: tuple[float, float] = None,
         # interact: bool = False,
         **kwargs,
     ):
-        if cmap is None and np.iscomplexobj(array):
-            cmap = config.get("visualize.phase_cmap", "hsluv")
-        elif cmap is None:
-            cmap = config.get("visualize.cmap", "viridis")
+        # if cmap is None and np.iscomplexobj(array):
+        #     cmap = config.get("visualize.phase_cmap", "hsluv")
+        # elif cmap is None:
+        #     cmap = config.get("visualize.cmap", "viridis")
 
         self._cmap = cmap
         self._size_bar = []
@@ -1315,26 +772,73 @@ class VisualizationImshow(BaseVisualization):
 
     @property
     def _uses_domain_coloring(self):
-        return self.array.is_complex and (self._complex_conversion == "none")
+        return np.iscomplexobj(self.array) and (self._complex_conversion == "none")
+
+    def set_complex_conversion(self, complex_conversion: str):
+        self._complex_conversion = complex_conversion
+        self.set_normalization()
+        self.set_artists()
+
+        if self._uses_domain_coloring:
+            self.axes.set_cbar_layout(ncbars=2)
+        else:
+            self.axes.set_cbar_layout(ncbars=1)
+
+        self.set_cbars()
+
+        # self.set_scale_units()
+        # self.set_cbar_labels()
+
+    def _get_cmap(self):
+        if self._cmap is not None:
+            cmap = self._cmap
+
+        elif np.iscomplexobj(self.array) and (
+            self._complex_conversion in ("none", "phase")
+        ):
+            cmap = config.get("visualize.phase_cmap", "hsluv")
+
+        else:
+            cmap = config.get("visualize.cmap", "viridis")
+
+        if cmap == "hsluv":
+            cmap = hsluv_cmap
+
+        return cmap
+
+    def set_cmaps(self, cmap):
+        self._cmap = cmap
+        cmap = self._get_cmap()
+
+        for i in np.ndindex(self.axes.shape):
+            ims = self._artists[i]
+
+            if self._uses_domain_coloring:
+                ims[0].set_cmap(cmap)
+            else:
+                ims[0].set_cmap(cmap)
+
+    def remove_artists(self):
+        for ax in np.array(self.axes).ravel():
+            for child in ax.get_children():
+                if isinstance(child, AxesImage):
+                    child.remove()
 
     def set_artists(
         self,
     ):
+        self.remove_artists()
         artists = np.zeros(self.axes.shape, dtype=object)
 
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
             norm = self._normalization[i]
             array = self._get_array_for_axis(axis_index=i)
+            cmap = self._get_cmap()
 
-            if np.iscomplexobj(array):
+            if self._uses_domain_coloring:
                 abs_array = np.abs(array)
                 alpha = np.clip(norm(abs_array), a_min=0.0, a_max=1.0)
-
-                cmap = self._cmap
-
-                if cmap == "hsluv":
-                    cmap = hsluv_cmap
 
                 im1 = ax.imshow(
                     np.angle(array).T,
@@ -1362,9 +866,10 @@ class VisualizationImshow(BaseVisualization):
                         array.T,
                         origin="lower",
                         interpolation="none",
-                        cmap=self._cmap,
+                        cmap=cmap,
                     )
                 ]
+                ims[0].set_norm(norm)
 
             artists.itemset(i, ims)
 
@@ -1375,9 +880,7 @@ class VisualizationImshow(BaseVisualization):
             im = self._artists[i]
             array = self._get_array_for_axis(axis_index=i)
 
-            if len(im) == 1:
-                im[0].set_data(array.T)
-            else:
+            if self._uses_domain_coloring:
                 norm = self._normalization[i]
                 abs_array = np.abs(array)
                 alpha = norm(abs_array)
@@ -1386,6 +889,8 @@ class VisualizationImshow(BaseVisualization):
                 im[0].set_alpha(alpha)
                 im[0].set_data(np.angle(array).T)
                 im[1].set_data(abs_array)
+            else:
+                im[0].set_data(array.T)
 
     def set_values_lim(self, values_lim: tuple[float, float] = None):
         values_lim = self._validate_value_limits(values_lim)
@@ -1396,7 +901,7 @@ class VisualizationImshow(BaseVisualization):
             norm.vmin = values_lim[i][0]
             norm.vmax = values_lim[i][1]
 
-            if len(im) == 2:
+            if self._uses_domain_coloring:
                 array = self._get_array_for_axis(i)
                 alpha = norm(np.abs(array))
                 alpha = np.clip(alpha, a_min=0, a_max=1)
@@ -1404,54 +909,52 @@ class VisualizationImshow(BaseVisualization):
 
     def set_normalization(
         self,
-        power: float = None,
+        power: float = 1.0,
         vmin: float = None,
         vmax: float = None,
     ):
-        if self._common_scale:
-            vmin, vmax = self._validate_value_limits([vmin, vmax])
+        value_lim = self._validate_value_limits([vmin, vmax])
 
         normalization = np.zeros(self.axes.shape, dtype=object)
         for i in np.ndindex(self.axes.shape):
-            array = self._get_array_for_axis(i)
-            # im = self._artists[i]
+            vmin, vmax = value_lim[i]
 
             if power == 1.0:
                 norm = colors.Normalize(vmin=vmin, vmax=vmax)
             else:
                 norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
 
-            if np.iscomplexobj(array):
-                array = np.abs(array)
-
-            norm.autoscale_None(array)
-
             normalization[i] = norm
 
         self._normalization = normalization
 
-    def _update_power(self, power: float = 1.0):
+    def set_power(self, power: float = 1.0):
+        def _set_normalization():
+            for i in np.ndindex(self.axes.shape):
+                ims = self._artists[i]
+                ims[-1].norm = self._normalization[i]
+
         for i in np.ndindex(self.axes.shape):
-            artists = self._artists[i]
             norm = self._normalization[i]
 
-            if (power != 1.0) and isinstance(norm, colors.Normalize):
+            if (power != 1.0) and (not hasattr(norm, "gamma")):
                 self._normalization[i] = colors.PowerNorm(
                     gamma=power, vmin=norm.vmin, vmax=norm.vmax
                 )
-                artists.norm = self._normalization[i]
+                _set_normalization()
 
-            if (power == 1.0) and isinstance(norm, colors.PowerNorm):
+            if (power == 1.0) and hasattr(norm, "gamma"):
                 self._normalization[i] = colors.Normalize(
                     vmin=norm.vmin, vmax=norm.vmax
                 )
-                artists.norm = self._normalization[i]
+                _set_normalization()
 
             if (power != 1.0) and isinstance(norm, colors.PowerNorm):
                 self._normalization[i].gamma = power
+                self._normalization[i]._changed()
 
     def set_cbar_labels(self, label: str = None, **kwargs):
-        if self._:
+        if self._uses_domain_coloring:
             for cbar1, cbar2 in self._cbars.values():
                 cbar1.set_label("arg", rotation=0, ha="center", va="top")
                 cbar1.ax.yaxis.set_label_coords(0.5, -0.02)
@@ -1472,30 +975,48 @@ class VisualizationImshow(BaseVisualization):
                 cbar2.ax.yaxis.set_offset_position("left")
 
         else:
-            super().set_cbar_labels(label, **kwargs)
+            # if label is None:
+            #     label = self._get_display_measurements().metadata.get("label", "")
+            #
+            # if self._scale_units is None or len(self._scale_units) == 0:
+            #     label = f"{label}"
+            # else:
+            #     label = f"{label} [{self._scale_units}]"
+
+            label = ""
+
+            # for i in np.ndindex(self.axes.shape):
+
+            for cbars in self._cbars.values():
+                for cbar in cbars:
+                    cbar.set_label(label, **kwargs)
+                    cbar.formatter.set_powerlimits((-2, 2))
+                    cbar.formatter.set_useMathText(True)
+                    cbar.ax.yaxis.set_offset_position("left")
 
     def set_cbars(self, **kwargs):
-        cbars = defaultdict(list)
+        cbars = np.zeros(self.axes.shape, dtype=object)
 
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
             ims = self._artists[i]
+            orientation = _cbar_orientation(self.axes._cbar_loc)
 
-            if isinstance(self.axes, AxesGrid):
-                if ax in self.axes._caxes.keys():
-                    cax = self.axes._caxes[ax]
-                else:
-                    continue
+            cbars_ax = []
+            if hasattr(self.axes, "set_cbar_layout"):
+                caxes = self.axes._caxes[i]
 
                 for j, im in enumerate(ims):
-                    cbars[ax].append(plt.colorbar(im, cax=cax[j], **kwargs))
-
+                    cbars_ax.append(
+                        plt.colorbar(
+                            im, cax=caxes[j], orientation=orientation, **kwargs
+                        )
+                    )
             else:
-                if isinstance(im, np.ndarray):
-                    for j, image in enumerate(im):
-                        cbars[ax].append(plt.colorbar(image, ax=ax, **kwargs))
-                else:
-                    cbars[ax].append(plt.colorbar(im, ax=ax, **kwargs))
+                for j, im in enumerate(ims):
+                    cbars_ax.append(plt.colorbar(im, ax=ax, **kwargs))
+
+            cbars.itemset(i, cbars_ax)
 
         self._cbars = cbars
 
@@ -1577,6 +1098,45 @@ class VisualizationImshow(BaseVisualization):
             )
             ax.add_artist(anchored_size_bar)
             self._size_bars.append(anchored_size_bar)
+
+    def make_widgets(self):
+        widgets = super().make_widgets()
+
+        power_scale_slider = make_power_scale_slider(self)
+        cmap_dropdown = make_cmap_dropdown(self)
+        complex_visualization_dropdown = make_complex_visualization_dropdown(self)
+
+        widgets["power_scale_slider"] = power_scale_slider
+        widgets["cmap_dropdown"] = cmap_dropdown
+        widgets["complex_visualization_dropdown"] = complex_visualization_dropdown
+
+        return widgets
+
+    def layout_widgets(self):
+        widgets = self.make_widgets()
+
+        widget_box = ipywidgets.VBox(
+            [
+                ipywidgets.VBox(widgets["sliders"]),
+                ipywidgets.HBox(
+                    [
+                        widgets["reset_button"],
+                        widgets["continuous_update_button"],
+                    ]
+                ),
+                ipywidgets.HBox(
+                    [
+                        widgets["scale_button"],
+                        widgets["autoscale_button"],
+                    ]
+                ),
+                widgets["power_scale_slider"],
+                widgets["cmap_dropdown"],
+                widgets["complex_visualization_dropdown"],
+            ]
+        )
+        layout = ipywidgets.HBox([widget_box, widgets["canvas"]])
+        return layout
 
 
 def make_toggle_hkl_button(visualization):

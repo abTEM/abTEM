@@ -1,11 +1,23 @@
+"""Module for plotting atoms, images, line scans, and diffraction patterns."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 from mpl_toolkits.axes_grid1 import Size, Divider
 from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
 
+from abtem.core.colors import hsluv_cmap
 from abtem.core.utils import interleave, flatten_list_of_lists
+
+
+if TYPE_CHECKING:
+    from abtem.measurements import (
+        BaseMeasurements,
+    )
+
 
 def _cbar_orientation(cbar_loc):
     if cbar_loc == "right":
@@ -15,6 +27,88 @@ def _cbar_orientation(cbar_loc):
     else:
         raise ValueError()
     return orientation
+
+
+def _make_default_sizes(cbar_loc="right"):
+    sizes = {
+        "cbar_spacing": Size.Fixed(0.4),
+        "padding": Size.Fixed(0.1),
+        "cbar_shift": Size.Fixed(0.1),
+        "cax": Size.Fixed(0.1),
+        # "padding": Size.Fixed(0.1),
+    }
+
+    if _cbar_orientation(cbar_loc) == "vertical":
+        sizes["cbar_padding_left"] = Size.Fixed(0.1)
+        sizes["cbar_padding_right"] = Size.Fixed(0.9)
+
+    elif _cbar_orientation(cbar_loc) == "horizontal":
+        sizes["cbar_padding_left"] = Size.Fixed(0.4)
+        sizes["cbar_padding_right"] = Size.Fixed(0.4)
+
+    return sizes
+
+
+def _cbar_layout(n: int, sizes: dict) -> list:
+    if n == 0:
+        return []
+
+    layout = [sizes["cbar_padding_left"]]
+    for i in range(n):
+        layout.extend([sizes["cbar"]])
+
+        if i < n - 1:
+            layout.extend([sizes["cbar_spacing"]])
+
+    layout.extend([sizes["cbar_padding_right"]])
+    return layout
+
+
+def _insert_multiple(l, l2, i):
+    return l[:i] + l2 + l[i:]
+
+
+def _make_grid_layout(
+    axes,
+    ncbars: int,
+    sizes: dict,
+    cbar_mode: str = "each",
+    cbar_loc: str = "right",
+    direction: str = "col",
+):
+
+    sizes_layout = []
+    for i, ax in enumerate(axes):
+        if direction == "col":
+            sizes_layout.append([Size.AxesX(ax, aspect="axes", ref_ax=axes[0])])
+        elif direction == "row":
+            sizes_layout.append([Size.AxesY(ax, aspect="axes", ref_ax=axes[0])])
+        else:
+            raise ValueError()
+
+        if (i < len(axes) - 1) and ((ncbars == 0) or (cbar_mode == "single")):
+            sizes_layout[-1].append(sizes["padding"])
+
+    if not "cbar" in sizes:
+        sizes["cbar"] = Size.from_any("5%", sizes_layout[0][0])
+
+    if cbar_mode == "each":
+        if _cbar_orientation(cbar_loc) == "vertical":
+            cbar_layouts = [_cbar_layout(ncbars, sizes) for _ in range(len(axes))]
+            sizes_layout = interleave(sizes_layout, cbar_layouts)
+        elif _cbar_orientation(cbar_loc) == "horizontal":
+            cbar_layouts = [_cbar_layout(ncbars, sizes)[::-1] for _ in range(len(axes))]
+            sizes_layout = interleave(cbar_layouts, sizes_layout)
+    elif cbar_mode == "single":
+        if _cbar_orientation(cbar_loc) == "vertical":
+            sizes_layout.extend([_cbar_layout(ncbars, sizes)])
+        elif _cbar_orientation(cbar_loc) == "horizontal":
+            sizes_layout = [_cbar_layout(ncbars, sizes)[::-1]] + sizes_layout
+    else:
+        raise ValueError()
+
+    sizes_layout = flatten_list_of_lists(sizes_layout)
+    return sizes_layout
 
 
 class AxesGrid:
@@ -238,6 +332,8 @@ class AxesGrid:
         for key, value in kwargs.items():
             setattr(self._sizes[key], "fixed_size", value)
 
+        self.fig.canvas.draw_idle()
+
     def set_cbar_layout(self, **kwargs):
         self._ncbars = kwargs.pop("ncbars", self._ncbars)
         self._cbar_loc = kwargs.pop("cbar_loc", self._cbar_loc)
@@ -249,6 +345,23 @@ class AxesGrid:
 
         self._set_axes_locators()
         self._set_caxes_locators()
+
+    def adjust_figure_to_bbox(self):
+        self.set_sizes(left=0., bottom=0.)
+
+        size = self.fig.get_size_inches()
+        bbox_inches = self.fig.get_tightbbox()
+        pad_inches = plt.rcParams["savefig.pad_inches"]
+        bbox_inches.padded(pad_inches)
+        aspect = bbox_inches.width / bbox_inches.height
+        self.fig.set_size_inches((size[0], size[0] / aspect))
+
+        bbox_inches = self.fig.get_tightbbox().padded(pad_inches)
+        self.set_sizes(left=-bbox_inches.xmin)
+
+        bbox_inches = self.fig.get_tightbbox().padded(pad_inches)
+        self.set_sizes(bottom=-bbox_inches.ymin)
+        self.fig.canvas.draw_idle()
 
     @property
     def axes(self):
@@ -275,3 +388,122 @@ class AxesGrid:
     @property
     def shape(self) -> tuple[int, int]:
         return self._axes.shape
+
+
+def _axes_grid_cols_and_rows(ensemble_shape, axes_types):
+
+    shape = tuple(
+        n
+        for n, axes_type in zip(ensemble_shape, axes_types)
+        if not axes_type in ("index", "range", "overlay")
+    )
+
+    if len(shape) > 0:
+        ncols = shape[0]
+    else:
+        ncols = 1
+
+    if len(shape) > 1:
+        nrows = shape[1]
+    else:
+        nrows = 1
+
+    return ncols, nrows
+
+
+
+def _determine_axes_types(
+    ensemble_axes_metadata,
+    explode: bool | tuple[bool, ...] | None,
+    overlay: bool | tuple[bool, ...] | None,
+):
+    num_ensemble_axes = len(ensemble_axes_metadata)
+
+    axes_types = []
+    for axis_metadata in ensemble_axes_metadata:
+        if axis_metadata._default_type is not None:
+            axes_types.append(axis_metadata._default_type)
+        else:
+            axes_types.append("index")
+
+    if explode is True:
+        explode = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
+    elif explode is False:
+        explode = ()
+
+    if overlay is True:
+        overlay = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
+    elif overlay is False:
+        overlay = ()
+
+    axes_types = list(axes_types)
+    for i, axis_type in enumerate(axes_types):
+
+        if explode is not None:
+            if i in explode:
+                axes_types[i] = "explode"
+            else:
+                axes_types[i] = "index"
+
+        if overlay is not None:
+            if i in overlay:
+                axes_types[i] = "overlay"
+            if (explode is not None) and (i not in explode):
+                axes_types[i] = "index"
+
+    return axes_types
+
+
+def _validate_axes(
+    axes_types,
+    ensemble_shape,
+    ax: Axes = None,
+    explode: bool = False,
+    overlay: bool = False,
+    ncbars: int = 0,
+    common_color_scale: bool = False,
+    figsize: tuple[float, float] = None,
+    ioff: bool = False,
+    aspect: bool = True,
+    sharex: bool = True,
+    sharey: bool = True,
+) -> AxesGrid:
+
+    if common_color_scale:
+        cbar_mode = "single"
+    else:
+        cbar_mode = "each"
+
+    if ax is None:
+        if ioff:
+            with plt.ioff():
+                fig = plt.figure(figsize=figsize)
+        else:
+            fig = plt.figure(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    if ax is None:
+        ncols, nrows = _axes_grid_cols_and_rows(ensemble_shape, axes_types)
+
+        axes = AxesGrid(
+            fig=fig,
+            ncols=ncols,
+            nrows=nrows,
+            ncbars=ncbars,
+            cbar_mode=cbar_mode,
+            aspect=aspect,
+            sharex=sharex,
+            sharey=sharey,
+        )
+
+    elif ax is None:
+        ax = fig.add_subplot()
+        axes = np.array([[ax]])
+    else:
+        if explode:
+            raise NotImplementedError("`ax` not implemented with `explode = True`.")
+
+        axes = np.array([[ax]])
+
+    return axes

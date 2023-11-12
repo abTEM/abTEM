@@ -22,12 +22,11 @@ from abtem.measurements import (
     _polar_detector_bins, _scan_shape,
 )
 from abtem.transform import ArrayObjectTransform
-from abtem.visualize import discrete_cmap
+from abtem.visualize.visualizations import discrete_cmap
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
     from abtem.measurements import BaseMeasurements
-    from abtem.visualize import MeasurementVisualization2D
 
 
 def _validate_detectors(

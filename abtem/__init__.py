@@ -26,6 +26,6 @@ from abtem.inelastic.phonons import FrozenPhonons, AtomsEnsemble
 from abtem.potentials.iam import Potential, CrystalPotential, PotentialArray
 from abtem.scan import CustomScan, LineScan, GridScan
 from abtem.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope
-from abtem.visualize import show_atoms
+from abtem.visualize.visualizations import show_atoms
 from abtem.waves import Waves, Probe, PlaneWave
 from abtem import transfer

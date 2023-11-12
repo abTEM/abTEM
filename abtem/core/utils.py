@@ -2,6 +2,7 @@
 from __future__ import annotations
 import copy
 import inspect
+import itertools
 import warnings
 from typing import Tuple
 
@@ -191,6 +192,8 @@ def tuple_range(length: int, offset: int = 0) -> tuple[int, ...]:
 def interleave(l1: list | tuple, l2: list | tuple):
     return tuple(val for pair in zip(l1, l2) for val in pair)
 
+def flatten_list_of_lists(l):
+    return list(itertools.chain(*l))
 
 def label_to_index(labels, max_label=None):
     if max_label is None:
