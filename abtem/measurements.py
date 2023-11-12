@@ -28,7 +28,8 @@ from abtem.core.axes import (
     ReciprocalSpaceAxis,
     LinearAxis,
     NonLinearAxis,
-    ScanAxis, OrdinalAxis,
+    ScanAxis,
+    OrdinalAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
@@ -524,6 +525,34 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     @abstractmethod
     def show(self, *args, **kwargs):
         """Documented in subclasses"""
+        pass
+
+
+class MeasurementsEnsemble(BaseMeasurements):
+    _base_dims = 0
+
+    def __init__(self, array, ensemble_axes_metadata, metadata=None):
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    @property
+    def _area_per_pixel(self):
+        raise RuntimeError("Cannot infer pixel area from metadata.")
+
+    @property
+    def base_axes_metadata(self):
+        return []
+
+    @classmethod
+    def from_array_and_metadata(
+        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
+    ) -> "T":
+        return cls(array, axes_metadata, metadata)
+
+    def show(self):
         pass
 
 
@@ -1584,7 +1613,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             overlay=overlay,
             figsize=figsize,
             interact=interact,
-            **kwargs
+            **kwargs,
         )
 
         if title is not None:
