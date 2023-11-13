@@ -1,8 +1,12 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
 from __future__ import annotations
+
+import contextlib
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
+from numbers import Number
 from typing import Any
 from typing import TYPE_CHECKING
 from typing import Tuple, Union, List
@@ -23,7 +27,7 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.parametrizations import EwaldParametrization
+from abtem.parametrizations import EwaldParametrization, LobatoParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
@@ -244,7 +248,6 @@ def _generate_slices(
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
-
         potential = Potential(
             gpts=gpts,
             atoms=atoms[i : i + 1],
@@ -526,8 +529,6 @@ class GPAWPotential(_PotentialBuilder):
 
         calculator = _DummyGPAW.from_generic(calculator)
 
-        # print(calculator)
-
         atoms = self.frozen_phonons.atoms
 
         if self.repetitions != (1, 1, 1):
@@ -545,7 +546,7 @@ class GPAWPotential(_PotentialBuilder):
         random_atoms = self.frozen_phonons.randomize(atoms)
 
         interpolators = get_core_correction_interpolators(
-            calculator.setups, calculator.D_asp, calculator.Q_aL, 0.02
+            calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001
         )
 
         # calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
@@ -677,7 +678,9 @@ class GPAWParametrization:
     Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.
     """
 
-    def __init__(self):
+    def __init__(self, nodes=None, integration_step=0.002):
+        self._nodes = nodes
+        self._integration_step = integration_step
         self._potential_functions = {}
 
     def _get_added_electrons(self, symbol, charge):
@@ -700,8 +703,6 @@ class GPAWParametrization:
             lambda: 0, {shell[:2]: shell[2] for shell in ionic_config}
         )
 
-        # sss
-
         electrons = []
         for key in set(config.keys()).union(set(ionic_config.keys())):
 
@@ -714,23 +715,24 @@ class GPAWParametrization:
 
     def _get_all_electron_atom(self, symbol, charge=0.0):
 
-        # with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectronAtom(symbol, spinpol=False, xc="PBE")
+        if isinstance(symbol, Number):
+            symbol = chemical_symbols[symbol]
 
-        added_electrons = self._get_added_electrons(symbol, charge)
+        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+            ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
+            ae.run()
+            ae.refine()
 
-        for added_electron in added_electrons:
-            ae.add(*added_electron[:2], added_electron[-1])
+        # added_electrons = self._get_added_electrons(symbol, charge)
+        #
+        # for added_electron in added_electrons:
+        #     ae.add(*added_electron[:2], added_electron[-1])
 
         # # ae.run()
         # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-        ae.run(maxiter=5000, mix=0.005, dnmax=1e-5)
-        # ae.refine()
+         #maxiter=5000, mix=0.005, dnmax=1e-5)
 
         return ae
-
-        # vr_e = interp1d(radial_coord, electron_potential, fill_value='extrapolate', bounds_error=False)
-        # vr = lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0) + vr_e(r) / r * units.Hartree * units.Bohr
 
     def charge(self, symbol: str, charge: float = 0.0):
         """
@@ -753,31 +755,80 @@ class GPAWParametrization:
         n = ae.n_sg.sum(0) / units.Bohr**3
         return interp1d(r, n, fill_value="extrapolate", bounds_error=False)
 
+    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+
+        from hankel import SymmetricFourierTransform
+
+        ht = SymmetricFourierTransform(ndim=3, h=self._integration_step, N=self._nodes)
+        k = np.linspace(0.001, 12, 2000)
+
+        n = self.charge(symbol, charge)
+
+        # we do not calculate the Fourier Transform at k=0 for numerical reason
+        fx = ht.transform(n, k[1:] * 2 * np.pi)[0]
+
+        # instead it is replaced by the exact value fx(0)=Z
+        fx = np.concatenate([[atomic_numbers[symbol]], fx])
+
+        fx = interp1d(k, fx, fill_value=(atomic_numbers[symbol], 0.), bounds_error=False)
+        return fx
+
+    def _to_lobato(self, symbol, charge):
+        fx = self.x_ray_scattering_factor(symbol, charge)
+        n = self.charge(symbol, charge)
+
+        r = np.linspace(0, 20, 10000)
+
+        Z = np.trapz(4 * np.pi * r ** 2 * n(r), dx=np.diff(r))
+        fe0 = np.trapz(4 * np.pi * r ** 4 * n(r), dx=np.diff(r)) / units.Bohr / 3
+
+        k = np.linspace(0.0, 12, 100)
+        fe = np.zeros(len(k))
+        fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi ** 2 * units.Bohr)
+        fe[k == 0] = fe0
+
+        if isinstance(symbol, str):
+            symbol = atomic_numbers[symbol]
+
+        parametrization_aeatom = LobatoParametrization({})
+        parametrization_aeatom.fit(symbol, k, fe)
+        return parametrization_aeatom
+
     def potential(self, symbol: str, charge: float = 0.0):
-        """
-        Calculate the radial electrostatic potential for an atom.
+        return self._to_lobato(symbol, charge).potential(symbol, charge)
 
-        Parameters
-        ----------
-        symbol : str
-            Chemical symbol of the atomic element.
-        charge : float, optional
-            Charge the atom by the given fractional number of electrons.
+    def scattering_factor(self, symbol, charge: float = 0.0):
+        return self._to_lobato(symbol, charge).scattering_factor(symbol, charge)
 
-        Returns
-        -------
-        potential : callable
-            Function of the radial electrostatic potential with parameter 'r' corresponding to the radial distance from the core.
-        """
-
-        ae = self._get_all_electron_atom(symbol, charge)
-        r = ae.rgd.r_g * units.Bohr
-
-        ve = -ae.rgd.poisson(ae.n_sg.sum(0))
-        ve = interp1d(r, ve, fill_value="extrapolate", bounds_error=False)
-
-        vr = (
-            lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0)
-            + ve(r) / r * units.Hartree * units.Bohr
-        )
-        return vr
+    # def potential(self, symbol: str, charge: float = 0.0):
+    #     return interp1d(k, fe, fill_value=(fe0, 0.), bounds_error=False)
+    # def potential(self, symbol: str, charge: float = 0.0):
+    #     """
+    #     Calculate the radial electrostatic potential for an atom.
+    #
+    #     Parameters
+    #     ----------
+    #     symbol : str
+    #         Chemical symbol of the atomic element.
+    #     charge : float, optional
+    #         Charge the atom by the given fractional number of electrons.
+    #
+    #     Returns
+    #     -------
+    #     potential : callable
+    #         Function of the radial electrostatic potential with parameter 'r' corresponding to the radial distance from the core.
+    #     """
+    #
+    #     ae = self._get_all_electron_atom(symbol, charge)
+    #     r = ae.rgd.r_g * units.Bohr
+    #
+    #     ve = -ae.rgd.poisson(ae.n_sg.sum(0))
+    #     ve = interp1d(r, ve, fill_value="extrapolate", bounds_error=False)
+    #
+    #     vr = (
+    #         lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0)
+    #         + ve(r) / r * units.Hartree * units.Bohr
+    #     )
+    #     return vr

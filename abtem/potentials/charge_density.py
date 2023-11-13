@@ -478,9 +478,6 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         pixel_thickness = (slice_shape[-1] - 1)
 
-
-        print("sss", pixel_thickness)
-        sssss
         return np.trapz(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
 
     def _integrate_slice(self, array, a, b):
