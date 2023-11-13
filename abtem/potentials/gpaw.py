@@ -721,6 +721,7 @@ class GPAWParametrization:
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
             ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
             ae.run()
+            ae.scalar_relativistic=True
             ae.refine()
 
         # added_electrons = self._get_added_electrons(symbol, charge)
