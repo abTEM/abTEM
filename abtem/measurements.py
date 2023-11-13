@@ -47,9 +47,8 @@ from abtem.distributions import BaseDistribution
 from abtem.indexing import _index_diffraction_patterns, _format_miller_indices
 from abtem.noise import NoiseTransform
 from abtem.visualize import (
-    MeasurementVisualization2D,
-    MeasurementVisualization1D,
-    DiffractionSpotsVisualization,
+    VisualizationLines,
+    VisualizationImshow,
 )
 
 # Enables CuPy-accelerated functions if it is available.
@@ -82,7 +81,7 @@ def _scanned_measurement_type(
         return Images
 
     else:
-        return None
+        return MeasurementsEnsemble
         # raise RuntimeError(
         #     f"no measurement type for {measurement.__class__} with {len(_scan_shape(measurement))} scan "
         #     f"axes"
@@ -100,7 +99,7 @@ def _reduced_scanned_images_or_line_profiles(
     new_array,
     old_measurement,
     metadata=None,
-) -> RealSpaceLineProfiles | Images | np.ndarray:
+) -> RealSpaceLineProfiles | Images | MeasurementsEnsemble | np.ndarray:
     if metadata is None:
         metadata = {}
 
@@ -134,6 +133,15 @@ def _reduced_scanned_images_or_line_profiles(
         )
 
         return images
+    elif _scanned_measurement_type(old_measurement) is MeasurementsEnsemble:
+        ensemble_axes_metadata = old_measurement.ensemble_axes_metadata
+
+        measurement_ensemble = MeasurementsEnsemble(
+            new_array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+        return measurement_ensemble
     else:
         return new_array
 
@@ -532,6 +540,9 @@ class MeasurementsEnsemble(BaseMeasurements):
     _base_dims = 0
 
     def __init__(self, array, ensemble_axes_metadata, metadata=None):
+        print(array.shape)
+        print(ensemble_axes_metadata)
+
         super().__init__(
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
@@ -552,8 +563,54 @@ class MeasurementsEnsemble(BaseMeasurements):
     ) -> "T":
         return cls(array, axes_metadata, metadata)
 
-    def show(self):
-        pass
+    def show(
+        self,
+        ax: Axes = None,
+        common_scale: bool = True,
+        explode: bool | Sequence[int] = None,
+        overlay: bool | Sequence[int] = None,
+        figsize: tuple[int, int] = None,
+        title: str = None,
+        units: str = None,
+        legend: bool = False,
+        interact: bool = False,
+        display: bool = True,
+        **kwargs,
+    ):
+        # if not interact:
+        #     self.compute()
+
+        visualization = VisualizationLines(
+            array=self.array,
+            coordinate_axes=self.ensemble_axes_metadata[-1:],
+            values_axis=None,
+            ensemble_axes=self.ensemble_axes_metadata[:-1],
+            ax=ax,
+            common_scale=common_scale,
+            explode=explode,
+            overlay=overlay,
+            figsize=figsize,
+            interact=interact,
+            title=title,
+            **kwargs,
+        )
+
+        # if title is not None:
+        #     visualization.set_column_titles(title)
+        #
+        # if units is not None:
+        #     visualization.set_xunits(units)
+        #     visualization.set_yunits(units)
+
+        # if not display and not interact:
+        #     plt.close()
+        #
+        # if interact and display:
+        #     from IPython.display import display as ipython_display
+        #
+        #     ipython_display(visualization.layout_widgets())
+
+        return visualization
 
 
 class _BaseMeasurement2D(BaseMeasurements):
@@ -859,7 +916,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         units: str = None,
         interact: bool = False,
         display: bool = True,
-    ) -> MeasurementVisualization2D:
+    ) -> VisualizationImshow:
         """
         Show the image(s) using matplotlib.
 
@@ -906,8 +963,11 @@ class _BaseMeasurement2D(BaseMeasurements):
         if not interact:
             self.compute()
 
-        visualization = MeasurementVisualization2D(
-            measurements=self,
+        visualization = VisualizationImshow(
+            array=self.array,
+            coordinate_axes=self.base_axes_metadata,
+            values_axis=None,
+            ensemble_axes=self.ensemble_axes_metadata,
             ax=ax,
             cbar=cbar,
             cmap=cmap,
@@ -920,12 +980,12 @@ class _BaseMeasurement2D(BaseMeasurements):
             interact=interact,
         )
 
-        if title is not None:
-            visualization.set_column_titles(title)
-
-        if units is not None:
-            visualization.set_xunits(units)
-            visualization.set_yunits(units)
+        # if title is not None:
+        #     visualization.set_column_titles(title)
+        #
+        # if units is not None:
+        #     visualization.set_xunits(units)
+        #     visualization.set_yunits(units)
 
         if not display and not interact:
             plt.close()
@@ -933,7 +993,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         if interact and display:
             from IPython.display import display as ipython_display
 
-            ipython_display(visualization.widgets)
+            ipython_display(visualization.layout_widgets())
 
         return visualization
 
@@ -1565,7 +1625,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         interact: bool = False,
         display: bool = True,
         **kwargs,
-    ) -> MeasurementVisualization1D:
+    ) -> VisualizationLines:
         """
         Show the reciprocal-space line profile(s) using matplotlib.
 
@@ -1605,8 +1665,11 @@ class _BaseMeasurement1D(BaseMeasurements):
         if not interact:
             self.compute()
 
-        visualization = MeasurementVisualization1D(
-            self,
+        visualization = VisualizationLines(
+            array=self.array,
+            coordinate_axes=self.base_axes_metadata,
+            values_axis=None,
+            ensemble_axes=self.ensemble_axes_metadata,
             ax=ax,
             common_scale=common_scale,
             explode=explode,
@@ -1629,7 +1692,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         if interact and display:
             from IPython.display import display as ipython_display
 
-            ipython_display(visualization.widgets)
+            ipython_display(visualization.layout_widgets())
 
         return visualization
 

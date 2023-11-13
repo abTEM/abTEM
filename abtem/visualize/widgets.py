@@ -58,6 +58,9 @@ def _make_update_indices_function(visualization, sliders):
                 idx = slice(*idx)
             indices += (idx,)
 
+        if not sliders:
+            return
+
         with sliders[0].hold_trait_notifications():
             visualization.set_ensemble_indices(indices)
             if visualization._autoscale:
@@ -99,9 +102,6 @@ def make_sliders_from_ensemble_axes(
         raise ValueError()
 
     for visualization in visualizations[1:]:
-        # if not isinstance(visualization, MeasurementVisualization):
-        #     raise ValueError()
-
         if not (
             (
                 visualization.measurements.ensemble_axes_metadata

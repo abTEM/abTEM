@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 
 import ipywidgets
 import matplotlib
@@ -39,6 +39,9 @@ from abtem.visualize.widgets import (
     make_cmap_dropdown,
     make_complex_visualization_dropdown,
 )
+
+if TYPE_CHECKING:
+    from abtem.core.axes import AxisMetadata
 
 
 def _format_options(options):
@@ -80,6 +83,7 @@ class BaseVisualization:
         values_axis=None,
         ensemble_axes_metadata=None,
         common_scale: bool = False,
+        figsize=None,
         aspect: bool = False,
         explode: bool = False,
         overlay: bool = False,
@@ -88,6 +92,11 @@ class BaseVisualization:
         values_label: str = None,
         values_units: str = None,
         ncbars: int = 0,
+        interact: bool = False,
+        share_x: bool = False,
+        share_y: bool = False,
+        title: bool | str = True,
+        limits_margin: float = 0.0,
     ):
         self._array = array
         self._coordinate_axes = coordinate_axes
@@ -114,6 +123,7 @@ class BaseVisualization:
 
         self._ensemble_axes_metadata = ensemble_axes_metadata
         self._ensemble_shape = array.shape[: -self._num_coordinate_dims]
+        self._limits_margin = limits_margin
 
         self._axes_types = _determine_axes_types(
             ensemble_axes_metadata, explode=explode, overlay=overlay
@@ -122,13 +132,15 @@ class BaseVisualization:
         self._axes = _validate_axes(
             self._axes_types,
             self._ensemble_shape,
-            ioff=True,
+            ioff=interact,
             explode=explode,
             aspect=aspect,
             ncbars=ncbars,
             common_color_scale=common_scale,
+            figsize=figsize,
+            sharex=share_x,
+            sharey=share_y,
         )
-
         self._indices = self._validate_ensemble_indices()
 
         self._complex_conversion = "none"
@@ -136,6 +148,14 @@ class BaseVisualization:
         self._row_titles = []
         self._panel_labels = []
         self._artists = None
+
+        self.fig.canvas.header_visible = False
+
+        if self.axes.ncols > 1 and title:
+            self.set_column_titles(title)
+
+        if self.axes.nrows > 1 and title:
+            self.set_row_titles()
 
     @property
     def fig(self):
@@ -151,7 +171,7 @@ class BaseVisualization:
         self.set_values_lim()
 
     @property
-    def ensemble_axes_metadata(self):
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return self._ensemble_axes_metadata
 
     @property
@@ -167,7 +187,7 @@ class BaseVisualization:
         return self._artists
 
     @property
-    def axes_types(self):
+    def axes_types(self) -> list[str]:
         return self._axes_types
 
     @property
@@ -221,8 +241,11 @@ class BaseVisualization:
 
     def _get_panel_titles(self):
         titles = [
-            [i.format_title(".3f") for i in axis]
-            for axis, axis_type in zip(self._ensemble_axes_metadata, self._axes_types)
+            [
+                axis_element.format_title(".3g", include_label=i == 0)
+                for i, axis_element in enumerate(axis)
+            ]
+            for axis, axis_type in zip(self.ensemble_axes_metadata, self.axes_types)
             if axis_type == "explode"
         ]
         titles = list(itertools.product(*titles))
@@ -234,6 +257,7 @@ class BaseVisualization:
             for axis, axis_type in zip(self._ensemble_axes_metadata, self._axes_types)
             if axis_type == "overlay"
         ]
+
         labels = list(itertools.product(*labels))
         return [" - ".join(label) for label in labels]
 
@@ -308,9 +332,12 @@ class BaseVisualization:
             if value_lim[1] is None:
                 value_lim[1] = float(np.nanmax(array))
 
+            if self._limits_margin:
+                margin = (value_lim[1] - value_lim[0]) * self._limits_margin
+                value_lim[0] -= margin
+                value_lim[1] += margin
+
             return value_lim
-            # margin = (max_value - min_value) * 0.05
-            # return [min_value - margin, max_value + margin]
 
         if self._common_scale:
             array = self._get_array_for_current_indices()
@@ -333,7 +360,16 @@ class BaseVisualization:
         limits = []
         for axis, n in zip(self._coordinate_axes, shape):
             coordinates = axis.coordinates(n)
-            limits.append([coordinates[0], coordinates[-1]])
+
+            min_limit = coordinates[0]
+            max_limit = coordinates[-1]
+
+            if self._limits_margin:
+                margin = (max_limit - min_limit) * self._limits_margin
+                min_limit -= margin
+                max_limit += margin
+
+            limits.append([min_limit, max_limit])
         return limits
 
     def _get_coordinate_labels(self):
@@ -406,25 +442,28 @@ class BaseVisualization:
 
     def set_ylim(self, ylim: tuple[float, float] = None):
         if self._num_coordinate_dims == 1:
-            ylim = self._validate_value_limits(ylim)
+            if ylim is None:
+                ylim = self._validate_value_limits(ylim)
+
+                for i in np.ndindex(self.axes.shape):
+                    self.axes[i].set_ylim(ylim[i])
+                return
+
         elif self._num_coordinate_dims == 2:
-            ylim = self._get_coordinate_limits()[1]
+            if ylim is None:
+                ylim = self._get_coordinate_limits()[1]
         else:
             raise NotImplementedError
 
         for i in np.ndindex(self.axes.shape):
-            self.axes[i].set_ylim(ylim[i])
+            self.axes[i].set_ylim(ylim)
 
     def set_xlim(self, xlim: tuple[float, float] = None):
-        if self._num_coordinate_dims == 1:
-            xlim = self._validate_value_limits(xlim)
-        elif self._num_coordinate_dims == 2:
+        if xlim is None:
             xlim = self._get_coordinate_limits()[0]
-        else:
-            raise NotImplementedError
 
         for i in np.ndindex(self.axes.shape):
-            self.axes[i].set_xlim(xlim[i])
+            self.axes[i].set_xlim(xlim)
 
     @abstractmethod
     def set_values_lim(self, values_lim: tuple[float, float] = None):
@@ -432,16 +471,16 @@ class BaseVisualization:
 
     def set_column_titles(
         self,
-        titles: str | list[str] = None,
+        titles: str | list[str] | bool = None,
         pad: float = 10.0,
         format: str = ".3g",
         units: str = None,
         fontsize: float = 12,
         **kwargs,
     ):
-        if titles is None:
+        if titles is None or titles is True:
             titles = [
-                title[0] for title in self._get_panel_titles()[:: self.axes.shape[0]]
+                title[0] for title in self._get_panel_titles()[:: self.axes.shape[1]]
             ]
         elif isinstance(titles, str):
             titles = [titles] * self.axes.shape[0]
@@ -638,34 +677,48 @@ class VisualizationLines(BaseVisualization):
     def __init__(
         self,
         array,
-        coordinate_axis,
+        coordinate_axes,
         values_axis,
         ensemble_axes=None,
         common_scale: bool = True,
         explode: Sequence[str] | bool = False,
         overlay: Sequence[str] | bool = False,
-        # figsize: tuple[float, float] = None,
-        # interact: bool = False,
+        figsize: tuple[float, float] = None,
+        interact: bool = False,
+        title: bool = True,
+        legend: bool = True,
         **kwargs,
     ):
         super().__init__(
             array,
-            coordinate_axis,
+            coordinate_axes,
             values_axis,
             ensemble_axes,
             common_scale=common_scale,
             aspect=False,
             explode=explode,
             overlay=overlay,
+            interact=interact,
+            figsize=figsize,
+            share_x=True,
+            share_y=common_scale,
+            title=title,
+            limits_margin=0.05
         )
 
         self.set_artists()
         self.set_xlabel()
         self.set_ylabel()
-        self.set_legends()
+
+        if any(axis_type == "overlay" for axis_type in self.axes_types) and legend:
+            self.set_legends()
+
+        self.set_xunits()
+        self.set_yunits()
 
     def set_artists(self, **kwargs):
         x = self._coordinate_axes[0].coordinates(self._array.shape[-1])
+
         labels = self._get_overlay_labels()
         artists = np.zeros(self.axes.shape, dtype=object)
 
@@ -720,18 +773,19 @@ class VisualizationImshow(BaseVisualization):
     def __init__(
         self,
         array,
-        coordinate_axis,
+        coordinate_axes,
         values_axis,
         ensemble_axes=None,
         common_scale: bool = False,
         explode: Sequence[str] | bool = False,
         cmap: str = None,
-        power: float = 1,
+        power: float = 1.0,
         vmin: float = None,
         vmax: float = None,
         cbar: bool = False,
-        # figsize: tuple[float, float] = None,
-        # interact: bool = False,
+        figsize: tuple[float, float] = None,
+        interact: bool = False,
+        title: str | bool = True,
         **kwargs,
     ):
         # if cmap is None and np.iscomplexobj(array):
@@ -752,7 +806,7 @@ class VisualizationImshow(BaseVisualization):
 
         super().__init__(
             array,
-            coordinate_axis,
+            coordinate_axes,
             values_axis,
             ensemble_axes,
             common_scale=common_scale,
@@ -760,15 +814,35 @@ class VisualizationImshow(BaseVisualization):
             explode=explode,
             overlay=False,
             ncbars=ncbars,
+            interact=interact,
+            figsize=figsize,
+            share_x=True,
+            share_y=True,
+            title=title,
         )
 
         self.set_normalization(power=power, vmin=vmin, vmax=vmax)
         self.set_artists()
         self.set_xlabel()
         self.set_ylabel()
+        self.set_extent()
+
+        self._cbars = None
 
         if cbar:
             self.set_cbars()
+
+        # if cbar:
+        #     self.set_cbars()
+        #     self.set_scale_units()
+        #     self.set_cbar_labels()
+        #
+        # self.set_extent()
+        # self.set_xunits()
+        # self.set_yunits()
+        # self.set_xlabels()
+        # self.set_ylabels()
+        # self.set_column_titles()
 
     @property
     def _uses_domain_coloring(self):
@@ -778,6 +852,9 @@ class VisualizationImshow(BaseVisualization):
         self._complex_conversion = complex_conversion
         self.set_normalization()
         self.set_artists()
+
+        if self._cbars is None:
+            return
 
         if self._uses_domain_coloring:
             self.axes.set_cbar_layout(ncbars=2)
@@ -892,20 +969,25 @@ class VisualizationImshow(BaseVisualization):
             else:
                 im[0].set_data(array.T)
 
-    def set_values_lim(self, values_lim: tuple[float, float] = None):
-        values_lim = self._validate_value_limits(values_lim)
-
-        for i in np.ndindex(self.axes.shape):
-            im = self._artists[i]
-            norm = self._normalization[i]
-            norm.vmin = values_lim[i][0]
-            norm.vmax = values_lim[i][1]
-
-            if self._uses_domain_coloring:
+    def _set_domain_coloring_alpha(self):
+        if self._uses_domain_coloring:
+            for i in np.ndindex(self.axes.shape):
+                im = self._artists[i]
+                norm = self._normalization[i]
                 array = self._get_array_for_axis(i)
                 alpha = norm(np.abs(array))
                 alpha = np.clip(alpha, a_min=0, a_max=1)
                 im[0].set_alpha(alpha)
+
+    def set_values_lim(self, values_lim: tuple[float, float] = None):
+        values_lim = self._validate_value_limits(values_lim)
+
+        for i in np.ndindex(self.axes.shape):
+            norm = self._normalization[i]
+            norm.vmin = values_lim[i][0]
+            norm.vmax = values_lim[i][1]
+
+        self._set_domain_coloring_alpha()
 
     def set_normalization(
         self,
@@ -927,6 +1009,15 @@ class VisualizationImshow(BaseVisualization):
             normalization[i] = norm
 
         self._normalization = normalization
+
+    def set_extent(self, extent: list[float] = None):
+        if extent is None:
+            limits = self._get_coordinate_limits()
+            extent = limits[0] + limits[1]
+
+        for ims in self._artists.ravel():
+            for im in ims:
+                im.set_extent(extent)
 
     def set_power(self, power: float = 1.0):
         def _set_normalization():
@@ -952,6 +1043,8 @@ class VisualizationImshow(BaseVisualization):
             if (power != 1.0) and isinstance(norm, colors.PowerNorm):
                 self._normalization[i].gamma = power
                 self._normalization[i]._changed()
+
+        self._set_domain_coloring_alpha()
 
     def set_cbar_labels(self, label: str = None, **kwargs):
         if self._uses_domain_coloring:

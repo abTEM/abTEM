@@ -76,7 +76,6 @@ def _make_grid_layout(
     cbar_loc: str = "right",
     direction: str = "col",
 ):
-
     sizes_layout = []
     for i, ax in enumerate(axes):
         if direction == "col":
@@ -124,9 +123,8 @@ class AxesGrid:
         anchor: str = "NW",
         sharex: bool = True,
         sharey: bool = True,
-        rect: tuple = (0., 0, 1, 1),
+        rect: tuple = (0.1, 0.1, 0.9, 0.9),
     ):
-
         self._fig = fig
         self._ncols = ncols
         self._nrows = nrows
@@ -174,8 +172,11 @@ class AxesGrid:
 
         ax = Axes(self.fig, (0, 0, 1, 1), sharex=None, sharey=None)
 
+        sharex = ax if self._sharex else None
+        sharey = ax if self._sharey else None
+
         axes = [ax] + [
-            Axes(self.fig, (0, 0, 1, 1), sharex=ax, sharey=ax)
+            Axes(self.fig, (0, 0, 1, 1), sharex=sharex, sharey=sharey)
             for _ in range(self._nrows * self._ncols - 1)
         ]
 
@@ -347,7 +348,7 @@ class AxesGrid:
         self._set_caxes_locators()
 
     def adjust_figure_to_bbox(self):
-        self.set_sizes(left=0., bottom=0.)
+        self.set_sizes(left=0.0, bottom=0.0)
 
         size = self.fig.get_size_inches()
         bbox_inches = self.fig.get_tightbbox()
@@ -391,7 +392,6 @@ class AxesGrid:
 
 
 def _axes_grid_cols_and_rows(ensemble_shape, axes_types):
-
     shape = tuple(
         n
         for n, axes_type in zip(ensemble_shape, axes_types)
@@ -409,7 +409,6 @@ def _axes_grid_cols_and_rows(ensemble_shape, axes_types):
         nrows = 1
 
     return ncols, nrows
-
 
 
 def _determine_axes_types(
@@ -438,7 +437,6 @@ def _determine_axes_types(
 
     axes_types = list(axes_types)
     for i, axis_type in enumerate(axes_types):
-
         if explode is not None:
             if i in explode:
                 axes_types[i] = "explode"
@@ -468,7 +466,6 @@ def _validate_axes(
     sharex: bool = True,
     sharey: bool = True,
 ) -> AxesGrid:
-
     if common_color_scale:
         cbar_mode = "single"
     else:
