@@ -6,6 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
+from ase import Atoms
 
 from abtem.antialias import AntialiasAperture
 from abtem.antialias import antialias_aperture
@@ -544,12 +545,14 @@ def transition_potential_multislice_and_detect(
     ):
         if slice_index in potential.exit_planes:
             exit_plane_index = potential.exit_planes.index(slice_index)
+
             measurement_index = _validate_potential_ensemble_indices(
                 potential_index, exit_plane_index, potential
             )
+
             for i, detector in enumerate(detectors):
                 new_measurement = detector.detect(waves)
-                new_measurement = new_measurement.sum(-3)
+                new_measurement = new_measurement.sum(0)
                 measurements[i].array[measurement_index] += new_measurement.array
 
     waves = waves.ensure_real_space()
@@ -572,8 +575,22 @@ def transition_potential_multislice_and_detect(
         extra_ensemble_axes_metadata,
     )
 
-    if sites is None:
+    transition_potential.grid.match(waves)
+    transition_potential.accelerator.match(waves)
+
+    if hasattr(transition_potential, "build"):
+        transition_potential = transition_potential.build()
+
+    transition_potential = transition_potential.copy_to_device("gpu")
+
+    if sites is None and hasattr(potential, "get_sliced_atoms"):
         sites = potential.get_sliced_atoms()
+    elif sites is None and hasattr(potential, "atoms"):
+        sites = potential.atoms
+    elif isinstance(sites, Atoms):
+        sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
+    else:
+        raise ValueError()
 
     for (
         potential_index,
@@ -608,16 +625,19 @@ def transition_potential_multislice_and_detect(
             for _, scattered_waves in transition_potential.generate_scattered_waves(
                 waves, sites_slice
             ):
-                _update_measurements_inner(
-                    measurements,
-                    scattered_waves,
-                    detectors,
-                    potential,
-                    scatter_index,
-                    potential_index,
-                )
-
                 if transition_potential.double_channel:
+                    _update_measurements_inner(
+                        measurements,
+                        scattered_waves,
+                        detectors,
+                        potential,
+                        scatter_index,
+                        potential_index,
+                    )
+
+                    if scatter_index + 1 == len(potential):
+                        break
+
                     for inner_slice_index, inner_potential_slice in enumerate(
                         potential_configuration.generate_slices(
                             first_slice=scatter_index + 1
@@ -642,16 +662,16 @@ def transition_potential_multislice_and_detect(
                         )
 
                 else:
-                    raise NotImplementedError
-                    # measurement_index = ()
-                    #
-                    # measurements = _update_measurements(
-                    #     scattered_waves,
-                    #     detectors,
-                    #     measurements,
-                    #     measurement_index,
-                    #     additive=True,
-                    # )
+                    exit_plane_index = potential.exit_planes.index(scatter_index)
+
+                    exit_planes = slice(exit_plane_index, len(potential.exit_planes))
+                    measurement_index = (exit_planes,)
+
+                    for i, detector in enumerate(detectors):
+                        new_measurement = detector.detect(scattered_waves).sum(0)
+                        measurements[i].array[
+                            measurement_index
+                        ] += new_measurement.array[None]
 
     return measurements
 
@@ -775,7 +795,12 @@ class MultisliceTransform(ArrayObjectTransform):
         detectors: BaseDetector | list[BaseDetector] = None,
         conjugate: bool = False,
         transpose: bool = False,
+        multislice_func: callable = None,
+        **multislice_func_kwargs,
     ):
+        if multislice_func is None:
+            multislice_func = multislice_and_detect
+
         potential = _validate_potential(potential)
 
         self._potential = potential
@@ -785,6 +810,12 @@ class MultisliceTransform(ArrayObjectTransform):
         self._detectors = detectors
         self._conjugate = conjugate
         self._transpose = transpose
+        self._multislice_func = multislice_func
+        self._multislice_func_kwargs = multislice_func_kwargs
+
+    @property
+    def multislice_func(self) -> callable:
+        return self._multislice_func
 
     @property
     def _num_outputs(self):
@@ -889,15 +920,18 @@ class MultisliceTransform(ArrayObjectTransform):
             detectors=self.detectors,
             conjugate=self.conjugate,
             transpose=self.transpose,
+            multislice_func=self.multislice_func,
+            **self._multislice_func_kwargs
         )
 
     def _calculate_new_array(self, waves):
-        measurements = multislice_and_detect(
+        measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,
             detectors=self.detectors,
             conjugate=self.conjugate,
             transpose=self.transpose,
+            **self._multislice_func_kwargs,
         )
 
         if self._potential.num_exit_planes == 1:

@@ -1561,6 +1561,8 @@ def stack(
         if not all(isinstance(element, str) for element in axis_metadata):
             raise ValueError()
         axis_metadata = OrdinalAxis(values=axis_metadata)
+    elif not isinstance(axis_metadata, AxisMetadata):
+        raise ValueError()
 
     return arrays[0]._stack(arrays, axis_metadata, axis)
 

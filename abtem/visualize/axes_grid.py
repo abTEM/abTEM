@@ -76,12 +76,15 @@ def _make_grid_layout(
     cbar_loc: str = "right",
     direction: str = "col",
 ):
+    sss
     sizes_layout = []
     for i, ax in enumerate(axes):
         if direction == "col":
             sizes_layout.append([Size.AxesX(ax, aspect="axes", ref_ax=axes[0])])
         elif direction == "row":
-            sizes_layout.append([Size.AxesY(ax, aspect="axes", ref_ax=axes[0])])
+            sizes_layout.append(
+                [Size.AxesY(ax, aspect="axes", ref_ax=None)]
+            )  # ref_ax=axes[0])])
         else:
             raise ValueError()
 
@@ -124,6 +127,7 @@ class AxesGrid:
         sharex: bool = True,
         sharey: bool = True,
         rect: tuple = (0.1, 0.1, 0.9, 0.9),
+        origin="lower",
     ):
         self._fig = fig
         self._ncols = ncols
@@ -137,11 +141,15 @@ class AxesGrid:
         self._cbar_loc = cbar_loc
         self._cbar_mode = cbar_mode
 
+        if not origin == "lower":
+            # TODO
+            raise NotImplementedError()
+
         self._sizes = {
-            "cbar_spacing": Size.Fixed(0.6),
+            "cbar_spacing": Size.Fixed(0.5),
             "padding": Size.Fixed(0.1),
-            "cbar_shift": Size.Fixed(0.1),
-            "cbar_width": Size.Fixed(0.1),
+            "cbar_shift": Size.Fixed(0.0),
+            "cbar_width": Size.Fixed(0.15),
             "left": Size.Fixed(0.0),
             "right": Size.Fixed(0.0),
             "top": Size.Fixed(0.0),
@@ -165,7 +173,15 @@ class AxesGrid:
                 for ax in inner_axes:
                     ax._axislines["left"].toggle(ticklabels=False, label=False)
 
-        # self.set_layout(ncbars, cbar_loc)
+    def _axis_location_to_indices(self, axis_location):
+        axis_locations = {
+            "all": tuple(np.ndindex(self.shape)),
+            "upper left": ((0, self.axes.shape[1] - 1),),
+            "upper right": (self.axes.shape[0] - 1, self.axes.shape[1] - 1),
+            "lower left": ((0, 0),),
+            "lower right": ((self.axes.shape[0] - 1, 0),),
+        }
+        return axis_locations[axis_location]
 
     def _make_axes(self):
         from mpl_toolkits.axes_grid1.mpl_axes import Axes
@@ -180,10 +196,15 @@ class AxesGrid:
             for _ in range(self._nrows * self._ncols - 1)
         ]
 
+        for i, ax in enumerate(axes):
+            ax._tag = i
+
         for ax in axes:
             self._fig.add_axes(ax)
 
-        return np.array(axes, dtype=object).reshape((self._ncols, self._nrows))
+        return np.array(axes, dtype=object).reshape(
+            (self._ncols, self._nrows), order="C"
+        )
 
     def _remove_caxes(self):
         if self._cbar_mode == "single":
@@ -227,7 +248,9 @@ class AxesGrid:
         line_sizes = []
         for row_type in line_types:
             if row_type == "ax":
-                line_sizes.append(axes_size(axes[i], aspect="axes", ref_ax=axes[0]))
+
+                # line_sizes.append(Size.Scaled(1.)) # TODO
+                line_sizes.append(axes_size(axes[i], aspect=.2, ref_ax=axes[0]))
                 i += 1
             else:
                 line_sizes.append(self._sizes[row_type])
@@ -253,8 +276,8 @@ class AxesGrid:
     def _set_axes_locators(self):
         row_types, col_types = self._get_row_types(), self._get_col_types()
         i = 0
-        for ny, row_type in enumerate(row_types):
-            for nx, col_type in enumerate(col_types):
+        for nx, col_type in enumerate(col_types):
+            for ny, row_type in enumerate(row_types):
                 if (row_type == "ax") and (col_type == "ax"):
                     locator = self._divider.new_locator(nx=nx, ny=ny)
                     self._axes.ravel()[i].set_axes_locator(locator)
@@ -440,13 +463,13 @@ def _determine_axes_types(
         if explode is not None:
             if i in explode:
                 axes_types[i] = "explode"
-            else:
+            elif i not in overlay:
                 axes_types[i] = "index"
 
         if overlay is not None:
             if i in overlay:
                 axes_types[i] = "overlay"
-            if (explode is not None) and (i not in explode):
+            elif (explode is not None) and (i not in explode):
                 axes_types[i] = "index"
 
     return axes_types

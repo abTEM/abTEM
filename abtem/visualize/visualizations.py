@@ -15,6 +15,7 @@ from ase.data.colors import jmol_colors
 from matplotlib import colors
 from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import ListedColormap
 from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
@@ -22,15 +23,17 @@ from matplotlib.patches import Circle
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from abtem.atoms import pad_atoms, plane_to_axes
+from abtem.core import config
+from abtem.core.axes import ScaleAxis
+from abtem.core.backend import get_array_module
+from abtem.core.colors import hsluv_cmap
+from abtem.core.utils import label_to_index
 from abtem.visualize.axes_grid import (
     _determine_axes_types,
     _validate_axes,
     _cbar_orientation,
 )
-from abtem.core import config
-from abtem.core.colors import hsluv_cmap
-from abtem.core.units import _get_conversion_factor
-from abtem.core.utils import label_to_index
+from abtem.core.backend import cp
 from abtem.visualize.widgets import (
     make_sliders_from_ensemble_axes,
     make_scale_button,
@@ -80,7 +83,7 @@ class BaseVisualization:
         self,
         array,
         coordinate_axes,
-        values_axis=None,
+        scale_axis=None,
         ensemble_axes_metadata=None,
         common_scale: bool = False,
         figsize=None,
@@ -88,9 +91,7 @@ class BaseVisualization:
         explode: bool = False,
         overlay: bool = False,
         coordinate_labels: list[str] = None,
-        coordinate_units: list[str] = None,
-        values_label: str = None,
-        values_units: str = None,
+        scale_label: str = None,
         ncbars: int = 0,
         interact: bool = False,
         share_x: bool = False,
@@ -98,21 +99,25 @@ class BaseVisualization:
         title: bool | str = True,
         limits_margin: float = 0.0,
     ):
+        xp = get_array_module(array)
+
+        if hasattr(xp, "asnumpy"):
+            array = xp.asnumpy(array)
+
         self._array = array
         self._coordinate_axes = coordinate_axes
         self._common_scale = common_scale
-        self._values_axis = None
 
         if coordinate_labels is None:
             coordinate_labels = [None] * len(coordinate_axes)
 
-        if coordinate_units is None:
-            coordinate_units = [None] * len(coordinate_axes)
-
         self._coordinate_labels = coordinate_labels
-        self._coordinate_units = coordinate_units
-        self._values_label = values_label
-        self._values_units = values_units
+
+        if scale_axis is None:
+            scale_axis = ScaleAxis()
+
+        self._scale_axis = scale_axis
+        self._scale_label = scale_label
 
         self._autoscale = config.get("visualize.autoscale", False)
 
@@ -248,6 +253,7 @@ class BaseVisualization:
             for axis, axis_type in zip(self.ensemble_axes_metadata, self.axes_types)
             if axis_type == "explode"
         ]
+
         titles = list(itertools.product(*titles))
         return titles
 
@@ -313,6 +319,7 @@ class BaseVisualization:
             raise NotImplementedError
 
         array = array[index]
+
         return array
 
     def _validate_value_limits(self, value_lim: list[float, float] = None):
@@ -373,43 +380,14 @@ class BaseVisualization:
         return limits
 
     def _get_coordinate_labels(self):
-        return [
-            axis.format_label(units)
-            for axis, units in zip(self._coordinate_axes, self._coordinate_units)
-        ]
-
-    def _get_coordinate_units(self):
-        return [axis.units for axis in self._coordinate_axes]
-
-    def _get_values_label(self):
-        return ""
-
-    def _get_values_units(self):
-        return ""
-
-    def set_xunits(self, units: str = None):
-        self._coordinate_units[0] = units
-
-        self.set_xlabel()
-        self.set_xlim()
-
-    def set_yunits(self, units: str = None):
-        if self._num_coordinate_dims == 1:
-            self._values_units = units
-        elif self._num_coordinate_dims == 2:
-            self._coordinate_units[1] = units
-        else:
-            raise NotImplementedError
-
-        self.set_ylabel()
-        self.set_ylim()
+        return [axis.format_label(units) for axis, units in zip(self._coordinate_axes)]
 
     def set_xlabel(self, label: str = None):
         if label is not None:
             self._coordinate_labels[0] = label
 
         if self._coordinate_labels[0] is None:
-            label = self._coordinate_axes[0].format_label(self._coordinate_units[0])
+            label = self._coordinate_axes[0].format_label()
         else:
             label = self._coordinate_labels[0]
 
@@ -420,17 +398,17 @@ class BaseVisualization:
     def set_ylabel(self, label: str = None):
         if self._num_coordinate_dims == 1:
             if label is not None:
-                self._values_label = label
+                self._scale_label = label
 
-            if self._values_label is None:
-                label = ""
+            if self._scale_label is None:
+                label = self._scale_axis.format_label()
 
         elif self._num_coordinate_dims == 2:
             if label is not None:
                 self._coordinate_labels[1] = label
 
             if self._coordinate_labels[1] is None:
-                label = self._coordinate_axes[1].format_label(self._coordinate_units[1])
+                label = self._coordinate_axes[1].format_label()
 
         else:
             raise NotImplementedError
@@ -444,7 +422,6 @@ class BaseVisualization:
         if self._num_coordinate_dims == 1:
             if ylim is None:
                 ylim = self._validate_value_limits(ylim)
-
                 for i in np.ndindex(self.axes.shape):
                     self.axes[i].set_ylim(ylim[i])
                 return
@@ -482,6 +459,7 @@ class BaseVisualization:
             titles = [
                 title[0] for title in self._get_panel_titles()[:: self.axes.shape[1]]
             ]
+
         elif isinstance(titles, str):
             titles = [titles] * self.axes.shape[0]
 
@@ -595,17 +573,28 @@ class BaseVisualization:
         # else:
         #     self._metadata_labels = []
 
-    def axis_off(self, spines: bool = True):
-        for ax in np.array(self.axes).ravel():
-            ax.set_xlabel("")
-            ax.set_ylabel("")
-            ax.set_xticks([])
-            ax.set_yticks([])
-            if not spines:
-                ax.spines["top"].set_visible(False)
-                ax.spines["right"].set_visible(False)
-                ax.spines["bottom"].set_visible(False)
-                ax.spines["left"].set_visible(False)
+    def axis(self, mode="all", ticks: bool = True):
+        if mode == "all":
+            return
+
+        if mode == "none":
+            indices = ()
+        else:
+            indices = tuple(self.axes._axis_location_to_indices(mode))
+
+        for index in np.ndindex(self.axes.shape):
+            if index in indices:
+                continue
+
+            ax = self.axes[index]
+            ax._axislines["bottom"].toggle(ticklabels=False, label=False, ticks=ticks)
+            ax._axislines["left"].toggle(ticklabels=False, label=False, ticks=ticks)
+
+            # if not spines:
+            #     ax.spines["top"].set_visible(False)
+            #     ax.spines["right"].set_visible(False)
+            #     ax.spines["bottom"].set_visible(False)
+            #     ax.spines["left"].set_visible(False)
 
     @abstractmethod
     def set_artists(self):
@@ -678,21 +667,21 @@ class VisualizationLines(BaseVisualization):
         self,
         array,
         coordinate_axes,
-        values_axis,
+        scale_axis,
         ensemble_axes=None,
         common_scale: bool = True,
         explode: Sequence[str] | bool = False,
         overlay: Sequence[str] | bool = False,
         figsize: tuple[float, float] = None,
         interact: bool = False,
-        title: bool = True,
+        title: bool | str = True,
         legend: bool = True,
         **kwargs,
     ):
         super().__init__(
             array,
             coordinate_axes,
-            values_axis,
+            scale_axis,
             ensemble_axes,
             common_scale=common_scale,
             aspect=False,
@@ -703,18 +692,33 @@ class VisualizationLines(BaseVisualization):
             share_x=True,
             share_y=common_scale,
             title=title,
-            limits_margin=0.05
+            limits_margin=0.05,
         )
 
         self.set_artists()
+        self.set_ylim()
         self.set_xlabel()
         self.set_ylabel()
 
         if any(axis_type == "overlay" for axis_type in self.axes_types) and legend:
             self.set_legends()
 
-        self.set_xunits()
-        self.set_yunits()
+        if not common_scale:
+            self.axes.set_sizes(padding=0.5)
+
+        for ax in np.array(self.axes).ravel():
+            # ax.yaxis.set_label_coords(0.5, -0.02)
+            # cbar2.formatter.set_powerlimits((0, 0))
+            # ax.get_yaxis().formatter.set_useMathText(True)
+
+            ax.ticklabel_format(
+                style="sci", axis="y", scilimits=(0, 0), useMathText=True
+            )
+            ax.get_yaxis().get_offset_text().set_horizontalalignment("center")
+            # ax.yaxis.set_offset_position("right")
+            # ax.yaxis.set_offset_position("left")
+
+            # self.axes[i].set_ylabel(format_label(self._y_label, self._y_units))
 
     def set_artists(self, **kwargs):
         x = self._coordinate_axes[0].coordinates(self._array.shape[-1])
@@ -774,25 +778,21 @@ class VisualizationImshow(BaseVisualization):
         self,
         array,
         coordinate_axes,
-        values_axis,
-        ensemble_axes=None,
+        scale_axis,
+        ensemble_axes: list[AxisMetadata] = None,
         common_scale: bool = False,
-        explode: Sequence[str] | bool = False,
+        explode: Sequence[int] | bool = False,
+        overlay: Sequence[int] | bool = False,
         cmap: str = None,
         power: float = 1.0,
         vmin: float = None,
         vmax: float = None,
         cbar: bool = False,
         figsize: tuple[float, float] = None,
-        interact: bool = False,
         title: str | bool = True,
+        interact: bool = False,
         **kwargs,
     ):
-        # if cmap is None and np.iscomplexobj(array):
-        #     cmap = config.get("visualize.phase_cmap", "hsluv")
-        # elif cmap is None:
-        #     cmap = config.get("visualize.cmap", "viridis")
-
         self._cmap = cmap
         self._size_bar = []
 
@@ -807,12 +807,12 @@ class VisualizationImshow(BaseVisualization):
         super().__init__(
             array,
             coordinate_axes,
-            values_axis,
+            scale_axis,
             ensemble_axes,
             common_scale=common_scale,
             aspect=True,
             explode=explode,
-            overlay=False,
+            overlay=overlay,
             ncbars=ncbars,
             interact=interact,
             figsize=figsize,
@@ -828,21 +828,11 @@ class VisualizationImshow(BaseVisualization):
         self.set_extent()
 
         self._cbars = None
+        self._size_bars = []
 
         if cbar:
             self.set_cbars()
-
-        # if cbar:
-        #     self.set_cbars()
-        #     self.set_scale_units()
-        #     self.set_cbar_labels()
-        #
-        # self.set_extent()
-        # self.set_xunits()
-        # self.set_yunits()
-        # self.set_xlabels()
-        # self.set_ylabels()
-        # self.set_column_titles()
+            self.set_cbar_labels()
 
     @property
     def _uses_domain_coloring(self):
@@ -862,8 +852,6 @@ class VisualizationImshow(BaseVisualization):
             self.axes.set_cbar_layout(ncbars=1)
 
         self.set_cbars()
-
-        # self.set_scale_units()
         # self.set_cbar_labels()
 
     def _get_cmap(self):
@@ -937,7 +925,7 @@ class VisualizationImshow(BaseVisualization):
 
                 im2.set_norm(norm)
                 ims = [im1, im2]
-            else:
+            elif len(array.shape) == 2:
                 ims = [
                     ax.imshow(
                         array.T,
@@ -947,6 +935,22 @@ class VisualizationImshow(BaseVisualization):
                     )
                 ]
                 ims[0].set_norm(norm)
+            elif len(array.shape) == 3:
+                cmaps = [ListedColormap([c]) for c in cmap]
+                alphas = [alpha for alpha in array]
+
+                ims = [
+                    ax.imshow(
+                        np.ones_like(alpha.T),
+                        origin="lower",
+                        interpolation="none",
+                        cmap=cmap,
+                        alpha=alpha.T,
+                    )
+                    for alpha, cmap in zip(alphas, cmaps)
+                ]
+            else:
+                raise NotImplementedError()
 
             artists.itemset(i, ims)
 
@@ -1048,7 +1052,7 @@ class VisualizationImshow(BaseVisualization):
 
     def set_cbar_labels(self, label: str = None, **kwargs):
         if self._uses_domain_coloring:
-            for cbar1, cbar2 in self._cbars.values():
+            for cbar1, cbar2 in self._cbars.ravel():
                 cbar1.set_label("arg", rotation=0, ha="center", va="top")
                 cbar1.ax.yaxis.set_label_coords(0.5, -0.02)
                 cbar1.set_ticks([-np.pi, -np.pi / 2, 0, +np.pi / 2, np.pi])
@@ -1068,19 +1072,10 @@ class VisualizationImshow(BaseVisualization):
                 cbar2.ax.yaxis.set_offset_position("left")
 
         else:
-            # if label is None:
-            #     label = self._get_display_measurements().metadata.get("label", "")
-            #
-            # if self._scale_units is None or len(self._scale_units) == 0:
-            #     label = f"{label}"
-            # else:
-            #     label = f"{label} [{self._scale_units}]"
+            if label is None:
+                label = self._scale_axis.format_label()
 
-            label = ""
-
-            # for i in np.ndindex(self.axes.shape):
-
-            for cbars in self._cbars.values():
+            for cbars in self._cbars.ravel():
                 for cbar in cbars:
                     cbar.set_label(label, **kwargs)
                     cbar.formatter.set_powerlimits((-2, 2))
@@ -1141,20 +1136,8 @@ class VisualizationImshow(BaseVisualization):
         frameon: bool = False,
         **kwargs,
     ):
-        panel_locs = {
-            "all": tuple(np.ndindex(self.axes.shape)),
-            "upper left": ((0, -1)),
-            "upper right": ((-1, -1),),
-            "lower left": ((0, 0),),
-            "lower right": ((-1, 0),),
-        }
-
         if isinstance(panel_loc, str):
-            panel_loc = panel_locs.get(panel_loc, ((0, 0),))
-
-        conversion = _get_conversion_factor(
-            self._coordinate_units[0], self._coordinate_axes[0].units
-        )
+            panel_loc = self.axes._axis_location_to_indices(panel_loc)
 
         if size is None:
             limits = self._get_coordinate_limits()[0]
@@ -1162,13 +1145,10 @@ class VisualizationImshow(BaseVisualization):
 
         if size_vertical is None:
             limits = self._get_coordinate_limits()[1]
-            size = (limits[1] - limits[0]) / 3
-
-        size = conversion * size
-        size_vertical = conversion * size_vertical
+            size_vertical = (limits[1] - limits[0]) / 20
 
         if label is None:
-            label = f"{size:>{formatting}} {self._get_coordinate_units()}"
+            label = f"{self._coordinate_axes[0].format_label(formatting=formatting)}"
 
         for size_bar in self._size_bars:
             size_bar.remove()

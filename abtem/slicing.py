@@ -109,7 +109,7 @@ class BaseSlicedAtoms(EqualityMixin):
         be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
     """
 
-    def __init__(self, atoms: Atoms, slice_thickness: float | np.ndarray | str):
+    def __init__(self, atoms: Atoms, slice_thickness: float | Sequence[float] | str):
         if not is_cell_orthogonal(atoms):
             raise RuntimeError("atoms must have an orthogonal cell")
 
@@ -210,12 +210,13 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
     """
 
-    def __init__(self, atoms: Atoms, slice_thickness: float | tuple[float, ...]):
+    def __init__(self, atoms: Atoms, slice_thickness: float | Sequence[float]):
         super().__init__(atoms, slice_thickness)
 
         labels = np.digitize(
             self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
         )
+
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
         ]

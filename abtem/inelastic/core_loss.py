@@ -17,7 +17,7 @@ from scipy.special import spherical_jn, sph_harm
 from abtem import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis, AxisMetadata
-from abtem.core.backend import copy_to_device
+from abtem.core.backend import copy_to_device, validate_device
 from abtem.core.chunks import generate_chunks
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
@@ -389,6 +389,7 @@ class SubshellTransitions(BaseTransitionCollection):
         gpts: float | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
         energy: float = None,
+        double_channel: bool = True,
     ):
         transitions = self.get_transitions()
         return TransitionPotential(
@@ -398,6 +399,7 @@ class SubshellTransitions(BaseTransitionCollection):
             gpts=gpts,
             sampling=sampling,
             energy=energy,
+            double_channel=double_channel,
         )
 
 
@@ -530,6 +532,7 @@ class TransitionPotential(BaseTransitionPotential):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
+
         array = np.zeros((len(self._transitions),) + self.gpts, dtype=complex)
         k0 = 1 / energy2wavelength(self.energy)
 
@@ -553,7 +556,7 @@ class TransitionPotential(BaseTransitionPotential):
                 2 * np.pi**2 * kn * k**2 * energy2sigma(self.energy)
             )
 
-        array = np.fft.ifft2(array) / np.prod(self.sampling)
+        array = array / np.prod(self.sampling)
 
         return TransitionPotentialArray(
             self.Z,
@@ -564,6 +567,12 @@ class TransitionPotential(BaseTransitionPotential):
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             double_channel=self.double_channel,
         )
+
+    def scatter(self, waves: Waves, sites: Atoms | Atom | np.ndarray) -> Waves:
+        self.grid.match(waves)
+        self.accelerator.match(waves)
+
+        return self.build().scatter(waves, sites)
 
     def show(self, **kwargs):
         return self.build().to_images().show(**kwargs)
@@ -595,7 +604,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             metadata=metadata,
         )
 
-    def validate_sites(self, sites: Atoms | Atom):
+    def validate_sites(self, sites: Atoms | Atom) -> np.ndarray:
         if isinstance(sites, Atoms):
             sites = sites[sites.numbers == self.Z].positions[:, :2]
         elif isinstance(sites, Atom):
@@ -603,6 +612,8 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
                 sites = sites.position[:2]
             else:
                 sites = np.zeros((0, 2), dtype=np.float32)
+        else:
+            sites = np.array(sites)
 
         if len(sites.shape) == 1:
             sites = sites[None]
@@ -610,7 +621,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         sites = np.array(sites, dtype=np.float32)
         return sites
 
-    def scatter(self, waves: Waves, sites: Atoms | Atom | np.ndarray):
+    def scatter(self, waves: Waves, sites: Atoms | Atom | np.ndarray) -> Waves:
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
@@ -623,7 +634,9 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         positions = copy_to_device(positions, waves.array)
 
         array = ifft2(
-            fft2(self.array)[None] * fft_shift_kernel(positions, self.gpts)[:, None] * energy2sigma(self.energy)
+            self.array[None]
+            * fft_shift_kernel(positions, self.gpts)[:, None]
+            * energy2sigma(self.energy)
         )
 
         array = array.reshape((-1,) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
@@ -648,7 +661,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             yield sites[start:end], scattered_waves
 
     def to_images(self):
-        array = np.fft.fftshift(self.array, axes=(-2, -1))
+        array = np.fft.fftshift(ifft2(self.array), axes=(-2, -1))
         return Images(
             array,
             sampling=self.sampling,

@@ -760,9 +760,6 @@ class Potential(_PotentialBuilder):
                     else:
                         array = new_array[None]
 
-
-
-
             if array is None:
                 array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
 

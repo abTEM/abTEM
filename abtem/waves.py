@@ -19,6 +19,7 @@ from abtem.core.axes import (
     ReciprocalSpaceAxis,
     AxisMetadata,
     AxesMetadataList,
+    OrdinalAxis,
 )
 from abtem.core.backend import (
     get_array_module,
@@ -55,7 +56,10 @@ from abtem.measurements import (
     BaseMeasurements,
     RealSpaceLineProfiles,
 )
-from abtem.multislice import MultisliceTransform
+from abtem.multislice import (
+    MultisliceTransform,
+    transition_potential_multislice_and_detect,
+)
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.scan import BaseScan, GridScan, _validate_scan
 from abtem.tilt import _validate_tilt
@@ -192,7 +196,6 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin):
     def _gpts_within_angle(
         self, angle: float | str, parity: str = "same"
     ) -> tuple[int, int]:
-
         if angle is None or angle == "full":
             return self.gpts
 
@@ -299,7 +302,6 @@ class Waves(BaseWaves, ArrayObject):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         if sampling is not None and extent is not None:
             extent = None
 
@@ -346,7 +348,6 @@ class Waves(BaseWaves, ArrayObject):
     def from_array_and_metadata(
         cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict = None
     ) -> Waves:
-
         """
         Creates wave functions from a given array and metadata.
 
@@ -897,6 +898,38 @@ class Waves(BaseWaves, ArrayObject):
 
         return self.apply_transform(ctf, max_batch=max_batch)
 
+    def transition_potential_multislice(
+        self,
+        potential: BasePotential,
+        transition_potentials,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        sites=None,
+    ) -> Waves:
+        potential = _validate_potential(potential, self)
+
+        measurements = []
+        for transition_potential in transition_potentials:
+            multislice_transform = MultisliceTransform(
+                potential=potential,
+                detectors=detectors,
+                multislice_func=transition_potential_multislice_and_detect,
+                transition_potential=transition_potential,
+                sites=sites,
+            )
+            measurements.append(self.apply_transform(transform=multislice_transform))
+
+        axis_metadata = OrdinalAxis(label="Element", values = [
+                str(transition_potential.Z)
+                for transition_potential in transition_potentials
+            ])
+
+        measurements = abtem.stack(
+            measurements,
+            axis_metadata,
+        )
+
+        return _reduce_ensemble(measurements)
+
     def multislice(
         self,
         potential: BasePotential,
@@ -934,7 +967,7 @@ class Waves(BaseWaves, ArrayObject):
 
         return _reduce_ensemble(waves)
 
-    def show(self, complex_images:bool=False, **kwargs):
+    def show(self, complex_images: bool = False, **kwargs):
         """
         Show the wave-function intensities.
 
@@ -972,7 +1005,6 @@ def _reduce_ensemble(ensemble):
 
 class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def __init__(self, ensemble_names: tuple[str, ...], device: str):
-
         self._ensemble_names = ensemble_names
         self._device = device
         super().__init__()
@@ -1053,7 +1085,6 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         arg_splits,
         **kwargs,
     ):
-
         args = unpack_blockwise_args(args)
         for arg_split, (name, partial) in zip(arg_splits, partials.items()):
             kwargs[name] = partial(*args[slice(*arg_split)]).item()
@@ -1179,7 +1210,6 @@ class PlaneWave(_WavesBuilder):
         tilt: tuple[float, float] = (0.0, 0.0),
         device: str = None,
     ):
-
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._tilt = _validate_tilt(tilt=tilt)
@@ -1380,7 +1410,6 @@ class Probe(_WavesBuilder):
         metadata: dict = None,
         **kwargs,
     ):
-
         self._accelerator = Accelerator(energy=energy)
 
         # if not ((semiangle_cutoff is None) + (aperture is None) == 1):
@@ -1581,6 +1610,7 @@ class Probe(_WavesBuilder):
         detectors: BaseDetector = None,
         max_batch: int | str = "auto",
         lazy: bool = None,
+        **kwargs,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Run the multislice algorithm for probe wave functions at the provided positions.
@@ -1626,7 +1656,15 @@ class Probe(_WavesBuilder):
         else:
             probes = self._lazy_build_waves(probe, max_batch)
 
-        multislice = MultisliceTransform(potential, detectors)
+        if "transition_potential" in kwargs.keys():
+            multislice = MultisliceTransform(
+                potential,
+                detectors,
+                multislice_func=transition_potential_multislice_and_detect,
+                **kwargs,
+            )
+        else:
+            multislice = MultisliceTransform(potential, detectors)
 
         measurements = probes.apply_transform(multislice)
 
