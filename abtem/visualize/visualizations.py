@@ -936,9 +936,11 @@ class VisualizationImshow(BaseVisualization):
                 ]
                 ims[0].set_norm(norm)
             elif len(array.shape) == 3:
-                cmaps = [ListedColormap([c]) for c in cmap]
-                alphas = [alpha for alpha in array]
+                cmaps = [ListedColormap(c) for c in cmap]
+                print(cmaps)
+                alphas = [np.clip(norm(alpha), a_min=0.0, a_max=1.0) for alpha in array]
 
+                print(alphas[0], array.shape, array[0].shape)
                 ims = [
                     ax.imshow(
                         np.ones_like(alpha.T),
@@ -949,6 +951,7 @@ class VisualizationImshow(BaseVisualization):
                     )
                     for alpha, cmap in zip(alphas, cmaps)
                 ]
+                ax.set_facecolor("k")
             else:
                 raise NotImplementedError()
 

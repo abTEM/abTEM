@@ -50,6 +50,7 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
 )
 from abtem.distributions import BaseDistribution
+from abtem.inelastic.core_loss import BaseTransitionPotential
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -901,10 +902,13 @@ class Waves(BaseWaves, ArrayObject):
     def transition_potential_multislice(
         self,
         potential: BasePotential,
-        transition_potentials,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
         detectors: BaseDetector | list[BaseDetector] = None,
         sites=None,
     ) -> Waves:
+        if hasattr(transition_potentials, "scatter"):
+            transition_potentials = [transition_potentials]
+
         potential = _validate_potential(potential, self)
 
         measurements = []
@@ -918,15 +922,28 @@ class Waves(BaseWaves, ArrayObject):
             )
             measurements.append(self.apply_transform(transform=multislice_transform))
 
-        axis_metadata = OrdinalAxis(label="Element", values = [
-                str(transition_potential.Z)
-                for transition_potential in transition_potentials
-            ])
+        if len(measurements) > 1:
+            axis_metadata = OrdinalAxis(
+                label="Z, n, l",
+                values=[
+                    ",".join(
+                        (
+                            str(transition_potential.metadata["Z"]),
+                            str(transition_potential.metadata["n"]),
+                            str(transition_potential.metadata["l"]),
+                        )
+                    )
+                    for transition_potential in transition_potentials
+                ],
+                _tex_label="$Z, n, \ell$",
+            )
 
-        measurements = abtem.stack(
-            measurements,
-            axis_metadata,
-        )
+            measurements = abtem.stack(
+                measurements,
+                axis_metadata,
+            )
+        else:
+            measurements = measurements[0]
 
         return _reduce_ensemble(measurements)
 

@@ -625,6 +625,7 @@ def transition_potential_multislice_and_detect(
             for _, scattered_waves in transition_potential.generate_scattered_waves(
                 waves, sites_slice
             ):
+
                 if transition_potential.double_channel:
                     _update_measurements_inner(
                         measurements,
