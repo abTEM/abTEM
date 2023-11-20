@@ -1,17 +1,17 @@
 """Module for various convenient utilities."""
 from __future__ import annotations
+
 import copy
 import inspect
 import itertools
 import warnings
+import os
 from typing import Tuple
 
 import numpy as np
 
-from abtem.core.backend import get_array_module
-import dask.array as da
 from abtem.core.backend import cp
-
+from abtem.core.backend import get_array_module
 
 
 def is_array_like(x):
@@ -209,3 +209,8 @@ def label_to_index(labels, max_label=None):
     hi = xp.searchsorted(sorted_labels, index, side="right")
     for i, (l, h) in enumerate(zip(lo, hi)):
         yield indices[l:h]
+
+
+def get_data_path(file):
+    this_file = os.path.abspath(os.path.dirname(file))
+    return os.path.join(this_file, "data")
