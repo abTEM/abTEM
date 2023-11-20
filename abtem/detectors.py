@@ -216,6 +216,7 @@ class AnnularDetector(BaseDetector):
         return metadata
 
     def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
+        """ Return the inner and outer limits of the integration """
         if self.inner is not None:
             inner = self.inner
         else:

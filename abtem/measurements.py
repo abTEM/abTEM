@@ -3793,6 +3793,16 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         intensities = defaultdict(lambda: values, intensities)
         return intensities
 
+    def to_hyperspy(self, use_pyxem:bool=True):
+        if not use_pyxem:
+            super().to_hyperspy()
+
+        try:
+            import pyxem
+        except ImportError:
+            raise ImportError("this feature of abTEM requires PyXEM")
+
+
     @property
     def positions_dict(self) -> Dict[tuple[int, int, int], np.ndarray]:
         """

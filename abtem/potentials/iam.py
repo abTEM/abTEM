@@ -541,6 +541,8 @@ class Potential(_PotentialBuilder):
         device: str = None,
     ):
 
+        #add warning
+
         if isinstance(atoms, Atoms):
             atoms = atoms.copy()
             atoms.calc = None

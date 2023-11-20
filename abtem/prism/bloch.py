@@ -1,6 +1,10 @@
 import warnings
 
-import cupy as cp
+try:
+    import cupy as cp
+except:
+    cp = None
+
 import numpy as np
 import pandas as pd
 
@@ -267,7 +271,11 @@ class BlochWaves:
             return psi
         else:
             intensities = xp.abs(psi) ** 2
-            intensities = xp.asnumpy(intensities)
+            
+            try:
+                intensities = xp.asnumpy(intensities)
+            except AttributeError:
+                pass
 
             intensities = pd.DataFrame(
                 {

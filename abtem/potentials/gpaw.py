@@ -463,14 +463,14 @@ class GPAWPotential(_PotentialBuilder):
         calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
         calc.initialize(random_atoms)
 
-        return _get_all_electron_density(
-            nt_sG=nt_sG,
-            gd=gd,
-            D_asp=calculator.D_asp,
-            setups=calc.setups,
-            gridrefinement=self.gridrefinement,
-            atoms=random_atoms,
-        )
+        # return _get_all_electron_density(
+        #     nt_sG=nt_sG,
+        #     gd=gd,
+        #     D_asp=calculator.D_asp,
+        #     setups=calc.setups,
+        #     gridrefinement=self.gridrefinement,
+        #     atoms=random_atoms,
+        # )
 
     def _get_ewald_potential(self):
         ewald_parametrization = EwaldParametrization(width=3)
@@ -682,6 +682,7 @@ class GPAWParametrization:
         self._nodes = nodes
         self._integration_step = integration_step
         self._potential_functions = {}
+        self._charge = {}
 
     def _get_added_electrons(self, symbol, charge):
         if not charge:
@@ -754,7 +755,10 @@ class GPAWParametrization:
         ae = self._get_all_electron_atom(symbol, charge)
         r = ae.rgd.r_g * units.Bohr
         n = ae.n_sg.sum(0) / units.Bohr**3
-        return interp1d(r, n, fill_value="extrapolate", bounds_error=False)
+        n = interp1d(r, n, fill_value="extrapolate", bounds_error=False)
+
+        self._charge[symbol] = n
+        return
 
     def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0):
         if isinstance(symbol, (int, np.int32, np.int64)):
@@ -776,14 +780,23 @@ class GPAWParametrization:
         fx = interp1d(k, fx, fill_value=(atomic_numbers[symbol], 0.), bounds_error=False)
         return fx
 
+    def _get_charge(self):
+        pass
+
+    def _get_fe0(self, r, symbol=None, charge=0., n=None):
+        if n is None:
+            n = self.charge(r, symbol)
+
+        Z = np.trapz(4 * np.pi * r ** 2 * n(r), dx=np.diff(r))
+        fe0 = np.trapz(4 * np.pi * r ** 4 * n(r), dx=np.diff(r)) / units.Bohr / 3
+
+        return fe0
+
     def _to_lobato(self, symbol, charge):
         fx = self.x_ray_scattering_factor(symbol, charge)
         n = self.charge(symbol, charge)
 
         r = np.linspace(0, 20, 10000)
-
-        Z = np.trapz(4 * np.pi * r ** 2 * n(r), dx=np.diff(r))
-        fe0 = np.trapz(4 * np.pi * r ** 4 * n(r), dx=np.diff(r)) / units.Bohr / 3
 
         k = np.linspace(0.0, 12, 100)
         fe = np.zeros(len(k))
