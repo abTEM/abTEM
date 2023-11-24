@@ -1593,7 +1593,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         if units is not None:
             visualization.set_xunits(units)
-            visualization.set_yunits(units)
+            visualization.set_yunits()
 
         if legend:
             visualization.set_legends()
