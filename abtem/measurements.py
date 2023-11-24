@@ -2852,7 +2852,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
             )
             array = self.array.map_blocks(
-                _map_radial_average,
+                _map_azimuthal_average,
                 max_angle=max_angle,
                 radial_sampling=radial_sampling,
                 angular_sampling=self.angular_sampling,
@@ -2863,7 +2863,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 meta=xp.array((), dtype=np.float32),
             )
         else:
-            array = _map_radial_average(
+            array = _map_azimuthal_average(
                 self.array,
                 max_angle=max_angle,
                 radial_sampling=radial_sampling,
