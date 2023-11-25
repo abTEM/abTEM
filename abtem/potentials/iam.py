@@ -440,7 +440,8 @@ class _PotentialBuilder(BasePotential):
             if self.ensemble_shape:
                 for i, _, potential in self.generate_blocks(1):
                     potential = potential.item()
-                    i = np.unravel_index((0,), self.ensemble_shape)
+                    #print(i)
+                    #i = np.unravel_index((i,), self.ensemble_shape)
 
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
@@ -1369,11 +1370,10 @@ class CrystalPotential(_PotentialBuilder):
 
             array = da.concatenate(arrays)
         else:
-
-
             potential_unit = self.potential_unit
             #if self.potential_unit.array:
             #    atoms = atoms.compute()
+
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 if self.seeds is not None:
@@ -1381,7 +1381,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                array.itemset(i, (potential_unit, self.seeds))
+                array.itemset(i, (potential_unit, seeds))
 
         return (array,)
 
@@ -1437,8 +1437,9 @@ class CrystalPotential(_PotentialBuilder):
         """
         if hasattr(self.potential_unit, "array"):
             potentials = self.potential_unit
+
         else:
-            potentials = self.potential_unit.build(lazy=False)
+            potentials = self.potential_unit.build(lazy=False).compute()
 
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
@@ -1454,9 +1455,10 @@ class CrystalPotential(_PotentialBuilder):
         stop = first_slice + 1
 
         for i in range(self.repetitions[2]):
-            generator = potentials[
-                rng.integers(0, potentials.shape[0])
-            ].generate_slices()
+            potential_index = rng.integers(0, potentials.shape[0])
+            potential = potentials[potential_index]
+
+            generator = potential.generate_slices()
 
             for i in range(len(self.potential_unit)):
                 slic = next(generator).tile(self.repetitions[:2])
