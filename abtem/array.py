@@ -199,7 +199,11 @@ def _compute_context(
         progress_bar = config.get("local_diagnostics.progress_bar")
 
     if progress_bar:
-        progress_bar = ProgressBar()
+        if progress_bar == "tqdm":
+            from tqdm.dask import TqdmCallback
+            progress_bar = TqdmCallback(desc="tasks")
+        else:
+            progress_bar = ProgressBar()
     else:
         progress_bar = nullcontext()
 

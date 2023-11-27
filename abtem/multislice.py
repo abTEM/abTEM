@@ -512,7 +512,7 @@ def transition_potential_multislice_and_detect(
     potential: BasePotential,
     transition_potential: BaseTransitionPotential,
     detectors: list[BaseDetector] = None,
-    sites: SliceIndexedAtoms = None,
+    sites: SliceIndexedAtoms | Atoms = None,
     conjugate: bool = False,
     transpose: bool = False,
 ) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
@@ -587,9 +587,10 @@ def transition_potential_multislice_and_detect(
         sites = potential.get_sliced_atoms()
     elif sites is None and hasattr(potential, "atoms"):
         sites = potential.atoms
-    elif isinstance(sites, Atoms):
+
+    if isinstance(sites, Atoms):
         sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
-    else:
+    elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError()
 
     for (
@@ -622,10 +623,11 @@ def transition_potential_multislice_and_detect(
 
             sites_slice = sites.get_atoms_in_slices(scatter_index)
 
+            #distributed_print(scatter_index)
+
             for _, scattered_waves in transition_potential.generate_scattered_waves(
                 waves, sites_slice
             ):
-
                 if transition_potential.double_channel:
                     _update_measurements_inner(
                         measurements,
@@ -922,7 +924,7 @@ class MultisliceTransform(ArrayObjectTransform):
             conjugate=self.conjugate,
             transpose=self.transpose,
             multislice_func=self.multislice_func,
-            **self._multislice_func_kwargs
+            **self._multislice_func_kwargs,
         )
 
     def _calculate_new_array(self, waves):

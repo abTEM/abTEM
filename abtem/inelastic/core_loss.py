@@ -224,11 +224,12 @@ def calculate_bound_radial_wavefunction(Z, n, l, xc="PBE"):
 
 
 def radial_schroedinger_equation(ef, l, r, vr):
-    return l * (l + 1) / r**2 - vr(r) / r - ef
+    return (l * (l + 1) / r**2 - vr(r) / r) * 1.02 - ef
 
 
 def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
-    from gpaw.atom.all_electron import AllElectron
+    # from gpaw.atom.all_electron import AllElectron
+    from gpaw.atom.aeatom import AllElectronAtom
 
     check_valid_quantum_number(Z, n, l)
     config_tuples = config_str_to_config_tuples(
@@ -237,15 +238,19 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
     subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
     with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectron(chemical_symbols[Z], xcname=xc)
-        ae.f_j[subshell_index] -= 0.0
+        ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
+        # ae.f_j[subshell_index] -= 0.0
         ae.run()
+        ae.scalar_relativistic = True
+        ae.refine()
 
-    vr = interp1d(ae.r, -2 * ae.vr, fill_value="extrapolate", bounds_error=False)
+    vr = interp1d(
+        ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
+    )
 
     ef = epsilon / units.Rydberg
 
-    r = np.linspace(1e-16, 10, 1000000)
+    r = np.linspace(1e-12, 20, 1000000)
     f = radial_schroedinger_equation(ef, lprime, r, vr)
 
     ur = numerov(f, 0.0, 1e-12, r[1] - r[0])
@@ -464,7 +469,7 @@ class TransitionPotential(BaseTransitionPotential):
     @property
     def metadata(self):
         bound = self.transition_quantum_numbers[0][0]
-        return {"Z":self.Z, "n": bound[0], "l": bound[1]}
+        return {"Z": self.Z, "n": bound[0], "l": bound[1]}
 
     @property
     def transitions(self):
@@ -537,7 +542,6 @@ class TransitionPotential(BaseTransitionPotential):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-
         array = np.zeros((len(self._transitions),) + self.gpts, dtype=complex)
         k0 = 1 / energy2wavelength(self.energy)
 
@@ -571,7 +575,7 @@ class TransitionPotential(BaseTransitionPotential):
             sampling=self.sampling,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             double_channel=self.double_channel,
-            metadata=self.metadata
+            metadata=self.metadata,
         )
 
     def scatter(self, waves: Waves, sites: Atoms | Atom | np.ndarray) -> Waves:

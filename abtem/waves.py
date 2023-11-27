@@ -63,6 +63,7 @@ from abtem.multislice import (
 )
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.scan import BaseScan, GridScan, _validate_scan
+from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _validate_tilt
 from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
@@ -904,8 +905,9 @@ class Waves(BaseWaves, ArrayObject):
         potential: BasePotential,
         transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
         detectors: BaseDetector | list[BaseDetector] = None,
-        sites=None,
-    ) -> Waves:
+        sites: SliceIndexedAtoms | Atoms = None,
+    ) -> Waves | BaseMeasurements:
+
         if hasattr(transition_potentials, "scatter"):
             transition_potentials = [transition_potentials]
 
