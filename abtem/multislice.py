@@ -21,7 +21,9 @@ from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast
 from abtem.detectors import BaseDetector, _validate_detectors, WavesDetector
-from abtem.inelastic.core_loss import BaseTransitionPotential
+from abtem.inelastic.core_loss import (
+    BaseTransitionPotential,
+)
 from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
@@ -512,6 +514,7 @@ def transition_potential_multislice_and_detect(
     potential: BasePotential,
     transition_potential: BaseTransitionPotential,
     detectors: list[BaseDetector] = None,
+    detectors_elastic: list[BaseDetector] = None,
     sites: SliceIndexedAtoms | Atoms = None,
     conjugate: bool = False,
     transpose: bool = False,
@@ -540,7 +543,7 @@ def transition_potential_multislice_and_detect(
         Exit waves or detected measurements or lists of measurements.
     """
 
-    def _update_measurements_inner(
+    def _update_loss_measurements(
         measurements, waves, detectors, potential, slice_index, potential_index
     ):
         if slice_index in potential.exit_planes:
@@ -552,7 +555,7 @@ def transition_potential_multislice_and_detect(
 
             for i, detector in enumerate(detectors):
                 new_measurement = detector.detect(waves)
-                new_measurement = new_measurement.sum(0)
+                new_measurement = new_measurement.sum((0, 1))
                 measurements[i].array[measurement_index] += new_measurement.array
 
     waves = waves.ensure_real_space()
@@ -623,13 +626,11 @@ def transition_potential_multislice_and_detect(
 
             sites_slice = sites.get_atoms_in_slices(scatter_index)
 
-            #distributed_print(scatter_index)
-
             for _, scattered_waves in transition_potential.generate_scattered_waves(
-                waves, sites_slice
+                waves, sites_slice, max_batch="auto"
             ):
                 if transition_potential.double_channel:
-                    _update_measurements_inner(
+                    _update_loss_measurements(
                         measurements,
                         scattered_waves,
                         detectors,
@@ -655,7 +656,9 @@ def transition_potential_multislice_and_detect(
                             transpose=transpose,
                         )
 
-                        _update_measurements_inner(
+                        _update_plasmon_axes(waves, depth)
+
+                        _update_loss_measurements(
                             measurements,
                             scattered_waves,
                             detectors,
@@ -665,16 +668,25 @@ def transition_potential_multislice_and_detect(
                         )
 
                 else:
-                    exit_plane_index = potential.exit_planes.index(scatter_index)
+                    try:
+                        exit_plane_index = potential.exit_planes.index(scatter_index)
+                    except ValueError:
+                        pass
+                    else:
+                        exit_planes = slice(
+                            exit_plane_index, len(potential.exit_planes)
+                        )
+                        measurement_index = (exit_planes,)
 
-                    exit_planes = slice(exit_plane_index, len(potential.exit_planes))
-                    measurement_index = (exit_planes,)
+                        for i, detector in enumerate(detectors):
+                            new_measurement = detector.detect(scattered_waves).sum(
+                                (0, 1)
+                            )
+                            measurements[i].array[
+                                measurement_index
+                            ] += new_measurement.array[None]
 
-                    for i, detector in enumerate(detectors):
-                        new_measurement = detector.detect(scattered_waves).sum(0)
-                        measurements[i].array[
-                            measurement_index
-                        ] += new_measurement.array[None]
+                    # np.exp((potential.thickness - depth) / 700)
 
     return measurements
 
@@ -948,3 +960,52 @@ class MultisliceTransform(ArrayObjectTransform):
             arrays = arrays[0]
 
         return arrays
+
+    # def apply(self, waves: Waves):
+    #     if "transition_potentials" in self._multislice_func_kwargs.keys():
+    #         sites = self._multislice_func_kwargs.get("sites", None)
+    #         transition_potentials = self._multislice_func_kwargs.get(
+    #             "transition_potentials"
+    #         )
+    #
+    #         transition_potentials = _validate_transition_potentials(
+    #             transition_potentials
+    #         )
+    #
+    #         measurements = []
+    #         for transition_potential in transition_potentials:
+    #             multislice_transform = MultisliceTransform(
+    #                 potential=self.potential,
+    #                 detectors=self.detectors,
+    #                 multislice_func=transition_potential_multislice_and_detect,
+    #                 transition_potential=transition_potential,
+    #                 sites=sites,
+    #             )
+    #             measurements.append(multislice_transform.apply(waves))
+    #
+    #         if len(measurements) > 1:
+    #             axis_metadata = OrdinalAxis(
+    #                 label="Z, n, l",
+    #                 values=[
+    #                     ",".join(
+    #                         (
+    #                             str(transition_potential.metadata["Z"]),
+    #                             str(transition_potential.metadata["n"]),
+    #                             str(transition_potential.metadata["l"]),
+    #                         )
+    #                     )
+    #                     for transition_potential in transition_potentials
+    #                 ],
+    #                 _tex_label="$Z, n, \ell$",
+    #             )
+    #
+    #             measurements = stack(
+    #                 measurements,
+    #                 axis_metadata,
+    #             )
+    #         else:
+    #             measurements = measurements[0]
+    #
+    #         return measurements
+    #     else:
+    #         return super().apply(waves)

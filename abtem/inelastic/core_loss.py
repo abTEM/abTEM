@@ -4,6 +4,7 @@ import contextlib
 import itertools
 import os
 from abc import abstractmethod
+from functools import reduce
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,8 +18,8 @@ from scipy.special import spherical_jn, sph_harm
 from abtem import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis, AxisMetadata
-from abtem.core.backend import copy_to_device, validate_device
-from abtem.core.chunks import generate_chunks
+from abtem.core.backend import copy_to_device
+from abtem.core.chunks import generate_chunks, validate_chunks
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
     HasAcceleratorMixin,
@@ -27,7 +28,7 @@ from abtem.core.energy import (
     relativistic_mass_correction,
     energy2sigma,
 )
-from abtem.core.fft import fft_shift_kernel, fft2
+from abtem.core.fft import fft_shift_kernel
 from abtem.core.fft import ifft2
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
 
@@ -76,6 +77,12 @@ def check_valid_quantum_number(Z, n, ell):
         raise RuntimeError(
             f"Quantum numbers (n, ell) = ({n}, {ell}) not valid for element {symbol}"
         )
+
+
+def _validate_transition_potentials(transition_potentials):
+    if hasattr(transition_potentials, "scatter"):
+        transition_potentials = [transition_potentials]
+    return transition_potentials
 
 
 class RadialWavefunction:
@@ -299,6 +306,9 @@ class SubshellTransitions(BaseTransitionCollection):
         self._epsilon = epsilon
         self._xc = xc
         super().__init__(Z)
+
+    def __len__(self):
+        return len(self.get_transition_quantum_numbers())
 
     @property
     def bound_configuration(self):
@@ -649,26 +659,43 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             * energy2sigma(self.energy)
         )
 
-        array = array.reshape((-1,) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
+        array = array.reshape((len(sites), len(self),) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
 
         d = waves._copy_kwargs(exclude=("array",))
-        d["array"] = array * waves.array[None]
+        d["array"] = array * waves.array[None, None]
 
-        ensemble_axes_metadata = self.ensemble_axes_metadata
+        ensemble_axes_metadata = [AxisMetadata(label="sites")] + self.ensemble_axes_metadata
         d["ensemble_axes_metadata"] = (
             ensemble_axes_metadata + d["ensemble_axes_metadata"]
         )
         return waves.__class__(**d)
 
-    def generate_scattered_waves(self, waves, sites, chunks=1):
+    def generate_scattered_waves(
+        self, waves: Waves, sites: Atoms | Atom | np.ndarray, max_batch: int = "auto"
+    ):
         sites = self.validate_sites(sites)
 
-        for start, end in generate_chunks(len(sites), chunks=chunks):
+        if isinstance(max_batch, int):
+            max_batch = int(max_batch * np.prod(waves.shape) * len(self))
+
+        chunks = validate_chunks(
+            shape=(len(sites),) + waves.shape,
+            chunks=("auto",) + (-1,) * len(waves.shape),
+            limit=max_batch,
+            dtype=waves.dtype,
+        )[0]
+
+        start = 0
+        for chunk in chunks:
+            end = start + chunk
             if end - start == 0:
                 break
 
-            scattered_waves = self.scatter(waves, sites[start:end])
-            yield sites[start:end], scattered_waves
+            sites_chunk = sites[start:end]
+            start = end
+
+            scattered_waves = self.scatter(waves, sites_chunk)
+            yield sites_chunk, scattered_waves
 
     def to_images(self):
         array = np.fft.fftshift(ifft2(self.array), axes=(-2, -1))

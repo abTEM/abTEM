@@ -50,7 +50,10 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
 )
 from abtem.distributions import BaseDistribution
-from abtem.inelastic.core_loss import BaseTransitionPotential
+from abtem.inelastic.core_loss import (
+    BaseTransitionPotential,
+    _validate_transition_potentials,
+)
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -907,9 +910,7 @@ class Waves(BaseWaves, ArrayObject):
         detectors: BaseDetector | list[BaseDetector] = None,
         sites: SliceIndexedAtoms | Atoms = None,
     ) -> Waves | BaseMeasurements:
-
-        if hasattr(transition_potentials, "scatter"):
-            transition_potentials = [transition_potentials]
+        transition_potentials = _validate_transition_potentials(transition_potentials)
 
         potential = _validate_potential(potential, self)
 
@@ -1580,6 +1581,31 @@ class Probe(_WavesBuilder):
 
         return waves
 
+    def _validate_and_build(
+        self,
+        scan: Sequence | BaseScan = None,
+        max_batch: int | str = "auto",
+        lazy: bool = None,
+        potential=None,
+    ):
+        self.check_can_build(potential)
+        lazy = _validate_lazy(lazy)
+
+        probe = self.copy()
+
+        if potential is not None:
+            probe.grid.match(potential)
+
+        scan = _validate_scan(scan, probe)
+        probe._positions = scan
+
+        if not lazy:
+            probes = self._build_waves(probe)
+        else:
+            probes = self._lazy_build_waves(probe, max_batch)
+
+        return probes
+
     def build(
         self,
         scan: Sequence | BaseScan = None,
@@ -1606,21 +1632,7 @@ class Probe(_WavesBuilder):
         probe_wave_functions : Waves
             The built probe wave functions.
         """
-        self.check_can_build()
-        lazy = _validate_lazy(lazy)
-
-        scan = _validate_scan(scan, self)
-
-        probe = self.copy()
-
-        probe._positions = scan
-
-        if not lazy:
-            probes = self._build_waves(probe)
-        else:
-            probes = self._lazy_build_waves(probe, max_batch)
-
-        return _reduce_ensemble(probes)
+        return self._validate_and_build(scan=scan, max_batch=max_batch, lazy=lazy)
 
     def multislice(
         self,
@@ -1629,7 +1641,6 @@ class Probe(_WavesBuilder):
         detectors: BaseDetector = None,
         max_batch: int | str = "auto",
         lazy: bool = None,
-        **kwargs,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Run the multislice algorithm for probe wave functions at the provided positions.
@@ -1655,38 +1666,42 @@ class Probe(_WavesBuilder):
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurement
         """
-
         potential = _validate_potential(potential)
 
-        self.check_can_build(potential)
+        probes = self._validate_and_build(
+            scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
+        )
 
-        lazy = _validate_lazy(lazy)
-
-        probe = self.copy()
-
-        probe.grid.match(potential)
-
-        scan = _validate_scan(scan, probe)
-
-        probe._positions = scan
-
-        if not lazy:
-            probes = self._build_waves(probe)
-        else:
-            probes = self._lazy_build_waves(probe, max_batch)
-
-        if "transition_potential" in kwargs.keys():
-            multislice = MultisliceTransform(
-                potential,
-                detectors,
-                multislice_func=transition_potential_multislice_and_detect,
-                **kwargs,
-            )
-        else:
-            multislice = MultisliceTransform(potential, detectors)
+        multislice = MultisliceTransform(potential, detectors)
 
         measurements = probes.apply_transform(multislice)
+        return _reduce_ensemble(measurements)
 
+    def transition_potential_multislice(
+        self,
+        potential: BasePotential | Atoms,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+        scan: tuple | BaseScan = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        sites: SliceIndexedAtoms | Atoms = None,
+        detectors_elastic: BaseDetector | list[BaseDetector] = None,
+        max_batch: int | str = "auto",
+        lazy: bool = None,
+    ) -> Waves | BaseMeasurements:
+        potential = _validate_potential(potential)
+
+        probes = self._validate_and_build(
+            scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
+        )
+
+        multislice = MultisliceTransform(
+            potential,
+            detectors,
+            multislice_func=transition_potential_multislice_and_detect,
+            transition_potential=transition_potentials,
+            sites=sites,
+        )
+        measurements = probes.apply_transform(multislice)
         return _reduce_ensemble(measurements)
 
     def scan(
