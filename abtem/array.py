@@ -201,6 +201,7 @@ def _compute_context(
     if progress_bar:
         if progress_bar == "tqdm":
             from tqdm.dask import TqdmCallback
+
             progress_bar = TqdmCallback(desc="tasks")
         else:
             progress_bar = ProgressBar()
@@ -764,7 +765,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         indexed_array : ArrayObject or subclass of ArrayObject
             The indexed array object.
         """
-        if isinstance(items, (Number, slice, type(None))):
+        if isinstance(items, (Number, slice, type(None), list, np.ndarray)):
             items = (items,)
 
         elif not isinstance(items, tuple):
@@ -788,24 +789,24 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ):
             raise RuntimeError("Base axes cannot be indexed.")
 
-        expanded_axes_metadata = [
+        expanded_axes_metadatas = [
             axis_metadata.copy() for axis_metadata in self.ensemble_axes_metadata
         ]
         for i, item in enumerate(items):
             if item is None:
-                expanded_axes_metadata.insert(i, UnknownAxis())
+                expanded_axes_metadatas.insert(i, UnknownAxis())
 
         metadata = {}
         axes_metadata = []
         last_indexed = 0
-        for i, item in enumerate(items):
+        for item, expanded_axes_metadata in zip(items, expanded_axes_metadatas):
             last_indexed += 1
             if isinstance(item, Number):
-                metadata = {**metadata, **expanded_axes_metadata[i].item_metadata(item)}
+                metadata = {**metadata, **expanded_axes_metadata.item_metadata(item)}
             else:
-                axes_metadata += [expanded_axes_metadata[i][item].copy()]
+                axes_metadata += [expanded_axes_metadata[item].copy()]
 
-        axes_metadata += expanded_axes_metadata[last_indexed:]
+        axes_metadata += expanded_axes_metadatas[last_indexed:]
 
         d = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata", "metadata"))
         d["array"] = self._array[items]
@@ -1609,6 +1610,24 @@ def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> T:
 
     return cls.from_array_and_metadata(
         array=array, axes_metadata=axes_metadata, metadata=arrays[0].metadata
+    )
+
+
+def swapaxes(array_object, axis1, axis2):
+    xp = get_array_module(array_object.array)
+
+    if array_object.is_lazy:
+        array = da.swapaxes(array_object.array, axis1, axis2)
+    else:
+        array = xp.swapaxes(array_object.array, axis1, axis2)
+
+    cls = array_object.__class__
+
+    axes_metadata = copy.copy(array_object.axes_metadata)
+    axes_metadata[axis2], axes_metadata[axis1] = axes_metadata[axis1], axes_metadata[axis2]
+
+    return cls.from_array_and_metadata(
+        array=array, axes_metadata=axes_metadata, metadata=array_object.metadata
     )
 
 

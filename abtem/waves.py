@@ -851,6 +851,8 @@ class Waves(BaseWaves, ArrayObject):
                 normalize=normalize,
             )
 
+        #pattern = xp.zeros(self.shape, dtype=xp.float32)
+
         diffraction_patterns = DiffractionPatterns(
             pattern,
             sampling=(
@@ -1685,6 +1687,7 @@ class Probe(_WavesBuilder):
         detectors: BaseDetector | list[BaseDetector] = None,
         sites: SliceIndexedAtoms | Atoms = None,
         detectors_elastic: BaseDetector | list[BaseDetector] = None,
+        double_channel:bool = True,
         max_batch: int | str = "auto",
         lazy: bool = None,
     ) -> Waves | BaseMeasurements:
@@ -1700,6 +1703,8 @@ class Probe(_WavesBuilder):
             multislice_func=transition_potential_multislice_and_detect,
             transition_potential=transition_potentials,
             sites=sites,
+            double_channel=double_channel,
+            #pbar=None
         )
         measurements = probes.apply_transform(multislice)
         return _reduce_ensemble(measurements)

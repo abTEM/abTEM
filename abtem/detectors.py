@@ -268,6 +268,10 @@ class AnnularDetector(BaseDetector):
         diffraction_patterns = waves.diffraction_patterns(
             max_angle="full", parity="same", fftshift=False
         )
+
+
+        # array = np.zeros(waves.shape[:-2], dtype=np.float32)
+        # return array
         measurement = diffraction_patterns.integrate_radial(
             inner=self.inner, outer=outer
         )

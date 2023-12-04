@@ -4,7 +4,6 @@ import contextlib
 import itertools
 import os
 from abc import abstractmethod
-from functools import reduce
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -19,7 +18,8 @@ from abtem import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis, AxisMetadata
 from abtem.core.backend import copy_to_device
-from abtem.core.chunks import generate_chunks, validate_chunks
+from abtem.core.chunks import validate_chunks
+from abtem.core.complex import abs2
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
     HasAcceleratorMixin,
@@ -31,6 +31,8 @@ from abtem.core.energy import (
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.fft import ifft2
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
+from abtem.core.utils import CopyMixin
+from abtem.measurements import _polar_detector_bins
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -238,18 +240,22 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
     # from gpaw.atom.all_electron import AllElectron
     from gpaw.atom.aeatom import AllElectronAtom
 
+    def f(self, *args, **kwargs):
+        pass
+
+    AllElectronAtom.log = f
+
     check_valid_quantum_number(Z, n, l)
     config_tuples = config_str_to_config_tuples(
         electron_configurations[chemical_symbols[Z]]
     )
     subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
-    with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
-        # ae.f_j[subshell_index] -= 0.0
-        ae.run()
-        ae.scalar_relativistic = True
-        ae.refine()
+    ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
+    # ae.f_j[subshell_index] -= 0.0
+    ae.run()
+    ae.scalar_relativistic = True
+    ae.refine()
 
     vr = interp1d(
         ae.rgd.r_g, -2 * ae.vr_sg[0], fill_value="extrapolate", bounds_error=False
@@ -292,7 +298,6 @@ class SubshellTransitions(BaseTransitionCollection):
         n: int,
         l: int,
         order: int = 1,
-        only_dipole: bool = False,
         min_contrast: float = 1.0,
         epsilon: float = 1.0,
         xc: str = "PBE",
@@ -302,7 +307,6 @@ class SubshellTransitions(BaseTransitionCollection):
         self._l = l
         self._order = order
         self._min_contrast = min_contrast
-        self._only_dipole = only_dipole
         self._epsilon = epsilon
         self._xc = xc
         super().__init__(Z)
@@ -365,10 +369,20 @@ class SubshellTransitions(BaseTransitionCollection):
         return wave_functions
 
     def get_transition_quantum_numbers(self):
-        return [
-            (bound.quantum_numbers, excited.quantum_numbers)
-            for (bound, excited) in self.get_transitions()
-        ]
+        bound_states = [(self.n, self.l, ml) for ml in np.arange(-self.l, self.l + 1)]
+
+        excited_states = []
+        for lprime in self.lprimes:
+            for mlprime in np.arange(-lprime, lprime + 1):
+                excited_states.append((None, lprime, mlprime))
+
+        transitions = []
+        for bound_state, excited_state in itertools.product(
+            bound_states, excited_states
+        ):
+            transitions.append((bound_state, excited_state))
+
+        return transitions
 
     def get_transitions(self):
         bound_state = self.get_bound_wave_function()
@@ -388,12 +402,6 @@ class SubshellTransitions(BaseTransitionCollection):
         for bound_state, excited_state in itertools.product(
             bound_states, excited_states
         ):
-            if self._only_dipole and (not (abs(bound_state.l - excited_state.l) == 1)):
-                continue
-
-            if self._only_dipole and (not (abs(bound_state.ml - excited_state.ml) < 2)):
-                continue
-
             transitions.append((bound_state, excited_state))
 
         return transitions
@@ -418,7 +426,7 @@ class SubshellTransitions(BaseTransitionCollection):
         )
 
 
-class BaseTransitionPotential(HasAcceleratorMixin, HasGridMixin):
+class BaseTransitionPotential(HasAcceleratorMixin, HasGridMixin, CopyMixin):
     def __init__(
         self, Z, extent, gpts, sampling, energy, double_channel: bool = True, **kwargs
     ):
@@ -453,6 +461,17 @@ class TransitionPotential(BaseTransitionPotential):
         self._orbital_filling_factor = orbital_filling_factor
         self._transitions = transitions
         super().__init__(Z, extent, gpts, sampling, energy, double_channel)
+
+    def __len__(self):
+        return len(self._transitions)
+
+    @property
+    def orbital_filling_factor(self):
+        return self._orbital_filling_factor
+
+    @property
+    def double_channel(self):
+        return self._double_channel
 
     @property
     def Z(self):
@@ -548,11 +567,33 @@ class TransitionPotential(BaseTransitionPotential):
 
         return Hn0
 
+    def integrated_intensities(self):
+        intensities = self.build().to_images().intensity()
+        return intensities.array.sum((-2, -1)) * np.prod(self.sampling)
+
+    def filter_by_intensity(self, threshold: float) -> TransitionPotential:
+        integrated_intensities = self.integrated_intensities()
+        order = np.argsort(-integrated_intensities)
+        integrated_intensities = integrated_intensities[order]
+
+        cumulative = np.cumsum(integrated_intensities / integrated_intensities.sum())
+
+        n = np.searchsorted(cumulative, threshold) + 1
+        transitions = self.transitions[:n]
+
+        if not len(transitions) > 0:
+            raise RuntimeError()
+
+        kwargs = self._copy_kwargs(exclude=("transitions",))
+        kwargs["transitions"] = transitions
+
+        return self.__class__(**kwargs)
+
     def build(self):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        array = np.zeros((len(self._transitions),) + self.gpts, dtype=complex)
+        array = np.zeros((len(self._transitions),) + self.gpts, dtype=np.complex64)
         k0 = 1 / energy2wavelength(self.energy)
 
         for i, (bound, excited) in enumerate(self._transitions):
@@ -576,6 +617,8 @@ class TransitionPotential(BaseTransitionPotential):
             )
 
         array = array / np.prod(self.sampling)
+
+        # array = array.astype(xp.complex64)
 
         return TransitionPotentialArray(
             self.Z,
@@ -641,7 +684,55 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         sites = np.array(sites, dtype=np.float32)
         return sites
 
-    def scatter(self, waves: Waves, sites: Atoms | Atom | np.ndarray) -> Waves:
+    def local_potential(self, max_angle):
+        self.accelerator.check_is_defined()
+        fourier_space_sampling = self.reciprocal_space_sampling
+
+        angular_sampling = (
+            fourier_space_sampling[0] * self.wavelength * 1e3,
+            fourier_space_sampling[1] * self.wavelength * 1e3,
+        )
+
+        array = _polar_detector_bins(
+            gpts=self.gpts,
+            sampling=angular_sampling,
+            inner=0.0,
+            outer=max_angle,
+            nbins_radial=1,
+            nbins_azimuthal=1,
+            fftshift=False,
+            rotation=0.0,
+            # offset=self.offset,
+            return_indices=False,
+        )
+        array = array >= 0.0
+
+        array = abs2(self.array * array)
+
+        return array
+
+    def integrated_intensities(self, max_angle):
+
+        array = self.local_potential(max_angle).astype(np.complex64)
+
+        intensity = array.sum((-2, -1)) * np.prod(self.sampling)
+
+        return intensity.real
+
+    def filter_by_intensity(
+        self, threshold: float, max_angle: float
+    ) -> TransitionPotential:
+        intensities = self.integrated_intensities(max_angle)
+        order = np.argsort(-intensities)
+        intensities = intensities[order]
+        cumulative = np.cumsum(intensities / intensities.sum())
+        n = np.searchsorted(cumulative, threshold) + 1
+        included = order[:n]
+        return self[included]
+
+    def scatter(
+        self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
+    ) -> Waves:
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
@@ -659,29 +750,58 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             * energy2sigma(self.energy)
         )
 
-        array = array.reshape((len(sites), len(self),) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
+        array = array.reshape(
+            (
+                len(positions),
+                len(self),
+            )
+            + (1,) * (len(waves.shape) - 2)
+            + array.shape[-2:]
+        )
+
+        array = array * waves.array[None, None]
+
+        array = array.reshape((-1,) + array.shape[2:])
+
+        if threshold is not None and threshold > 0.0:
+            values = abs2(array).sum((-2, -1))
+            mask = values > threshold
+            mask = mask.any(tuple(range(1, len(array.shape) - 2)))
+            where = np.where(mask)
+            array = array[where]
+
+        # xp = get_array_module(waves.array)
+        # array = xp.zeros((len(positions), len(self)) + waves.shape)
 
         d = waves._copy_kwargs(exclude=("array",))
-        d["array"] = array * waves.array[None, None]
+        d["array"] = array
 
-        ensemble_axes_metadata = [AxisMetadata(label="sites")] + self.ensemble_axes_metadata
+        ensemble_axes_metadata = [AxisMetadata(label="sites")]
+        # + self.ensemble_axes_metadata)
+
         d["ensemble_axes_metadata"] = (
             ensemble_axes_metadata + d["ensemble_axes_metadata"]
         )
         return waves.__class__(**d)
 
     def generate_scattered_waves(
-        self, waves: Waves, sites: Atoms | Atom | np.ndarray, max_batch: int = "auto"
+        self,
+        waves: Waves,
+        sites: Atoms | Atom | np.ndarray,
+        max_batch: int = "auto",
+        threshold=None,
     ):
         sites = self.validate_sites(sites)
 
         if isinstance(max_batch, int):
-            max_batch = int(max_batch * np.prod(waves.shape) * len(self))
+            limit = int(max_batch * np.prod(waves.shape) * len(self))
+        else:
+            limit = max_batch
 
         chunks = validate_chunks(
             shape=(len(sites),) + waves.shape,
-            chunks=("auto",) + (-1,) * len(waves.shape),
-            limit=max_batch,
+            chunks=(max_batch,) + (-1,) * len(waves.shape),
+            limit=limit,
             dtype=waves.dtype,
         )[0]
 
@@ -694,7 +814,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             sites_chunk = sites[start:end]
             start = end
 
-            scattered_waves = self.scatter(waves, sites_chunk)
+            scattered_waves = self.scatter(waves, sites_chunk, threshold=threshold)
             yield sites_chunk, scattered_waves
 
     def to_images(self):

@@ -19,8 +19,7 @@ from abtem.core.chunks import (
 from abtem.core.utils import tuple_range, interleave
 
 
-def _wrap_with_array(x, ndims:int=None):
-
+def _wrap_with_array(x, ndims: int = None):
     if ndims is None:
         ndims = len(x.ensemble_shape)
 
@@ -57,11 +56,7 @@ def unpack_blockwise_args(args):
 #
 
 
-
-
-
 class Ensemble:
-
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
         """Shape of the ensemble axes."""
@@ -140,7 +135,7 @@ class Ensemble:
 
         out_symbols = tuple_range(sum(len(arg.shape) for arg in args))
 
-        #assert len(out_symbols) == max(len(self.ensemble_shape), 1)
+        # assert len(out_symbols) == max(len(self.ensemble_shape), 1)
 
         arg_symbols = ()
         offset = 0
@@ -184,13 +179,14 @@ class Ensemble:
             itertools.product(*(range(block.shape[0]) for block in blocks)),
             itertools.product(*chunk_ranges(chunks)),
         ):
-
             block = tuple(block[i] for i, block in zip(block_indices, blocks))
             slics = tuple(slice(start, stop) for start, stop in start_stop)
 
             yield block_indices, slics, self._from_partitioned_args()(*block)
 
-    def _validate_ensemble_chunks(self, chunks: Chunks, limit: Union[str, int] = "auto"):
+    def _validate_ensemble_chunks(
+        self, chunks: Chunks, limit: Union[str, int] = "auto"
+    ):
         if chunks is None:
             chunks = self._default_ensemble_chunks
 
@@ -203,7 +199,6 @@ class Ensemble:
         base_shape: Tuple[int, ...] = (),
         dtype=np.dtype("complex64"),
     ):
-
         shape = self.ensemble_shape
         chunks = self._default_ensemble_chunks
 

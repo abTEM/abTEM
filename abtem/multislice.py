@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from bisect import bisect
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -515,9 +516,11 @@ def transition_potential_multislice_and_detect(
     transition_potential: BaseTransitionPotential,
     detectors: list[BaseDetector] = None,
     detectors_elastic: list[BaseDetector] = None,
+    double_channel: bool = True,
     sites: SliceIndexedAtoms | Atoms = None,
     conjugate: bool = False,
     transpose: bool = False,
+    pbar=None,
 ) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
@@ -555,7 +558,7 @@ def transition_potential_multislice_and_detect(
 
             for i, detector in enumerate(detectors):
                 new_measurement = detector.detect(waves)
-                new_measurement = new_measurement.sum((0, 1))
+                new_measurement = new_measurement.sum((0,))
                 measurements[i].array[measurement_index] += new_measurement.array
 
     waves = waves.ensure_real_space()
@@ -584,7 +587,7 @@ def transition_potential_multislice_and_detect(
     if hasattr(transition_potential, "build"):
         transition_potential = transition_potential.build()
 
-    transition_potential = transition_potential.copy_to_device("gpu")
+    transition_potential = transition_potential.copy_to_device(waves.device)
 
     if sites is None and hasattr(potential, "get_sliced_atoms"):
         sites = potential.get_sliced_atoms()
@@ -595,6 +598,20 @@ def transition_potential_multislice_and_detect(
         sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
     elif not isinstance(sites, SliceIndexedAtoms):
         raise ValueError()
+
+    n_sites = np.sum(sites.atoms.numbers == transition_potential.Z)
+
+    if n_sites == 0:
+        raise RuntimeError(
+            f"No scattering sites matching transition potential for element {transition_potential.Z}"
+        )
+
+    from tqdm.auto import tqdm
+
+    pbar = tqdm(desc="task sites", total=n_sites)
+
+    a = 0
+    b = 0
 
     for (
         potential_index,
@@ -624,12 +641,50 @@ def transition_potential_multislice_and_detect(
 
             _update_plasmon_axes(waves, depth)
 
-            sites_slice = sites.get_atoms_in_slices(scatter_index)
+            sites_slice = sites.get_atoms_in_slices(
+                scatter_index, atomic_number=transition_potential.Z
+            )
 
-            for _, scattered_waves in transition_potential.generate_scattered_waves(
-                waves, sites_slice, max_batch="auto"
+            if len(sites_slice) == 0:
+                continue
+
+            for (
+                included_sites,
+                scattered_waves,
+            ) in transition_potential.generate_scattered_waves(
+                waves, sites_slice, max_batch=1, threshold=2.918117678919752e-15 * 1
             ):
-                if transition_potential.double_channel:
+
+                if len(scattered_waves) == 0:
+                    continue
+
+                # import matplotlib.pyplot as plt
+                #
+                #     print(scattered_waves.array.shape)
+                #     # plt.imshow((np.abs(scattered_waves.array) ** 2).sum((0, 1, 2)))
+                #     plt.imshow((np.abs(waves.array) ** 2).sum((0, 1)))
+                #     plt.scatter(*(included_sites[:, :2] / np.array(waves.sampling)).T)
+                #     # plt.plot(included_sites.positions[:2].)
+                #     plt.show()
+                #     a += 1
+                #     continue
+                #
+                # print(scattered_waves.array.shape)
+                # # plt.imshow((np.abs(scattered_waves.array) ** 2).sum((0, 1, 2)))
+                # plt.imshow((np.abs(waves.array) ** 2).sum((0, 1)))
+                # plt.scatter(*(included_sites[:, :2] / np.array(waves.sampling)).T)
+                # plt.show()
+                # b += 1
+                #
+                # if a > 3 and b > 3:
+                #     sss
+                #
+                # if scatter_index == 10:
+                #     break
+
+                pbar.update(len(included_sites))
+
+                if double_channel:
                     _update_loss_measurements(
                         measurements,
                         scattered_waves,
@@ -639,8 +694,8 @@ def transition_potential_multislice_and_detect(
                         potential_index,
                     )
 
-                    if scatter_index + 1 == len(potential):
-                        break
+                    # if scatter_index + 1 == len(potential):
+                    #    break
 
                     for inner_slice_index, inner_potential_slice in enumerate(
                         potential_configuration.generate_slices(
@@ -668,25 +723,25 @@ def transition_potential_multislice_and_detect(
                         )
 
                 else:
-                    try:
-                        exit_plane_index = potential.exit_planes.index(scatter_index)
-                    except ValueError:
-                        pass
-                    else:
-                        exit_planes = slice(
-                            exit_plane_index, len(potential.exit_planes)
-                        )
-                        measurement_index = (exit_planes,)
+                    exit_plane_index = bisect(potential.exit_planes, scatter_index)
+                    # exit_plane_start = potential.exit_planes[exit_plane_index]
 
-                        for i, detector in enumerate(detectors):
-                            new_measurement = detector.detect(scattered_waves).sum(
-                                (0, 1)
-                            )
-                            measurements[i].array[
-                                measurement_index
-                            ] += new_measurement.array[None]
+                    exit_planes = slice(exit_plane_index, len(potential.exit_planes))
+
+                    if len(potential.exit_planes) > 1:
+                        measurement_index = (exit_planes,)
+                    else:
+                        measurement_index = ()
+
+                    for i, detector in enumerate(detectors):
+                        new_measurement = detector.detect(scattered_waves).sum((0,))
+                        measurements[i].array[
+                            measurement_index
+                        ] += new_measurement.array[(None,) * len(measurement_index)]
 
                     # np.exp((potential.thickness - depth) / 700)
+
+    pbar.close()
 
     return measurements
 
