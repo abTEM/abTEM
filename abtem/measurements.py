@@ -229,7 +229,7 @@ def _polar_detector_bins(
     return_indices: bool = False,
 ) -> np.ndarray | list[np.ndarray]:
     alpha, phi = polar_spatial_frequencies(
-        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
+        gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
     )
     phi = (phi + rotation) % (2 * np.pi)
 
@@ -3274,6 +3274,7 @@ class PolarMeasurements(BaseMeasurements):
         new_array[..., regions < 0] = np.nan
 
         wavelength = energy2wavelength(self._get_from_metadata("energy"))
+
         sampling = (
             angular_sampling[0] / (wavelength * 1e3),
             angular_sampling[1] / (wavelength * 1e3),
