@@ -571,7 +571,7 @@ class _AbstractRadialDetector(BaseDetector):
             raise ValueError("provide the waves or the energy of waves")
         else:
             if gpts is None:
-                gpts = min(int(8 * self.outer), 2048)
+                gpts = 1024
 
             if not hasattr(gpts, "__len__"):
                 gpts = (gpts,) * 2
