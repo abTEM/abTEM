@@ -360,11 +360,32 @@ def gaussian(
     return MultidimensionalDistribution(distributions=distributions)
 
 
-def _validate_distribution(
+def validate_distribution(
     distribution: BaseDistribution | Iterable | Number,
 ) -> BaseDistribution | Number:
+    """
+    Parameters
+    ----------
+    distribution : BaseDistribution or Iterable or Number
+        The input distribution to be validated.
 
-    if isinstance(distribution, (BaseDistribution, Number)):
+    Returns
+    -------
+    BaseDistribution or Number
+        The validated distribution. If the input distribution is already a
+        valid distribution, it is returned as is. If the input distribution is
+        a single number, it is returned unchanged. If the input distribution is
+        an ndarray with shape (0,), its single element is returned. If the input
+        distribution is a tuple, list, or ndarray, it is converted to an ndarray
+        and wrapped into a DistributionFromValues object where each value has
+        equal weight. Otherwise, a ValueError is raised.
+
+    Raises
+    ------
+    ValueError
+        If the input distribution is not a valid distribution or .
+    """
+    if isinstance(distribution, (BaseDistribution, Number, str)):
         return distribution
 
     if isinstance(distribution, np.ndarray) and len(distribution.shape) == 0:
@@ -376,7 +397,7 @@ def _validate_distribution(
             distribution, np.ones_like(distribution, dtype=np.float32)
         )
 
-    raise ValueError(f"value {distribution} is not a valid distribution")
+    raise ValueError(f"value {distribution} is not a single number or could not be converted to a valid distribution")
 
 
 def _unpack_distributions(

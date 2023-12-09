@@ -13,7 +13,7 @@ from abtem.distributions import (
     MultidimensionalDistribution,
     EnsembleFromDistributions,
     from_values,
-    _validate_distribution,
+    validate_distribution,
 )
 
 if TYPE_CHECKING:
@@ -187,7 +187,7 @@ class AxisAlignedBeamTilt(BaseBeamTilt):
     def __init__(self, tilt: float | BaseDistribution = 0.0, direction: str = "x"):
 
         if isinstance(tilt, (np.ndarray, list, tuple)):
-            tilt = _validate_distribution(tilt)
+            tilt = validate_distribution(tilt)
 
         if not isinstance(tilt, BaseDistribution):
             tilt = float(tilt)

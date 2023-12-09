@@ -27,7 +27,7 @@ from abtem.core.utils import (
 )
 from abtem.distributions import (
     EnsembleFromDistributions,
-    _validate_distribution,
+    validate_distribution,
     BaseDistribution,
 )
 
@@ -326,7 +326,7 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
 
     @staticmethod
     def _validate_distribution(distribution):
-        return _validate_distribution(distribution)
+        return validate_distribution(distribution)
 
     # def _validate_ensemble_axes_metadata(self, ensemble_axes_metadata):
     #     if isinstance(ensemble_axes_metadata, AxisMetadata):

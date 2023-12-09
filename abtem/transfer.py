@@ -27,7 +27,7 @@ from abtem.core.utils import expand_dims_to_broadcast
 from abtem.distributions import (
     BaseDistribution,
     _unpack_distributions,
-    _validate_distribution,
+    validate_distribution,
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
 from abtem.transform import ReciprocalSpaceMultiplication
@@ -47,7 +47,7 @@ class BaseTransferFunction(
         extent: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
-        distributions: tuple[str] = (),
+        distributions: tuple[str, ...] = (),
     ):
         self._accelerator = Accelerator(energy=energy)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -103,7 +103,25 @@ class BaseTransferFunction(
         max_angle: float = None,
         gpts: int | tuple[int, int] = None,
     ):
-        """ """
+        """Converts the transfer function instance to DiffractionPatterns.
+
+        Parameters
+        ----------
+        max_angle : float, optional
+            The maximum diffraction angle in radians. If not provided, the maximum angle
+            will be determined based on the `self._max_semiangle_cutoff` attribute of the instance.
+            If neither `max_angle` nor `self._max_semiangle_cutoff` is available, a `RuntimeError`
+            will be raised.
+        gpts : int | tuple[int, int], optional
+            The number of grid points in reciprocal space for performing Fourier Transform.
+            If not provided, a default value of 128 will be used.
+
+        Returns
+        -------
+        abtem.measurements.DiffractionPatterns
+            The diffraction patterns obtained from the conversion.
+
+        """
         from abtem.measurements import DiffractionPatterns
 
         if (self.sampling is None) or (max_angle is not None):
@@ -149,7 +167,7 @@ class BaseAperture(BaseTransferFunction):
         extent: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
-        distributions: tuple[str] = (),
+        distributions: tuple[str, ...] = (),
     ):
         self._semiangle_cutoff = semiangle_cutoff
         super().__init__(
@@ -189,7 +207,7 @@ class BaseAperture(BaseTransferFunction):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    def semiangle_cutoff(self, semiangle_cutoff:float | BaseDistribution):
+    def semiangle_cutoff(self, semiangle_cutoff: float | BaseDistribution):
         self._semiangle_cutoff = semiangle_cutoff
 
     def _cropped_aperture(self):
@@ -319,7 +337,7 @@ class Aperture(BaseAperture):
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
     ):
-        semiangle_cutoff = _validate_distribution(semiangle_cutoff)
+        semiangle_cutoff = validate_distribution(semiangle_cutoff)
         self._soft = soft
 
         super().__init__(
@@ -352,7 +370,7 @@ class Aperture(BaseAperture):
 
     def _evaluate_from_angular_grid(
         self, alpha: np.ndarray, phi: np.ndarray
-    ) -> np.ndarray:
+    ) -> np.ndarray | float:
         xp = get_array_module(alpha)
 
         if self.semiangle_cutoff == xp.inf:
@@ -632,7 +650,7 @@ class TemporalEnvelope(BaseTransferFunction):
         sampling: float | tuple[float, float] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
-        self._focal_spread = _validate_distribution(focal_spread)
+        self._focal_spread = validate_distribution(focal_spread)
         super().__init__(
             distributions=("focal_spread",),
             energy=energy,
@@ -648,7 +666,7 @@ class TemporalEnvelope(BaseTransferFunction):
 
     @focal_spread.setter
     def focal_spread(self, value):
-        self._focal_spread = _validate_distribution(value)
+        self._focal_spread = validate_distribution(value)
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -682,7 +700,7 @@ def _aberration_property(name, key):
             return 0.0
 
     def _setter(self, value):
-        value = _validate_distribution(value)
+        value = validate_distribution(value)
         getattr(self, name)[key] = value
 
     return property(_getter, _setter)
@@ -903,7 +921,7 @@ class _HasAberrations:
         """
 
         for symbol, value in aberration_coefficients.items():
-            value = _validate_distribution(value)
+            value = validate_distribution(value)
 
             if symbol in self._symbols():
                 self._aberration_coefficients[symbol] = value
@@ -916,7 +934,7 @@ class _HasAberrations:
 
         for symbol, value in aberration_coefficients.items():
             if symbol in ("defocus", "C10"):
-                value = _validate_distribution(value)
+                value = validate_distribution(value)
 
                 if isinstance(value, str) and value.lower() == "scherzer":
                     if self.energy is None:
@@ -981,7 +999,7 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
             sampling=sampling,
         )
 
-        self._angular_spread = _validate_distribution(angular_spread)
+        self._angular_spread = validate_distribution(angular_spread)
         self._aberration_coefficients = self._default_aberration_coefficients()
 
         aberration_coefficients = (
@@ -1341,13 +1359,14 @@ class CTF(_HasAberrations, BaseAperture):
         wiener_snr: float = 0.0,
         **kwargs,
     ):
+        distributions = polar_symbols + (
+            "angular_spread",
+            "focal_spread",
+            "semiangle_cutoff",
+        )
+
         super().__init__(
-            distributions=polar_symbols
-            + (
-                "angular_spread",
-                "focal_spread",
-                "semiangle_cutoff",
-            ),
+            distributions=distributions,
             energy=energy,
             semiangle_cutoff=semiangle_cutoff,
             extent=extent,
@@ -1363,9 +1382,9 @@ class CTF(_HasAberrations, BaseAperture):
         aberration_coefficients = {**aberration_coefficients, **kwargs}
         self.set_aberrations(aberration_coefficients)
 
-        self._angular_spread = _validate_distribution(angular_spread)
-        self._focal_spread = _validate_distribution(focal_spread)
-        self._semiangle_cutoff = _validate_distribution(semiangle_cutoff)
+        self._angular_spread = validate_distribution(angular_spread)
+        self._focal_spread = validate_distribution(focal_spread)
+        self._semiangle_cutoff = validate_distribution(semiangle_cutoff)
         self._soft = soft
         self._flip_phase = flip_phase
         self._wiener_snr = wiener_snr

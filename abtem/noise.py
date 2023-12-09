@@ -8,7 +8,7 @@ from abtem.core.axes import (
     SampleAxis,
 )
 from abtem.core.backend import get_array_module
-from abtem.distributions import _validate_distribution, BaseDistribution
+from abtem.distributions import validate_distribution, BaseDistribution
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.transform import EnsembleTransform
 
@@ -21,14 +21,14 @@ class NoiseTransform(EnsembleTransform):
         seeds: int | tuple[int, ...] = None,
     ):
 
-        self._dose = _validate_distribution(dose)
+        self._dose = validate_distribution(dose)
 
         if samples is None and seeds is None:
             samples = 1
 
         if seeds is None and samples > 1:
             seeds = _validate_seeds(seeds, samples)
-            seeds = _validate_distribution(seeds)
+            seeds = validate_distribution(seeds)
 
         self._seeds = seeds
 
