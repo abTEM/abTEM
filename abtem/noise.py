@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.interpolate import RegularGridInterpolator
 
 from abtem.core.axes import (
     NonLinearAxis,
@@ -11,8 +12,6 @@ from abtem.core.backend import get_array_module
 from abtem.distributions import _validate_distribution, BaseDistribution
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.transform import EnsembleTransform
-import numpy as np
-from scipy.interpolate import RegularGridInterpolator
 
 
 class NoiseTransform(EnsembleTransform):
