@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from bisect import bisect
+from bisect import bisect_left
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -36,6 +36,7 @@ from abtem.potentials.iam import (
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
+from abtem.core.diagnostics import TqdmWrapper
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -517,6 +518,7 @@ def transition_potential_multislice_and_detect(
     detectors: list[BaseDetector] = None,
     detectors_elastic: list[BaseDetector] = None,
     double_channel: bool = True,
+    threshold: float = 1.0,
     sites: SliceIndexedAtoms | Atoms = None,
     conjugate: bool = False,
     transpose: bool = False,
@@ -606,12 +608,14 @@ def transition_potential_multislice_and_detect(
             f"No scattering sites matching transition potential for element {transition_potential.Z}"
         )
 
-    from tqdm.auto import tqdm
+    absolute_threshold = transition_potential.absolute_threshold(
+        waves, threshold=threshold
+    )
 
-    pbar = tqdm(desc="task sites", total=n_sites)
+    n_waves = np.prod(waves.shape[:-2])
+    n_slices = n_waves * potential.num_slices
 
-    a = 0
-    b = 0
+    pbar = TqdmWrapper(total=n_slices)
 
     for (
         potential_index,
@@ -645,6 +649,8 @@ def transition_potential_multislice_and_detect(
                 scatter_index, atomic_number=transition_potential.Z
             )
 
+            pbar.update_if_exists(n_waves)
+
             if len(sites_slice) == 0:
                 continue
 
@@ -652,37 +658,10 @@ def transition_potential_multislice_and_detect(
                 included_sites,
                 scattered_waves,
             ) in transition_potential.generate_scattered_waves(
-                waves, sites_slice, max_batch=1, threshold=2.918117678919752e-15 * 1
+                waves, sites_slice, max_batch=1, threshold=absolute_threshold
             ):
-
                 if len(scattered_waves) == 0:
                     continue
-
-                # import matplotlib.pyplot as plt
-                #
-                #     print(scattered_waves.array.shape)
-                #     # plt.imshow((np.abs(scattered_waves.array) ** 2).sum((0, 1, 2)))
-                #     plt.imshow((np.abs(waves.array) ** 2).sum((0, 1)))
-                #     plt.scatter(*(included_sites[:, :2] / np.array(waves.sampling)).T)
-                #     # plt.plot(included_sites.positions[:2].)
-                #     plt.show()
-                #     a += 1
-                #     continue
-                #
-                # print(scattered_waves.array.shape)
-                # # plt.imshow((np.abs(scattered_waves.array) ** 2).sum((0, 1, 2)))
-                # plt.imshow((np.abs(waves.array) ** 2).sum((0, 1)))
-                # plt.scatter(*(included_sites[:, :2] / np.array(waves.sampling)).T)
-                # plt.show()
-                # b += 1
-                #
-                # if a > 3 and b > 3:
-                #     sss
-                #
-                # if scatter_index == 10:
-                #     break
-
-                pbar.update(len(included_sites))
 
                 if double_channel:
                     _update_loss_measurements(
@@ -723,8 +702,7 @@ def transition_potential_multislice_and_detect(
                         )
 
                 else:
-                    exit_plane_index = bisect(potential.exit_planes, scatter_index)
-                    # exit_plane_start = potential.exit_planes[exit_plane_index]
+                    exit_plane_index = bisect_left(potential.exit_planes, scatter_index)
 
                     exit_planes = slice(exit_plane_index, len(potential.exit_planes))
 
@@ -741,7 +719,7 @@ def transition_potential_multislice_and_detect(
 
                     # np.exp((potential.thickness - depth) / 700)
 
-    pbar.close()
+    pbar.close_if_exists()
 
     return measurements
 

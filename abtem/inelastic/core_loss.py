@@ -17,7 +17,7 @@ from scipy.special import spherical_jn, sph_harm
 from abtem import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
 from abtem.core.axes import OrdinalAxis, AxisMetadata
-from abtem.core.backend import copy_to_device
+from abtem.core.backend import copy_to_device, get_array_module
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.electron_configurations import electron_configurations
@@ -28,7 +28,7 @@ from abtem.core.energy import (
     relativistic_mass_correction,
     energy2sigma,
 )
-from abtem.core.fft import fft_shift_kernel
+from abtem.core.fft import fft_shift_kernel, fft2, fft2_convolve
 from abtem.core.fft import ifft2
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
 from abtem.core.utils import CopyMixin
@@ -627,7 +627,6 @@ class TransitionPotential(BaseTransitionPotential):
             extent=self.extent,
             sampling=self.sampling,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
-            double_channel=self.double_channel,
             metadata=self.metadata,
         )
 
@@ -639,6 +638,39 @@ class TransitionPotential(BaseTransitionPotential):
 
     def show(self, **kwargs):
         return self.build().to_images().show(**kwargs)
+
+
+# @njit(fastmath=True)
+def fast_roll(array, shifts):
+    xp = get_array_module(array)
+    output = xp.empty((len(shifts),) + array.shape, dtype=array.dtype)
+
+    for i in range(len(shifts)):
+        if np.all(shifts[i] > 0):
+            output[i, : shifts[i, 0], : shifts[i, 1]] = array[
+                -shifts[i, 0] :, -shifts[i, 1] :
+            ]
+            output[i, : shifts[i, 0], shifts[i, 1] :] = array[
+                -shifts[i, 0] :, : -shifts[i, 1]
+            ]
+            output[i, shifts[i, 0] :, : shifts[i, 1]] = array[
+                : -shifts[i, 0], -shifts[i, 1] :
+            ]
+            output[i, shifts[i, 0] :, shifts[i, 1] :] = array[
+                : -shifts[i, 0], : -shifts[i, 1]
+            ]
+        elif shifts[i, 1] > 0:
+            output[i, :, : shifts[i, 1]] = array[:, -shifts[i, 1] :]
+            output[i, :, shifts[i, 1] :] = array[:, : -shifts[i, 1] :]
+        elif shifts[i, 0] > 0:
+            output[i, : shifts[i, 0], :] = array[-shifts[i, 0] :, :]
+            output[i, shifts[i, 0] :, :] = array[: -shifts[i, 0] :, :]
+        elif (shifts[i, 0] == 0) and (shifts[i, 1] == 0):
+            output[i] = array
+        else:
+            raise RuntimeError()
+
+    return output
 
 
 class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
@@ -653,7 +685,6 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         sampling: float | tuple[float, float] = None,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
-        double_channel: bool = True,
     ):
         super().__init__(
             Z=Z,
@@ -661,11 +692,115 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             gpts=array.shape[-2:],
             sampling=sampling,
             energy=energy,
-            double_channel=double_channel,
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+        self._local_potential = self.local_potential(space="real").sum(0)
+        self._threshold = None
+
+    def set_threshold(self, wave, threshold):
+        local_potentials = self.local_potential(space="real")
+        local_potential = local_potentials.sum(0)
+
+        c = np.fft.irfft2(np.fft.rfft2(local_potential) * np.fft.rfft2(wave.array))
+        c = np.sort(c.ravel())[::-1]
+
+    def local_potential(self, max_angle=None, space="reciprocal"):
+        """
+        Parameters
+        ----------
+        max_angle : float
+            Maximum angle (in degrees) for the local potential calculation.
+        space : str, optional
+            Specifies the coordinate space in which the potential is calculated.
+            Default is "reciprocal". Possible values are "reciprocal" and "real".
+
+        Returns
+        -------
+        array : ndarray
+            The calculated local potential.
+
+        """
+        self.accelerator.check_is_defined()
+        fourier_space_sampling = self.reciprocal_space_sampling
+
+        angular_sampling = (
+            fourier_space_sampling[0] * self.wavelength * 1e3,
+            fourier_space_sampling[1] * self.wavelength * 1e3,
+        )
+
+        array = self.array
+
+        if max_angle is not None:
+            region = _polar_detector_bins(
+                gpts=self.gpts,
+                sampling=angular_sampling,
+                inner=0.0,
+                outer=max_angle,
+                nbins_radial=1,
+                nbins_azimuthal=1,
+                fftshift=False,
+                rotation=0.0,
+                # offset=self.offset,
+                return_indices=False,
+            )
+            region = region >= 0.0
+            array = array * region
+
+        if space == "reciprocal":
+            array = abs2(array)
+        elif space == "real":
+            array = abs2(ifft2(array))
+        else:
+            raise ValueError(
+                "The 'space' parameter is invalid. Accepted values are 'reciprocal' or 'real'."
+            )
+
+        return array
+
+    def integrated_intensities(self, max_angle: float, space: str = "reciprocal"):
+        array = self.local_potential(max_angle, space)
+        intensity = array.sum((-2, -1)) * np.prod(self.sampling)
+        return intensity
+
+    def filter_by_intensity(
+        self, threshold: float, max_angle: float
+    ) -> TransitionPotential:
+        intensities = self.integrated_intensities(max_angle)
+        order = np.argsort(-intensities)
+        intensities = intensities[order]
+        cumulative = np.cumsum(intensities / intensities.sum())
+        n = np.searchsorted(cumulative, threshold) + 1
+        included = order[:n]
+        return self[included]
+
+    def absolute_threshold(self, waves: Waves, threshold: float=1.):
+
+        if threshold >= 1.:
+            return 0.
+
+        if hasattr(waves, "build"):
+            waves = waves.build(lazy=False)
+
+        local_potential = self.local_potential(space="real").sum(0)
+        array = abs2(waves.array)
+
+        local_potential = copy_to_device(local_potential, array)
+
+        overlap = fft2_convolve(
+            local_potential[(None,) * (len(array.shape) - 2)].astype(np.complex64),
+            fft2(array.astype(np.complex64)),
+        ).real
+
+        overlap = copy_to_device(overlap, "cpu")
+
+        overlap = np.sort(overlap.ravel())[::-1]
+
+        cumulative = np.cumsum(overlap) / overlap.sum()
+
+        return overlap[np.searchsorted(cumulative, threshold, side="left") - 1]
 
     def validate_sites(self, sites: Atoms | Atom) -> np.ndarray:
         if isinstance(sites, Atoms):
@@ -684,51 +819,66 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         sites = np.array(sites, dtype=np.float32)
         return sites
 
-    def local_potential(self, max_angle):
-        self.accelerator.check_is_defined()
-        fourier_space_sampling = self.reciprocal_space_sampling
+    def filter_sites(self, waves, sites, threshold):
 
-        angular_sampling = (
-            fourier_space_sampling[0] * self.wavelength * 1e3,
-            fourier_space_sampling[1] * self.wavelength * 1e3,
-        )
+        if hasattr(waves, "build"):
+            waves = waves.build(lazy=False)
 
-        array = _polar_detector_bins(
-            gpts=self.gpts,
-            sampling=angular_sampling,
-            inner=0.0,
-            outer=max_angle,
-            nbins_radial=1,
-            nbins_azimuthal=1,
-            fftshift=False,
-            rotation=0.0,
-            # offset=self.offset,
-            return_indices=False,
-        )
-        array = array >= 0.0
+        validated_sites = self.validate_sites(sites)
 
-        array = abs2(self.array * array)
+        if threshold is not None and threshold > 0.0:
+            xp = get_array_module(waves.array)
+            validated_sites = copy_to_device(validated_sites, waves.array)
 
-        return array
+            rounded_sites = xp.round((validated_sites / xp.array(self.sampling))).astype(int)
 
-    def integrated_intensities(self, max_angle):
+            local_potential = copy_to_device(self._local_potential, waves.array)
 
-        array = self.local_potential(max_angle).astype(np.complex64)
 
-        intensity = array.sum((-2, -1)) * np.prod(self.sampling)
+            shifted_local_potential = fast_roll(local_potential, rounded_sites)
 
-        return intensity.real
+            shifted_local_potential = shifted_local_potential.reshape(
+                (len(validated_sites),)
+                + (1,) * (len(waves.shape) - 2)
+                + shifted_local_potential.shape[-2:]
+            )
 
-    def filter_by_intensity(
-        self, threshold: float, max_angle: float
-    ) -> TransitionPotential:
-        intensities = self.integrated_intensities(max_angle)
-        order = np.argsort(-intensities)
-        intensities = intensities[order]
-        cumulative = np.cumsum(intensities / intensities.sum())
-        n = np.searchsorted(cumulative, threshold) + 1
-        included = order[:n]
-        return self[included]
+            overlaps = shifted_local_potential * abs2(waves.array[None])
+            overlaps = overlaps.sum(axis=(-2, -1))
+
+            mask = overlaps > threshold
+
+            mask = mask.any(tuple(range(1, len(overlaps.shape))))
+
+            mask = copy_to_device(mask, "cpu")
+            # if np.any(mask):
+            #     print(shifted_local_potential.shape, waves.shape)
+            #
+            #     plt.imshow(
+            #         shifted_local_potential[0, 0, 0]
+            #         / shifted_local_potential[0, 0, 0].max()
+            #         + abs2(waves.array).sum((0,1)) / abs2(waves.array[0, 0]).max()
+            #     )
+            #     plt.title("include")
+            #     # plt.show()
+            #     # plt.imshow(abs2(waves.array[0, 0]))
+            #     plt.show()
+            # else:
+            #     plt.imshow(
+            #         shifted_local_potential[0, 0, 0]
+            #         / shifted_local_potential[0, 0, 0].max()
+            #         + abs2(waves.array).sum((0,1)) / abs2(waves.array[0, 0]).max()
+            #     )
+            #     plt.title("skip")
+            #     # plt.show()
+            #     # plt.imshow(abs2(waves.array[0, 0]))
+            #     plt.show()
+
+            #print(type(mask), type(sites))
+
+            sites = sites[mask]
+
+        return sites
 
     def scatter(
         self, waves: Waves, sites: Atoms | Atom | np.ndarray, threshold: float = None
@@ -737,47 +887,43 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         self.accelerator.match(waves)
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+        xp = get_array_module(waves.array)
 
-        positions = self.validate_sites(sites)
-        positions /= self.sampling
+        sites = self.validate_sites(sites)
+        sites = self.filter_sites(waves, sites, threshold=threshold)
 
-        self._array = copy_to_device(self.array, waves.array)
-        positions = copy_to_device(positions, waves.array)
+        if len(sites) == 0:
+            array = waves.array[None][[False]]
 
-        array = ifft2(
-            self.array[None]
-            * fft_shift_kernel(positions, self.gpts)[:, None]
-            * energy2sigma(self.energy)
-        )
+        else:
+            self._array = copy_to_device(self.array, waves.array)
+            sites = copy_to_device(sites, waves.array)
 
-        array = array.reshape(
-            (
-                len(positions),
-                len(self),
+            sites = sites / xp.array(self.sampling, dtype=xp.float32)
+
+            array = ifft2(
+                self.array[None]
+                * fft_shift_kernel(sites, self.gpts)[:, None]
+                * energy2sigma(self.energy)
             )
-            + (1,) * (len(waves.shape) - 2)
-            + array.shape[-2:]
-        )
 
-        array = array * waves.array[None, None]
+            array = array.reshape(
+                (
+                    len(sites),
+                    len(self),
+                )
+                + (1,) * (len(waves.shape) - 2)
+                + array.shape[-2:]
+            )
 
-        array = array.reshape((-1,) + array.shape[2:])
+            array = array * waves.array[None, None]
 
-        if threshold is not None and threshold > 0.0:
-            values = abs2(array).sum((-2, -1))
-            mask = values > threshold
-            mask = mask.any(tuple(range(1, len(array.shape) - 2)))
-            where = np.where(mask)
-            array = array[where]
-
-        # xp = get_array_module(waves.array)
-        # array = xp.zeros((len(positions), len(self)) + waves.shape)
+            array = array.reshape((-1,) + array.shape[2:])
 
         d = waves._copy_kwargs(exclude=("array",))
         d["array"] = array
 
         ensemble_axes_metadata = [AxisMetadata(label="sites")]
-        # + self.ensemble_axes_metadata)
 
         d["ensemble_axes_metadata"] = (
             ensemble_axes_metadata + d["ensemble_axes_metadata"]

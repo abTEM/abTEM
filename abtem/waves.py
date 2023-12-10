@@ -851,7 +851,7 @@ class Waves(BaseWaves, ArrayObject):
                 normalize=normalize,
             )
 
-        #pattern = xp.zeros(self.shape, dtype=xp.float32)
+        # pattern = xp.zeros(self.shape, dtype=xp.float32)
 
         diffraction_patterns = DiffractionPatterns(
             pattern,
@@ -1679,7 +1679,7 @@ class Probe(_WavesBuilder):
         measurements = probes.apply_transform(multislice)
         return _reduce_ensemble(measurements)
 
-    def transition_potential_multislice(
+    def transition_potential_scan(
         self,
         potential: BasePotential | Atoms,
         transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
@@ -1687,10 +1687,58 @@ class Probe(_WavesBuilder):
         detectors: BaseDetector | list[BaseDetector] = None,
         sites: SliceIndexedAtoms | Atoms = None,
         detectors_elastic: BaseDetector | list[BaseDetector] = None,
-        double_channel:bool = True,
+        double_channel: bool = True,
+        threshold: float = 1.0,
         max_batch: int | str = "auto",
         lazy: bool = None,
     ) -> Waves | BaseMeasurements:
+        """
+        Parameters
+        ----------
+        potential : BasePotential | Atoms
+            The potential to be used for calculating the transition potentials.
+            It can be an instance of `BasePotential` or an `Atoms` object.
+        transition_potentials : BaseTransitionPotential | list[BaseTransitionPotential]
+            The transition potentials to be used for multislice calculations.
+            It can be an instance of `BaseTransitionPotential` or a list of `BaseTransitionPotential` objects.
+        scan : tuple | BaseScan, optional
+            The scan parameters. It can be a tuple or an instance of `BaseScan`.
+            Defaults to None.
+        detectors : BaseDetector | list[BaseDetector], optional
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            Defaults to None, which
+        sites : SliceIndexedAtoms | Atoms, optional
+            The slice indexed atoms to be used for multislice calculations.
+            It can be an instance of `SliceIndexedAtoms` or an `Atoms` object.
+            Defaults to None.
+        detectors_elastic : BaseDetector | list[BaseDetector], optional
+            The elastic detectors to be used for recording the measurements.
+            It can be an instance of `BaseDetector` or a list of `BaseDetector` objects.
+            Defaults to None.
+        double_channel : bool, optional
+            A boolean indicating whether to use double channel for recording the measurements.
+            Defaults to True.
+        max_batch : int | str, optional
+            The maximum batch size for parallel processing.
+            It can be an integer or the string "auto".
+            Defaults to "auto".
+        lazy : bool, optional
+            A boolean indicating whether to use lazy evaluation for the calculations.
+            Defaults to None.
+
+        Returns
+        -------
+        Waves | BaseMeasurements
+            The calculated waves or measurements, depending on the value of `lazy`.
+
+        """
+        if scan is None:
+            scan = GridScan()
+
+        if detectors is None:
+            detectors = FlexibleAnnularDetector()
+
         potential = _validate_potential(potential)
 
         probes = self._validate_and_build(
@@ -1704,9 +1752,11 @@ class Probe(_WavesBuilder):
             transition_potential=transition_potentials,
             sites=sites,
             double_channel=double_channel,
-            #pbar=None
+            threshold=threshold,
+            # pbar=None
         )
         measurements = probes.apply_transform(multislice)
+
         return _reduce_ensemble(measurements)
 
     def scan(

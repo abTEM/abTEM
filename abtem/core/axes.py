@@ -89,7 +89,13 @@ def format_title(
         units = ""
 
     if use_tex:
-        return f"{label}${format_value(value, formatting)}${units}"
+        value = format_value(value, formatting)
+        if isinstance(value, Number):
+            value = f"${value}$"
+        else:
+            value = f"{value}"
+
+        return f"{label}{value}{units}"
     else:
         return f"{label}{value:>{formatting}}{units}"
 
