@@ -15,7 +15,7 @@ from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import complex_exponential
-from abtem.core.config import config
+from abtem.core import config
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
@@ -417,6 +417,7 @@ def multislice_and_detect(
     detectors: list[BaseDetector] = None,
     conjugate: bool = False,
     transpose: bool = False,
+    pbar:bool = False
 ) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
@@ -542,6 +543,8 @@ def transition_potential_multislice_and_detect(
     transpose : bool, optional
         If True, reverse the order of propagation and transmission (default is False).
 
+
+
     Returns
     -------
     measurements : Waves or tuple of :class:`.BaseMeasurement`
@@ -613,9 +616,9 @@ def transition_potential_multislice_and_detect(
     )
 
     n_waves = np.prod(waves.shape[:-2])
-    n_slices = n_waves * potential.num_slices
+    n_slices = n_waves * potential.num_slices * potential.num_configurations
 
-    pbar = TqdmWrapper(total=n_slices)
+    pbar = TqdmWrapper(enabled=pbar, total=n_slices, leave=False)
 
     for (
         potential_index,
@@ -846,6 +849,7 @@ class MultisliceTransform(ArrayObjectTransform):
         multislice_func: callable = None,
         **multislice_func_kwargs,
     ):
+
         if multislice_func is None:
             multislice_func = multislice_and_detect
 
@@ -854,6 +858,11 @@ class MultisliceTransform(ArrayObjectTransform):
         self._potential = potential
 
         detectors = _validate_detectors(detectors)
+
+        if not "pbar" in multislice_func_kwargs.keys():
+            multislice_func_kwargs["pbar"] = config.get(
+                "local_diagnostics.task_level_progress", False
+            )
 
         self._detectors = detectors
         self._conjugate = conjugate

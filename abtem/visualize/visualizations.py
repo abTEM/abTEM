@@ -245,17 +245,35 @@ class BaseVisualization:
         # self.update_panel_labels()
 
     def _get_panel_titles(self):
-        titles = [
-            [
-                axis_element.format_title(".3g", include_label=i == 0)
-                for i, axis_element in enumerate(axis)
-            ]
-            for axis, axis_type in zip(self.ensemble_axes_metadata, self.axes_types)
-            if axis_type == "explode"
-        ]
+        titles = []
 
-        titles = list(itertools.product(*titles))
-        return titles
+        for i, (axis, axis_type) in enumerate(zip(self.ensemble_axes_metadata, self.axes_types)):
+            if axis_type == "explode":
+                axis_titles = []
+                if hasattr(axis, "__len__"):
+                    for i, axis_element in enumerate(axis):
+                        title = axis_element.format_title(".3g", include_label=i == 0)
+                        axis_titles.append(title)
+                else:
+                    axis_titles = [""] * self.axes.shape[i]
+                titles.append(axis_titles)
+
+        # Generate the cartesian product of the titles
+        titles_product = list(itertools.product(*titles))
+
+        return titles_product
+        #
+        # titles = [
+        #     [
+        #         axis_element.format_title(".3g", include_label=i == 0)
+        #         for i, axis_element in enumerate(axis)
+        #     ]
+        #     for axis, axis_type in zip(self.ensemble_axes_metadata, self.axes_types)
+        #     if axis_type == "explode"
+        # ]
+        #
+        # titles = list(itertools.product(*titles))
+        # return titles
 
     def _get_overlay_labels(self):
         labels = [
@@ -937,10 +955,13 @@ class VisualizationImshow(BaseVisualization):
                 ims[0].set_norm(norm)
             elif len(array.shape) == 3:
                 cmaps = [ListedColormap(c) for c in cmap]
-                print(cmaps)
+
+                print(norm)
+
                 alphas = [np.clip(norm(alpha), a_min=0.0, a_max=1.0) for alpha in array]
 
-                print(alphas[0], array.shape, array[0].shape)
+                print(cmaps)
+                # print(alphas[0], array.shape, array[0].shape)
                 ims = [
                     ax.imshow(
                         np.ones_like(alpha.T),
@@ -951,7 +972,9 @@ class VisualizationImshow(BaseVisualization):
                     )
                     for alpha, cmap in zip(alphas, cmaps)
                 ]
+
                 ax.set_facecolor("k")
+
             else:
                 raise NotImplementedError()
 
@@ -1405,3 +1428,39 @@ def show_atoms(
         ax.set_ylim([np.min(cell_lines_y), np.max(cell_lines_y)])
 
     return fig, ax
+
+
+"""
+from matplotlib import colors
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+
+fig, ax = plt.subplots()
+ax.set_facecolor("k")
+
+cmap = ListedColormap(["lime"])
+norm = colors.Normalize()
+norm.autoscale_None(stacked.array[0])
+alpha = norm(stacked.array[0])
+
+im = ax.imshow(
+    np.ones_like(stacked.array[0]).T, alpha=alpha.T, cmap=cmap, origin="lower"
+)
+
+cmap = LinearSegmentedColormap.from_list("red", ["k", "lime"])
+plt.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
+
+c = "r"
+cmap = ListedColormap([c])
+norm = colors.Normalize()
+norm.autoscale_None(stacked.array[1])
+alpha = norm(stacked.array[1])
+
+im = ax.imshow(
+    np.ones_like(stacked.array[1]).T, alpha=alpha.T, cmap=cmap, origin="lower"
+)
+
+cmap = LinearSegmentedColormap.from_list("c", ["k", c])
+plt.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
+
+"""

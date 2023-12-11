@@ -12,7 +12,7 @@ import numpy as np
 from ase import Atoms
 from ase import data
 from ase.cell import Cell
-from ase.data import chemical_symbols, atomic_numbers
+from ase.data import chemical_symbols
 from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
@@ -235,6 +235,11 @@ class FrozenPhonons(BaseFrozenPhonons):
         If dict, a displacement standard deviation should be provided for each species. The atomic species can be
         specified as atomic number or a symbol, using the ASE standard.
         If list or array, a displacement standard deviation should be provided for each atom.
+
+        Anistropic displacements may be given by providing a standard deviation for each principal direction.
+        This may be a tuple of three numbers for identical displacements for all atoms. A dict of tuples of three
+        numbers to specify displacements for each species. A list or array with three numbers for each atom.
+
     directions : str, optional
         The displacement directions of the atoms as a string; for example 'xy' (default) for displacement in the `x`-
         and `y`-direction (i.e. perpendicular to the propagation direction).
@@ -273,18 +278,7 @@ class FrozenPhonons(BaseFrozenPhonons):
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
         )
 
-
-        self._is_anisotropic()
-
-        self._anisotropic = True
-
-    def _is_anisotropic(self):
-
-        sigmas = self._validate_sigmas(self._atoms)
-
-        print(sigmas)
-
-    def _convert_sigmas_to_array(self, atoms):
+    def _validate_sigmas(self, atoms):
         unique_symbols = [chemical_symbols[number] for number in self.atomic_numbers]
         sigmas = self._sigmas
 
@@ -293,31 +287,19 @@ class FrozenPhonons(BaseFrozenPhonons):
             for symbol in unique_symbols:
                 new_sigmas[symbol] = sigmas
 
-            sigmas = np.full(len(atoms), new_sigmas)
+            anisotropic = False
+            sigmas = new_sigmas
 
-        #if isinstance(sigmas, )
+        elif isinstance(sigmas, dict):
+            anisotropic = any(hasattr(value, "__len__") for value in sigmas.values())
 
-        if isinstance(sigmas, dict):
+            if anisotropic and not all(len(value) == 3 for value in sigmas.values()):
+                raise RuntimeError("Three values for each element must be given for anisotropic displacements.")
+
             if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
                 raise RuntimeError(
                     "Displacement standard deviation must be provided for all atomic species."
                 )
-
-            for sigma, key in sigmas.items():
-                lengths = []
-                if hasattr(sigma, "__len__"):
-                    assert len(sigma == 3)
-                    lengths.append(len(sigma))
-                else:
-                    lengths.append(0)
-
-                if np.all(np.array(lengths) == 3):
-                    pass
-
-
-
-
-
 
         elif isinstance(sigmas, Iterable):
             sigmas = np.array(sigmas, dtype=np.float32)
@@ -325,10 +307,22 @@ class FrozenPhonons(BaseFrozenPhonons):
                 raise RuntimeError(
                     "Displacement standard deviation must be provided for all atoms."
                 )
+
+            if len(sigmas.shape) == 2:
+                if sigmas.shape[1] == 3:
+                    anisotropic = True
+                else:
+                    raise RuntimeError(
+                        "Three values for each atom must be given for anisotropic displacements."
+                    )
+            elif len(sigmas.shape) == 1:
+                anisotropic = False
+            else:
+                raise RuntimeError()
         else:
             raise ValueError()
 
-        return sigmas
+        return sigmas, anisotropic
 
     @property
     def ensemble_shape(self):
@@ -382,79 +376,37 @@ class FrozenPhonons(BaseFrozenPhonons):
                 raise RuntimeError(f"Directions must be 'x', 'y' or 'z', not {axes}.")
         return axes
 
-    def _apply_displacements(self, sigmas, atoms):
-        pass
-
-        # rng = np.random.default_rng(self.seed[0])
-        # atoms = atoms.copy()
-        #
-        # if not self._anisotropic:
-        #     r = rng.normal(size=(len(atoms), 3)) / np.sqrt(3)
-        #
-        #     for axis in self._axes:
-        #         atoms.positions[:, axis] += sigmas * r[:, axis]
-        # else:
-        #
-        #
-        #     displacements = [rng.normal(size=(len(atoms))) * sigmas for _ in range(3)]
-        #
-        #     for i, displacement in enumerate(displacements):
-        #         atoms.positions[:, i] += displacement
-        # return atoms
-
-    def _realize_sigmas(self, sigmas, atoms):
-        sigmas = self._validate_sigmas(sigmas)
-
-        if self._anisotropic:
-            realized_sigmas = np.zeros((len(self.atoms), 3))
-        else:
-            realized_sigmas = np.zeros(len(self.atoms))
-
-        numbers = self._atoms.numbers
-
-        for key, sigma in sigmas.items():
-            number = atomic_numbers[key]
-
-            which_atoms = numbers == number
-
-            realized_sigmas[which_atoms] = sigma
-
-
-        print(realized_sigmas)
-
-        sss
-
-        # if isinstance(sigmas, dict):
-        #
-        #
-        #
-        #     try :
-        #         print(sigmas)
-        #     except:
-        #         pass
-        #
-
-        # temp = np.zeros(len(atoms.numbers), dtype=np.float32)
-        # for unique in np.unique(atoms.numbers):
-        #     temp[atoms.numbers == unique] = np.float32(
-        #         sigmas[chemical_symbols[unique]]
-        #     )
-
-        # print(sigmas)
-        #
-        # sss
-        #
-        # return realized_sigmas
-
     def randomize(self, atoms: Atoms) -> Atoms:
-        sigmas = self._realize_sigmas(self._sigmas, atoms)
+        sigmas, anisotropic = self._validate_sigmas(atoms)
 
-        # sigmas = temp
-        #
-        # elif not isinstance(sigmas, np.ndarray):
-        #     raise RuntimeError()
+        if isinstance(sigmas, dict):
+            if anisotropic:
+                temp = np.zeros((len(atoms.numbers), 3), dtype=np.float32)
+            else:
+                temp = np.zeros(len(atoms.numbers), dtype=np.float32)
 
-        atoms = self._apply_displacements(sigmas, atoms)
+            for unique in np.unique(atoms.numbers):
+                temp[atoms.numbers == unique] = np.float32(
+                    sigmas[chemical_symbols[unique]]
+                )
+            sigmas = temp
+
+        elif not isinstance(sigmas, np.ndarray):
+            raise RuntimeError()
+
+        atoms = atoms.copy()
+
+        rng = np.random.default_rng(self.seed[0])
+
+        if anisotropic:
+            r = rng.normal(size=(len(atoms), 3))
+            for axis in self._axes:
+                atoms.positions[:, axis] += sigmas[:, axis] * r[:, axis]
+        else:
+            r = rng.normal(size=(len(atoms), 3)) / np.sqrt(3)
+
+            for axis in self._axes:
+                atoms.positions[:, axis] += sigmas * r[:, axis]
 
         return atoms
 

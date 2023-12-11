@@ -72,6 +72,7 @@ from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
     ArrayObjectTransform,
 )
+from abtem.core import config
 
 
 def _ensure_parity(n, even, v=1):
@@ -1753,8 +1754,8 @@ class Probe(_WavesBuilder):
             sites=sites,
             double_channel=double_channel,
             threshold=threshold,
-            # pbar=None
         )
+
         measurements = probes.apply_transform(multislice)
 
         return _reduce_ensemble(measurements)
