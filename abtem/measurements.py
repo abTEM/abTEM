@@ -28,7 +28,8 @@ from abtem.core.axes import (
     ReciprocalSpaceAxis,
     LinearAxis,
     NonLinearAxis,
-    ScanAxis, OrdinalAxis,
+    ScanAxis,
+    OrdinalAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
@@ -228,7 +229,7 @@ def _polar_detector_bins(
     return_indices: bool = False,
 ) -> np.ndarray | list[np.ndarray]:
     alpha, phi = polar_spatial_frequencies(
-        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
+        gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
     )
     phi = (phi + rotation) % (2 * np.pi)
 
@@ -1584,7 +1585,7 @@ class _BaseMeasurement1D(BaseMeasurements):
             overlay=overlay,
             figsize=figsize,
             interact=interact,
-            **kwargs
+            **kwargs,
         )
 
         if title is not None:
@@ -1592,7 +1593,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         if units is not None:
             visualization.set_xunits(units)
-            visualization.set_yunits(units)
+            visualization.set_yunits()
 
         if legend:
             visualization.set_legends()
@@ -2520,7 +2521,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def radial_binning(
         self, step_size: float = 1.0, inner: float = 0.0, outer: float = None
-    ) -> "PolarMeasurements":
+    ) -> PolarMeasurements:
         """
         Create polar measurement(s) from the diffraction pattern(s) by binning the measurements in annular regions. This
         method may be used to simulate a segmented detector with a specified number of radial bins.
@@ -2768,6 +2769,116 @@ class DiffractionPatterns(_BaseMeasurement2D):
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         return self.__class__(**kwargs)
+
+    def azimuthal_average(
+        self,
+        max_angle: float = None,
+        order: int = 1,
+        radial_sampling: float = None,
+        azimuthal_sampling: float = None,
+    ) -> ReciprocalSpaceLineProfiles:
+        """
+        Calculate the azimuthal averages of the diffraction patterns.
+
+        Parameters
+        ----------
+        max_angle : float, optional
+            The maximum included scattering angle in the azimuthal averages [mrad].
+        order : float, optional
+            The spline interpolation order. Default is 1.
+        radial_sampling : float, optional
+            The radial sampling of the azimuthal averages [mrad]. Default is equal to the smallest value of the x and y
+            component of the angular sampling.
+        azimuthal_sampling : float
+            The azimuthal step size between samples used for averaging [rad].
+        """
+
+        def _map_azimuthal_average(
+            array, max_angle, radial_sampling, angular_sampling, azimuthal_sampling
+        ):
+            shape = array.shape
+            center = (shape[-2] // 2, shape[-1] // 2)
+
+            ks = np.linspace(
+                0, max_angle, int(max_angle / radial_sampling), endpoint=False
+            )
+            a = np.linspace(
+                0, 2 * np.pi, int(2 * np.pi / azimuthal_sampling), endpoint=False
+            )
+
+            points = [
+                (
+                    np.cos(a) * r / angular_sampling[0],
+                    np.sin(a) * r / angular_sampling[1],
+                )
+                for r in ks
+            ]
+
+            points = np.concatenate(points, axis=1).T
+            points = points + center
+
+            map_coordinates = get_ndimage_module(array).map_coordinates
+
+            blocks = np.zeros(array.shape[:-2], dtype=object)
+            for i in np.ndindex(array.shape[:-2]):
+                unrolled = map_coordinates(array[i], points.T, order=order)
+                unrolled = unrolled.reshape(ks.shape + (-1,)).mean(1)
+                unrolled = unrolled[(slice(None),) + (None,) * len(array.shape[:-2])]
+                blocks.itemset(i, unrolled)
+
+            if not blocks.size:
+                return blocks.item()
+
+            blocks = np.block(blocks.tolist())
+            blocks = np.moveaxis(blocks, source=0, destination=-1)
+            return blocks
+
+        if max_angle is None:
+            max_angle = -min(min(self.angular_limits))
+
+        if radial_sampling is None:
+            radial_sampling = min(self.angular_sampling)
+
+        if azimuthal_sampling is None:
+            azimuthal_sampling = 2 * np.arcsin(radial_sampling / 2 / max_angle)
+
+        if self.is_lazy:
+            xp = get_array_module(self.array)
+            n = int(max_angle / radial_sampling)
+            base_axes = tuple(
+                range(
+                    len(self.ensemble_shape),
+                    len(self.ensemble_shape) + len(self.base_shape),
+                )
+            )
+            array = self.array.map_blocks(
+                _map_azimuthal_average,
+                max_angle=max_angle,
+                radial_sampling=radial_sampling,
+                angular_sampling=self.angular_sampling,
+                azimuthal_sampling=azimuthal_sampling,
+                drop_axis=base_axes,
+                new_axis=base_axes[0],
+                chunks=self.array.chunks[:-2] + (n,),
+                meta=xp.array((), dtype=np.float32),
+            )
+        else:
+            array = _map_azimuthal_average(
+                self.array,
+                max_angle=max_angle,
+                radial_sampling=radial_sampling,
+                angular_sampling=self.angular_sampling,
+                azimuthal_sampling=azimuthal_sampling,
+            )
+
+        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+
+        return ReciprocalSpaceLineProfiles(
+            array,
+            sampling=radial_sampling / (wavelength * 1e3),
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+        )
 
     def block_direct(
         self, radius: float = None, margin: bool = None
@@ -3163,6 +3274,7 @@ class PolarMeasurements(BaseMeasurements):
         new_array[..., regions < 0] = np.nan
 
         wavelength = energy2wavelength(self._get_from_metadata("energy"))
+
         sampling = (
             angular_sampling[0] / (wavelength * 1e3),
             angular_sampling[1] / (wavelength * 1e3),
@@ -3505,8 +3617,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             criterion = -np.max(self.intensities, axis=ensemble_axes)
         else:
             raise ValueError()
-
-        # print(criterion.shape)
 
         order = np.argsort(criterion)
         positions = self.positions[order]

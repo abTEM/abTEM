@@ -1918,17 +1918,17 @@ class MeasurementVisualization1D(MeasurementVisualization):
             new_lines = []
             for _, line_profile in measurement.generate_ensemble(keepdims=True):
 
-                if not "label" in kwargs:
-                    labels = []
-                    for axis in line_profile.ensemble_axes_metadata:
-                        labels += [axis.format_title(".3f")]
+                labels = []
+                for axis in line_profile.ensemble_axes_metadata:
+                    labels += [axis.format_title(".3g")]
 
-                    kwargs["label"] = "-".join(labels)
+                label = "-".join(labels)
 
                 new_lines.append(
                     ax.plot(
                         x,
                         line_profile.array[(0,) * (len(line_profile.shape) - 1)],
+                        label=label,
                         **kwargs
                     )[0]
                 )

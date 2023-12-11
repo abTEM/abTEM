@@ -4,6 +4,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from copy import copy
 from functools import partial
+from numbers import Number
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,6 +13,7 @@ from abtem.array import T
 from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
+from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.measurements import (
     DiffractionPatterns,
@@ -19,7 +21,8 @@ from abtem.measurements import (
     Images,
     RealSpaceLineProfiles,
     _scanned_measurement_type,
-    _polar_detector_bins, _scan_shape,
+    _polar_detector_bins,
+    _scan_shape,
 )
 from abtem.transform import ArrayObjectTransform
 from abtem.visualize import discrete_cmap
@@ -234,8 +237,8 @@ class AnnularDetector(BaseDetector):
         return []
 
     def _out_ensemble_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
-        ensemble_shape = super()._out_ensemble_shape(waves, index) # noqa
-        return ensemble_shape[:-len(_scan_shape(waves))]
+        ensemble_shape = super()._out_ensemble_shape(waves, index)  # noqa
+        return ensemble_shape[: -len(_scan_shape(waves))]
 
     def _out_base_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
         return _scan_shape(waves)
@@ -291,7 +294,7 @@ class AnnularDetector(BaseDetector):
         -------
         measurement : Images
         """
-        return self.apply(waves) # noqa
+        return self.apply(waves)  # noqa
 
     def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
@@ -387,24 +390,24 @@ class _AbstractRadialDetector(BaseDetector):
         """Spacing between the azimuthal detector bins [mrad]."""
         pass
 
+    @property
     @abstractmethod
-    def _calculate_nbins_radial(self, waves: BaseWaves):
+    def nbins_radial(self):
+        """Spacing between the azimuthal detector bins [mrad]."""
         pass
 
+    @property
     @abstractmethod
-    def _calculate_nbins_azimuthal(self, waves: BaseWaves):
+    def nbins_azimuthal(self):
+        """Spacing between the azimuthal detector bins [mrad]."""
         pass
 
     def _out_dtype(self, waves: Waves, index: bool = 0):
         return np.float32
 
     def _out_base_shape(self, waves: Waves, index: bool = 0):
-        shape = (
-            self._calculate_nbins_radial(waves),
-            self._calculate_nbins_azimuthal(waves),
-        )
-
-        return shape
+        self._match_waves(waves)
+        return self.nbins_radial, self.nbins_azimuthal
 
     def _out_type(self, waves: Waves, index: bool = 0):
         return PolarMeasurements
@@ -464,8 +467,8 @@ class _AbstractRadialDetector(BaseDetector):
         measurement = waves.diffraction_patterns(max_angle="cutoff", parity="same")
 
         measurement = measurement.polar_binning(
-            nbins_radial=self._calculate_nbins_radial(waves),
-            nbins_azimuthal=self._calculate_nbins_azimuthal(waves),
+            nbins_radial=self.nbins_radial,
+            nbins_azimuthal=self.nbins_azimuthal,
             inner=inner,
             outer=outer,
             rotation=self._rotation,
@@ -476,6 +479,10 @@ class _AbstractRadialDetector(BaseDetector):
             measurement = measurement.to_cpu()
 
         return measurement.array
+
+    def _match_waves(self, waves):
+        if self.outer is None:
+            self._outer = min(waves.cutoff_angles)
 
     def detect(self, waves: Waves) -> PolarMeasurements:
         """
@@ -490,7 +497,7 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         measurement : PolarMeasurements
         """
-        return self.apply(waves) # noqa
+        return self.apply(waves)  # noqa
 
     def get_detector_regions(self, waves: BaseWaves = None):
         """
@@ -506,17 +513,8 @@ class _AbstractRadialDetector(BaseDetector):
         detector_region : PolarMeasurements
         """
 
-        bins = np.arange(
-            0,
-            self._calculate_nbins_radial(waves)
-            * self._calculate_nbins_azimuthal(waves),
-        )
-        bins = bins.reshape(
-            (
-                self._calculate_nbins_radial(waves),
-                self._calculate_nbins_azimuthal(waves),
-            )
-        )
+        bins = np.arange(0, self.nbins_radial * self.nbins_azimuthal)
+        bins = bins.reshape((self.nbins_radial, self.nbins_azimuthal))
 
         metadata = copy(waves.metadata)
         metadata.update({"label": "detector regions", "units": ""})
@@ -532,7 +530,14 @@ class _AbstractRadialDetector(BaseDetector):
 
         return polar_measurements
 
-    def show(self, waves: BaseWaves = None, **kwargs):
+    def show(
+        self,
+        waves: BaseWaves = None,
+        gpts: int | tuple[int, int] = None,
+        sampling: float | tuple[int, int] = None,
+        energy: float = None,
+        **kwargs,
+    ):
         """
         Show the segmented detector regions as a polar plot.
 
@@ -540,17 +545,81 @@ class _AbstractRadialDetector(BaseDetector):
         ----------
         waves : BaseWaves
             The waves to derive the segmented detector regions from.
+        gpts : two int, optional
+            Number of grid points describing the wave functions to be detected.
+        sampling : two float, optional
+            Lateral sampling of the wave functions to be detected [1 / Å].
+        energy : float, optional
+            Electron energy of the wave functions to be detected [eV].
         kwargs :
-            Optional keyword arguments for PolarMeasurements.show.
+            Optional keyword arguments for DiffractionPatterns.show.
 
         Returns
         -------
         visualization : MeasurementVisualization2D
         """
 
-        num_colors = self._calculate_nbins_radial(
-            waves
-        ) * self._calculate_nbins_azimuthal(waves)
+        if waves is not None:
+            if gpts is not None or sampling is not None or energy is not None:
+                raise ValueError(
+                    "provide either waves or 'gpts', 'sampling' and 'energy'"
+                )
+            segmented_regions = self.get_detector_regions(waves)
+            diffraction_patterns = segmented_regions.to_diffraction_patterns(waves.gpts)
+
+        elif energy is None:
+            raise ValueError("provide the waves or the energy of waves")
+        else:
+            if gpts is None:
+                gpts = 1024
+
+            if not hasattr(gpts, "__len__"):
+                gpts = (gpts,) * 2
+
+            if sampling is None:
+                angular_sampling = (
+                    self.outer / gpts[0] * 2 * 1.1,
+                    self.outer / gpts[1] * 2 * 1.1,
+                )
+                reciprocal_space_sampling = (
+                    angular_sampling[0] / (energy2wavelength(energy) * 1e3),
+                    angular_sampling[1] / (energy2wavelength(energy) * 1e3),
+                )
+            else:
+                if not hasattr(sampling, "__len__"):
+                    sampling = (sampling,) * 2
+
+                reciprocal_space_sampling = 1 / (gpts[0] * sampling[0]), 1 / (
+                    gpts[0] * sampling[0]
+                )
+                angular_sampling = (
+                    reciprocal_space_sampling[0] * energy2wavelength(energy) * 1e3,
+                    reciprocal_space_sampling[1] * energy2wavelength(energy) * 1e3,
+                )
+
+            regions = _polar_detector_bins(
+                gpts=gpts,
+                sampling=angular_sampling,
+                inner=self.inner,
+                outer=self.outer,
+                nbins_radial=self.nbins_radial,
+                nbins_azimuthal=self.nbins_azimuthal,
+                fftshift=True,
+                rotation=self.rotation,
+                offset=(0.0, 0.0),
+                return_indices=False,
+            )
+
+            regions = regions.astype(np.float32)
+            regions[..., regions < 0] = np.nan
+
+            diffraction_patterns = DiffractionPatterns(
+                regions, sampling=reciprocal_space_sampling, metadata={"energy": energy}
+            )
+
+        n_bins_radial = self.nbins_radial
+        n_bins_azimuthal = self.nbins_azimuthal
+        num_colors = n_bins_radial * n_bins_azimuthal
 
         if "cmap" not in kwargs:
             if num_colors <= 10:
@@ -569,11 +638,7 @@ class _AbstractRadialDetector(BaseDetector):
         if "units" not in kwargs:
             kwargs["units"] = "mrad"
 
-        segmented_regions = self.get_detector_regions(waves).to_diffraction_patterns(
-            waves.gpts
-        )
-
-        return segmented_regions.show(**kwargs)
+        return diffraction_patterns.show(**kwargs)
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
@@ -617,6 +682,14 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         )
 
     @property
+    def nbins_radial(self):
+        return int(np.floor(self.outer - self.inner) / self.step_size)
+
+    @property
+    def nbins_azimuthal(self):
+        return 1
+
+    @property
     def step_size(self) -> float:
         """Step size [mrad]."""
         return self._step_size
@@ -633,16 +706,9 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     def azimuthal_sampling(self) -> float:
         return 2 * np.pi
 
-    def _calculate_nbins_radial(self, waves: Waves) -> int:
-        if self.outer is None:
-            outer = min(waves.cutoff_angles)
-        else:
-            outer = self.outer
-
-        return int(np.floor(outer - self.inner) / self.step_size)
-
-    def _calculate_nbins_azimuthal(self, waves: Waves) -> int:
-        return 1
+    def detect(self, waves: Waves) -> PolarMeasurements:
+        self._match_waves(waves)
+        return super().detect(waves)
 
 
 class SegmentedDetector(_AbstractRadialDetector):
@@ -725,12 +791,6 @@ class SegmentedDetector(_AbstractRadialDetector):
     @nbins_azimuthal.setter
     def nbins_azimuthal(self, value: float):
         self._nbins_azimuthal = value
-
-    def _calculate_nbins_radial(self, waves: Waves = None):
-        return self.nbins_radial
-
-    def _calculate_nbins_azimuthal(self, waves: Waves = None):
-        return self.nbins_azimuthal
 
 
 class PixelatedDetector(BaseDetector):
@@ -898,7 +958,7 @@ class PixelatedDetector(BaseDetector):
         -------
         measurement : DiffractionPatterns
         """
-        return self.apply(waves) # noqa
+        return self.apply(waves)  # noqa
 
 
 class WavesDetector(BaseDetector):
