@@ -6,7 +6,6 @@
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import ImageGrid
-from myst_nb import glue
 import numpy as np
 
 import abtem
@@ -89,7 +88,6 @@ ctf_func({'defocus':100}).show()
 # In[6]:
 
 
-from abtem.visualize.utils import domain_coloring
 import cplot
 
 
