@@ -63,8 +63,25 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
 
 
 def format_title(
-        axes, formatting: str = ".3f", units: str = None, include_label: bool = True
+    axes, formatting: str = ".3f", units: str = None, include_label: bool = True
 ):
+    """
+    Parameters
+    ----------
+    axes : object
+        The abtem AxisMetadata object to format as a title.
+    formatting : str, optional
+        The string format to apply to floating point values. Default is '.3f'.
+    units : str, optional
+        The units to display after the value. Default is derived from the AxisMetadata object.
+    include_label : bool, optional
+        Whether to include the label of the axes in the title. Default is True.
+
+    Returns
+    -------
+    str
+        The formatted title for the plot.
+    """
     try:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
     except KeyError:
@@ -89,7 +106,13 @@ def format_title(
         units = ""
 
     if use_tex:
-        return f"{label}${format_value(value, formatting)}${units}"
+        value = format_value(value, formatting)
+        if isinstance(value, Number):
+            value = f"${value}$"
+        else:
+            value = f"{value}"
+
+        return f"{label}{value}{units}"
     else:
         return f"{label}{value:>{formatting}}{units}"
 
