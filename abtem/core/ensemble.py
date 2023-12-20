@@ -30,7 +30,6 @@ def _wrap_with_array(x, ndims: int = None):
 
 def _wrap_args_with_array(*args, ndims):
     args = _wrap_with_array(args, ndims)
-    print(args)
     return args
 
 

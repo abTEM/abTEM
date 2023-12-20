@@ -446,7 +446,6 @@ def disk_meshgrid(r: int) -> np.ndarray:
     disc_indices : np.ndarray
     """
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
-    print(cols.shape)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T
     inside = (rows**2 + cols**2) <= r**2

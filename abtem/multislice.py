@@ -11,11 +11,12 @@ from ase import Atoms
 
 from abtem.antialias import AntialiasAperture
 from abtem.antialias import antialias_aperture
+from abtem.core import config
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import complex_exponential
-from abtem.core import config
+from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
@@ -33,10 +34,11 @@ from abtem.potentials.iam import (
     PotentialArray,
     _validate_potential,
 )
+from abtem.real_space_multislice import LaplaceOperator
+from abtem.real_space_multislice import multislice_step as real_space_multislice_step
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
-from abtem.core.diagnostics import TqdmWrapper
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -293,7 +295,7 @@ def allocate_multislice_measurements(
     return measurements
 
 
-def multislice_step(
+def conventional_multislice_step(
     waves: Waves,
     potential_slice: PotentialArray | TransmissionFunction,
     propagator: FresnelPropagator,
@@ -417,7 +419,8 @@ def multislice_and_detect(
     detectors: list[BaseDetector] = None,
     conjugate: bool = False,
     transpose: bool = False,
-    pbar:bool = False
+    pbar: bool = False,
+    method: str = "conventional",
 ) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
@@ -443,9 +446,33 @@ def multislice_and_detect(
         Exit waves or detected measurements or lists of measurements.
     """
     waves = waves.ensure_real_space()
+    detectors = _validate_detectors(detectors)
 
-    antialias_aperture = AntialiasAperture()
-    propagator = FresnelPropagator()
+    if method in ("conventional", "fft"):
+        antialias_aperture = AntialiasAperture()
+        propagator = FresnelPropagator()
+
+        def multislice_step(waves, potential_slice):
+            return conventional_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                antialias_aperture=antialias_aperture,
+                propagator=propagator,
+                conjugate=conjugate,
+                transpose=transpose,
+            )
+
+    else:
+        laplace_operator = LaplaceOperator(12)
+        num_terms = 40
+
+        def multislice_step(waves, potential_slice):
+            return real_space_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                laplace=laplace_operator,
+                num_terms=num_terms,
+            )
 
     (
         extra_ensemble_axes_shape,
@@ -461,6 +488,10 @@ def multislice_and_detect(
             extra_ensemble_axes_shape,
             extra_ensemble_axes_metadata,
         )
+
+    n_waves = np.prod(waves.shape[:-2])
+    n_slices = n_waves * potential.num_slices * potential.num_configurations
+    pbar = TqdmWrapper(enabled=pbar, total=int(n_slices), leave=False)
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
@@ -483,11 +514,11 @@ def multislice_and_detect(
             waves = multislice_step(
                 waves,
                 potential_slice,
-                propagator,
-                antialias_aperture,
-                conjugate=conjugate,
-                transpose=transpose,
+                # conjugate=conjugate,
+                # transpose=transpose,
             )
+
+            pbar.update_if_exists(int(n_waves))
 
             depth += potential_slice.axes_metadata[0].values[0]
 
@@ -508,6 +539,8 @@ def multislice_and_detect(
             detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
             for detector in detectors
         ]
+
+    pbar.close_if_exists()
 
     return measurements
 
@@ -849,7 +882,6 @@ class MultisliceTransform(ArrayObjectTransform):
         multislice_func: callable = None,
         **multislice_func_kwargs,
     ):
-
         if multislice_func is None:
             multislice_func = multislice_and_detect
 

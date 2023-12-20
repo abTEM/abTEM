@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import math
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -6,7 +8,6 @@ import scipy.ndimage
 from numba import stencil, njit
 
 from abtem.core.energy import energy2sigma
-import math
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -86,12 +87,14 @@ def _laplace_stencil_array(accuracy):
     return stencil
 
 
-def _laplace_operator_func(accuracy, prefactor, dtype=np.complex128):
+def _laplace_operator_stencil(accuracy, prefactor, dtype=np.complex128):
     c = _finite_difference_coefficients(2, accuracy)
     c = c * prefactor
     c = c.astype(dtype)
     c = np.roll(c, -(len(c) // 2))
     n = len(c) // 2
+    pad_width = [(n,n),(n,n)]
+    print(n)
 
     @stencil(neighborhood=((-n, n + 1), (-n, n + 1)))
     def stencil_func(a):
@@ -104,7 +107,16 @@ def _laplace_operator_func(accuracy, prefactor, dtype=np.complex128):
     def _laplace_stencil(a):
         return stencil_func(a)
 
-    return _laplace_stencil
+    def _apply_boundary(mode="wrap", pad_width=pad_width):
+        def stencil_with_boundary(func):
+            def func_wrapper(a:np.ndarray):
+                a=np.pad(a, pad_width=pad_width, mode=mode)
+                res  = func(a)
+                return res[n:-n,n:-n]
+            return func_wrapper
+        return stencil_with_boundary
+
+    return _apply_boundary()(_laplace_stencil)
 
 
 def _laplace_operator_func_slow(accuracy, prefactor):
@@ -116,12 +128,19 @@ def _laplace_operator_func_slow(accuracy, prefactor):
     #return scipy.ndimage.convolve(array, stencil, mode="wrap")
 
 
+# class LaplaceOperator:
+#
+#     def __init__(self, accuracy, prefactor):
+#
+
+
 def _multislice_exponential_series(
     waves: np.ndarray,
     transmission_function: np.ndarray,
     num_terms: int,
     laplace: callable,
 ):
+
     temp = laplace(waves) + waves * transmission_function
     waves += temp
     for i in range(2, num_terms + 1):
@@ -140,14 +159,13 @@ def multislice_step(
     if num_terms < 1:
         raise ValueError()
 
-    prefactor = (
-        1.0j
-        * waves.wavelength
-        * potential_slice.thickness
-        / (4 * np.pi)
-        / np.prod(waves.sampling)
-    )
-
+    # prefactor = (
+    #     1.0j
+    #     * waves.wavelength
+    #     * potential_slice.thickness
+    #     / (4 * np.pi)
+    #     / np.prod(waves.sampling)
+    # )
 
     transmission_function = 1.0j * potential_slice.array[0] * energy2sigma(waves.energy)
 

@@ -91,8 +91,6 @@ class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCM
         exit_plane_index = 0
         exit_planes = self.exit_planes
 
-        print(exit_planes)
-
         if exit_planes[0] == -1:
             exit_plane_index += 1
 
