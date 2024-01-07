@@ -400,6 +400,7 @@ class FrozenPhonons(BaseFrozenPhonons):
 
         if anisotropic:
             r = rng.normal(size=(len(atoms), 3))
+
             for axis in self._axes:
                 atoms.positions[:, axis] += sigmas[:, axis] * r[:, axis]
         else:

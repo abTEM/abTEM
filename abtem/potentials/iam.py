@@ -728,7 +728,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return self.frozen_phonons._partition_args(chunks, lazy=lazy)
 
 
-class _PotentialBuilder(BasePotential):
+class _PotentialBuilder(_FieldBuilder, BasePotential):
     pass
 
 
@@ -1317,6 +1317,7 @@ class CrystalPotential(_PotentialBuilder):
         box = extent + (potential_unit.thickness * repetitions[2],)
         slice_thickness = potential_unit.slice_thickness * repetitions[2]
         super().__init__(
+            array_object=PotentialArray,
             gpts=gpts,
             cell=Cell(np.diag(box)),
             slice_thickness=slice_thickness,

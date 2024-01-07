@@ -14,40 +14,6 @@ if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
 
 
-@njit(parallel=True, fastmath=True)
-def anisotropic_5_point_stencil(array_in, array_out=None):
-    @stencil
-    def _stencil_func(a):
-        c3 = np.complex64(4.0)
-        return -c3 * a[0, 0] + a[0, 1] + a[-1, 0] + a[1, 0] + a[0, -1]
-
-    if array_out is not None:
-        return _stencil_func(array_in, out=array_out)
-    else:
-        return _stencil_func(array_in)
-
-
-@njit(parallel=True, fastmath=True)
-def isotropic_9_point_stencil(
-    array_in, prefactor: float = 1.0, array_out: np.ndarray = None
-):
-    @stencil
-    def _stencil_func(a, c):
-        c1 = np.complex128(1.0 / 6.0 * prefactor)
-        c2 = np.complex128(2.0 / 3.0 * prefactor)
-        c3 = np.complex128(-10.0 / 3.0 * prefactor)
-        return (
-            c1 * (a[1, 1] + a[1, -1] + a[-1, -1] + a[-1, 1])
-            + c2 * (a[1, 0] + a[0, -1] + a[-1, 0] + a[0, 1])
-            + c3 * a[0, 0]
-        )
-
-    if array_out is not None:
-        return _stencil_func(array_in, prefactor, out=array_out)
-    else:
-        return _stencil_func(array_in, prefactor)
-
-
 def _get_central_offsets(derivative, accuracy):
     assert accuracy % 2 == 0
     num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy

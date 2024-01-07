@@ -72,7 +72,8 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         positions : np.ndarray
             2D array of xy-positions of the centers of each radial function [Å].
         a : np.ndarray
-            Lower integration limit of the projection integrals along z for each position [Å]. The limit is given
+            Lower integration limit of the pr
+            ojection integrals along z for each position [Å]. The limit is given
             relative to the center of the radial function.
         b : np.ndarray
             Upper integration limit of the projection integrals along z for each position [Å]. The limit is given
@@ -452,7 +453,6 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         sampling: tuple[float, float],
         device: str = "cpu",
     ):
-
         xp = get_array_module(device)
         kx, ky = spatial_frequencies(gpts, sampling, xp=np)
 
@@ -539,7 +539,6 @@ def interpolate_radial_functions(
     dt = np.log(radial_gpts[-1] / radial_gpts[0]) / (n - 1)
 
     for i in range(positions.shape[0]):
-
         px = int(round(positions[i, 0] / sampling[0]))
         py = int(round(positions[i, 1] / sampling[1]))
 
@@ -661,12 +660,11 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
     def __init__(
         self,
         parametrization: str | Parametrization = "lobato",
-        cutoff_tolerance: float = 1e-3,
+        cutoff_tolerance: float = 1e-4,
         taper: float = 0.85,
         integration_step: float = 0.02,
         quad_order: int = 8,
     ):
-
         self._parametrization = validate_parametrization(parametrization)
         self._taper = taper
         self._quad_order = quad_order
@@ -730,7 +728,6 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
     def _calculate_integral_table(
         self, symbol: str, sampling: tuple[float, float]
     ) -> ProjectionIntegralTable:
-
         potential = self.parametrization.potential(symbol)
         cutoff = self.cutoff(symbol)
 
@@ -738,9 +735,24 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         radial_gpts = self._radial_gpts(inner_limit, cutoff)
         limits = self._integral_limits(cutoff)
 
+        # def potential_blurred(r, func):
+        #     ri = np.linspace(-4, 4, 101)[(None,) * len(r.shape)]
+        #     r = r[..., None]
+        #     r = np.abs(r + ri)
+        #     f = (func(r) * np.exp(-ri**2 / .01)[None, None]).sum(-1)
+        #     return f
+
+        #potential_blurred_ = lambda r: potential_blurred(r, potential)
+
         projection = lambda z: potential(
             np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
         )
+
+        # projection = lambda z: potential(
+        #    np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+        # )
+
+        # * np.exp(-(radial_gpts[:, None] ** 2) / 10000)
 
         table = np.zeros((len(limits) - 1, len(radial_gpts)))
         table[0, :] = integrate.fixed_quad(
@@ -777,9 +789,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         try:
             scattering_factor = self.tables[symbol]
         except KeyError:
-            scattering_factor = self._calculate_integral_table(
-                symbol, sampling
-            )
+            scattering_factor = self._calculate_integral_table(symbol, sampling)
             self._tables[symbol] = scattering_factor
 
         return scattering_factor
@@ -793,7 +803,6 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         sampling: tuple[float, float],
         device: str = "cpu",
     ) -> np.ndarray:
-
         xp = get_array_module(device)
         array = xp.zeros(gpts, dtype=xp.float32)
 
@@ -843,5 +852,9 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 )
 
             # array
+
+        from scipy.ndimage import gaussian_filter
+
+        array = gaussian_filter(array, sigma=2.33333, mode="wrap")
 
         return array
