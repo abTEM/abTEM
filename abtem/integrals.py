@@ -14,7 +14,12 @@ from scipy.interpolate import interp1d
 from scipy.optimize import brentq, fsolve
 from scipy.special import erf
 
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import (
+    cp,
+    get_array_module,
+    get_scipy_module,
+    get_ndimage_module,
+)
 from abtem.core.backend import cupyx
 from abtem.core.backend import device_name_from_array_module
 from abtem.core.fft import fft2, ifft2
@@ -739,19 +744,20 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         #     ri = np.linspace(-4, 4, 101)[(None,) * len(r.shape)]
         #     r = r[..., None]
         #     r = np.abs(r + ri)
-        #     f = (func(r) * np.exp(-ri**2 / .01)[None, None]).sum(-1)
+        #     f = (
+        #         func(r) * r[None, None] ** 2 * np.exp(-(ri**2) / 0.1)[None, None]
+        #     ).sum(-1)
         #     return f
-
-        #potential_blurred_ = lambda r: potential_blurred(r, potential)
-
-        projection = lambda z: potential(
-            np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
-        )
-
-        # projection = lambda z: potential(
-        #    np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+        #
+        # potential_blurred_ = lambda r: potential_blurred(r, potential)
+        #
+        # projection = lambda z: potential_blurred_(
+        #     np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
         # )
 
+        projection = lambda z: potential(
+           np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+        )
         # * np.exp(-(radial_gpts[:, None] ** 2) / 10000)
 
         table = np.zeros((len(limits) - 1, len(radial_gpts)))
@@ -804,9 +810,10 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         device: str = "cpu",
     ) -> np.ndarray:
         xp = get_array_module(device)
-        array = xp.zeros(gpts, dtype=xp.float32)
 
+        array = xp.zeros(gpts, dtype=xp.float32)
         for number in np.unique(atoms.numbers):
+
             table = self.get_integral_table(chemical_symbols[number], sampling)
 
             positions = atoms.positions[atoms.numbers == number]
@@ -829,10 +836,15 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 xp.diff(radial_potential, axis=1) / xp.diff(table.radial_gpts)[None]
             )
 
+            if len(self._parametrization.sigmas):
+                temp = xp.zeros(gpts, dtype=xp.float32)
+            else:
+                temp = array
+
             # temp_array = xp.zeros(gpts, dtype=xp.float32)
             if xp is cp:
                 interpolate_radial_functions_cuda(
-                    array=array,
+                    array=temp,
                     positions=positions,
                     disk_indices=disk_indices,
                     sampling=sampling,
@@ -842,7 +854,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 )
             else:
                 interpolate_radial_functions(
-                    array=array,
+                    array=temp,
                     positions=positions,
                     disk_indices=disk_indices,
                     sampling=sampling,
@@ -851,10 +863,11 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     radial_derivative=radial_potential_derivative,
                 )
 
-            # array
+            symbol = chemical_symbols[number]
 
-        from scipy.ndimage import gaussian_filter
-
-        array = gaussian_filter(array, sigma=2.33333, mode="wrap")
+            if symbol in self._parametrization.sigmas:
+                sigma = self._parametrization.sigmas[symbol] / sampling / np.sqrt(3)
+                temp = get_ndimage_module(temp).gaussian_filter(temp, sigma=sigma, mode="wrap")
+                array += temp
 
         return array

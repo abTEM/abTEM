@@ -794,7 +794,7 @@ class Waves(BaseWaves, ArrayObject):
             xp = get_array_module(array)
 
             if normalize:
-                array = array / np.prod(array.shape[-2:])
+                array = array / float(np.prod(array.shape[-2:]))
 
             array = fft2(array, overwrite_x=False)
 
