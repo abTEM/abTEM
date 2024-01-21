@@ -432,7 +432,7 @@ def polar_spatial_frequencies(
     return k, phi
 
 
-def disc_meshgrid(r: int) -> np.ndarray:
+def disk_meshgrid(r: int) -> np.ndarray:
     """
     Return all indices inside a disk with a given radius.
 
