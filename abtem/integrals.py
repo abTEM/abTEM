@@ -6,17 +6,24 @@ from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING
 
 import numpy as np
+from ase import Atoms
+from ase.data import chemical_symbols
 from numba import jit
 from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq, fsolve
 from scipy.special import erf
 
-from abtem.core.backend import cp, get_array_module
+from abtem.core.backend import (
+    cp,
+    get_array_module,
+    get_scipy_module,
+    get_ndimage_module,
+)
 from abtem.core.backend import cupyx
 from abtem.core.backend import device_name_from_array_module
 from abtem.core.fft import fft2, ifft2
-from abtem.core.grid import disc_meshgrid
+from abtem.core.grid import disk_meshgrid
 from abtem.core.grid import polar_spatial_frequencies
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import EqualityMixin, CopyMixin
@@ -33,9 +40,25 @@ if TYPE_CHECKING:
     from abtem.parametrizations import Parametrization
 
 
-class ProjectionIntegrator:
-    """Base class for projection integrator object used for calculating projection integrals of radial potentials."""
+class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
+    """Base class for projection integrator object used for calculating projection integrals of radial potentials.
 
+    Parameters
+    ----------
+    periodic : bool
+        True indicates that the projection integrals are periodic perpendicular to the projection direction.
+    finite : bool
+        True indicates that the projection integrals are finite along the projection direction.
+    retain_data : bool, optional
+        If True, intermediate calculations are kept.
+    """
+
+    def __init__(self, periodic: bool, finite: bool, retain_data: bool = False):
+        self._periodic = periodic
+        self._finite = finite
+        self._retain_data = retain_data
+
+    @abstractmethod
     def integrate_on_grid(
         self,
         positions: np.ndarray,
@@ -54,7 +77,8 @@ class ProjectionIntegrator:
         positions : np.ndarray
             2D array of xy-positions of the centers of each radial function [Å].
         a : np.ndarray
-            Lower integration limit of the projection integrals along z for each position [Å]. The limit is given
+            Lower integration limit of the pr
+            ojection integrals along z for each position [Å]. The limit is given
             relative to the center of the radial function.
         b : np.ndarray
             Upper integration limit of the projection integrals along z for each position [Å]. The limit is given
@@ -69,24 +93,6 @@ class ProjectionIntegrator:
         """
         pass
 
-
-class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
-    """
-    The ProjectionIntegratorPlan facilitates the creation of :class:`.ProjectionIntegrator` objects using the ``.build``
-    method given a grid and a chemical symbol.
-
-    Parameters
-    ----------
-    periodic : bool
-        True indicates that the projection integrals are periodic perpendicular to the projection direction.
-    finite : bool
-        True indicates that the projection integrals are finite along the projection direction.
-    """
-
-    def __init__(self, periodic: bool, finite: bool):
-        self._periodic = periodic
-        self._finite = finite
-
     @property
     def periodic(self) -> bool:
         """True indicates that the created projection integrators are implemented only for periodic potentials."""
@@ -98,36 +104,35 @@ class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         projections."""
         return self._finite
 
-    @abstractmethod
-    def build(
-        self,
-        symbol: str,
-        gpts: tuple[int, int],
-        sampling: tuple[float, float],
-        device: str,
-    ) -> ProjectionIntegrator:
-        """
-        Build projection integrator for given chemical symbol, grid and device.
-
-        Parameters
-        ----------
-        symbol : str
-            Chemical symbol to build the projection integrator for.
-        gpts : two int
-            Number of grid points in `x` and `y` describing each slice of the potential.
-        sampling : two float
-            Sampling of the potential in `x` and `y` [1 / Å].
-        device : str, optional
-            The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
-            configuration file.
-
-        Returns
-        -------
-        projection_integrator : ProjectionIntegrator
-            The projection integrator for the specified chemical symbol.
-        """
-
-        pass
+    # @abstractmethod
+    # def build(
+    #     self,
+    #     symbol: str,
+    #     gpts: tuple[int, int],
+    #     sampling: tuple[float, float],
+    #     device: str,
+    # ):
+    #     """
+    #     Build projection integrator for given chemical symbol, grid and device.
+    #
+    #     Parameters
+    #     ----------
+    #     symbol : str
+    #         Chemical symbol to build the projection integrator for.
+    #     gpts : two int
+    #         Number of grid points in `x` and `y` describing each slice of the potential.
+    #     sampling : two float
+    #         Sampling of the potential in `x` and `y` [1 / Å].
+    #     device : str, optional
+    #         The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
+    #         configuration file.
+    #
+    #     Returns
+    #     -------
+    #     projection_integrator : ProjectionIntegrator
+    #         The projection integrator for the specified chemical symbol.
+    #     """
+    #     pass
 
     @abstractmethod
     def cutoff(self, symbol: str) -> float:
@@ -135,193 +140,208 @@ class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         pass
 
 
-class GaussianScatteringFactors(ProjectionIntegrator):
-    def __init__(
-        self,
-        gaussian_scattering_factors,
-        error_function_scales,
-        correction_scattering_factors,
-    ):
-        self._gaussian_scattering_factors = gaussian_scattering_factors
-        self._error_function_scales = error_function_scales
-        self._correction_scattering_factors = correction_scattering_factors
+# class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
+#     """
+#     The ProjectionIntegratorPlan facilitates the creation of :class:`.ProjectionIntegrator` objects using the ``.build``
+#     method given a grid and a chemical symbol.
+#
+#     Parameters
+#     ----------
+#
+#     """
+#
+#     def __init__(self, periodic: bool, finite: bool):
+#         self._periodic = periodic
+#         self._finite = finite
 
-    def _integrate_gaussian_scattering_factors(self, positions, a, b, sampling, device):
-        xp = get_array_module(device)
-
-        a = a - positions[:, 2]
-        b = b - positions[:, 2]
-
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
-
-        weights = (
-            np.abs(
-                erf(self._error_function_scales[:, None] * b[None])
-                - erf(self._error_function_scales[:, None] * a[None])
-            )
-            / 2
-        )
-
-        array = xp.zeros(
-            self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
-        )
-
-        for i in range(5):
-            temp = xp.zeros_like(array, dtype=xp.complex64)
-
-            superpose_deltas(positions, temp, weights=weights[i])
-
-            array += fft2(temp, overwrite_x=False) * self._gaussian_scattering_factors[
-                i
-            ].astype(xp.complex64)
-
-        return array
-
-    def _integrate_correction_factors(self, positions, a, b, sampling, device):
-        xp = get_array_module(device)
-
-        temp = xp.zeros(
-            self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
-        )
-
-        positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
-
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
-
-        superpose_deltas(positions, temp)
-
-        return fft2(
-            temp, overwrite_x=False
-        ) * self._correction_scattering_factors.astype(xp.complex64)
-
-    def integrate_on_grid(
-        self,
-        positions: np.ndarray,
-        a: np.ndarray,
-        b: np.ndarray,
-        gpts: tuple[int, int],
-        sampling: tuple[float, float],
-        device: str = "cpu",
-        fourier_space: bool = False,
-    ) -> np.ndarray:
-
-        shape = self._gaussian_scattering_factors.shape[-2:]
-
-        assert gpts == shape
-
-        array = self._integrate_gaussian_scattering_factors(
-            positions, a, b, sampling, device
-        )
-
-        if self._correction_scattering_factors is not None:
-            array += self._integrate_correction_factors(
-                positions, a, b, sampling, device
-            )
-
-        if fourier_space:
-            return array
-        else:
-            return ifft2(array / sinc(shape, sampling, device)).real
-
-
-class GaussianProjectionIntegrals(ProjectionIntegratorPlan):
-    """
-    Parameters
-    ----------
-    gaussian_parametrization : str or Parametrization, optional
-        The Gaussian radial potential parametrization to integrate. Must be parametrization described by a superposition
-        of Gaussians. Default is the Peng parametrization.
-    correction_parametrization : str or Parametrization, optional
-        The correction radial potential parametrization to integrate. Used for correcting the dependence of the
-        potential close to the nuclear core. Default is the Lobato parametrization.
-    cutoff_tolerance : float, optional
-        The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. Default is 1e-3.
-    """
-
-    def __init__(
-        self,
-        gaussian_parametrization: str | Parametrization = "peng",
-        correction_parametrization: str | Parametrization = "lobato",
-        cutoff_tolerance: float = 1e-3,
-    ):
-
-        self._gaussian_parametrization = validate_parametrization(
-            gaussian_parametrization
-        )
-
-        if correction_parametrization is not None:
-            self._correction_parametrization = validate_parametrization(
-                correction_parametrization
-            )
-        else:
-            self._correction_parametrization = correction_parametrization
-
-        self._cutoff_tolerance = cutoff_tolerance
-
-        super().__init__(periodic=True, finite=True)
-
-    @property
-    def cutoff_tolerance(self):
-        """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
-        return self._cutoff_tolerance
-
-    @property
-    def gaussian_parametrization(self):
-        """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
-        return self._gaussian_parametrization
-
-    @property
-    def correction_parametrization(self):
-        return self._correction_parametrization
-
-    def cutoff(self, symbol: str) -> float:
-        return cutoff(
-            self.gaussian_parametrization.potential(symbol),
-            self.cutoff_tolerance,
-            a=1e-3,
-            b=1e3,
-        )  # noqa
-
-    def build(
-        self,
-        symbol: str,
-        gpts: tuple[int, int],
-        sampling: tuple[float, float],
-        device: str = "cpu",
-    ):
-        xp = get_array_module(device)
-        k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
-
-        parameters = xp.array(
-            self.gaussian_parametrization.scaled_parameters(
-                symbol, "projected_scattering_factor"
-            )
-        )
-
-        gaussian_scattering_factors = parameters[0, :, None, None] * np.exp(
-            -parameters[1, :, None, None] * k[None] ** 2.0
-        )
-
-        if self.correction_parametrization:
-            infinite_gaussian = (
-                self.gaussian_parametrization.projected_scattering_factor(symbol)
-            )
-            infinite_correction = (
-                self.correction_parametrization.projected_scattering_factor(symbol)
-            )
-            correction_scattering_factors = infinite_correction(
-                k**2
-            ) - infinite_gaussian(k**2)
-        else:
-            correction_scattering_factors = None
-
-        error_function_scales = np.pi / np.sqrt(parameters[1])
-
-        return GaussianScatteringFactors(
-            gaussian_scattering_factors,
-            error_function_scales,
-            correction_scattering_factors,
-        )
+#
+# class GaussianScatteringFactors(ProjectionIntegrator):
+#     def __init__(
+#         self,
+#         gaussian_scattering_factors,
+#         error_function_scales,
+#         correction_scattering_factors,
+#     ):
+#         self._gaussian_scattering_factors = gaussian_scattering_factors
+#         self._error_function_scales = error_function_scales
+#         self._correction_scattering_factors = correction_scattering_factors
+#
+#     def _integrate_gaussian_scattering_factors(self, positions, a, b, sampling, device):
+#         xp = get_array_module(device)
+#
+#         a = a - positions[:, 2]
+#         b = b - positions[:, 2]
+#
+#         positions = (positions[:, :2] / sampling).astype(xp.float32)
+#
+#         weights = (
+#             np.abs(
+#                 erf(self._error_function_scales[:, None] * b[None])
+#                 - erf(self._error_function_scales[:, None] * a[None])
+#             )
+#             / 2
+#         )
+#
+#         array = xp.zeros(
+#             self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
+#         )
+#
+#         for i in range(5):
+#             temp = xp.zeros_like(array, dtype=xp.complex64)
+#
+#             superpose_deltas(positions, temp, weights=weights[i])
+#
+#             array += fft2(temp, overwrite_x=False) * self._gaussian_scattering_factors[
+#                 i
+#             ].astype(xp.complex64)
+#
+#         return array
+#
+#     def _integrate_correction_factors(self, positions, a, b, sampling, device):
+#         xp = get_array_module(device)
+#
+#         temp = xp.zeros(
+#             self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
+#         )
+#
+#         positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
+#
+#         positions = (positions[:, :2] / sampling).astype(xp.float32)
+#
+#         superpose_deltas(positions, temp)
+#
+#         return fft2(
+#             temp, overwrite_x=False
+#         ) * self._correction_scattering_factors.astype(xp.complex64)
+#
+#     def integrate_on_grid(
+#         self,
+#         positions: np.ndarray,
+#         a: np.ndarray,
+#         b: np.ndarray,
+#         gpts: tuple[int, int],
+#         sampling: tuple[float, float],
+#         device: str = "cpu",
+#         fourier_space: bool = False,
+#     ) -> np.ndarray:
+#
+#         shape = self._gaussian_scattering_factors.shape[-2:]
+#
+#         assert gpts == shape
+#
+#         array = self._integrate_gaussian_scattering_factors(
+#             positions, a, b, sampling, device
+#         )
+#
+#         if self._correction_scattering_factors is not None:
+#             array += self._integrate_correction_factors(
+#                 positions, a, b, sampling, device
+#             )
+#
+#         if fourier_space:
+#             return array
+#         else:
+#             return ifft2(array / sinc(shape, sampling, device)).real
+#
+#
+# class GaussianProjectionIntegrals(ProjectionIntegratorPlan):
+#     """
+#     Parameters
+#     ----------
+#     gaussian_parametrization : str or Parametrization, optional
+#         The Gaussian radial potential parametrization to integrate. Must be parametrization described by a superposition
+#         of Gaussians. Default is the Peng parametrization.
+#     correction_parametrization : str or Parametrization, optional
+#         The correction radial potential parametrization to integrate. Used for correcting the dependence of the
+#         potential close to the nuclear core. Default is the Lobato parametrization.
+#     cutoff_tolerance : float, optional
+#         The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. Default is 1e-3.
+#     """
+#
+#     def __init__(
+#         self,
+#         gaussian_parametrization: str | Parametrization = "peng",
+#         correction_parametrization: str | Parametrization = "lobato",
+#         cutoff_tolerance: float = 1e-3,
+#     ):
+#
+#         self._gaussian_parametrization = validate_parametrization(
+#             gaussian_parametrization
+#         )
+#
+#         if correction_parametrization is not None:
+#             self._correction_parametrization = validate_parametrization(
+#                 correction_parametrization
+#             )
+#         else:
+#             self._correction_parametrization = correction_parametrization
+#
+#         self._cutoff_tolerance = cutoff_tolerance
+#
+#         super().__init__(periodic=True, finite=True)
+#
+#     @property
+#     def cutoff_tolerance(self):
+#         """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
+#         return self._cutoff_tolerance
+#
+#     @property
+#     def gaussian_parametrization(self):
+#         """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
+#         return self._gaussian_parametrization
+#
+#     @property
+#     def correction_parametrization(self):
+#         return self._correction_parametrization
+#
+#     def cutoff(self, symbol: str) -> float:
+#         return cutoff(
+#             self.gaussian_parametrization.potential(symbol),
+#             self.cutoff_tolerance,
+#             a=1e-3,
+#             b=1e3,
+#         )  # noqa
+#
+#     def build(
+#         self,
+#         symbol: str,
+#         gpts: tuple[int, int],
+#         sampling: tuple[float, float],
+#         device: str = "cpu",
+#     ):
+#         xp = get_array_module(device)
+#         k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
+#
+#         parameters = xp.array(
+#             self.gaussian_parametrization.scaled_parameters(
+#                 symbol, "projected_scattering_factor"
+#             )
+#         )
+#
+#         gaussian_scattering_factors = parameters[0, :, None, None] * np.exp(
+#             -parameters[1, :, None, None] * k[None] ** 2.0
+#         )
+#
+#         if self.correction_parametrization:
+#             infinite_gaussian = (
+#                 self.gaussian_parametrization.projected_scattering_factor(symbol)
+#             )
+#             infinite_correction = (
+#                 self.correction_parametrization.projected_scattering_factor(symbol)
+#             )
+#             correction_scattering_factors = infinite_correction(
+#                 k**2
+#             ) - infinite_gaussian(k**2)
+#         else:
+#             correction_scattering_factors = None
+#
+#         error_function_scales = np.pi / np.sqrt(parameters[1])
+#
+#         return GaussianScatteringFactors(
+#             gaussian_scattering_factors,
+#             error_function_scales,
+#             correction_scattering_factors,
+#         )
 
 
 def sinc(
@@ -404,78 +424,24 @@ def superpose_deltas(
     return array
 
 
-class ProjectedScatteringFactorIntegrator(ProjectionIntegrator):
+class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     """
-    A ProjectionIntegrator calculating infinite projections of radial potential parametrizations. The hybrid real and
+    A FieldIntegrator calculating infinite projections of radial potential parametrizations. The hybrid real and
     reciprocal space method by Wouter Van den Broek et al. is used.
 
     Parameters
     ----------
-    scattering_factor : 2d array
-        Array representing a projected scattering factor. The zero-frequency is assumed to be at [0,0].
+    parametrization : str or Parametrization, optional
+        The radial potential parametrization to integrate. Default is the Lobato parametrization.
 
     References
     ----------
     W. Van den Broek et al. Ultramicroscopy, 158:89–97, 2015. doi:10.1016/j.ultramic.2015.07.005.
     """
 
-    def __init__(self, scattering_factor: np.ndarray):
-        self._scattering_factor = scattering_factor
-
-    @property
-    def scattering_factor(self) -> np.ndarray:
-        """Projected scattering factor array on a 2D grid."""
-        return self._scattering_factor
-
-    def integrate_on_grid(
-        self,
-        positions: np.ndarray,
-        a: np.ndarray,
-        b: np.ndarray,
-        gpts: tuple[int, int],
-        sampling: tuple[float, float],
-        device: str = "cpu",
-        fourier_space: bool = False,
-    ):
-        xp = get_array_module(device)
-
-        if len(positions) == 0:
-            return xp.zeros(gpts, dtype=xp.float32)
-
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
-
-        array = xp.zeros(gpts, dtype=xp.float32)
-
-        array = superpose_deltas(positions, array).astype(xp.complex64)
-
-        array = fft2(array, overwrite_x=True)
-
-        f = self.scattering_factor / sinc(
-            self._scattering_factor.shape[-2:], sampling, device
-        )
-
-        array *= f
-
-        if fourier_space:
-            return array.real
-        else:
-            array = ifft2(array, overwrite_x=True).real
-            return array
-
-
-class ProjectedScatteringFactors(ProjectionIntegratorPlan):
-    """
-    The :class:`.ProjectedScatteringFactors` facilitates the creation of :class:`.ProjectedScatteringFactorIntegrator`
-    objects using the ``.build`` method given a grid and a chemical symbol.
-
-    Parameters
-    ----------
-    parametrization : str or Parametrization, optional
-        The radial potential parametrization to integrate. Default is the Lobato parametrization.
-    """
-
     def __init__(self, parametrization: str | Parametrization = "lobato"):
         self._parametrization = validate_parametrization(parametrization)
+        self._scattering_factors = {}
         super().__init__(periodic=True, finite=False)
 
     @property
@@ -485,14 +451,13 @@ class ProjectedScatteringFactors(ProjectionIntegratorPlan):
     def cutoff(self, symbol: str) -> float:
         return np.inf
 
-    def build(
+    def _calculate_scattering_factor(
         self,
         symbol: str,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-    ) -> ProjectedScatteringFactorIntegrator:
-
+    ):
         xp = get_array_module(device)
         kx, ky = spatial_frequencies(gpts, sampling, xp=np)
 
@@ -507,7 +472,62 @@ class ProjectedScatteringFactors(ProjectionIntegratorPlan):
                 * (xp.pi * sigma / xp.sqrt(3 / 2)) ** 2
             )
 
-        return ProjectedScatteringFactorIntegrator(f)
+        return f
+
+    def get_scattering_factor(self, symbol, gpts, sampling, device):
+        try:
+            scattering_factor = self.scattering_factors[symbol]
+        except KeyError:
+            scattering_factor = self._calculate_scattering_factor(
+                symbol, gpts, sampling, device
+            )
+            self._scattering_factors[symbol] = scattering_factor
+
+        return scattering_factor
+
+    @property
+    def scattering_factors(self) -> dict[str, np.ndarray]:
+        """Projected scattering factor array on a 2D grid."""
+        return self._scattering_factors
+
+    def integrate_on_grid(
+        self,
+        atoms: Atoms,
+        a: np.ndarray,
+        b: np.ndarray,
+        gpts: tuple[int, int],
+        sampling: tuple[float, float],
+        device: str = "cpu",
+        fourier_space: bool = False,
+    ):
+        xp = get_array_module(device)
+        if len(atoms) == 0:
+            return xp.zeros(gpts, dtype=xp.float32)
+
+        array = xp.zeros(gpts, dtype=xp.float32)
+        for number in np.unique(atoms.numbers):
+            scattering_factor = self.get_scattering_factor(
+                chemical_symbols[number], gpts, sampling, device
+            )
+
+            positions = atoms.positions[atoms.numbers == number]
+
+            positions = (positions[:, :2] / sampling).astype(xp.float32)
+
+            temp_array = xp.zeros(gpts, dtype=xp.float32)
+
+            temp_array = superpose_deltas(positions, temp_array).astype(xp.complex64)
+
+            temp_array = fft2(temp_array, overwrite_x=True)
+
+            temp_array *= scattering_factor / sinc(gpts, sampling, device)
+
+            if not fourier_space:
+                temp_array = ifft2(temp_array, overwrite_x=True).real
+
+            array += temp_array
+
+        return array
 
 
 @jit(nopython=True, nogil=True)
@@ -524,7 +544,6 @@ def interpolate_radial_functions(
     dt = np.log(radial_gpts[-1] / radial_gpts[0]) / (n - 1)
 
     for i in range(positions.shape[0]):
-
         px = int(round(positions[i, 0] / sampling[0]))
         py = int(round(positions[i, 1] / sampling[1]))
 
@@ -549,7 +568,7 @@ def interpolate_radial_functions(
                     )
 
 
-class ProjectionIntegralTable(ProjectionIntegrator):
+class ProjectionIntegralTable:
     """
     A ProjectionIntegrator calculating finite projections of radial potential parametrizations. An integral table
     for each used to evaluate the projection integrals for each atom in a slice given p integral limits.
@@ -589,72 +608,6 @@ class ProjectionIntegralTable(ProjectionIntegrator):
         )
         return f(b) - f(a)
 
-    def integrate_on_grid(
-        self,
-        positions: np.ndarray,
-        a: float,
-        b: float,
-        gpts: tuple[int, int],
-        sampling: tuple[float, float],
-        device: str = "cpu",
-    ) -> np.ndarray:
-
-        # assert len(a) == len(b) == len(positions)
-        # assert len(a.shape) == 1
-        # assert len(b.shape) == 1
-        if np.isscalar(a):
-            a = np.array([a] * len(positions))
-
-        if np.isscalar(b):
-            b = np.array([b] * len(positions))
-
-        assert len(sampling) == 2
-
-        xp = get_array_module(device)
-
-        array = xp.zeros(gpts, dtype=xp.float32)
-
-        a = a - positions[:, 2]
-        b = b - positions[:, 2]
-
-        disk_indices = xp.asarray(
-            disc_meshgrid(int(np.ceil(self._radial_gpts[-1] / np.min(sampling))))
-        )
-        radial_potential = xp.asarray(self.integrate(a, b))
-
-        positions = xp.asarray(positions, dtype=np.float32)
-
-        # sampling = xp.array(sampling, dtype=xp.float32)
-        # positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
-
-        radial_potential_derivative = xp.zeros_like(radial_potential)
-        radial_potential_derivative[:, :-1] = (
-            xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
-        )
-
-        if xp is cp:
-            interpolate_radial_functions_cuda(
-                array=array,
-                positions=positions,
-                disk_indices=disk_indices,
-                sampling=sampling,
-                radial_gpts=xp.asarray(self.radial_gpts),
-                radial_functions=radial_potential,
-                radial_derivative=radial_potential_derivative,
-            )
-        else:
-            interpolate_radial_functions(
-                array=array,
-                positions=positions,
-                disk_indices=disk_indices,
-                sampling=sampling,
-                radial_gpts=self.radial_gpts,
-                radial_functions=radial_potential,
-                radial_derivative=radial_potential_derivative,
-            )
-
-        return array
-
 
 def cutoff(func: callable, tolerance: float, a: float, b: float) -> float:
     """
@@ -690,7 +643,7 @@ def cutoff_taper(radial_gpts, cutoff, taper):
     return taper_values
 
 
-class ProjectionQuadratureRule(ProjectionIntegratorPlan):
+class QuadratureProjectionIntegrals(FieldIntegrator):
     """
     Projection integration plan for calculating finite projection integrals based on Gaussian quadrature rule.
 
@@ -712,17 +665,18 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
     def __init__(
         self,
         parametrization: str | Parametrization = "lobato",
-        cutoff_tolerance: float = 1e-3,
+        cutoff_tolerance: float = 1e-4,
         taper: float = 0.85,
         integration_step: float = 0.02,
         quad_order: int = 8,
     ):
-
         self._parametrization = validate_parametrization(parametrization)
         self._taper = taper
         self._quad_order = quad_order
         self._cutoff_tolerance = cutoff_tolerance
         self._integration_step = integration_step
+        self._tables = {}
+
         super().__init__(periodic=False, finite=True)
 
     @property
@@ -734,6 +688,10 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
     def quad_order(self):
         """Order of quadrature integration."""
         return self._quad_order
+
+    @property
+    def tables(self):
+        return self._tables
 
     @property
     def cutoff_tolerance(self) -> float:
@@ -772,9 +730,53 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         limits = np.linspace(-cutoff, 0, int(np.ceil(cutoff / self._integration_step)))
         return np.concatenate((limits, -limits[::-1][1:]))
 
-    def build_integral_table(
-        self, symbol: str, inner_limit: float
+    def _calculate_integral_table(
+        self, symbol: str, sampling: tuple[float, float]
     ) -> ProjectionIntegralTable:
+        potential = self.parametrization.potential(symbol)
+        cutoff = self.cutoff(symbol)
+
+        inner_limit = min(sampling) / 2
+        radial_gpts = self._radial_gpts(inner_limit, cutoff)
+        limits = self._integral_limits(cutoff)
+
+        # def potential_blurred(r, func):
+        #     ri = np.linspace(-4, 4, 101)[(None,) * len(r.shape)]
+        #     r = r[..., None]
+        #     r = np.abs(r + ri)
+        #     f = (
+        #         func(r) * r[None, None] ** 2 * np.exp(-(ri**2) / 0.1)[None, None]
+        #     ).sum(-1)
+        #     return f
+        #
+        # potential_blurred_ = lambda r: potential_blurred(r, potential)
+        #
+        # projection = lambda z: potential_blurred_(
+        #     np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+        # )
+
+        projection = lambda z: potential(
+           np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+        )
+        # * np.exp(-(radial_gpts[:, None] ** 2) / 10000)
+
+        table = np.zeros((len(limits) - 1, len(radial_gpts)))
+        table[0, :] = integrate.fixed_quad(
+            projection, -limits[0] * 2, limits[0], n=self._quad_order
+        )[0]
+
+        for j, (a, b) in enumerate(zip(limits[1:-1], limits[2:])):
+            table[j + 1] = (
+                table[j] + integrate.fixed_quad(projection, a, b, n=self._quad_order)[0]
+            )
+
+        table = table * self._taper_values(radial_gpts, cutoff, self._taper)[None]
+
+        self._tables[symbol] = ProjectionIntegralTable(radial_gpts, limits[1:], table)
+
+        return self._tables[symbol]
+
+    def get_integral_table(self, symbol, sampling):
         """
         Build table of projection integrals of the radial atomic potential.
 
@@ -790,36 +792,82 @@ class ProjectionQuadratureRule(ProjectionIntegratorPlan):
         projection_integral_table :
             ProjectionIntegralTable
         """
-        potential = self.parametrization.potential(symbol)
-        cutoff = self.cutoff(symbol)
+        try:
+            scattering_factor = self.tables[symbol]
+        except KeyError:
+            scattering_factor = self._calculate_integral_table(symbol, sampling)
+            self._tables[symbol] = scattering_factor
 
-        radial_gpts = self._radial_gpts(inner_limit, cutoff)
-        limits = self._integral_limits(cutoff)
+        return scattering_factor
 
-        projection = lambda z: potential(
-            np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
-        )
-
-        table = np.zeros((len(limits) - 1, len(radial_gpts)))
-        table[0, :] = integrate.fixed_quad(
-            projection, -limits[0] * 2, limits[0], n=self._quad_order
-        )[0]
-
-        for j, (a, b) in enumerate(zip(limits[1:-1], limits[2:])):
-            table[j + 1] = (
-                table[j] + integrate.fixed_quad(projection, a, b, n=self._quad_order)[0]
-            )
-
-        table = table * self._taper_values(radial_gpts, cutoff, self._taper)[None]
-
-        return ProjectionIntegralTable(radial_gpts, limits[1:], table)
-
-    def build(
+    def integrate_on_grid(
         self,
-        symbol: str,
+        atoms: Atoms,
+        a: float,
+        b: float,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-    ) -> ProjectionIntegralTable:
-        inner_limit = min(sampling) / 2
-        return self.build_integral_table(symbol, inner_limit)
+    ) -> np.ndarray:
+        xp = get_array_module(device)
+
+        array = xp.zeros(gpts, dtype=xp.float32)
+        for number in np.unique(atoms.numbers):
+
+            table = self.get_integral_table(chemical_symbols[number], sampling)
+
+            positions = atoms.positions[atoms.numbers == number]
+
+            shifted_a = a - positions[:, 2]
+            shifted_b = b - positions[:, 2]
+
+            disk_indices = xp.asarray(
+                disk_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
+            )
+            radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
+
+            positions = xp.asarray(positions, dtype=np.float32)
+
+            # sampling = xp.array(sampling, dtype=xp.float32)
+            # positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
+
+            radial_potential_derivative = xp.zeros_like(radial_potential)
+            radial_potential_derivative[:, :-1] = (
+                xp.diff(radial_potential, axis=1) / xp.diff(table.radial_gpts)[None]
+            )
+
+            if len(self._parametrization.sigmas):
+                temp = xp.zeros(gpts, dtype=xp.float32)
+            else:
+                temp = array
+
+            # temp_array = xp.zeros(gpts, dtype=xp.float32)
+            if xp is cp:
+                interpolate_radial_functions_cuda(
+                    array=temp,
+                    positions=positions,
+                    disk_indices=disk_indices,
+                    sampling=sampling,
+                    radial_gpts=xp.asarray(table.radial_gpts),
+                    radial_functions=radial_potential,
+                    radial_derivative=radial_potential_derivative,
+                )
+            else:
+                interpolate_radial_functions(
+                    array=temp,
+                    positions=positions,
+                    disk_indices=disk_indices,
+                    sampling=sampling,
+                    radial_gpts=table.radial_gpts,
+                    radial_functions=radial_potential,
+                    radial_derivative=radial_potential_derivative,
+                )
+
+            symbol = chemical_symbols[number]
+
+            if symbol in self._parametrization.sigmas:
+                sigma = self._parametrization.sigmas[symbol] / sampling / np.sqrt(3)
+                temp = get_ndimage_module(temp).gaussian_filter(temp, sigma=sigma, mode="wrap")
+                array += temp
+
+        return array
