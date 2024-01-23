@@ -866,7 +866,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             symbol = chemical_symbols[number]
 
             if symbol in self._parametrization.sigmas:
-                sigma = self._parametrization.sigmas[symbol] / sampling / np.sqrt(3)
+                sigma = self._parametrization.sigmas[symbol] / np.array(sampling) / np.sqrt(3)
                 temp = get_ndimage_module(temp).gaussian_filter(temp, sigma=sigma, mode="wrap")
                 array += temp
 
