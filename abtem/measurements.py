@@ -22,6 +22,7 @@ from matplotlib.axes import Axes
 from numba import prange, jit
 
 from abtem.array import ArrayObject, stack
+from abtem.core import config
 from abtem.core.axes import (
     RealSpaceAxis,
     AxisMetadata,
@@ -40,7 +41,6 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
-from abtem.core import config
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.distributions import BaseDistribution
@@ -2773,9 +2773,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def azimuthal_average(
         self,
         max_angle: float = None,
-        order: int = 1,
         radial_sampling: float = None,
-        azimuthal_sampling: float = None,
+        weighting_function: str = "step",
+        width: float = 1.0,
     ) -> ReciprocalSpaceLineProfiles:
         """
         Calculate the azimuthal averages of the diffraction patterns.
@@ -2789,58 +2789,48 @@ class DiffractionPatterns(_BaseMeasurement2D):
         radial_sampling : float, optional
             The radial sampling of the azimuthal averages [mrad]. Default is equal to the smallest value of the x and y
             component of the angular sampling.
-        azimuthal_sampling : float
-            The azimuthal step size between samples used for averaging [rad].
+        weigthing_method : str
+
         """
 
         def _map_azimuthal_average(
-            array, max_angle, radial_sampling, angular_sampling, azimuthal_sampling
+            array,
+            angular_coordinates,
+            max_angle,
+            radial_sampling,
+            weighting_function,
+            width,
         ):
-            shape = array.shape
-            center = (shape[-2] // 2, shape[-1] // 2)
+            x, y = np.meshgrid(*angular_coordinates, indexing="ij")
+            r = np.sqrt(x**2 + y**2)
 
-            ks = np.linspace(
-                0, max_angle, int(max_angle / radial_sampling), endpoint=False
-            )
-            a = np.linspace(
-                0, 2 * np.pi, int(2 * np.pi / azimuthal_sampling), endpoint=False
-            )
+            centers = np.arange(0, max_angle, radial_sampling)
 
-            points = [
-                (
-                    np.cos(a) * r / angular_sampling[0],
-                    np.sin(a) * r / angular_sampling[1],
-                )
-                for r in ks
-            ]
+            values = np.zeros(array.shape[:-2] + centers.shape)
+            for i, center in enumerate(centers):
+                if weighting_function == "step":
+                    mask = np.abs(r - center) < width
+                elif weighting_function == "gaussian":
+                    mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
+                else:
+                    raise ValueError()
 
-            points = np.concatenate(points, axis=1).T
-            points = points + center
+                weight = np.sum(mask)
 
-            map_coordinates = get_ndimage_module(array).map_coordinates
+                if weight > 0:
+                    values[..., i] = np.sum(array * mask, axis=(-2, -1)) / weight
+                else:
+                    values[..., i] = 0.0
 
-            blocks = np.zeros(array.shape[:-2], dtype=object)
-            for i in np.ndindex(array.shape[:-2]):
-                unrolled = map_coordinates(array[i], points.T, order=order)
-                unrolled = unrolled.reshape(ks.shape + (-1,)).mean(1)
-                unrolled = unrolled[(slice(None),) + (None,) * len(array.shape[:-2])]
-                blocks.itemset(i, unrolled)
-
-            if not blocks.size:
-                return blocks.item()
-
-            blocks = np.block(blocks.tolist())
-            blocks = np.moveaxis(blocks, source=0, destination=-1)
-            return blocks
+            return values
 
         if max_angle is None:
             max_angle = -min(min(self.angular_limits))
 
         if radial_sampling is None:
-            radial_sampling = min(self.angular_sampling)
+            radial_sampling = min(self.angular_sampling) / 2.0
 
-        if azimuthal_sampling is None:
-            azimuthal_sampling = 2 * np.arcsin(radial_sampling / 2 / max_angle)
+        width = width * radial_sampling
 
         if self.is_lazy:
             xp = get_array_module(self.array)
@@ -2853,10 +2843,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
             array = self.array.map_blocks(
                 _map_azimuthal_average,
+                angular_coordinates=self.angular_coordinates,
                 max_angle=max_angle,
                 radial_sampling=radial_sampling,
-                angular_sampling=self.angular_sampling,
-                azimuthal_sampling=azimuthal_sampling,
+                weighting_function=weighting_function,
+                width=width,
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (n,),
@@ -2865,10 +2856,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             array = _map_azimuthal_average(
                 self.array,
+                angular_coordinates=self.angular_coordinates,
                 max_angle=max_angle,
                 radial_sampling=radial_sampling,
-                angular_sampling=self.angular_sampling,
-                azimuthal_sampling=azimuthal_sampling,
+                weighting_function=weighting_function,
+                width=width,
             )
 
         wavelength = energy2wavelength(self._get_from_metadata("energy"))
@@ -2879,6 +2871,127 @@ class DiffractionPatterns(_BaseMeasurement2D):
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )
+
+    def azimuthal_average(
+        self,
+        max_angle: float = None,
+        radial_sampling: float = 1.0,
+        weighting_function: str = "step",
+        width: float = 1.0,
+    ) -> ReciprocalSpaceLineProfiles:
+        """
+        Calculate the azimuthal averages of the diffraction patterns.
+
+        Parameters
+        ----------
+        max_angle : float, optional
+            The maximum included scattering angle in the azimuthal averages [mrad].
+        order : float, optional
+            The spline interpolation order. Default is 1.
+        radial_sampling : float, optional
+            The radial sampling of the azimuthal averages [mrad]. Default is equal to the smallest value of the x and y
+            component of the angular sampling.
+        weigthing_method : str
+
+        """
+
+        def _map_azimuthal_average(
+            array,
+            angular_coordinates,
+            max_angle,
+            radial_sampling,
+            weighting_function,
+            width,
+        ):
+            x, y = np.meshgrid(*angular_coordinates, indexing="ij")
+            r = np.sqrt(x**2 + y**2)
+
+            centers = np.arange(0, max_angle, radial_sampling)
+
+            values = np.zeros(array.shape[:-2] + centers.shape)
+            for i, center in enumerate(centers):
+                if weighting_function == "step":
+                    mask = np.abs(r - center) < width
+                elif weighting_function == "gaussian":
+                    mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
+                else:
+                    raise ValueError()
+
+                weight = np.sum(mask)
+
+                if weight > 0:
+                    values[..., i] = np.sum(array * mask, axis=(-2, -1)) / weight
+                else:
+                    values[..., i] = 0.0
+
+            return values
+
+        if max_angle is None:
+            max_angle = -min(min(self.angular_limits))
+
+        radial_sampling = radial_sampling * min(self.angular_sampling)
+        width = width * min(self.angular_sampling)
+
+        if self.is_lazy:
+            xp = get_array_module(self.array)
+            n = int(max_angle / radial_sampling)
+            base_axes = tuple(
+                range(
+                    len(self.ensemble_shape),
+                    len(self.ensemble_shape) + len(self.base_shape),
+                )
+            )
+            array = self.array.map_blocks(
+                _map_azimuthal_average,
+                angular_coordinates=self.angular_coordinates,
+                max_angle=max_angle,
+                radial_sampling=radial_sampling,
+                weighting_function=weighting_function,
+                width=width,
+                drop_axis=base_axes,
+                new_axis=base_axes[0],
+                chunks=self.array.chunks[:-2] + (n,),
+                meta=xp.array((), dtype=np.float32),
+            )
+        else:
+            array = _map_azimuthal_average(
+                self.array,
+                angular_coordinates=self.angular_coordinates,
+                max_angle=max_angle,
+                radial_sampling=radial_sampling,
+                weighting_function=weighting_function,
+                width=width,
+            )
+
+        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+
+        return ReciprocalSpaceLineProfiles(
+            array,
+            sampling=radial_sampling / (wavelength * 1e3),
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+        )
+
+    def fourier_shell_correlation(
+        self, other, radial_sampling=1, width=1, weighting_function="step"
+    ):
+        fsc = (self**0.5 * other**0.5).azimuthal_average(
+            radial_sampling=radial_sampling,
+            width=width,
+            weighting_function=weighting_function,
+        ) / (
+            self.azimuthal_average(
+                radial_sampling=radial_sampling,
+                width=width,
+                weighting_function=weighting_function,
+            )
+            * other.azimuthal_average(
+                radial_sampling=radial_sampling,
+                width=width,
+                weighting_function=weighting_function,
+            )
+        )
+        return fsc
 
     def block_direct(
         self, radius: float = None, margin: bool = None
