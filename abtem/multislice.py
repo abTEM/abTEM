@@ -449,6 +449,9 @@ def multislice_and_detect(
     waves = waves.ensure_real_space()
     detectors = _validate_detectors(detectors)
 
+    if multislice_step_kwargs is None:
+        multislice_step_kwargs = {}
+
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
@@ -463,18 +466,20 @@ def multislice_and_detect(
                 transpose=transpose,
             )
 
-    else:
-        derivative_accuracy = multislice_step_kwargs.get("derivative_accuracy", 8)
+    elif method in ("realspace",):
+        derivative_accuracy = multislice_step_kwargs.get("derivative_accuracy", 2)
         laplace_operator = LaplaceOperator(derivative_accuracy)
-        num_terms = multislice_step_kwargs.get("num_terms", 8)
+        max_terms = multislice_step_kwargs.get("max_terms", 80)
 
         def multislice_step(waves, potential_slice):
             return realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 laplace=laplace_operator,
-                num_terms=num_terms,
+                max_terms=max_terms,
             )
+    else:
+        raise ValueError()
 
     (
         extra_ensemble_axes_shape,

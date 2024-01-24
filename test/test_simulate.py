@@ -103,7 +103,7 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 
     if len(potential.exit_planes) > 1:
         assert exit_waves.shape[1] == len(potential.exit_planes)
-    assert exit_waves.shape[0] == potential.num_frozen_phonons
+    assert exit_waves.shape[0] == potential.num_configurations
     assert exit_waves.gpts == potential.gpts
 
 #@reproduce_failure('6.80.0', b'AXicY2BAAkwwBqNFAwNhwEqacrhqQkwgAACZyAF9')

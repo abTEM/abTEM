@@ -81,11 +81,11 @@ def test_crystal_potential_with_frozen_phonons(data, potential_unit, tile, num_f
 
     crystal_potential = crystal_potential.build(lazy=lazy)
 
-    assert num_frozen_phonons == crystal_potential.num_frozen_phonons
+    assert num_frozen_phonons == crystal_potential.num_configurations
 
     crystal_potential.compute()
 
-    assert num_frozen_phonons == crystal_potential.num_frozen_phonons
+    assert num_frozen_phonons == crystal_potential.num_configurations
 
 # @given(data=st.data(),
 #        tile=st.tuples(st.integers(min_value=1, max_value=2),
