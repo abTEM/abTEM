@@ -5,48 +5,83 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import scipy.ndimage
+import sympy
 from numba import stencil, njit
 
-from abtem.potentials.iam import TransmissionFunction
+from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma
+from abtem.potentials.iam import TransmissionFunction
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
     from abtem.potentials.iam import PotentialArray
 
 
-def _get_central_offsets(derivative, accuracy):
-    assert accuracy % 2 == 0
-    num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
-    num_side = num_central // 2
-    offsets = list(range(-num_side, num_side + 1))
-    return offsets
+# def _get_central_offsets(derivative, accuracy):
+#     assert accuracy % 2 == 0
+#     num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
+#     num_side = num_central // 2
+#     offsets = list(range(-num_side, num_side + 1))
+#     return offsets
+#
+#
+# def _build_matrix(offsets):
+#     A = [([1 for _ in offsets])]
+#     for i in range(1, len(offsets)):
+#         A.append([j**i for j in offsets])
+#
+#     return np.array(A, dtype=float)
+#
+#
+# def _build_rhs(offsets, derivative):
+#     b = [0 for _ in offsets]
+#     b[derivative] = math.factorial(derivative)
+#     return np.array(b, dtype=float)
 
 
-def _build_matrix(offsets):
+def _build_matrix(offsets: list[int]) -> sympy.Matrix:
+    """Constructs the equation system matrix for the finite difference coefficients"""
     A = [([1 for _ in offsets])]
     for i in range(1, len(offsets)):
         A.append([j**i for j in offsets])
+    return sympy.Matrix(A)
 
-    return np.array(A, dtype=float)
 
-
-def _build_rhs(offsets, derivative):
+def _build_rhs(offsets: list[int], deriv: int) -> sympy.Matrix:
+    """The right hand side of the equation system matrix"""
     b = [0 for _ in offsets]
-    b[derivative] = math.factorial(derivative)
-    return np.array(b, dtype=float)
+    b[deriv] = math.factorial(deriv)
+    return sympy.Matrix(b)
 
 
-def _finite_difference_coefficients(derivative, accuracy):
-    offsets = _get_central_offsets(derivative, accuracy)
-    A = _build_matrix(offsets)
-    b = _build_rhs(offsets, derivative)
-    coefs = np.linalg.solve(A, b)
+def finite_difference_coefficients(derivative: int, accuracy: int = 2) -> np.ndarray:
+    if accuracy % 2 == 1 or accuracy <= 0:
+        raise ValueError("accuracy order must be a positive even integer")
+
+    if derivative < 0:
+        raise ValueError("derivative degree must be a positive integer")
+
+    num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
+    num_side = num_central // 2
+    offsets = list(range(-num_side, num_side + 1))
+
+    matrix = _build_matrix(offsets)
+    rhs = _build_rhs(offsets, derivative)
+    coefs = sympy.linsolve((matrix, rhs))
+    coefs = np.array([float(coef) for coef in tuple(coefs)[0]])
     return coefs
 
 
+# def _finite_difference_coefficients(derivative, accuracy):
+#     offsets = _get_central_offsets(derivative, accuracy)
+#     A = _build_matrix(offsets)
+#     b = _build_rhs(offsets, derivative)
+#     coefs = np.linalg.solve(A, b)
+#     return coefs
+
+
 def _laplace_stencil_array(accuracy):
-    coefficients = _finite_difference_coefficients(2, accuracy)
+    coefficients = finite_difference_coefficients(2, accuracy)
     stencil = np.zeros((len(coefficients),) * 2)
 
     stencil[len(coefficients) // 2, :] = coefficients
@@ -57,7 +92,7 @@ def _laplace_stencil_array(accuracy):
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=np.complex64
 ):
-    c = _finite_difference_coefficients(2, accuracy)
+    c = finite_difference_coefficients(2, accuracy)
     c = c * prefactor
     c = c.astype(dtype)
     c = np.roll(c, -(len(c) // 2))
@@ -139,18 +174,43 @@ class LaplaceOperator:
         return waves
 
 
+class DivergedError(Exception):
+    def __init__(self, message="the series diverged"):
+        super().__init__(message)
+
+
+class NotConvergedError(Exception):
+    def __init__(self, message="the series did not converge"):
+        super().__init__(message)
+
+
 def _multislice_exponential_series(
     waves,
     transmission_function,
-    num_terms: int,
     laplace: callable,
+    tolerance: float = 1e-16,
+    max_terms: int = 300,
 ):
+    xp = get_array_module(waves)
+    initial_amplitude = xp.abs(waves).sum()
+
     temp = laplace(waves) + waves * transmission_function
 
     waves += temp
-    for i in range(2, num_terms + 1):
+    for i in range(2, max_terms + 1):
         temp = (laplace(temp) + temp * transmission_function) / i
         waves += temp
+
+        temp_amplitude = np.abs(temp).sum()
+        if temp_amplitude / initial_amplitude <= tolerance:
+            break
+
+        if temp_amplitude > initial_amplitude:
+            raise DivergedError()
+    else:
+        raise NotConvergedError(
+            f"series did not converge to a tolerance of {tolerance} in {max_terms} terms"
+        )
     return waves
 
 
@@ -168,15 +228,15 @@ def _multislice_exponential_series(
 #     return waves
 
 
-
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
     laplace: callable,
-    max_terms: int = 1,
+    tolerance: float = 1e-16,
+    max_terms: int = np.inf,
 ):
-    # if num_terms < 1:
-    #     raise ValueError()
+    if max_terms < 1:
+        raise ValueError()
 
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
@@ -189,28 +249,17 @@ def multislice_step(
             energy=waves.energy
         )
 
-
     thickness = potential_slice.thickness
-    #transmission_function = 1.0j * potential_slice.array[0] * energy2sigma(waves.energy)
+    transmission_function = 1.0j * potential_slice.array[0] * energy2sigma(waves.energy)
 
-    #waves = transmission_function.transmit(waves)
+    # waves = transmission_function.transmit(waves)
 
     laplace = laplace.get_stencil(waves, thickness)
 
     waves._array = _multislice_exponential_series(
-        waves._array, max_terms, laplace
+        waves._array, transmission_function, laplace, tolerance, max_terms
     )
     return waves
-
-
-class DivergedError(Exception):
-    def __init__(self, message="the series diverged"):
-        super().__init__(message)
-
-
-class NotConvergedError(Exception):
-    def __init__(self, message="the series did not converge"):
-        super().__init__(message)
 
 
 # def multislice_step(

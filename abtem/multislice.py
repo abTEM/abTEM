@@ -421,7 +421,7 @@ def multislice_and_detect(
     transpose: bool = False,
     pbar: bool = False,
     method: str = "conventional",
-    multislice_step_kwargs: dict = None
+    **kwargs
 ) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
@@ -449,9 +449,6 @@ def multislice_and_detect(
     waves = waves.ensure_real_space()
     detectors = _validate_detectors(detectors)
 
-    if multislice_step_kwargs is None:
-        multislice_step_kwargs = {}
-
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
@@ -467,9 +464,9 @@ def multislice_and_detect(
             )
 
     elif method in ("realspace",):
-        derivative_accuracy = multislice_step_kwargs.get("derivative_accuracy", 2)
+        derivative_accuracy = kwargs.get("derivative_accuracy", 6)
         laplace_operator = LaplaceOperator(derivative_accuracy)
-        max_terms = multislice_step_kwargs.get("max_terms", 80)
+        max_terms = kwargs.get("max_terms", 80)
 
         def multislice_step(waves, potential_slice):
             return realspace_multislice_step(
