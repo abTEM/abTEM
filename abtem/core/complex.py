@@ -10,7 +10,7 @@ def _complex_exponential(x):
     """
     Calculate the complex exponential.
     """
-    return np.cos(x) + 1.j * np.sin(x)
+    return np.cos(x) + 1.0j * np.sin(x)
 
 
 @nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
@@ -18,7 +18,18 @@ def _abs2(x):
     """
     Calculate the absolute square of a complex number.
     """
-    return x.real ** 2 + x.imag ** 2
+    return x.real**2 + x.imag**2
+
+
+if cp is not None:
+    _abs2_cupy = cp.ElementwiseKernel(
+        in_params="float32 x, float32 y",
+        out_params="float32 z",
+        operation="z = x * x + y * y",
+        name="abs_squared",
+    )
+else:
+    _abs2_cupy = None
 
 
 def abs2(x, **kwargs):
@@ -31,7 +42,7 @@ def abs2(x, **kwargs):
     check_cupy_is_installed()
 
     if isinstance(x, cp.ndarray):
-        return cp.abs(x) ** 2
+        return _abs2_cupy(x.real, x.imag)
 
     raise ValueError()
 
@@ -46,6 +57,6 @@ def complex_exponential(x):
     check_cupy_is_installed()
 
     if isinstance(x, cp.ndarray):
-        return cp.exp(1.j * x)
+        return cp.exp(1.0j * x)
 
     raise ValueError()
