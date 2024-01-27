@@ -1,16 +1,16 @@
 """Module for various convenient utilities."""
 from __future__ import annotations
+
 import copy
 import inspect
+import itertools
+import os
 import warnings
-from typing import Tuple
 
 import numpy as np
 
-from abtem.core.backend import get_array_module
-import dask.array as da
 from abtem.core.backend import cp
-
+from abtem.core.backend import get_array_module
 
 
 def is_array_like(x):
@@ -46,12 +46,10 @@ class CopyMixin:
 
 
 def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
-
     if not isinstance(b, a.__class__):
         return False
 
     for key, value in a.__dict__.items():
-
         if key in exclude:
             continue
 
@@ -61,7 +59,10 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
             return False
 
         from abtem.core.ensemble import EmptyEnsemble
-        if isinstance(value, EmptyEnsemble) and isinstance(b.__dict__[key], EmptyEnsemble):
+
+        if isinstance(value, EmptyEnsemble) and isinstance(
+            b.__dict__[key], EmptyEnsemble
+        ):
             return True
 
         with warnings.catch_warnings():
@@ -168,7 +169,6 @@ def expand_dims_to_broadcast(
     match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
     broadcast: bool = False,
 ):
-
     xp = get_array_module(arr1)
 
     axis1, axis2 = _get_dims_to_broadcast(arr1, arr2, match_dims)
@@ -192,6 +192,10 @@ def interleave(l1: list | tuple, l2: list | tuple):
     return tuple(val for pair in zip(l1, l2) for val in pair)
 
 
+def flatten_list_of_lists(l):
+    return list(itertools.chain(*l))
+
+
 def label_to_index(labels, max_label=None):
     if max_label is None:
         max_label = np.max(labels)
@@ -206,3 +210,8 @@ def label_to_index(labels, max_label=None):
     hi = xp.searchsorted(sorted_labels, index, side="right")
     for i, (l, h) in enumerate(zip(lo, hi)):
         yield indices[l:h]
+
+
+def get_data_path(file):
+    this_file = os.path.abspath(os.path.dirname(file))
+    return os.path.join(this_file, "data")

@@ -48,7 +48,7 @@ def latex_float(f, formatting):
 
 def format_value(value: Union[tuple, float], formatting: str, tolerance: float = 1e-14):
     if isinstance(value, tuple):
-        return ", ".join(format_value(v, formatting=formatting) for v in value)
+        return ", ".join(str(format_value(v, formatting=formatting)) for v in value)
 
     if isinstance(value, float):
         if np.abs(value) < tolerance:
@@ -65,23 +65,6 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
 def format_title(
     axes, formatting: str = ".3f", units: str = None, include_label: bool = True
 ):
-    """
-    Parameters
-    ----------
-    axes : object
-        The abtem AxisMetadata object to format as a title.
-    formatting : str, optional
-        The string format to apply to floating point values. Default is '.3f'.
-    units : str, optional
-        The units to display after the value. Default is derived from the AxisMetadata object.
-    include_label : bool, optional
-        Whether to include the label of the axes in the title. Default is True.
-
-    Returns
-    -------
-    str
-        The formatted title for the plot.
-    """
     try:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
     except KeyError:
@@ -219,11 +202,13 @@ class LinearAxis(AxisMetadata):
 
     def to_nonlinear_axis(self, n):
         values = tuple(self.coordinates(n))
-        return NonLinearAxis(label=self.label,
-                           _tex_label=self._tex_label,
-                           units=self.units,
-                           values=values,
-                           _concatenate=self._concatenate)
+        return NonLinearAxis(
+            label=self.label,
+            _tex_label=self._tex_label,
+            units=self.units,
+            values=values,
+            _concatenate=self._concatenate,
+        )
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -251,7 +236,9 @@ class OrdinalAxis(AxisMetadata):
     values: Union[Sequence, ArrayLike] = ()
 
     def format_title(self, formatting, include_label: bool = True, **kwargs):
-        return format_title(self, formatting=formatting, include_label=include_label, **kwargs)
+        return format_title(
+            self, formatting=formatting, include_label=include_label, **kwargs
+        )
 
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):
@@ -397,6 +384,16 @@ class FrozenPhononsAxis(AxisMetadata):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class PrismPlaneWavesAxis(AxisMetadata):
     pass
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class ScaleAxis:
+    label: str = ""
+    units: str = None
+    _tex_label: str | None = None
+
+    def format_label(self):
+        return format_label(self)
 
 
 def axis_to_dict(axis: AxisMetadata):

@@ -1,13 +1,9 @@
 import warnings
 
-try:
-    import cupy as cp
-except:
-    pass
 import numpy as np
 import pandas as pd
 
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, cp
 from abtem.core.constants import kappa
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.parametrizations import validate_parametrization
@@ -36,8 +32,9 @@ def _C_reflection_conditions(hkl):
 
 
 class StructureFactors:
-    def __init__(self, atoms, k_max, parametrization="lobato"):
+    def __init__(self, atoms, k_max, parametrization="lobato", thermal_sigma=None):
         self._atoms = atoms
+        self._thermal_sigma = thermal_sigma
         self._k_max = k_max
         self._hkl = self._make_hkl_grid()
         self._g_vec = self._hkl @ self._atoms.cell.reciprocal()
@@ -92,16 +89,15 @@ class StructureFactors:
         f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=np.complex128)
 
         for idx, Z in enumerate(Z_unique):
-            # lobato_lookup = single_atom_scatter()
-            # lobato_lookup.get_scattering_factor([Z], [1.0], g_unique, units="A")
-            # f_e_uniq[idx, :] = lobato_lookup.fe
-            # f_e_uniq[idx, :] = LobatoParametrization().scattering_factor(Z)(
-            #    g_unique**2
-            # )
+            if self._thermal_sigma is not None:
+                DWF = np.exp(-0.5 * self._thermal_sigma**2 * g_unique**2 * (2*np.pi)**2)
+            else:
+                DWF = 1.0
 
             scattering_factor = self._parametrization.scattering_factor(Z)
-            f_e_uniq[idx, :] = scattering_factor(g_unique**2)
-            f_e_uniq[idx, g_unique > self.k_max] = 0.
+            f_e_uniq[idx, :] = scattering_factor(g_unique**2) * DWF
+
+            f_e_uniq[idx, g_unique > self.k_max] = 0.0
 
         return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
 
@@ -211,9 +207,6 @@ class BlochWaves:
 
         prefactor = energy2sigma(self.energy) / self.wavelength / np.pi / kappa
 
-        # m0c2 = 5.109989461e5
-        # prefactor = (m0c2 + self.energy) / m0c2 / np.pi
-
         U_gmh = prefactor * U_gmh
         U_gmh = U_gmh.reshape((n_beams, n_beams))
 
@@ -252,7 +245,9 @@ class BlochWaves:
             C = C / xp.sqrt(
                 1
                 + self.wavelength
-                * xp.array(self.structure_factors.g_vec[self.included_hkl][:, 2][:, None])
+                * xp.array(
+                    self.structure_factors.g_vec[self.included_hkl][:, 2][:, None]
+                )
             )
 
         C_inv = xp.conjugate(C.T)

@@ -33,7 +33,6 @@ def iterate_chunk_ranges(chunks):
 
 
 def config_chunk_size(device):
-
     if device == "gpu":
         return parse_bytes(config.get("dask.chunk-size-gpu"))
 
@@ -54,7 +53,6 @@ def validate_chunks(
     dtype: np.dtype.base = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
-
     if chunks == -1:
         return validate_chunks(shape, shape)
 
@@ -76,7 +74,6 @@ def validate_chunks(
 
     validated_chunks = ()
     for s, c in zip(shape, chunks):
-
         if isinstance(c, tuple):
             assert sum(c) == s
             validated_chunks += (c,)
@@ -103,7 +100,6 @@ def auto_chunks(
     dtype: np.dtype.base = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
-
     if limit == "auto":
         if dtype is None:
             raise ValueError("auto selecting chunk limits requires dtype")
@@ -141,13 +137,15 @@ def auto_chunks(
 
     j = 0
     while len(autodims):
-        #autodims = [i for i in autodims if current_chunks[i] != maximum_chunks[i]]
+        # autodims = [i for i in autodims if current_chunks[i] != maximum_chunks[i]]
         if len(autodims) == 0:
             break
 
         j = j % len(autodims)
 
-        current_chunks[autodims[j]] = min(current_chunks[autodims[j]] + 1, shape[autodims[j]])
+        current_chunks[autodims[j]] = min(
+            current_chunks[autodims[j]] + 1, shape[autodims[j]]
+        )
 
         total = reduce(mul, current_chunks)
 
@@ -167,7 +165,7 @@ def auto_chunks(
         else:
             chunks += (c,)
 
-    #current_chunks = tuple(current_chunks)
+    # current_chunks = tuple(current_chunks)
     chunks = validate_chunks(shape, chunks, limit, dtype)
     return chunks
 
@@ -217,6 +215,10 @@ def generate_chunks(
     num_items: int, num_chunks: int = None, chunks: int = None, start: int = 0
 ):
     for batch in equal_sized_chunks(num_items, num_chunks, chunks):
+        if num_items == 0:
+            break
+
         end = start + batch
+
         yield start, end
         start = end
