@@ -360,7 +360,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         return self._frozen_phonons
 
     @property
-    def num_frozen_phonons(self):
+    def num_configurations(self):
         return len(self.frozen_phonons)
 
     @property

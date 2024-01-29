@@ -19,6 +19,7 @@ from abtem.core.axes import (
     ReciprocalSpaceAxis,
     AxisMetadata,
     AxesMetadataList,
+    OrdinalAxis,
 )
 from abtem.core.backend import (
     get_array_module,
@@ -49,20 +50,29 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
 )
 from abtem.distributions import BaseDistribution
+from abtem.inelastic.core_loss import (
+    BaseTransitionPotential,
+    _validate_transition_potentials,
+)
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
     BaseMeasurements,
     RealSpaceLineProfiles,
 )
-from abtem.multislice import MultisliceTransform
+from abtem.multislice import (
+    MultisliceTransform,
+    transition_potential_multislice_and_detect,
+)
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.scan import BaseScan, GridScan, _validate_scan
+from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _validate_tilt
 from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
     ArrayObjectTransform,
 )
+from abtem.core import config
 
 
 def _ensure_parity(n, even, v=1):
@@ -192,7 +202,6 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin):
     def _gpts_within_angle(
         self, angle: float | str, parity: str = "same"
     ) -> tuple[int, int]:
-
         if angle is None or angle == "full":
             return self.gpts
 
@@ -299,7 +308,6 @@ class Waves(BaseWaves, ArrayObject):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         if sampling is not None and extent is not None:
             extent = None
 
@@ -346,7 +354,6 @@ class Waves(BaseWaves, ArrayObject):
     def from_array_and_metadata(
         cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict = None
     ) -> Waves:
-
         """
         Creates wave functions from a given array and metadata.
 
@@ -787,7 +794,7 @@ class Waves(BaseWaves, ArrayObject):
             xp = get_array_module(array)
 
             if normalize:
-                array = array / np.prod(array.shape[-2:])
+                array = array / float(np.prod(array.shape[-2:]))
 
             array = fft2(array, overwrite_x=False)
 
@@ -845,6 +852,8 @@ class Waves(BaseWaves, ArrayObject):
                 normalize=normalize,
             )
 
+        # pattern = xp.zeros(self.shape, dtype=xp.float32)
+
         diffraction_patterns = DiffractionPatterns(
             pattern,
             sampling=(
@@ -897,6 +906,53 @@ class Waves(BaseWaves, ArrayObject):
 
         return self.apply_transform(ctf, max_batch=max_batch)
 
+    def transition_potential_multislice(
+        self,
+        potential: BasePotential,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+        detectors: BaseDetector | list[BaseDetector] = None,
+        sites: SliceIndexedAtoms | Atoms = None,
+    ) -> Waves | BaseMeasurements:
+        transition_potentials = _validate_transition_potentials(transition_potentials)
+
+        potential = _validate_potential(potential, self)
+
+        measurements = []
+        for transition_potential in transition_potentials:
+            multislice_transform = MultisliceTransform(
+                potential=potential,
+                detectors=detectors,
+                multislice_func=transition_potential_multislice_and_detect,
+                transition_potential=transition_potential,
+                sites=sites,
+            )
+            measurements.append(self.apply_transform(transform=multislice_transform))
+
+        if len(measurements) > 1:
+            axis_metadata = OrdinalAxis(
+                label="Z, n, l",
+                values=[
+                    ",".join(
+                        (
+                            str(transition_potential.metadata["Z"]),
+                            str(transition_potential.metadata["n"]),
+                            str(transition_potential.metadata["l"]),
+                        )
+                    )
+                    for transition_potential in transition_potentials
+                ],
+                _tex_label="$Z, n, \ell$",
+            )
+
+            measurements = abtem.stack(
+                measurements,
+                axis_metadata,
+            )
+        else:
+            measurements = measurements[0]
+
+        return _reduce_ensemble(measurements)
+
     def multislice(
         self,
         potential: BasePotential,
@@ -934,7 +990,7 @@ class Waves(BaseWaves, ArrayObject):
 
         return _reduce_ensemble(waves)
 
-    def show(self, complex_images:bool=False, **kwargs):
+    def show(self, complex_images: bool = False, **kwargs):
         """
         Show the wave-function intensities.
 
@@ -972,7 +1028,6 @@ def _reduce_ensemble(ensemble):
 
 class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def __init__(self, ensemble_names: tuple[str, ...], device: str):
-
         self._ensemble_names = ensemble_names
         self._device = device
         super().__init__()
@@ -1053,7 +1108,6 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         arg_splits,
         **kwargs,
     ):
-
         args = unpack_blockwise_args(args)
         for arg_split, (name, partial) in zip(arg_splits, partials.items()):
             kwargs[name] = partial(*args[slice(*arg_split)]).item()
@@ -1179,7 +1233,6 @@ class PlaneWave(_WavesBuilder):
         tilt: tuple[float, float] = (0.0, 0.0),
         device: str = None,
     ):
-
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._tilt = _validate_tilt(tilt=tilt)
@@ -1380,7 +1433,6 @@ class Probe(_WavesBuilder):
         metadata: dict = None,
         **kwargs,
     ):
-
         self._accelerator = Accelerator(energy=energy)
 
         # if not ((semiangle_cutoff is None) + (aperture is None) == 1):
@@ -1532,6 +1584,31 @@ class Probe(_WavesBuilder):
 
         return waves
 
+    def _validate_and_build(
+        self,
+        scan: Sequence | BaseScan = None,
+        max_batch: int | str = "auto",
+        lazy: bool = None,
+        potential=None,
+    ):
+        self.check_can_build(potential)
+        lazy = _validate_lazy(lazy)
+
+        probe = self.copy()
+
+        if potential is not None:
+            probe.grid.match(potential)
+
+        scan = _validate_scan(scan, probe)
+        probe._positions = scan
+
+        if not lazy:
+            probes = self._build_waves(probe)
+        else:
+            probes = self._lazy_build_waves(probe, max_batch)
+
+        return probes
+
     def build(
         self,
         scan: Sequence | BaseScan = None,
@@ -1558,21 +1635,7 @@ class Probe(_WavesBuilder):
         probe_wave_functions : Waves
             The built probe wave functions.
         """
-        self.check_can_build()
-        lazy = _validate_lazy(lazy)
-
-        scan = _validate_scan(scan, self)
-
-        probe = self.copy()
-
-        probe._positions = scan
-
-        if not lazy:
-            probes = self._build_waves(probe)
-        else:
-            probes = self._lazy_build_waves(probe, max_batch)
-
-        return _reduce_ensemble(probes)
+        return self._validate_and_build(scan=scan, max_batch=max_batch, lazy=lazy)
 
     def multislice(
         self,
@@ -1606,27 +1669,92 @@ class Probe(_WavesBuilder):
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurement
         """
+        potential = _validate_potential(potential)
+
+        probes = self._validate_and_build(
+            scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
+        )
+
+        multislice = MultisliceTransform(potential, detectors)
+
+        measurements = probes.apply_transform(multislice)
+        return _reduce_ensemble(measurements)
+
+    def transition_potential_scan(
+        self,
+        potential: BasePotential | Atoms,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+        scan: tuple | BaseScan = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        sites: SliceIndexedAtoms | Atoms = None,
+        detectors_elastic: BaseDetector | list[BaseDetector] = None,
+        double_channel: bool = True,
+        threshold: float = 1.0,
+        max_batch: int | str = "auto",
+        lazy: bool = None,
+    ) -> Waves | BaseMeasurements:
+        """
+        Parameters
+        ----------
+        potential : BasePotential | Atoms
+            The potential to be used for calculating the transition potentials.
+            It can be an instance of `BasePotential` or an `Atoms` object.
+        transition_potentials : BaseTransitionPotential | list[BaseTransitionPotential]
+            The transition potentials to be used for multislice calculations.
+            It can be an instance of `BaseTransitionPotential` or a list of `BaseTransitionPotential` objects.
+        scan : tuple | BaseScan, optional
+            The scan parameters. It can be a tuple or an instance of `BaseScan`.
+            Defaults to None.
+        detectors : BaseDetector | list[BaseDetector], optional
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            Defaults to None, which
+        sites : SliceIndexedAtoms | Atoms, optional
+            The slice indexed atoms to be used for multislice calculations.
+            It can be an instance of `SliceIndexedAtoms` or an `Atoms` object.
+            Defaults to None.
+        detectors_elastic : BaseDetector | list[BaseDetector], optional
+            The elastic detectors to be used for recording the measurements.
+            It can be an instance of `BaseDetector` or a list of `BaseDetector` objects.
+            Defaults to None.
+        double_channel : bool, optional
+            A boolean indicating whether to use double channel for recording the measurements.
+            Defaults to True.
+        max_batch : int | str, optional
+            The maximum batch size for parallel processing.
+            It can be an integer or the string "auto".
+            Defaults to "auto".
+        lazy : bool, optional
+            A boolean indicating whether to use lazy evaluation for the calculations.
+            Defaults to None.
+
+        Returns
+        -------
+        Waves | BaseMeasurements
+            The calculated waves or measurements, depending on the value of `lazy`.
+
+        """
+        if scan is None:
+            scan = GridScan()
+
+        if detectors is None:
+            detectors = FlexibleAnnularDetector()
 
         potential = _validate_potential(potential)
 
-        self.check_can_build(potential)
+        probes = self._validate_and_build(
+            scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
+        )
 
-        lazy = _validate_lazy(lazy)
-
-        probe = self.copy()
-
-        probe.grid.match(potential)
-
-        scan = _validate_scan(scan, probe)
-
-        probe._positions = scan
-
-        if not lazy:
-            probes = self._build_waves(probe)
-        else:
-            probes = self._lazy_build_waves(probe, max_batch)
-
-        multislice = MultisliceTransform(potential, detectors)
+        multislice = MultisliceTransform(
+            potential,
+            detectors,
+            multislice_func=transition_potential_multislice_and_detect,
+            transition_potential=transition_potentials,
+            sites=sites,
+            double_channel=double_channel,
+            threshold=threshold,
+        )
 
         measurements = probes.apply_transform(multislice)
 

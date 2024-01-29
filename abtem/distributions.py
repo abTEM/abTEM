@@ -360,7 +360,7 @@ def gaussian(
     return MultidimensionalDistribution(distributions=distributions)
 
 
-def _validate_distribution(
+def validate_distribution(
     distribution: BaseDistribution | Iterable | Number,
 ) -> BaseDistribution | Number:
     """

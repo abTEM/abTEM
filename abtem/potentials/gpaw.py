@@ -27,7 +27,7 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.parametrizations import EwaldParametrization, LobatoParametrization
+from abtem.parametrizations import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
@@ -248,6 +248,7 @@ def _generate_slices(
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
+
         potential = Potential(
             gpts=gpts,
             atoms=atoms[i : i + 1],

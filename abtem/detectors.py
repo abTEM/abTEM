@@ -4,7 +4,6 @@ from __future__ import annotations
 from abc import abstractmethod
 from copy import copy
 from functools import partial
-from numbers import Number
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -25,12 +24,11 @@ from abtem.measurements import (
     _scan_shape,
 )
 from abtem.transform import ArrayObjectTransform
-from abtem.visualize import discrete_cmap
+from abtem.visualize.visualizations import discrete_cmap
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
     from abtem.measurements import BaseMeasurements
-    from abtem.visualize import MeasurementVisualization2D
 
 
 def _validate_detectors(
@@ -46,7 +44,6 @@ def _validate_detectors(
         isinstance(detectors, list)
         and all(hasattr(detector, "detect") for detector in detectors)
     ):
-
         raise RuntimeError(
             "Detectors must be AbstractDetector or list of AbstractDetector."
         )
@@ -183,7 +180,6 @@ class AnnularDetector(BaseDetector):
         to_cpu: bool = True,
         url: str = None,
     ):
-
         self._inner = inner
         self._outer = outer
         self._offset = offset
@@ -299,7 +295,6 @@ class AnnularDetector(BaseDetector):
     def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
     ) -> np.ndarray:
-
         array = _polar_detector_bins(
             gpts=waves._gpts_within_angle("cutoff"),
             sampling=waves.angular_sampling,
@@ -990,7 +985,6 @@ class WavesDetector(BaseDetector):
         return metadata
 
     def _calculate_new_array(self, waves):
-
         waves = waves.ensure_real_space()
 
         if self.to_cpu:

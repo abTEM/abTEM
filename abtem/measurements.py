@@ -5,6 +5,7 @@ import copy
 import itertools
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from numbers import Number
 from typing import (
     TypeVar,
     Dict,
@@ -31,6 +32,7 @@ from abtem.core.axes import (
     NonLinearAxis,
     ScanAxis,
     OrdinalAxis,
+    ScaleAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
@@ -47,9 +49,8 @@ from abtem.distributions import BaseDistribution
 from abtem.indexing import _index_diffraction_patterns, _format_miller_indices
 from abtem.noise import NoiseTransform
 from abtem.visualize import (
-    MeasurementVisualization2D,
-    MeasurementVisualization1D,
-    DiffractionSpotsVisualization,
+    VisualizationLines,
+    VisualizationImshow,
 )
 
 # Enables CuPy-accelerated functions if it is available.
@@ -82,7 +83,7 @@ def _scanned_measurement_type(
         return Images
 
     else:
-        return None
+        return MeasurementsEnsemble
         # raise RuntimeError(
         #     f"no measurement type for {measurement.__class__} with {len(_scan_shape(measurement))} scan "
         #     f"axes"
@@ -100,7 +101,7 @@ def _reduced_scanned_images_or_line_profiles(
     new_array,
     old_measurement,
     metadata=None,
-) -> RealSpaceLineProfiles | Images | np.ndarray:
+) -> RealSpaceLineProfiles | Images | MeasurementsEnsemble | np.ndarray:
     if metadata is None:
         metadata = {}
 
@@ -134,6 +135,15 @@ def _reduced_scanned_images_or_line_profiles(
         )
 
         return images
+    elif _scanned_measurement_type(old_measurement) is MeasurementsEnsemble:
+        ensemble_axes_metadata = old_measurement.ensemble_axes_metadata
+
+        measurement_ensemble = MeasurementsEnsemble(
+            new_array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+        return measurement_ensemble
     else:
         return new_array
 
@@ -522,10 +532,89 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         return measurement
 
+    def _scale_axis_from_metadata(self):
+        return ScaleAxis(
+            label=self.metadata.get("label", ""),
+            units=self.metadata.get("units", None),
+            _tex_label=None,
+        )
+
     @abstractmethod
     def show(self, *args, **kwargs):
         """Documented in subclasses"""
         pass
+
+
+class MeasurementsEnsemble(BaseMeasurements):
+    _base_dims = 0
+
+    def __init__(
+        self,
+        array: np.ndarray,
+        ensemble_axes_metadata: list[AxisMetadata],
+        metadata: dict = None,
+    ):
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    @property
+    def _area_per_pixel(self):
+        raise RuntimeError("Cannot infer pixel area from metadata.")
+
+    @property
+    def base_axes_metadata(self):
+        return []
+
+    @classmethod
+    def from_array_and_metadata(
+        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
+    ) -> "T":
+        return cls(array, axes_metadata, metadata)
+
+    def show(
+        self,
+        ax: Axes = None,
+        common_scale: bool = True,
+        explode: bool | Sequence[int] = None,
+        overlay: bool | Sequence[int] = None,
+        figsize: tuple[int, int] = None,
+        title: str = None,
+        units: str = None,
+        legend: bool = False,
+        interact: bool = False,
+        display: bool = True,
+        **kwargs,
+    ):
+        # if not interact:
+        #     self.compute()
+
+        visualization = VisualizationLines(
+            array=self.array,
+            coordinate_axes=self.ensemble_axes_metadata[-1:],
+            scale_axis=self._scale_axis_from_metadata(),
+            ensemble_axes=self.ensemble_axes_metadata[:-1],
+            ax=ax,
+            common_scale=common_scale,
+            explode=explode,
+            overlay=overlay,
+            figsize=figsize,
+            interact=interact,
+            title=title,
+            **kwargs,
+        )
+
+        if not display and not interact:
+            plt.close()
+
+        if interact and display:
+            from IPython.display import display as ipython_display
+
+            ipython_display(visualization.layout_widgets())
+
+        return visualization
 
 
 class _BaseMeasurement2D(BaseMeasurements):
@@ -825,13 +914,14 @@ class _BaseMeasurement2D(BaseMeasurements):
         vmax: float = None,
         power: float = 1.0,
         common_color_scale: bool = False,
-        explode: bool | Sequence[bool] = None,
+        explode: bool | Sequence[int] = None,
+        overlay: bool | Sequence[int] = None,
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
         interact: bool = False,
         display: bool = True,
-    ) -> MeasurementVisualization2D:
+    ) -> VisualizationImshow:
         """
         Show the image(s) using matplotlib.
 
@@ -872,14 +962,21 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         Returns
         -------
-        measurement_visualization_2d : MeasurementVisualization2D
+        measurement_visualization_2d : VisualizationImshow
         """
 
         if not interact:
             self.compute()
 
-        visualization = MeasurementVisualization2D(
-            measurements=self,
+        scale_axis = self._scale_axis_from_metadata()
+
+        base_axes_metadata = self._plot_base_axes_metadata(units)
+
+        visualization = VisualizationImshow(
+            array=self.array,
+            coordinate_axes=base_axes_metadata,
+            scale_axis=scale_axis,
+            ensemble_axes=self.ensemble_axes_metadata,
             ax=ax,
             cbar=cbar,
             cmap=cmap,
@@ -888,16 +985,11 @@ class _BaseMeasurement2D(BaseMeasurements):
             power=power,
             common_scale=common_color_scale,
             explode=explode,
+            overlay=overlay,
             figsize=figsize,
             interact=interact,
+            title=title,
         )
-
-        if title is not None:
-            visualization.set_column_titles(title)
-
-        if units is not None:
-            visualization.set_xunits(units)
-            visualization.set_yunits(units)
 
         if not display and not interact:
             plt.close()
@@ -905,9 +997,13 @@ class _BaseMeasurement2D(BaseMeasurements):
         if interact and display:
             from IPython.display import display as ipython_display
 
-            ipython_display(visualization.widgets)
+            ipython_display(visualization.layout_widgets())
 
         return visualization
+
+    @abstractmethod
+    def _plot_base_axes_metadata(self, units):
+        pass
 
 
 class Images(_BaseMeasurement2D):
@@ -1296,13 +1392,8 @@ class Images(_BaseMeasurement2D):
             metadata=self.metadata,
         )
 
-    def _plot_extent_x(self, units=None):
-        scale = _get_conversion_factor(units, "Å")
-        return [0, self.extent[0] * scale]
-
-    def _plot_extent_y(self, units=None):
-        scale = _get_conversion_factor(units, "Å")
-        return [0, self.extent[1] * scale]
+    def _plot_base_axes_metadata(self, units: str = None):
+        return self.base_axes_metadata
 
 
 class _BaseMeasurement1D(BaseMeasurements):
@@ -1537,7 +1628,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         interact: bool = False,
         display: bool = True,
         **kwargs,
-    ) -> MeasurementVisualization1D:
+    ) -> VisualizationLines:
         """
         Show the reciprocal-space line profile(s) using matplotlib.
 
@@ -1577,8 +1668,13 @@ class _BaseMeasurement1D(BaseMeasurements):
         if not interact:
             self.compute()
 
-        visualization = MeasurementVisualization1D(
-            self,
+        scale_axis = self._scale_axis_from_metadata()
+
+        visualization = VisualizationLines(
+            array=self.array,
+            coordinate_axes=self.base_axes_metadata,
+            scale_axis=scale_axis,
+            ensemble_axes=self.ensemble_axes_metadata,
             ax=ax,
             common_scale=common_scale,
             explode=explode,
@@ -1588,20 +1684,10 @@ class _BaseMeasurement1D(BaseMeasurements):
             **kwargs,
         )
 
-        if title is not None:
-            visualization.set_column_titles(title)
-
-        if units is not None:
-            visualization.set_xunits(units)
-            visualization.set_yunits()
-
-        if legend:
-            visualization.set_legends()
-
         if interact and display:
             from IPython.display import display as ipython_display
 
-            ipython_display(visualization.widgets)
+            ipython_display(visualization.layout_widgets())
 
         return visualization
 
@@ -2571,6 +2657,26 @@ class DiffractionPatterns(_BaseMeasurement2D):
         integrated_images : Images
             The integrated images.
         """
+        if isinstance(inner, Sequence) or isinstance(outer, Sequence):
+            if isinstance(inner, Number):
+                inners = (inner,) * len(outer)
+                outers = outer
+            else:
+                outers = (outer,) * len(inner)
+                inners = inner
+
+            measurements = [
+                self.integrate_radial(inner=inner, outer=outer)
+                for inner, outer in zip(inners, outers)
+            ]
+
+            measurements = stack(
+                measurements,
+                axis_metadata=NonLinearAxis(
+                    label="Limits", values=tuple(zip(inners, outers)), units="mrad"
+                ),
+            )
+            return measurements
 
         self._check_integration_limits(inner, outer)
 
@@ -3042,6 +3148,30 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return array
 
+    def _plot_base_axes_metadata(self, units: str = None):
+        if units is None:
+            return self.base_axes_metadata
+
+        if units == "mrad":
+            return [
+                ReciprocalSpaceAxis(
+                    sampling=self.angular_sampling[0],
+                    offset=self.angular_limits[0][0],
+                    label="kx",
+                    units="mrad",
+                    fftshift=self.fftshift,
+                    _tex_label="$k_x$",
+                ),
+                ReciprocalSpaceAxis(
+                    sampling=self.angular_sampling[1],
+                    offset=self.angular_limits[1][0],
+                    label="ky",
+                    units="mrad",
+                    fftshift=self.fftshift,
+                    _tex_label="$k_y$",
+                ),
+            ]
+
     def _plot_extent_x(self, units: str = None):
         if units is None:
             units = "1/Å"
@@ -3387,7 +3517,6 @@ class PolarMeasurements(BaseMeasurements):
         new_array[..., regions < 0] = np.nan
 
         wavelength = energy2wavelength(self._get_from_metadata("energy"))
-
         sampling = (
             angular_sampling[0] / (wavelength * 1e3),
             angular_sampling[1] / (wavelength * 1e3),
@@ -3495,12 +3624,13 @@ class PolarMeasurements(BaseMeasurements):
         power: float = 1.0,
         common_color_scale: bool = False,
         explode: bool | Sequence[bool] = None,
+        overlay: bool | Sequence[int] = None,
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
         interact: bool = False,
         display: bool = True,
-    ) -> MeasurementVisualization2D:
+    ) -> VisualizationImshow:
         """
         Show the image(s) using matplotlib.
 
@@ -3559,6 +3689,7 @@ class PolarMeasurements(BaseMeasurements):
             power=power,
             common_color_scale=common_color_scale,
             explode=explode,
+            overlay=overlay,
             figsize=figsize,
             title=title,
             units=units,
