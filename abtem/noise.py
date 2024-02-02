@@ -21,7 +21,6 @@ class NoiseTransform(EnsembleTransform):
         samples: int = None,
         seeds: int | tuple[int, ...] = None,
     ):
-
         self._dose = validate_distribution(dose)
 
         if samples is None and seeds is None:
@@ -124,10 +123,17 @@ def _pixel_times(dwell_time, flyback_time, shape):
         Dimensions of a scan in pixels.
     """
 
-    line_time = (dwell_time * shape[1]) + flyback_time
-    slow_time = np.tile(np.linspace(line_time, shape[0] * line_time, shape[0])[:, None], (1, shape[1]))
-    fast_time = np.tile(np.linspace((line_time - flyback_time) / shape[1],
-                                    line_time - flyback_time, shape[1]), (shape[0], 1))
+    line_time = (dwell_time * shape[0]) + flyback_time
+    slow_time = np.tile(
+        np.linspace(line_time, shape[1] * line_time, shape[1]), (shape[0], 1)
+    )
+
+    fast_time = np.tile(
+        np.linspace(
+            (line_time - flyback_time) / shape[1], line_time - flyback_time, shape[0]
+        )[:, None],
+        (1, shape[1]),
+    )
     return slow_time + fast_time
 
 
@@ -150,7 +156,9 @@ def _single_axis_distortion(time, max_frequency, num_components):
     frequencies = np.random.rand(num_components, 1, 1) * max_frequency
     amplitudes = np.random.rand(num_components, 1, 1) / np.sqrt(frequencies)
     displacements = np.random.rand(num_components, 1, 1) / frequencies
-    return (amplitudes * np.sin(2 * np.pi * (time + displacements) * frequencies)).sum(axis=0)
+    return (amplitudes * np.sin(2 * np.pi * (time + displacements) * frequencies)).sum(
+        axis=0
+    )
 
 
 def _make_displacement_field(time, max_frequency, num_components, rms_power):
@@ -178,7 +186,7 @@ def _make_displacement_field(time, max_frequency, num_components, rms_power):
     y_mag_deviation = np.gradient(profile_y, axis=0)
 
     frame_mag_deviation = (1 + x_mag_deviation) * (1 + y_mag_deviation) - 1
-    frame_mag_deviation = np.sqrt(np.mean(frame_mag_deviation ** 2))
+    frame_mag_deviation = np.sqrt(np.mean(frame_mag_deviation**2))
 
     # 235.5 = 2.355 * 100 %; 2.355 converts from 1/e width to FWHM
 
@@ -212,47 +220,180 @@ def _apply_displacement_field(image, distortion_x, distortion_y):
     y, x = np.meshgrid(y, x)
     p = np.array([(x + distortion_x).ravel(), (y + distortion_y).ravel()]).T
 
-    p[:, 0] = np.clip(p[:, 0], 0, x.max())
-    p[:, 1] = np.clip(p[:, 1], 0, y.max())
+    # p[:, 0] = np.clip(p[:, 0], 0, x.max())
+    p[:, 0] = p[:, 0] % x.max()
+    # p[:, 1] = np.clip(p[:, 1], 0, y.max())
+    p[:, 1] = p[:, 1] % y.max()
 
     warped = interpolating_function(p)
     return warped.reshape(image.shape)
 
 
-# def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: float, max_frequency: float,
-#                    rms_power: float, num_components: int = 200):
-#     """
-#     Add scan noise to a measurement.
-#
-#     Parameters
-#     ----------
-#     measurement: Measurement object or 2d array
-#         The measurement to add noise to.
-#     dwell_time: float
-#         Dwell time on a single pixel in s.
-#     flyback_time: float
-#         Flyback time for the scanning probe at the end of each scan line in s.
-#     max_frequency: float
-#         Maximum noise frequency in 1 / s.
-#     rms_power: float
-#         Root-mean-square power of the distortion in unit of percent.
-#     num_components: int, optional
-#         Number of frequency components. More components will be more 'white' but will take longer.
-#
-#     Returns
-#     -------
-#     measurement: Measurement object
-#         The noisy measurement.
-#     """
-#
-#     measurement = measurement.copy()
-#     if isinstance(measurement, Measurement):
-#         array = measurement.array
-#     else:
-#         array = measurement
-#
-#     time = _pixel_times(dwell_time, flyback_time, array.T.shape)
-#     displacement_x, displacement_y = _make_displacement_field(time, max_frequency, num_components, rms_power)
-#     array = _apply_displacement_field(array[:].T, displacement_x, displacement_y)
-#     array[:] = array.T
-#     return measurement
+def apply_scan_noise(
+    measurement,
+    dwell_time: float,
+    flyback_time: float,
+    max_frequency: float,
+    rms_power: float,
+    num_components: int = 200,
+):
+    """
+    Add scan noise to a measurement.
+
+    Parameters
+    ----------
+    measurement: Measurement object or 2d array
+        The measurement to add noise to.
+    dwell_time: float
+        Dwell time on a single pixel in s.
+    flyback_time: float
+        Flyback time for the scanning probe at the end of each scan line in s.
+    max_frequency: float
+        Maximum noise frequency in 1 / s.
+    rms_power: float
+        Root-mean-square power of the distortion in unit of percent.
+    num_components: int, optional
+        Number of frequency components. More components will be more 'white' but will take longer.
+
+    Returns
+    -------
+    measurement: Measurement object
+        The noisy measurement.
+    """
+
+    measurement = measurement.copy()
+    if hasattr(measurement, "array"):
+        array = measurement.array
+    else:
+        array = measurement
+
+    time = _pixel_times(dwell_time, flyback_time, array.T.shape)
+    displacement_x, displacement_y = _make_displacement_field(
+        time, max_frequency, num_components, rms_power
+    )
+
+    array = _apply_displacement_field(array[:].T, displacement_x, displacement_y)
+    measurement.array[:] = array.T
+    return measurement
+
+
+class ScanNoiseTransform(EnsembleTransform):
+    def __init__(
+        self,
+        rms_power: float | np.ndarray | BaseDistribution,
+        dwell_time: float,
+        flyback_time: float,
+        samples: int = None,
+        max_frequency: float = 500,
+        num_components: int = 1000,
+        seeds: int | tuple[int, ...] = None,
+    ):
+        self._rms_power = validate_distribution(rms_power)
+        self._dwell_time = dwell_time
+        self._flyback_time = flyback_time
+        self._max_frequency = max_frequency
+        self._num_components = num_components
+
+        if samples is None and seeds is None:
+            samples = 1
+
+        if seeds is None and samples > 1:
+            seeds = _validate_seeds(seeds, samples)
+            seeds = validate_distribution(seeds)
+
+        self._seeds = seeds
+
+        super().__init__(
+            distributions=(
+                "dose",
+                "seeds",
+            )
+        )
+
+    @property
+    def rms_power(self):
+        return self._rms_power
+
+    @property
+    def dwell_time(self):
+        return self._dwell_time
+
+    @property
+    def flyback_time(self):
+        return self._flyback_time
+
+    @property
+    def max_frequency(self):
+        return self._max_frequency
+
+    @property
+    def num_components(self):
+        return self._num_components
+
+    @property
+    def seeds(self):
+        return self._seeds
+
+    @property
+    def samples(self):
+        if hasattr(self.seeds, "__len__"):
+            return len(self.seeds)
+        else:
+            return 1
+
+    @property
+    def ensemble_axes_metadata(self):
+        ensemble_axes_metadata = []
+
+        if isinstance(self.rms_power, BaseDistribution):
+            ensemble_axes_metadata += [
+                NonLinearAxis(
+                    label="RMS power",
+                    values=tuple(self.rms_power.values),
+                    units="\%",
+                )
+            ]
+
+        if isinstance(self.seeds, BaseDistribution):
+            ensemble_axes_metadata += [SampleAxis()]
+
+        return ensemble_axes_metadata
+
+    @property
+    def metadata(self):
+        return {"units": "", "label": "electron counts"}
+
+    def _calculate_new_array(self, array_object) -> np.ndarray | tuple[np.ndarray, ...]:
+        array = array_object.array
+        xp = get_array_module(array)
+
+        if isinstance(self.seeds, BaseDistribution):
+            array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
+
+        time = _pixel_times(self.dwell_time, self.flyback_time, array.shape[-2:])
+
+        if isinstance(self.rms_power, BaseDistribution):
+            rms_powers = xp.array(self.rms_power.values, dtype=xp.float32)
+        else:
+            rms_powers = xp.array([self.rms_power], dtype=xp.float32)
+
+        arrays = []
+        for rms_power in rms_powers:
+            inner_array = np.zeros_like(array)
+            for i in np.ndindex(array.shape[:-2]):
+                displacement_x, displacement_y = _make_displacement_field(
+                    time, self.max_frequency, self.num_components, rms_power
+                )
+
+                inner_array[i] = _apply_displacement_field(
+                    array[i], displacement_x, displacement_y
+                )
+
+            arrays.append(inner_array)
+
+        if isinstance(self.rms_power, BaseDistribution):
+            array = np.stack(arrays, axis=0)
+        else:
+            array = arrays[0]
+
+        return array

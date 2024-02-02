@@ -1600,12 +1600,21 @@ class Probe(_WavesBuilder):
             probe.grid.match(potential)
 
         scan = _validate_scan(scan, probe)
+
+        if len(scan) == 1:
+            squeeze = True
+        else:
+            squeeze = False
+
         probe._positions = scan
 
         if not lazy:
             probes = self._build_waves(probe)
         else:
             probes = self._lazy_build_waves(probe, max_batch)
+
+        if squeeze:
+            probes = probes.squeeze(axis=(-3,))
 
         return probes
 

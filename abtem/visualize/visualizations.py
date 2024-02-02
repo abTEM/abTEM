@@ -253,6 +253,7 @@ class BaseVisualization:
                     for i, axis_element in enumerate(axis):
                         title = axis_element.format_title(".3g", include_label=i == 0)
                         axis_titles.append(title)
+
                 else:
                     axis_titles = [""] * self.axes.shape[i]
                 titles.append(axis_titles)

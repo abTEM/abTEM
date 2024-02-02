@@ -55,7 +55,7 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
             value = 0.0
 
         if config.get("visualize.use_tex", False):
-            return latex_float(value, formatting)
+            return f"${latex_float(value, formatting)}$"
         else:
             return f"{value:>{formatting}}"
 
@@ -90,10 +90,10 @@ def format_title(
 
     if use_tex:
         value = format_value(value, formatting)
-        if isinstance(value, Number):
-            value = f"${value}$"
-        else:
-            value = f"{value}"
+        # if isinstance(value, Number):
+        #     value = f"${value}$"
+        # else:
+        # value = f"{value}"
 
         return f"{label}{value}{units}"
     else:
