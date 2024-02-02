@@ -1337,32 +1337,6 @@ class Images(_BaseMeasurement2D):
         kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def scan_noise(
-        self,
-        dwell_time,
-        flyback_time,
-        rms_power,
-        max_frequency=500,
-        num_components=200,
-    ):
-        transform = ScanNoiseTransform(
-            dwell_time=dwell_time,
-            flyback_time=flyback_time,
-            rms_power=rms_power,
-            max_frequency=max_frequency,
-            num_components=num_components,
-        )
-        return self.apply_transform(transform)
-
-        # new_measurement = apply_scan_noise(
-        #     self,
-        #     rms_power=rms_power,
-        #     max_frequency=max_frequency,
-        #     dwell_time=dwell_time,
-        #     flyback_time=flyback_time,
-        #     num_components=num_components,
-        # )
-
     def tile(self, repetitions: tuple[int, int]) -> Images:
         """
         Tile image(s).
@@ -1384,6 +1358,34 @@ class Images(_BaseMeasurement2D):
             self.array, (1,) * (len(self.array.shape) - 2) + repetitions
         )
         return self.__class__(**kwargs)
+
+    def scan_noise(
+        self,
+        dwell_time,
+        flyback_time,
+        rms_power,
+        max_frequency=500,
+        num_components=200,
+        seed=None,
+    ):
+        transform = ScanNoiseTransform(
+            dwell_time=dwell_time,
+            flyback_time=flyback_time,
+            rms_power=rms_power,
+            max_frequency=max_frequency,
+            num_components=num_components,
+            seeds=seed,
+        )
+        return self.apply_transform(transform)
+
+        # new_measurement = apply_scan_noise(
+        #     self,
+        #     rms_power=rms_power,
+        #     max_frequency=max_frequency,
+        #     dwell_time=dwell_time,
+        #     flyback_time=flyback_time,
+        #     num_components=num_components,
+        # )
 
     def diffractograms(self) -> DiffractionPatterns:
         """

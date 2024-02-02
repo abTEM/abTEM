@@ -137,7 +137,7 @@ def _pixel_times(dwell_time, flyback_time, shape):
     return slow_time + fast_time
 
 
-def _single_axis_distortion(time, max_frequency, num_components):
+def _single_axis_distortion(time, max_frequency, num_components, seed: int = None):
     """
     Single axis distortion internal function
 
@@ -153,15 +153,16 @@ def _single_axis_distortion(time, max_frequency, num_components):
         Number of frequency components.
     """
 
-    frequencies = np.random.rand(num_components, 1, 1) * max_frequency
-    amplitudes = np.random.rand(num_components, 1, 1) / np.sqrt(frequencies)
-    displacements = np.random.rand(num_components, 1, 1) / frequencies
+    rng = np.random.RandomState(seed=seed)
+    frequencies = rng.rand(num_components, 1, 1) * max_frequency
+    amplitudes = rng.rand(num_components, 1, 1) / np.sqrt(frequencies)
+    displacements = rng.rand(num_components, 1, 1) / frequencies
     return (amplitudes * np.sin(2 * np.pi * (time + displacements) * frequencies)).sum(
         axis=0
     )
 
 
-def _make_displacement_field(time, max_frequency, num_components, rms_power):
+def _make_displacement_field(time, max_frequency, num_components, rms_power, seed=None):
     """
     Displacement field creation internal function
 
@@ -179,8 +180,8 @@ def _make_displacement_field(time, max_frequency, num_components, rms_power):
        Root-mean-square power of the distortion.
     """
 
-    profile_x = _single_axis_distortion(time, max_frequency, num_components)
-    profile_y = _single_axis_distortion(time, max_frequency, num_components)
+    profile_x = _single_axis_distortion(time, max_frequency, num_components, seed=seed)
+    profile_y = _single_axis_distortion(time, max_frequency, num_components, seed=seed)
 
     x_mag_deviation = np.gradient(profile_x, axis=1)
     y_mag_deviation = np.gradient(profile_y, axis=0)
@@ -382,7 +383,11 @@ class ScanNoiseTransform(EnsembleTransform):
             inner_array = np.zeros_like(array)
             for i in np.ndindex(array.shape[:-2]):
                 displacement_x, displacement_y = _make_displacement_field(
-                    time, self.max_frequency, self.num_components, rms_power
+                    time,
+                    self.max_frequency,
+                    self.num_components,
+                    rms_power,
+                    seed=self.seeds,
                 )
 
                 inner_array[i] = _apply_displacement_field(
