@@ -519,9 +519,9 @@ def _validate_axes(
             sharey=sharey,
         )
 
-    elif ax is None:
-        ax = fig.add_subplot()
-        axes = np.array([[ax]])
+    # elif ax is None:
+    #     ax = fig.add_subplot()
+    #     axes = np.array([[ax]])
     else:
         if explode:
             raise NotImplementedError("`ax` not implemented with `explode = True`.")

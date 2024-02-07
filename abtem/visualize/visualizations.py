@@ -26,7 +26,7 @@ from abtem.core import config
 from abtem.core.axes import ScaleAxis
 from abtem.core.backend import get_array_module
 from abtem.core.colors import hsluv_cmap
-from abtem.core.utils import label_to_index
+from abtem.core.utils import label_to_index, flatten_list_of_lists
 from abtem.visualize.axes_grid import (
     _determine_axes_types,
     _validate_axes,
@@ -73,13 +73,82 @@ def _get_joined_titles(measurement, formatting, **kwargs):
     return "\n".join(titles)
 
 
+def _get_overlay_labels(axes_metadata, axes_types):
+    labels = [
+        [i.format_title(".3f") for i in axis]
+        for axis, axis_type in zip(axes_metadata, axes_types)
+        if axis_type == "overlay"
+    ]
+    labels = list(itertools.product(*labels))
+    return [" - ".join(label) for label in labels]
+
+
+def _get_axes_titles(axes_metadata, axes_types, axes_shape):
+    titles = []
+
+    for axis, axis_type, n in zip(axes_metadata, axes_types, axes_shape):
+        if axis_type == "explode":
+            axis_titles = []
+            if hasattr(axis, "__len__"):
+                assert len(axis) == n
+
+                for i, axis_element in enumerate(axis):
+                    title = axis_element.format_title(".3g", include_label=i == 0)
+                    axis_titles.append(title)
+
+            else:
+                axis_titles = [""] * n
+            titles.append(axis_titles)
+
+    titles_product = list(itertools.product(*titles))
+    return titles_product
+
+
+def _get_coordinate_limits(axes_metadata: list[AxisMetadata], shape, margin=None):
+    # shape = self._array.shape[-self._num_coordinate_dims :]
+    limits = []
+    for axis, n in zip(axes_metadata, shape):
+        coordinates = axis.coordinates(n)
+
+        min_limit = coordinates[0] - axis.sampling / 2
+        max_limit = coordinates[-1] + axis.sampling / 2
+
+        if margin:
+            margin = (max_limit - min_limit) * margin
+            min_limit -= margin
+            max_limit += margin
+
+        limits.append([min_limit, max_limit])
+    return limits
+
+
+def _get_value_limits(array, value_limits, margin=None):
+    if np.iscomplexobj(array):
+        array = np.abs(array)
+
+    value_limits = value_limits.copy()
+    if value_limits[0] is None:
+        value_limits[0] = float(np.nanmin(array))
+
+    if value_limits[1] is None:
+        value_limits[1] = float(np.nanmax(array))
+
+    if margin:
+        margin = (value_limits[1] - value_limits[0]) * margin
+        value_limits[0] -= margin
+        value_limits[1] += margin
+
+    return value_limits
+
+
 class BaseVisualization:
-    _num_coordinate_dims: int = None
+    # _num_coordinate_dims: int = None
 
     def __init__(
         self,
         array,
         coordinate_axes,
+        ax=None,
         scale_axis=None,
         ensemble_axes_metadata=None,
         common_scale: bool = False,
@@ -105,11 +174,21 @@ class BaseVisualization:
         self._coordinate_axes = coordinate_axes
         self._common_scale = common_scale
 
-        if coordinate_labels is None:
-            coordinate_labels = [None] * len(coordinate_axes)
+        # if coordinate_labels is None:
+        #     coordinate_labels = [None] * len(coordinate_axes)
+        #
+        # if label is not None:
+        #     self._coordinate_labels[0] = label
+        #
+        # if self._coordinate_labels[0] is None:
+        #     label = self._coordinate_axes[0].format_label()
+        # else:
+        #     label = self._coordinate_labels[0]
+        #
+        #
+        # self._coordinate_labels = coordinate_labels
 
-        self._coordinate_labels = coordinate_labels
-
+        print(ax)
         if scale_axis is None:
             scale_axis = ScaleAxis()
 
@@ -118,7 +197,9 @@ class BaseVisualization:
 
         self._autoscale = config.get("visualize.autoscale", False)
 
-        assert len(coordinate_axes) == self._num_coordinate_dims
+        self._num_coordinate_dims = len(coordinate_axes)
+
+        # assert len(coordinate_axes) == self._num_coordinate_dims
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
@@ -134,6 +215,7 @@ class BaseVisualization:
         self._axes = _validate_axes(
             self._axes_types,
             self._ensemble_shape,
+            ax=ax,
             ioff=interact,
             explode=explode,
             aspect=aspect,
@@ -151,17 +233,16 @@ class BaseVisualization:
         self._panel_labels = []
         self._artists = None
 
-        self.fig.canvas.header_visible = False
+        self.get_figure().canvas.header_visible = False
 
-        if self.axes.ncols > 1 and title:
-            self.set_column_titles(title)
+        # if self.axes.ncols > 1 and title:
+        #     self.set_column_titles(title)
+        #
+        # if self.axes.nrows > 1 and title:
+        #     self.set_row_titles()
 
-        if self.axes.nrows > 1 and title:
-            self.set_row_titles()
-
-    @property
-    def fig(self):
-        return self.axes.fig
+    def get_figure(self):
+        return self.axes[0, 0].get_figure()
 
     @property
     def autoscale(self):
@@ -241,27 +322,6 @@ class BaseVisualization:
         self.update_artists()
         # self.update_panel_labels()
 
-    def _get_panel_titles(self):
-        titles = []
-
-        for i, (axis, axis_type) in enumerate(
-            zip(self.ensemble_axes_metadata, self.axes_types)
-        ):
-            if axis_type == "explode":
-                axis_titles = []
-                if hasattr(axis, "__len__"):
-                    for i, axis_element in enumerate(axis):
-                        title = axis_element.format_title(".3g", include_label=i == 0)
-                        axis_titles.append(title)
-
-                else:
-                    axis_titles = [""] * self.axes.shape[i]
-                titles.append(axis_titles)
-
-        # Generate the cartesian product of the titles
-        titles_product = list(itertools.product(*titles))
-
-        return titles_product
         #
         # titles = [
         #     [
@@ -274,16 +334,6 @@ class BaseVisualization:
         #
         # titles = list(itertools.product(*titles))
         # return titles
-
-    def _get_overlay_labels(self):
-        labels = [
-            [i.format_title(".3f") for i in axis]
-            for axis, axis_type in zip(self._ensemble_axes_metadata, self._axes_types)
-            if axis_type == "overlay"
-        ]
-
-        labels = list(itertools.product(*labels))
-        return [" - ".join(label) for label in labels]
 
     def _get_array_for_current_indices(self):
         array = self._array[self._indices]
@@ -343,123 +393,64 @@ class BaseVisualization:
 
         return array
 
-    def _validate_value_limits(self, value_lim: list[float, float] = None):
-        if value_lim is None:
+    def _validate_value_limits(self, value_limits: list[float, float] = None):
+        if value_limits is None:
             fixed_value_lim = [None, None]
         else:
-            fixed_value_lim = value_lim.copy()
-
-        def _get_value_lim(array, value_lim):
-            if np.iscomplexobj(array):
-                array = np.abs(array)
-
-            value_lim = value_lim.copy()
-            if value_lim[0] is None:
-                value_lim[0] = float(np.nanmin(array))
-
-            if value_lim[1] is None:
-                value_lim[1] = float(np.nanmax(array))
-
-            if self._limits_margin:
-                margin = (value_lim[1] - value_lim[0]) * self._limits_margin
-                value_lim[0] -= margin
-                value_lim[1] += margin
-
-            return value_lim
+            fixed_value_lim = value_limits.copy()
 
         if self._common_scale:
             array = self._get_array_for_current_indices()
-            common_ylim = _get_value_lim(array, fixed_value_lim)
+            common_ylim = _get_value_limits(array, fixed_value_lim, self._limits_margin)
         else:
             common_ylim = None
 
-        value_lim = np.zeros(self.axes.shape + (2,))
+        value_limits = np.zeros(self.axes.shape + (2,))
         for i in np.ndindex(self.axes.shape):
             array = self._get_array_for_axis(i)
             if common_ylim is None:
-                value_lim[i] = _get_value_lim(array, fixed_value_lim)
+                value_limits[i] = _get_value_limits(
+                    array, fixed_value_lim, self._limits_margin
+                )
             else:
-                value_lim[i] = common_ylim
+                value_limits[i] = common_ylim
 
-        return value_lim
-
-    def _get_coordinate_limits(self):
-        shape = self._array.shape[-self._num_coordinate_dims :]
-        limits = []
-        for axis, n in zip(self._coordinate_axes, shape):
-            coordinates = axis.coordinates(n)
-
-            min_limit = coordinates[0]
-            max_limit = coordinates[-1]
-
-            if self._limits_margin:
-                margin = (max_limit - min_limit) * self._limits_margin
-                min_limit -= margin
-                max_limit += margin
-
-            limits.append([min_limit, max_limit])
-        return limits
+        return value_limits
 
     def _get_coordinate_labels(self):
         return [axis.format_label(units) for axis, units in zip(self._coordinate_axes)]
 
     def set_xlabel(self, label: str = None):
-        if label is not None:
-            self._coordinate_labels[0] = label
-
-        if self._coordinate_labels[0] is None:
-            label = self._coordinate_axes[0].format_label()
-        else:
-            label = self._coordinate_labels[0]
-
         for i in np.ndindex(self.axes.shape):
-            ax = self.axes[i]
-            ax.set_xlabel(label)
+            self.axes[i].set_xlabel(label)
 
     def set_ylabel(self, label: str = None):
-        if self._num_coordinate_dims == 1:
-            if label is not None:
-                self._scale_label = label
-
-            if self._scale_label is None:
-                label = self._scale_axis.format_label()
-
-        elif self._num_coordinate_dims == 2:
-            if label is not None:
-                self._coordinate_labels[1] = label
-
-            if self._coordinate_labels[1] is None:
-                label = self._coordinate_axes[1].format_label()
-
-        else:
-            raise NotImplementedError
+        # if self._num_coordinate_dims == 1:
+        #     if label is not None:
+        #         self._scale_label = label
+        #
+        #     if self._scale_label is None:
+        #         label = self._scale_axis.format_label()
+        #
+        # elif self._num_coordinate_dims == 2:
+        #     if label is not None:
+        #         self._coordinate_labels[1] = label
+        #
+        #     if self._coordinate_labels[1] is None:
+        #         label = self._coordinate_axes[1].format_label()
+        #
+        # else:
+        #     raise NotImplementedError
 
         for i, j in np.ndindex(self.axes.shape):
             if i == 0:
-                ax = self.axes[i, j]
-                ax.set_ylabel(label)
+                self.axes[i, j].set_ylabel(label)
 
     def set_ylim(self, ylim: tuple[float, float] = None):
-        if self._num_coordinate_dims == 1:
-            if ylim is None:
-                ylim = self._validate_value_limits(ylim)
-                for i in np.ndindex(self.axes.shape):
-                    self.axes[i].set_ylim(ylim[i])
-                return
-
-        elif self._num_coordinate_dims == 2:
-            if ylim is None:
-                ylim = self._get_coordinate_limits()[1]
-        else:
-            raise NotImplementedError
-
         for i in np.ndindex(self.axes.shape):
             self.axes[i].set_ylim(ylim)
 
     def set_xlim(self, xlim: tuple[float, float] = None):
-        if xlim is None:
-            xlim = self._get_coordinate_limits()[0]
-
         for i in np.ndindex(self.axes.shape):
             self.axes[i].set_xlim(xlim)
 
@@ -478,7 +469,10 @@ class BaseVisualization:
     ):
         if titles is None or titles is True:
             titles = [
-                title[0] for title in self._get_panel_titles()[:: self.axes.shape[1]]
+                title[0]
+                for title in _get_axes_titles(
+                    self.ensemble_axes_metadata, self.axes_types, self.axes.shape
+                )[:: self.axes.shape[1]]
             ]
 
         elif isinstance(titles, str):
@@ -515,7 +509,10 @@ class BaseVisualization:
     ):
         if titles is None:
             titles = [
-                title[1] for title in self._get_panel_titles()[: self.axes.shape[1]]
+                title[1]
+                for title in _get_axes_titles(
+                    self.ensemble_axes_metadata, self.axes_types, self.axes.shape
+                )[: self.axes.shape[1]]
             ]
         elif isinstance(titles, str):
             titles = [titles] * self.axes.shape[1]
@@ -722,6 +719,10 @@ class VisualizationLines(BaseVisualization):
             limits_margin=0.05,
         )
 
+        # ylim = self._validate_value_limits(ylim)
+        # for i in np.ndindex(self.axes.shape):
+        #     self.axes[i].set_ylim(ylim[i])
+
         self.set_artists()
         self.set_ylim()
         self.set_xlabel()
@@ -798,211 +799,6 @@ class VisualizationLines(BaseVisualization):
                 self.axes[i].legend(**kwargs)
 
 
-class BaseVisualization2D(BaseVisualization):
-    def __init__(
-        self,
-        array,
-        coordinate_axes,
-        scale_axis,
-        ensemble_axes: list[AxisMetadata] = None,
-        common_scale: bool = False,
-        explode: Sequence[int] | bool = False,
-        overlay: Sequence[int] | bool = False,
-        cmap: str = None,
-        power: float = 1.0,
-        vmin: float = None,
-        vmax: float = None,
-        cbar: bool = False,
-        figsize: tuple[float, float] = None,
-        title: str | bool = True,
-        interact: bool = False,
-    ):
-        self._cmap = cmap
-        self._size_bar = []
-
-        if cbar:
-            if np.iscomplexobj(array):
-                ncbars = 2
-            else:
-                ncbars = 1
-        else:
-            ncbars = 0
-
-        super().__init__(
-            array,
-            coordinate_axes,
-            scale_axis,
-            ensemble_axes,
-            common_scale=common_scale,
-            explode=explode,
-            overlay=overlay,
-            ncbars=ncbars,
-            interact=interact,
-            figsize=figsize,
-            title=title,
-            aspect=True,
-            share_x=True,
-            share_y=True,
-        )
-
-        self.set_artists(value_limits=[vmin, vmax], power=power)
-        self.set_xlabel()
-        self.set_ylabel()
-        self.set_extent()
-
-        self._size_bars = []
-        if cbar:
-            self.set_cbars()
-
-    def set_cbars(self, label=None, **kwargs):
-        if label is None:
-            label = self._scale_axis.format_label()
-
-        for i in np.ndindex(self.axes.shape):
-            artist = self._artists[i]
-
-            if hasattr(self.axes, "set_cbar_layout"):
-                caxes = self.axes._caxes[i]
-                artist.set_cbars(caxes=caxes, label=label)
-            else:
-                raise NotImplementedError
-
-    def set_complex_conversion(self, complex_conversion: str):
-        self._complex_conversion = complex_conversion
-
-        if np.iscomplexobj(self.array) and (self._complex_conversion == "none"):
-            self.axes.set_cbar_layout(ncbars=2)
-        else:
-            self.axes.set_cbar_layout(ncbars=1)
-
-        self.set_artists(value_limits=None)
-        self.set_cbars()
-
-    def _validate_cmap(self, cmap=None):
-        if cmap is not None:
-            pass
-
-        elif np.iscomplexobj(self.array) and (
-            self._complex_conversion in ("none", "phase")
-        ):
-            cmap = config.get("visualize.phase_cmap", "hsluv")
-
-        else:
-            cmap = config.get("visualize.cmap", "viridis")
-
-        if cmap == "hsluv":
-            cmap = hsluv_cmap
-
-        return cmap
-
-    def set_cmaps(self, cmap):
-        cmap = self._validate_cmap(cmap)
-
-        for i in np.ndindex(self.axes.shape):
-            self._artists[i].set_cmap(cmap)
-
-    def set_values_lim(self, values_lim: tuple[float, float] = None):
-        values_lim = self._validate_value_limits(values_lim)
-
-        for i in np.ndindex(self.axes.shape):
-            artist = self._artists[i]
-            artist.set_values_lim(values_lim[i])
-
-    def set_extent(self, extent: list[float] = None):
-        if extent is None:
-            limits = self._get_coordinate_limits()
-            extent = limits[0] + limits[1]
-
-        for artist in self._artists.ravel():
-            artist.set_extent(extent)
-
-    def set_power(self, power: float = 1.0):
-        for i in np.ndindex(self.axes.shape):
-            self._artists[i].set_power(power)
-
-    def update_artists(self):
-        for i in np.ndindex(self.axes.shape):
-            array = self._get_array_for_axis(axis_index=i)
-            self._artists[i].set_data(array)
-
-    def set_scalebars(
-        self,
-        panel_loc: tuple[int, ...] | str = "lower right",
-        label: str = "",
-        size: float = None,
-        loc: str = "lower right",
-        borderpad: float = 0.5,
-        formatting: str = ".3f",
-        size_vertical: float = None,
-        sep: float = 6,
-        pad: float = 0.3,
-        label_top: bool = True,
-        frameon: bool = False,
-        **kwargs,
-    ):
-        if isinstance(panel_loc, str):
-            panel_loc = self.axes._axis_location_to_indices(panel_loc)
-
-        if size is None:
-            limits = self._get_coordinate_limits()[0]
-            size = (limits[1] - limits[0]) / 3
-
-        if size_vertical is None:
-            limits = self._get_coordinate_limits()[1]
-            size_vertical = (limits[1] - limits[0]) / 20
-
-        if label is None:
-            label = f"{self._coordinate_axes[0].format_label(formatting=formatting)}"
-
-        for size_bar in self._size_bars:
-            size_bar.remove()
-
-        self._size_bars = []
-        for ax in panel_loc:
-            ax = self.axes[ax]
-            anchored_size_bar = AnchoredSizeBar(
-                ax.transData,
-                label=label,
-                label_top=label_top,
-                size=size,
-                borderpad=borderpad,
-                loc=loc,
-                size_vertical=size_vertical,
-                sep=sep,
-                pad=pad,
-                frameon=frameon,
-                **kwargs,
-            )
-            ax.add_artist(anchored_size_bar)
-            self._size_bars.append(anchored_size_bar)
-
-    # def add_area_indicator(self, area_indicator, panel="first", **kwargs):
-    #     xlim = self.axes[0, 0].get_xlim()
-    #     ylim = self.axes[0, 0].get_ylim()
-    #
-    #     for i, ax in enumerate(np.array(self.axes).ravel()):
-    #         if panel == "first" and i == 0:
-    #             area_indicator._add_to_visualization(ax, **kwargs)
-    #         elif panel == "all":
-    #             area_indicator._add_to_visualization(ax, **kwargs)
-    #
-    #         ax.set_xlim(xlim)
-    #         ax.set_ylim(ylim)
-
-
-def _get_norm(vmin=None, vmax=None, power=1.0, logscale=False):
-    if (power == 1.0) and (logscale is False):
-        norm = colors.Normalize(vmin=vmin, vmax=vmax)
-    elif (power != 1.0) and (logscale is False):
-        norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-    elif (power == 1.0) and (logscale is True):
-        norm = colors.LogNorm(vmin=vmin, vmax=vmax)
-    else:
-        raise ValueError("")
-
-    return norm
-
-
 class Artist2D:
     @abstractmethod
     def __init__(self, norm):
@@ -1011,10 +807,6 @@ class Artist2D:
 
     @abstractmethod
     def set_data(self, data):
-        pass
-
-    @abstractmethod
-    def set_extent(self, extent):
         pass
 
     @abstractmethod
@@ -1041,6 +833,7 @@ class ImageArtist(Artist2D):
         cmap,
         vmin: float = None,
         vmax: float = None,
+        extent=None,
         power: float = 1.0,
         logscale: bool = False,
     ):
@@ -1053,7 +846,10 @@ class ImageArtist(Artist2D):
             origin="lower",
             interpolation="none",
             cmap=cmap,
+            extent=extent,
         )
+
+        print(extent)
 
         self._image.set_norm(norm)
 
@@ -1074,9 +870,67 @@ class ImageArtist(Artist2D):
         self._cbar.formatter.set_useMathText(True)
         self._cbar.ax.yaxis.set_offset_position("left")
 
-    def set_values_lim(self, values_lim: tuple[float, float] = None):
-        self._norm.vmin = values_lim[0]
-        self._norm.vmax = values_lim[1]
+    def value_limits(self, value_limits: tuple[float, float] = None):
+        self._norm.vmin = value_limits[0]
+        self._norm.vmax = value_limits[1]
+
+    def set_power(self, power: float = 1.0):
+        if (power != 1.0) and isinstance(self._norm, colors.PowerNorm):
+            self._norm.gamma = power
+            self._norm._changed()
+        else:
+            self._norm = _get_norm(
+                vmin=self._norm.vmin, vmax=self._norm.vmax, power=power
+            )
+            self._image.norm = self._norm
+
+
+class ScatterArtist(Artist2D):
+    def __init__(
+        self,
+        ax,
+        data,
+        positions,
+        cmap,
+        vmin: float = None,
+        vmax: float = None,
+        power: float = 1.0,
+        logscale: bool = False,
+    ):
+        norm = _get_norm(vmin, vmax, power, logscale)
+
+        super().__init__(norm)
+
+        self._image = ax.scatter(
+            *positions[:, :2].T,
+            c=data,
+            # origin="lower",
+            # interpolation="none",
+            cmap=cmap,
+        )
+
+        # self._image.set_norm(norm)
+
+    # def set_extent(self, extent):
+    #     self._image.set_extent(extent)
+
+    def set_data(self, data):
+        self._image.set_data(data.T)
+
+    def set_cmap(self, cmap):
+        self._image.set_cmap(cmap)
+
+    def set_cbars(self, caxes, label=None, **kwargs):
+        self._cbar = plt.colorbar(self._image, cax=caxes[0])
+
+        self._cbar.set_label(label, **kwargs)
+        self._cbar.formatter.set_powerlimits((-2, 2))
+        self._cbar.formatter.set_useMathText(True)
+        self._cbar.ax.yaxis.set_offset_position("left")
+
+    def value_limits(self, value_limits: tuple[float, float] = None):
+        self._norm.vmin = value_limits[0]
+        self._norm.vmax = value_limits[1]
 
     def set_power(self, power: float = 1.0):
         if (power != 1.0) and isinstance(self._norm, colors.PowerNorm):
@@ -1132,9 +986,9 @@ class DomainColoringArtist(Artist2D):
         alpha = np.clip(alpha, a_min=0, a_max=1)
         self._image_phase.set_alpha(alpha)
 
-    def set_values_lim(self, values_lim: tuple[float, float] = None):
-        self._norm.vmin = values_lim[0]
-        self._norm.vmax = values_lim[1]
+    def set_value_limits(self, value_limits: tuple[float, float] = None):
+        self._norm.vmin = value_limits[0]
+        self._norm.vmax = value_limits[1]
         self._update_alpha()
 
     def set_cmap(self, cmap):
@@ -1219,14 +1073,13 @@ class OverlayImshowArtist(Artist2D):
         # ax.set_facecolor("k")
 
 
-class VisualizationImshow(BaseVisualization2D):
-    _num_coordinate_dims = 2
-
+class BaseVisualization2D(BaseVisualization):
     def __init__(
         self,
         array,
         coordinate_axes,
         scale_axis,
+        ax=None,
         ensemble_axes: list[AxisMetadata] = None,
         common_scale: bool = False,
         explode: Sequence[int] | bool = False,
@@ -1239,73 +1092,174 @@ class VisualizationImshow(BaseVisualization2D):
         figsize: tuple[float, float] = None,
         title: str | bool = True,
         interact: bool = False,
-        **kwargs,
     ):
+        self._cmap = cmap
+        self._size_bar = []
+
+        if cbar:
+            if np.iscomplexobj(array):
+                ncbars = 2
+            else:
+                ncbars = 1
+        else:
+            ncbars = 0
+
         super().__init__(
-            array,
-            coordinate_axes,
-            scale_axis,
-            ensemble_axes,
+            array=array,
+            coordinate_axes=coordinate_axes,
+            scale_axis=scale_axis,
+            ax=ax,
+            ensemble_axes_metadata=ensemble_axes,
             common_scale=common_scale,
             explode=explode,
             overlay=overlay,
-            cmap=cmap,
-            power=power,
-            vmin=vmin,
-            vmax=vmax,
-            cbar=cbar,
+            ncbars=ncbars,
             interact=interact,
             figsize=figsize,
             title=title,
+            aspect=True,
+            share_x=True,
+            share_y=True,
         )
 
-    def set_artists(
-        self,
-        value_limits: list[float] = None,
-        power: float = 1.0,
-        logscale: bool = False,
-        cmap: str = None,
-    ):
-        self.remove_artists()
+        self.set_artists(value_limits=[vmin, vmax], power=power)
+        self.set_xlabel(coordinate_axes[0].format_label())
+        self.set_ylabel(coordinate_axes[1].format_label())
 
-        value_limits = self._validate_value_limits(value_limits)
-        artists = np.zeros(self.axes.shape, dtype=object)
+        if cbar:
+            self.set_cbars()
+
+        # self._size_bars = []
+
+    def set_cbars(self, label=None, **kwargs):
+        if label is None:
+            label = self._scale_axis.format_label()
 
         for i in np.ndindex(self.axes.shape):
-            ax = self.axes[i]
-            vmin, vmax = value_limits[i]
-            array = self._get_array_for_axis(axis_index=i)
-            cmap = self._validate_cmap(cmap)
+            artist = self._artists[i]
 
-            if np.iscomplexobj(self.array) and (self._complex_conversion == "none"):
-                artist = DomainColoringArtist(
-                    ax,
-                    array,
-                    cmap,
-                    vmin=vmin,
-                    vmax=vmax,
-                    power=power,
-                    logscale=logscale,
-                )
-            elif len(array.shape) == 2:
-                artist = ImageArtist(
-                    ax,
-                    array,
-                    cmap,
-                    vmin=vmin,
-                    vmax=vmax,
-                    power=power,
-                    logscale=logscale,
-                )
-            elif len(array.shape) == 3:
-                raise NotImplementedError
+            if hasattr(self.axes, "set_cbar_layout"):
+                caxes = self.axes._caxes[i]
+                artist.set_cbars(caxes=caxes, label=label)
             else:
-                raise NotImplementedError()
+                raise NotImplementedError
 
-            artists.itemset(i, artist)
+    def set_complex_conversion(self, complex_conversion: str):
+        self._complex_conversion = complex_conversion
 
-        self._artists = artists
+        if np.iscomplexobj(self.array) and (self._complex_conversion == "none"):
+            self.axes.set_cbar_layout(ncbars=2)
+        else:
+            self.axes.set_cbar_layout(ncbars=1)
 
+        self.set_artists(value_limits=None)
+        self.set_cbars()
+
+    def _validate_cmap(self, cmap=None):
+        if cmap is not None:
+            pass
+
+        elif np.iscomplexobj(self.array) and (
+            self._complex_conversion in ("none", "phase")
+        ):
+            cmap = config.get("visualize.phase_cmap", "hsluv")
+
+        else:
+            cmap = config.get("visualize.cmap", "viridis")
+
+        if cmap == "hsluv":
+            cmap = hsluv_cmap
+
+        return cmap
+
+    def set_cmaps(self, cmap):
+        cmap = self._validate_cmap(cmap)
+
+        for i in np.ndindex(self.axes.shape):
+            self._artists[i].set_cmap(cmap)
+
+    def set_value_limits(self, values_limits: tuple[float, float] = None):
+        values_limits = self._validate_value_limits(values_limits)
+
+        for i in np.ndindex(self.axes.shape):
+            self._artists[i].set_value_limits(values_limits[i])
+
+    def set_extent(self, extent: list[float] = None):
+        for artist in self._artists.ravel():
+            artist.set_extent(extent)
+
+    def set_power(self, power: float = 1.0):
+        for i in np.ndindex(self.axes.shape):
+            self._artists[i].set_power(power)
+
+    def update_artists(self):
+        for i in np.ndindex(self.axes.shape):
+            array = self._get_array_for_axis(axis_index=i)
+            self._artists[i].set_data(array)
+
+    def set_scalebars(
+        self,
+        panel_loc: tuple[int, ...] | str = "lower right",
+        label: str = "",
+        size: float = None,
+        loc: str = "lower right",
+        borderpad: float = 0.5,
+        formatting: str = ".3f",
+        size_vertical: float = None,
+        sep: float = 6,
+        pad: float = 0.3,
+        label_top: bool = True,
+        frameon: bool = False,
+        **kwargs,
+    ):
+        if isinstance(panel_loc, str):
+            panel_loc = self.axes._axis_location_to_indices(panel_loc)
+
+        if size is None:
+            limits = self._get_coordinate_limits()[0]
+            size = (limits[1] - limits[0]) / 3
+
+        if size_vertical is None:
+            limits = self._get_coordinate_limits()[1]
+            size_vertical = (limits[1] - limits[0]) / 20
+
+        if label is None:
+            label = f"{self._coordinate_axes[0].format_label(formatting=formatting)}"
+
+        for size_bar in self._size_bars:
+            size_bar.remove()
+
+        self._size_bars = []
+        for ax in panel_loc:
+            ax = self.axes[ax]
+            anchored_size_bar = AnchoredSizeBar(
+                ax.transData,
+                label=label,
+                label_top=label_top,
+                size=size,
+                borderpad=borderpad,
+                loc=loc,
+                size_vertical=size_vertical,
+                sep=sep,
+                pad=pad,
+                frameon=frameon,
+                **kwargs,
+            )
+            ax.add_artist(anchored_size_bar)
+            self._size_bars.append(anchored_size_bar)
+
+    # def add_area_indicator(self, area_indicator, panel="first", **kwargs):
+    #     xlim = self.axes[0, 0].get_xlim()
+    #     ylim = self.axes[0, 0].get_ylim()
+    #
+    #     for i, ax in enumerate(np.array(self.axes).ravel()):
+    #         if panel == "first" and i == 0:
+    #             area_indicator._add_to_visualization(ax, **kwargs)
+    #         elif panel == "all":
+    #             area_indicator._add_to_visualization(ax, **kwargs)
+    #
+    #         ax.set_xlim(xlim)
+    #         ax.set_ylim(ylim)
     def make_widgets(self):
         widgets = super().make_widgets()
 
@@ -1344,6 +1298,206 @@ class VisualizationImshow(BaseVisualization2D):
         )
         layout = ipywidgets.HBox([widget_box, widgets["canvas"]])
         return layout
+
+
+def _get_norm(vmin=None, vmax=None, power=1.0, logscale=False):
+    if (power == 1.0) and (logscale is False):
+        norm = colors.Normalize(vmin=vmin, vmax=vmax)
+    elif (power != 1.0) and (logscale is False):
+        norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+    elif (power == 1.0) and (logscale is True):
+        norm = colors.LogNorm(vmin=vmin, vmax=vmax)
+    else:
+        raise ValueError("")
+
+    return norm
+
+
+class VisualizationImshow(BaseVisualization2D):
+    def __init__(
+        self,
+        array,
+        coordinate_axes,
+        scale_axis,
+        ax=None,
+        ensemble_axes: list[AxisMetadata] = None,
+        common_scale: bool = False,
+        explode: Sequence[int] | bool = False,
+        overlay: Sequence[int] | bool = False,
+        cmap: str = None,
+        power: float = 1.0,
+        vmin: float = None,
+        vmax: float = None,
+        cbar: bool = False,
+        figsize: tuple[float, float] = None,
+        title: str | bool = True,
+        interact: bool = False,
+        **kwargs,
+    ):
+        super().__init__(
+            array,
+            coordinate_axes,
+            ax=ax,
+            scale_axis=scale_axis,
+            ensemble_axes=ensemble_axes,
+            common_scale=common_scale,
+            explode=explode,
+            overlay=overlay,
+            cmap=cmap,
+            power=power,
+            vmin=vmin,
+            vmax=vmax,
+            cbar=cbar,
+            interact=interact,
+            figsize=figsize,
+            title=title,
+        )
+
+        shape = self.array.shape[-2:]
+        xlim, ylim = _get_coordinate_limits(coordinate_axes, shape=shape)
+
+        self.set_xlim(xlim)
+        self.set_ylim(ylim)
+
+    def set_artists(
+        self,
+        value_limits: list[float] = None,
+        power: float = 1.0,
+        logscale: bool = False,
+        cmap: str = None,
+    ):
+        self.remove_artists()
+
+        shape = self.array.shape[-2:]
+        value_limits = self._validate_value_limits(value_limits)
+
+        print(_get_coordinate_limits(self._coordinate_axes, shape=shape))
+
+        extent = flatten_list_of_lists(
+            _get_coordinate_limits(self._coordinate_axes, shape=shape)
+        )
+        artists = np.zeros(self.axes.shape, dtype=object)
+
+        for i in np.ndindex(self.axes.shape):
+            ax = self.axes[i]
+            vmin, vmax = value_limits[i]
+            array = self._get_array_for_axis(axis_index=i)
+            cmap = self._validate_cmap(cmap)
+
+            if np.iscomplexobj(self.array) and (self._complex_conversion == "none"):
+                artist = DomainColoringArtist(
+                    ax,
+                    array,
+                    cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    extent=extent,
+                    power=power,
+                    logscale=logscale,
+                )
+            else:
+                artist = ImageArtist(
+                    ax,
+                    array,
+                    cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    extent=extent,
+                    power=power,
+                    logscale=logscale,
+                )
+
+            artists.itemset(i, artist)
+
+        self._artists = artists
+
+
+class VisualizationScatter(BaseVisualization2D):
+    def __init__(
+        self,
+        array,
+        positions,
+        coordinate_axes,
+        scale_axis,
+        ensemble_axes: list[AxisMetadata] = None,
+        common_scale: bool = False,
+        explode: Sequence[int] | bool = False,
+        overlay: Sequence[int] | bool = False,
+        cmap: str = None,
+        power: float = 1.0,
+        vmin: float = None,
+        vmax: float = None,
+        cbar: bool = False,
+        figsize: tuple[float, float] = None,
+        title: str | bool = True,
+        interact: bool = False,
+        **kwargs,
+    ):
+        self._positions = positions
+
+        super().__init__(
+            array,
+            coordinate_axes,
+            scale_axis,
+            ensemble_axes,
+            common_scale=common_scale,
+            explode=explode,
+            overlay=overlay,
+            cmap=cmap,
+            power=power,
+            vmin=vmin,
+            vmax=vmax,
+            cbar=cbar,
+            interact=interact,
+            figsize=figsize,
+            title=title,
+        )
+
+        # extent = [positions[:,0].min()]
+
+    def set_artists(
+        self,
+        value_limits: list[float] = None,
+        power: float = 1.0,
+        logscale: bool = False,
+        cmap: str = None,
+    ):
+        self.remove_artists()
+
+        value_limits = self._validate_value_limits(value_limits)
+        artists = np.zeros(self.axes.shape, dtype=object)
+
+        for i in np.ndindex(self.axes.shape):
+            ax = self.axes[i]
+            vmin, vmax = value_limits[i]
+            array = self._get_array_for_axis(axis_index=i)
+            cmap = self._validate_cmap(cmap)
+
+            if np.iscomplexobj(self.array) and (self._complex_conversion == "none"):
+                artist = DomainColoringArtist(
+                    ax,
+                    array,
+                    cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    power=power,
+                    logscale=logscale,
+                )
+            else:
+                artist = ScatterArtist(
+                    ax=ax,
+                    data=array,
+                    positions=self._positions,
+                    cmap=cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    power=power,
+                    logscale=logscale,
+                )
+
+            artists.itemset(i, artist)
+
+        self._artists = artists
 
 
 def make_toggle_hkl_button(visualization):

@@ -1,5 +1,6 @@
 """Module for modifying ASE `Atoms` objects for use in abTEM."""
 from __future__ import annotations
+
 from numbers import Number
 
 import numpy as np
@@ -11,35 +12,69 @@ from scipy.spatial.distance import pdist
 
 from abtem.core.utils import label_to_index
 
-# Converting Cartesian string representations of Cartesian axes to numerical.
-_axes2tuple = {
-    "sxyz": (0, 0, 0, 0),
-    "sxyx": (0, 0, 1, 0),
-    "sxzy": (0, 1, 0, 0),
-    "sxzx": (0, 1, 1, 0),
-    "syzx": (1, 0, 0, 0),
-    "syzy": (1, 0, 1, 0),
-    "syxz": (1, 1, 0, 0),
-    "syxy": (1, 1, 1, 0),
-    "szxy": (2, 0, 0, 0),
-    "szxz": (2, 0, 1, 0),
-    "szyx": (2, 1, 0, 0),
-    "szyz": (2, 1, 1, 0),
-    "rzyx": (0, 0, 0, 1),
-    "rxyx": (0, 0, 1, 1),
-    "ryzx": (0, 1, 0, 1),
-    "rxzx": (0, 1, 1, 1),
-    "rxzy": (1, 0, 0, 1),
-    "ryzy": (1, 0, 1, 1),
-    "rzxy": (1, 1, 0, 1),
-    "ryxy": (1, 1, 1, 1),
-    "ryxz": (2, 0, 0, 1),
-    "rzxz": (2, 0, 1, 1),
-    "rxyz": (2, 1, 0, 1),
-    "rzyz": (2, 1, 1, 1),
-}
-
 axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
+
+
+# Converting Cartesian string representations of Cartesian axes to numerical.
+def euler_sequence(axes: str, convention: str):
+    """
+    Parameters
+    ----------
+    axes : str
+        Specifies the order of rotation axes. It should be a string representing a valid combination of the letters 'x',
+        'y', and 'z' in any order. For example, 'xyz' represents a sequence of rotations about the x-axis, y-axis,
+        and z-axis in that order.
+
+    convention : str
+        Specifies the convention used for the Euler angles. It should be either 'intrinsic' or 'static' for rotations
+        applied to a fixed frame or 'extrinsic' or 'rotating' for rotations applied to a rotating frame.
+
+    Returns
+    -------
+    tuple
+        A tuple of four angles (theta1, theta2, theta3, phi) representing the Euler sequence specified by the given
+        axes and convention.
+
+    Raises
+    ------
+    ValueError
+        If the given convention is not one of the valid options ('intrinsic', 'static', 'extrinsic', 'rotating').
+
+    """
+    if convention in ("intrinsic", "static"):
+        sequences = {
+            "xyz": (0, 0, 0, 0),
+            "xyx": (0, 0, 1, 0),
+            "xzy": (0, 1, 0, 0),
+            "xzx": (0, 1, 1, 0),
+            "yzx": (1, 0, 0, 0),
+            "yzy": (1, 0, 1, 0),
+            "yxz": (1, 1, 0, 0),
+            "yxy": (1, 1, 1, 0),
+            "zxy": (2, 0, 0, 0),
+            "zxz": (2, 0, 1, 0),
+            "zyx": (2, 1, 0, 0),
+            "zyz": (2, 1, 1, 0),
+        }
+    elif convention in ("extrinsic", "rotating"):
+        sequences = {
+            "zyx": (0, 0, 0, 1),
+            "xyx": (0, 0, 1, 1),
+            "yzx": (0, 1, 0, 1),
+            "xzx": (0, 1, 1, 1),
+            "xzy": (1, 0, 0, 1),
+            "yzy": (1, 0, 1, 1),
+            "zxy": (1, 1, 0, 1),
+            "yxy": (1, 1, 1, 1),
+            "yxz": (2, 0, 0, 1),
+            "zxz": (2, 0, 1, 1),
+            "xyz": (2, 1, 0, 1),
+            "zyz": (2, 1, 1, 1),
+        }
+    else:
+        raise ValueError("")
+
+    return sequences[axes]
 
 
 def plane_to_axes(plane: str) -> tuple:
@@ -221,7 +256,9 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     return atoms
 
 
-def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-6):
+def rotation_matrix_to_euler(
+    R: np.ndarray, axes: str = "xyz", convention: str = "intrinsic", eps: float = 1e-6
+):
     """
     Convert a Cartesian rotation matrix to Euler angles.
 
@@ -239,11 +276,13 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-
     angles : tuple
         Euler angles corresponding to the given rotation matrix.
     """
-    first_axis, parity, repetition, frame = _axes2tuple[axes.lower()]
+
+    first_axis, parity, repetition, frame = euler_sequence(axes, convention)
+    next_axis = [1, 2, 0, 1]
 
     i = first_axis
-    j = [1, 2, 0, 1][i + parity]
-    k = [1, 2, 0, 1][i - parity + 1]
+    j = next_axis[i + parity]
+    k = next_axis[i - parity + 1]
 
     R = np.array(R, dtype=float)
     if repetition:
@@ -272,6 +311,73 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-
     if frame:
         ax, az = az, ax
     return ax, ay, az
+
+
+def euler_to_rotation(
+    ai: float, aj: float, ak: float, axes: str = "xyz", convention: str = "intrinsic"
+):
+    """
+    Convert sequence of Euler angles to Cartesian rotation matrix.
+
+    Parameters
+    ----------
+    ai : float
+        First Euler angle
+    aj : float
+        Second Euler angle
+    ak : float
+        Third Euler angle
+    axes : str, optional
+        String representation of the axes of rotation. Default is "xyz".
+    convention : str, optional
+        Convention for rotation order. Default is "intrinsic".
+
+    Returns
+    -------
+    R : ndarray
+        3x3 rotation matrix
+
+    """
+    firstaxis, parity, repetition, frame = euler_sequence(axes, convention)
+
+    next_axis = [1, 2, 0, 1]
+
+    i = firstaxis
+    j = next_axis[i + parity]
+    k = next_axis[i - parity + 1]
+
+    if frame:
+        ai, ak = ak, ai
+    if parity:
+        ai, aj, ak = -ai, -aj, -ak
+
+    si, sj, sk = np.sin(ai), np.sin(aj), np.sin(ak)
+    ci, cj, ck = np.cos(ai), np.cos(aj), np.cos(ak)
+    cc, cs = ci * ck, ci * sk
+    sc, ss = si * ck, si * sk
+
+    R = np.eye(3)
+    if repetition:
+        R[i, i] = cj
+        R[i, j] = sj * si
+        R[i, k] = sj * ci
+        R[j, i] = sj * sk
+        R[j, j] = -cj * ss + cc
+        R[j, k] = -cj * cs - sc
+        R[k, i] = -sj * ck
+        R[k, j] = cj * sc + cs
+        R[k, k] = cj * cc - ss
+    else:
+        R[i, i] = cj * ck
+        R[i, j] = sj * sc - cs
+        R[i, k] = sj * cc + ss
+        R[j, i] = cj * sk
+        R[j, j] = sj * ss + cc
+        R[j, k] = sj * cs - sc
+        R[k, i] = -sj
+        R[k, j] = cj * si
+        R[k, k] = cj * ci
+    return R
 
 
 def decompose_affine_transform(

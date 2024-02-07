@@ -46,11 +46,18 @@ from abtem.core.grid import (
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.distributions import BaseDistribution
-from abtem.indexing import _index_diffraction_patterns, _format_miller_indices
+from abtem.indexing import (
+    # _format_miller_indices,
+    index_diffraction_spots,
+    excitation_errors,
+    reciprocal_space_gpts,
+    estimate_necessary_excitation_error,
+)
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize import (
     VisualizationLines,
     VisualizationImshow,
+    VisualizationScatter,
 )
 
 # Enables CuPy-accelerated functions if it is available.
@@ -2178,11 +2185,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def index_diffraction_spots(
         self,
         cell: Cell | float | tuple[float, float, float],
-        threshold: float = 0.001,
-        distance_threshold: float = 0.15,
-        min_distance: float = 0.0,
-        integration_radius: float = 0.0,
-        max_index: int = None,
+        rotation=(0.0, 0.0, 0.0),
+        rotation_axes="zxz",
+        intensity_min: float = 1e-6,
+        energy: float = None,
+        # integration_radius: float = 0.0,
         centering: str = "P",
     ) -> IndexedDiffractionPatterns:
         """
@@ -2193,18 +2200,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         cell : ase.cell.Cell or float or tuple of float
             The assumed unit cell with respect to the diffraction pattern should be indexed. Must be one of ASE `Cell`
             object, float (for a cubic unit cell) or three floats (for orthorhombic unit cells).
-        threshold : float
-            Minimum intensity of the diffraction spot peaks. Default is 0.001.
-        distance_threshold : float
-            Maximum reciprocal distance to the Ewald sphere of diffraction spots [1/Å]. Default is 0.15.
-        min_distance : float
-            The minimal allowed distance separating peaks [1/Å]. Default is 0.0.
-        integration_radius : float
-            If a non-zero value is given the intensity of diffraction spots is integrated over a disk of the given
-            value [1/Å].
-        max_index : int
-            Maximum miller index of diffraction spots. Default is determined from the maximum scattering angle of the
-            diffraction patterns.
         centering : {'P', 'F', 'I', 'A', 'B', 'C'}
             Assumed lattice centering used for determining the reflection conditions.
 
@@ -2217,21 +2212,31 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if self.is_lazy:
             raise RuntimeError("indexing not implemented for lazy measurement")
 
-        hkl, intensities, positions = _index_diffraction_patterns(
-            self,
-            cell,
-            threshold=threshold,
-            distance_threshold=distance_threshold,
-            min_distance=min_distance,
-            integration_radius=integration_radius,
-            max_index=max_index,
-            centering=centering,
+        if energy is None:
+            energy = self._get_from_metadata("energy")
+
+        k_max = max(self.max_frequency)
+        sampling = self.sampling
+        sg_max = np.abs(estimate_necessary_excitation_error(energy, k_max))
+
+        hkl, g_vec, nm, intensity = index_diffraction_spots(
+            array=self.array,
+            sampling=sampling,
+            cell=cell,
+            energy=energy,
+            k_max=k_max,
+            sg_max=sg_max,
+            rotation=rotation,
+            rotation_axes=rotation_axes,
+            intensity_min=intensity_min,
         )
 
-        ensemble_axes_metadata = self.ensemble_axes_metadata
-
         return IndexedDiffractionPatterns(
-            intensities, hkl, positions, ensemble_axes_metadata, metadata=self.metadata
+            intensity,
+            hkl,
+            positions=g_vec,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
         )
 
     @property
@@ -2263,6 +2268,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
             self.shape[-2] // 2 * self.angular_sampling[0],
             self.shape[-1] // 2 * self.angular_sampling[1],
         )
+
+    @property
+    def max_frequency(self):
+        return abs(self.limits[0][1]), abs(self.limits[1][1])
 
     @property
     def limits(self) -> list[tuple[float, float]]:
@@ -3700,7 +3709,7 @@ class PolarMeasurements(BaseMeasurements):
 
         Returns
         -------
-        measurement_visualization_2d : MeasurementVisualization2D
+        measurement_visualization_2d : MeasurementVisualizationImshow
         """
 
         diffraction_patterns = self.to_diffraction_patterns(gpts=gpts)
@@ -4061,6 +4070,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             self.metadata,
         )
 
+    def _plot_base_axes_metadata(self, units: str = None):
+        return self.base_axes_metadata
+
     def show(
         self,
         ax: Axes = None,
@@ -4120,33 +4132,39 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         Returns
         -------
-        measurement_visualization_2d : MeasurementVisualization2D
+        measurement_visualization_2d : MeasurementVisualizationImshow
         """
 
         if not interact:
             self.compute()
 
-        visualization = DiffractionSpotsVisualization(
-            self,
+        scale_axis = self._scale_axis_from_metadata()
+
+        base_axes_metadata = self._plot_base_axes_metadata(units)
+
+        # print(base_axes_metadata)
+
+        # print(self.array.shape)
+        # sss
+        visualization = VisualizationScatter(
+            array=self.array,
+            positions=self.positions,
+            coordinate_axes=base_axes_metadata,
+            scale_axis=scale_axis,
+            ensemble_axes=self.ensemble_axes_metadata,
             ax=ax,
-            power=power,
-            cmap=cmap,
-            scale=scale,
             cbar=cbar,
-            common_scale=common_color_scale,
+            cmap=cmap,
             vmin=vmin,
             vmax=vmax,
+            power=power,
+            common_scale=common_color_scale,
             explode=explode,
+            # overlay=overlay,
             figsize=figsize,
             interact=interact,
+            title=title,
         )
-
-        if title is not None:
-            visualization.set_column_titles(title)
-
-        if units is not None:
-            visualization.set_xunits(units)
-            visualization.set_yunits(units)
 
         if not display and not interact:
             plt.close()
@@ -4154,7 +4172,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         if interact and display:
             from IPython.display import display as ipython_display
 
-            ipython_display(visualization.widgets)
+            ipython_display(visualization.layout_widgets())
 
         return visualization
 
@@ -4200,9 +4218,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         miller_indices = list(
             set(itertools.chain(*[intensities1.keys() for intensities1 in intensities]))
         )
-
-        # print(miller_indices)
-        # sss
 
         new_intensities = {}
         for hkl in miller_indices:

@@ -170,6 +170,12 @@ class AxisMetadata:
         cls = globals()[d["type"]]
         return cls(**{key: value for key, value in d.items() if key != "type"})
 
+    def limits(self, n=None):
+        coordinates = self.coordinates(n)
+        min_limit = coordinates[0]
+        max_limit = coordinates[-1]
+        return min_limit, max_limit
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class UnknownAxis(AxisMetadata):
@@ -195,7 +201,10 @@ class LinearAxis(AxisMetadata):
         else:
             return " ".join([f"{coord:.2f}" for coord in coordinates])
 
-    def coordinates(self, n: int) -> np.ndarray:
+    def coordinates(self, n: int = None) -> np.ndarray:
+        if n is None:
+            raise ValueError("n is required")
+
         return np.linspace(
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )

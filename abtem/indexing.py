@@ -1,367 +1,185 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from numbers import Number
 
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
-from scipy.ndimage import maximum_filter
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components
 
+from abtem.atoms import euler_to_rotation, is_cell_orthogonal
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import label_to_index
 
-if TYPE_CHECKING:
-    from abtem.measurements import DiffractionPatterns
+
+def reciprocal_cell(cell):
+    return np.linalg.pinv(cell).transpose()
 
 
-def _get_frequency_bin_edges(diffraction_patterns):
-    bin_edge_x = np.fft.fftshift(
-        np.fft.fftfreq(
-            diffraction_patterns.shape[-2], d=1 / diffraction_patterns.shape[-2]
-        )
-    ).astype(int)
-    bin_edge_y = np.fft.fftshift(
-        np.fft.fftfreq(
-            diffraction_patterns.shape[-1], d=1 / diffraction_patterns.shape[-1]
-        )
-    ).astype(int)
-    bin_edge_x = (
-        bin_edge_x * diffraction_patterns.sampling[0]
-        - diffraction_patterns.sampling[0] / 2
+def reciprocal_space_gpts(
+    cell: np.ndarray,
+    k_max: float | tuple[float, float, float],
+) -> tuple[int, int, int]:
+    if isinstance(k_max, Number):
+        k_max = (k_max,) * 3
+
+    assert len(k_max) == 3
+
+    dk = np.linalg.norm(reciprocal_cell(cell), axis=1)
+
+    gpts = (
+        int(np.ceil(k_max[0] / dk[0])) * 2 + 1,
+        int(np.ceil(k_max[1] / dk[1])) * 2 + 1,
+        int(np.ceil(k_max[2] / dk[2])) * 2 + 1,
     )
-    bin_edge_y = (
-        bin_edge_y * diffraction_patterns.sampling[1]
-        - diffraction_patterns.sampling[1] / 2
-    )
-    return bin_edge_x, bin_edge_y
+    return gpts
 
 
-def _sphere_of_miller_index_grid_points(
-    diffraction_patterns, cell=None, max_index=None
-):
-    if max_index is None:
-        if cell is None:
-            raise RuntimeError()
+def make_hkl_grid(
+    cell: np.ndarray,
+    k_max: float | tuple[float, float, float],
+    axes=(0, 1, 2),
+) -> np.ndarray:
+    gpts = reciprocal_space_gpts(cell, k_max)
 
-        min_planar_distance = cell.reciprocal().lengths().min()
-        max_limit = max(
-            (
-                abs(diffraction_patterns.limits[0][0]),
-                abs(diffraction_patterns.limits[1][0]),
-            )
-        )
-        max_index = int(np.ceil(max_limit / min_planar_distance))
+    freqs = tuple(np.fft.fftfreq(n, d=1 / n).astype(int) for n in gpts)
 
-    hkl = np.meshgrid(*(np.arange(-max_index, max_index + 1),) * 3, indexing="ij")
-    hkl = np.stack((hkl[0], hkl[1], hkl[2]), -1).reshape((-1, 3))
+    freqs = tuple(freqs[axis] for axis in axes)
 
-    return hkl[np.linalg.norm(hkl, axis=-1) < max_index]
+    hkl = np.meshgrid(*freqs, indexing="ij")
+    hkl = np.stack(hkl, axis=-1)
+
+    hkl = hkl.reshape((-1, len(axes)))
+    return hkl
 
 
-def _k_space_grid_points(hkl, cell):
-    k = (
-        hkl[:, 0, None] * cell.reciprocal()[0, None]
-        + hkl[:, 1, None] * cell.reciprocal()[1, None]
-        + hkl[:, 2, None] * cell.reciprocal()[2, None]
-    )
-    return k
+def _pixel_edges(shape, sampling):
+    x = np.fft.fftshift(np.fft.fftfreq(shape[0], d=1 / shape[0]))
+    y = np.fft.fftshift(np.fft.fftfreq(shape[1], d=1 / shape[1]))
+    x = (x - 0.5) * sampling[0]
+    y = (y - 0.5) * sampling[1]
+    return x, y
 
 
-def _sagita(radius, chord):
-    return radius - np.sqrt(radius**2 - (chord / 2) ** 2)
+def _find_projected_pixel_index(g, shape, sampling):
+    x, y = _pixel_edges(shape, sampling)
 
-
-def _digitize_k_space_grid(k_grid, diffraction_patterns):
-    bin_edge_x, bin_edge_y = _get_frequency_bin_edges(diffraction_patterns)
-
-    n = np.digitize(k_grid[:, 0], bin_edge_x) - 1
-    m = np.digitize(k_grid[:, 1], bin_edge_y) - 1
+    n = np.digitize(g[:, 0], x) - 1
+    m = np.digitize(g[:, 1], y) - 1
 
     nm = np.concatenate((n[:, None], m[:, None]), axis=1)
-
     return nm
 
 
-def _k_space_distances_to_ewald_sphere(k_grid, wavelength):
-    k_norm = np.linalg.norm(k_grid[:, :2], axis=1)
-    ewald_z = _sagita(1 / wavelength, k_norm * 2)
-    return ewald_z - k_grid[:, 2]
+def excitation_errors(g, energy):
+    wavelength = energy2wavelength(energy)
+    return g[..., 2] - 0.5 * wavelength * (g**2).sum(axis=-1)
 
 
-def _validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> Cell:
+def estimate_necessary_excitation_error(energy, k_max):
+    hkl_corner = np.array([[np.sqrt(k_max), np.sqrt(k_max), 0]])
+    sg = excitation_errors(hkl_corner, energy)
+    return sg
+
+
+def match_hkl_to_pixel(hkl, g_vec, shape, sampling, sg=None):
+    nm = _find_projected_pixel_index(g_vec, shape, sampling)
+
+    if sg is None:
+        return nm
+
+    unique, indices, inverse = np.unique(
+        nm, return_index=True, return_inverse=True, axis=0
+    )
+
+    best_hkl = np.zeros((len(unique), 3), dtype=int)
+    best_g_vec = np.zeros((len(unique), 3), dtype=float)
+    best_sg = np.zeros((len(unique),), dtype=float)
+    best_nm = np.zeros((len(unique), 2), dtype=int)
+    for i, idx in enumerate(label_to_index(inverse)):
+        closest = np.argmin(np.abs(sg[idx]))
+        best_hkl[i] = hkl[idx][closest]
+        best_sg[i] = sg[idx][closest]
+        best_g_vec[i] = g_vec[idx][closest]
+        best_nm[i] = nm[indices[i]]
+
+    return best_hkl, best_g_vec, best_sg, best_nm
+
+
+def filter_by_threshold(arrays, values, threshold) -> tuple[np.ndarray, ...]:
+    mask = values < threshold
+    shape = None
+    out = ()
+    for array in arrays:
+        if shape and shape[0] != array.shape[0]:
+            raise ValueError()
+
+        shape = array.shape
+        out += (array[mask],)
+
+    return out
+
+
+def validate_cell(
+    cell: Atoms | Cell | float | tuple[float, float, float]
+) -> np.ndarray:
     if isinstance(cell, Atoms):
         cell = cell.cell
 
     if np.isscalar(cell):
-        cell = [cell] * 3
+        cell = np.diag([cell] * 3)
 
-    if not isinstance(cell, Cell):
-        cell = Cell(np.diag(cell))
+    cell = np.array(cell)
 
-    # if not is_cell_orthogonal(cell):
-    #
-    #     cell = Atoms(cell=cell)
-    #     cell = abtem.orthogonalize_cell(cell).cell
+    if isinstance(cell, np.ndarray) and cell.shape != (3, 3):
+        cell = np.diag(cell)
+
+    if not is_cell_orthogonal(Cell(cell)):
+        raise NotImplementedError
 
     return cell
 
 
-def _disk(width: int, height: int) -> np.ndarray:
-    h = np.linspace(-1 + 1 / width, 1 - 1 / width, width)
-    w = np.linspace(-1 + 1 / height, 1 - 1 / height, height)
-    x, y = np.meshgrid(h, w, indexing="ij")
-    return np.array((x**2 + y**2) <= 1.0, dtype=bool)
-
-
-def _hkl_tuples_to_str(miller_indices):
-    return ["{} {} {}".format(*hkl) for hkl in miller_indices]
-
-
-def _hkl_str_to_tuples(miller_indices):
-    return [tuple(int(index) for index in hkl.split(" ")) for hkl in miller_indices]
-
-
-def _integrate_disk(array, center, footprint):
-
-    radius = footprint.shape[0] // 2, footprint.shape[1] // 2
-    slice_limits = [
-        (
-            max(center[i] - radius[i], 0),
-            min(center[i] + radius[i] + 1, array.shape[-2 + i]),
-        )
-        for i in range(2)
-    ]
-
-    mask_slice_limits = [
-        (
-            slice_limits[i][0] - (center[i] - radius[i]),
-            footprint.shape[i] + (slice_limits[i][1] - (center[i] + radius[i] + 1)),
-        )
-        for i in range(2)
-    ]
-    cropped = array[..., slice(*slice_limits[0]), slice(*slice_limits[1])]
-    cropped_integration_footprint = footprint[
-        slice(*mask_slice_limits[0]), slice(*mask_slice_limits[1])
-    ]
-
-    return (cropped * cropped_integration_footprint).sum((-2, -1))
-
-
-def _F_reflection_conditions(hkl):
-    all_even = (hkl % 2 == 0).all(axis=1)
-    all_odd = (hkl % 2 == 1).all(axis=1)
-    return all_even + all_odd
-
-
-def _I_reflection_conditions(hkl):
-    return (hkl.sum(axis=1) % 2 == 0).all(axis=1)
-
-
-def _A_reflection_conditions(hkl):
-    return (hkl[1:].sum(axis=1) % 2 == 0).all(axis=1)
-
-
-def _B_reflection_conditions(hkl):
-    return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
-
-
-def _C_reflection_conditions(hkl):
-    return (hkl[:-1].sum(axis=1) % 2 == 0).all(axis=1)
-
-
-def _reflection_condition_mask(hkl: np.ndarray, centering: str):
-
-    if centering == "P":
-        return np.ones(len(hkl), dtype=bool)
-    elif centering == "F":
-        return _F_reflection_conditions(hkl)
-    elif centering == "I":
-        return _I_reflection_conditions(hkl)
-    elif centering == "A":
-        return _A_reflection_conditions(hkl)
-    elif centering == "B":
-        return _B_reflection_conditions(hkl)
-    elif centering == "C":
-        return _C_reflection_conditions(hkl)
-    else:
-        raise ValueError("lattice centering must be one of P, I, F, A, B or C")
-
-
-def _index_diffraction_patterns(
-    diffraction_patterns: DiffractionPatterns,
-    cell: Atoms | Cell | float | tuple[float, float, float],
-    threshold: float,
-    distance_threshold: float,
-    min_distance: float = 0.0,
-    integration_radius: float = 0.0,
-    max_index: int = None,
-    centering: str = "P",
+def index_diffraction_spots(
+    array,
+    sampling,
+    cell,
+    energy,
+    k_max,
+    sg_max,
+    rotation=(0.0, 0.0, 0.0),
+    rotation_axes="zxz",
+    intensity_min=1e-12,
 ):
-    cell = _validate_cell(cell)
+    R = euler_to_rotation(*rotation, axes=rotation_axes)
 
-    shape = diffraction_patterns.shape[-2:]
+    cell = validate_cell(cell)
 
-    hkl = _sphere_of_miller_index_grid_points(diffraction_patterns, cell, max_index)
+    cell = R @ cell
 
-    mask = _reflection_condition_mask(hkl, centering=centering)
-    hkl = hkl[mask]
+    hkl = make_hkl_grid(cell, k_max)
 
-    k = _k_space_grid_points(hkl, cell)
+    g_vec = hkl @ reciprocal_cell(cell)
 
-    mask = (
-        (k[:, 0] >= diffraction_patterns.limits[0][0])
-        * (k[:, 0] <= diffraction_patterns.limits[0][1])
-        * (k[:, 1] >= diffraction_patterns.limits[1][0])
-        * (k[:, 1] <= diffraction_patterns.limits[1][1])
+    sg = excitation_errors(g_vec, energy)
+    hkl, g_vec, sg = filter_by_threshold(
+        arrays=(hkl, g_vec, sg), values=sg, threshold=sg_max
     )
 
-    k = k[mask]
-    hkl = hkl[mask]
+    hkl, g_vec, sg, nm = match_hkl_to_pixel(hkl, g_vec, array.shape[-2:], sampling, sg)
 
-    wavelength = energy2wavelength(diffraction_patterns._get_from_metadata("energy"))
-    d_ewald = np.abs(_k_space_distances_to_ewald_sphere(k, wavelength))
+    intensity = array[..., nm[:, 0], nm[:, 1]]
 
-    mask = d_ewald < distance_threshold
-
-    k = k[mask]
-    hkl = hkl[mask]
-    d_ewald = d_ewald[mask]
-
-    nm = _digitize_k_space_grid(k, diffraction_patterns)
-    labels = np.ravel_multi_index(nm.T, shape)
-
-    ensemble_indices = tuple(range(len(diffraction_patterns.ensemble_shape)))
-    max_intensities = diffraction_patterns.array.max(axis=ensemble_indices)
-
-    if min_distance:
-        size = (
-            np.ceil((min_distance / np.array(diffraction_patterns.sampling))) // 2 * 4
-            + 1
-        ).astype(int)
-
-        footprint = _disk(*size)
-        maximum_filtered = maximum_filter(
-            max_intensities, footprint=footprint, mode="constant"
-        )
+    if len(array.shape) == 2:
+        max_intensity = intensity
     else:
-        maximum_filtered = None
+        max_intensity = intensity.max(axis=tuple(range(0, len(intensity.shape) - 1)))
 
-    if integration_radius:
-        size = (
-            np.ceil((2 * integration_radius / np.array(diffraction_patterns.sampling)))
-            // 2
-            * 2
-            + 1
-        ).astype(int)
-
-        integration_footprint = _disk(*size)
-    else:
-        integration_footprint = None
-
-    selected_hkl = []
-    intensities = []
-    positions = []
-    for label, indices in enumerate(label_to_index(labels)):
-
-        if len(indices) == 0:
-            continue
-
-        n, m = np.unravel_index(label, shape)
-
-        max_intensity = max_intensities[n, m]
-
-        if maximum_filtered is not None:
-            if max_intensity != maximum_filtered[n, m]:
-                continue
-
-        if integration_footprint is not None:
-            max_intensity = _integrate_disk(
-                max_intensities, (n, m), integration_footprint
-            )
-
-        if max_intensity < threshold:
-            continue
-
-        min_index = np.argmin(d_ewald[indices])
-
-        selected_hkl.append(hkl[indices][min_index])
-
-        if integration_footprint is not None:
-            intensities.append(
-                _integrate_disk(
-                    diffraction_patterns.array, (n, m), integration_footprint
-                )
-            )
-        else:
-            intensities.append(diffraction_patterns.array[..., n, m])
-
-        positions.append(k[indices][min_index])
-
-    intensities = np.array(intensities)
-
-    if intensities.size == 0:
-        raise RuntimeError("no diffraction spots found within provided threshold")
-
-    intensities = np.moveaxis(intensities, 0, -1)
-
-    return np.array(selected_hkl), intensities, np.array(positions)
-
-
-def _format_miller_indices(hkl):
-    return "{} {} {}".format(*hkl)
-
-
-def _miller_to_miller_bravais(hkl):
-    h, k, l = hkl
-
-    H = 2 * h - k
-    K = 2 * k - h
-    I = -H - K
-    L = l
-
-    return H, K, I, L
-
-
-def _equivalent_miller_indices(hkl):
-    is_negation = np.zeros((len(hkl), len(hkl)), dtype=bool)
-
-    for i in range(hkl.shape[1]):
-        negated = hkl.copy()
-        negated[:, i] = -negated[:, i]
-        is_negation += np.all(hkl[:, None] == negated[None], axis=2)
-
-    is_negation += np.all(hkl[:, None] == -hkl[None], axis=2)
-
-    sorted = np.sort(hkl, axis=1)
-    is_permutation = np.all(sorted[:, None] == sorted[None], axis=-1)
-
-    is_connected = is_negation + is_permutation
-    n, labels = connected_components(csr_matrix(is_connected))
-    return labels
-
-
-def _split_at_threshold(values, threshold):
-    order = np.argsort(values)
-    max_value = values.max()
-
-    split = (np.diff(values[order]) > (max_value * threshold)) * (
-        np.diff(values[order]) > 1e-6
+    hkl, g_vec, sg, nm = filter_by_threshold(
+        arrays=(hkl, g_vec, sg, nm),
+        values=-max_intensity,
+        threshold=-intensity_min,
     )
 
-    split = np.insert(split, 0, False)
-    return np.cumsum(split)[np.argsort(order)]
+    intensity = intensity[..., max_intensity > intensity_min]
 
-
-def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
-    labels = _equivalent_miller_indices(hkl)
-
-    spots = np.zeros(len(hkl), dtype=bool)
-    for indices in label_to_index(labels):
-        sub_labels = _split_at_threshold(intensities[indices], intensity_split)
-        for sub_indices in label_to_index(sub_labels):
-            order = np.lexsort(np.rot90(hkl[indices][sub_indices]))
-            spots[indices[sub_indices[order][-1]]] = True
-
-    return spots
+    return hkl, g_vec, nm, intensity

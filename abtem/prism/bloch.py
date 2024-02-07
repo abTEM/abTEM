@@ -90,7 +90,9 @@ class StructureFactors:
 
         for idx, Z in enumerate(Z_unique):
             if self._thermal_sigma is not None:
-                DWF = np.exp(-0.5 * self._thermal_sigma**2 * g_unique**2 * (2*np.pi)**2)
+                DWF = np.exp(
+                    -0.5 * self._thermal_sigma**2 * g_unique**2 * (2 * np.pi) ** 2
+                )
             else:
                 DWF = 1.0
 
@@ -136,6 +138,11 @@ class StructureFactors:
 def excitation_errors(g, wavelength):
     sg = (2 * g[:, 2] - wavelength * np.sum(g * g, axis=1)) / 2
     return sg
+
+
+def excitation_errors(g, energy):
+    wavelength = energy2wavelength(energy)
+    return g[..., 2] + 0.5 * wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)
 
 
 class BlochWaves:
