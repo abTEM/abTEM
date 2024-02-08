@@ -46,11 +46,8 @@ from abtem.core.grid import (
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.distributions import BaseDistribution
-from abtem.indexing import (
-    # _format_miller_indices,
+from abtem.indexing import (  # _format_miller_indices,
     index_diffraction_spots,
-    excitation_errors,
-    reciprocal_space_gpts,
     estimate_necessary_excitation_error,
 )
 from abtem.noise import NoiseTransform, ScanNoiseTransform
@@ -90,11 +87,7 @@ def _scanned_measurement_type(
         return Images
 
     else:
-        return MeasurementsEnsemble
-        # raise RuntimeError(
-        #     f"no measurement type for {measurement.__class__} with {len(_scan_shape(measurement))} scan "
-        #     f"axes"
-        # )
+        return MeasurementsEnsemble  # raise RuntimeError(  #     f"no measurement type for {measurement.__class__} with {len(_scan_shape(measurement))} scan "  #     f"axes"  # )
 
 
 def _bin_extent(n):
@@ -1385,14 +1378,7 @@ class Images(_BaseMeasurement2D):
         )
         return self.apply_transform(transform)
 
-        # new_measurement = apply_scan_noise(
-        #     self,
-        #     rms_power=rms_power,
-        #     max_frequency=max_frequency,
-        #     dwell_time=dwell_time,
-        #     flyback_time=flyback_time,
-        #     num_components=num_components,
-        # )
+        # new_measurement = apply_scan_noise(  #     self,  #     rms_power=rms_power,  #     max_frequency=max_frequency,  #     dwell_time=dwell_time,  #     flyback_time=flyback_time,  #     num_components=num_components,  # )
 
     def diffractograms(self) -> DiffractionPatterns:
         """
@@ -4141,15 +4127,22 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         scale_axis = self._scale_axis_from_metadata()
 
         base_axes_metadata = self._plot_base_axes_metadata(units)
+        array = np.concatenate((self.array[:, None], self.positions), axis=-1)
 
-        # print(base_axes_metadata)
+        offset_x = self.positions[:, 0].min()
+        extent_x = self.positions[:, 0].ptp()
 
-        # print(self.array.shape)
-        # sss
+        offset_y = self.positions[:, 1].min()
+        extent_y = self.positions[:, 1].ptp()
+
+        coordinate_axes = [
+            NonLinearAxis(label="x", values=[offset_x, offset_x + extent_x]),
+            NonLinearAxis(label="y", values=[offset_y, offset_y + extent_y]),
+        ]
+
         visualization = VisualizationScatter(
-            array=self.array,
-            positions=self.positions,
-            coordinate_axes=base_axes_metadata,
+            array=array,
+            coordinate_axes=coordinate_axes,
             scale_axis=scale_axis,
             ensemble_axes=self.ensemble_axes_metadata,
             ax=ax,
@@ -4159,8 +4152,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             vmax=vmax,
             power=power,
             common_scale=common_color_scale,
-            explode=explode,
-            # overlay=overlay,
+            explode=explode,  # overlay=overlay,
             figsize=figsize,
             interact=interact,
             title=title,
