@@ -14,7 +14,7 @@ from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib import colors
 from matplotlib.axes import Axes
-from matplotlib.collections import PatchCollection
+from matplotlib.collections import PatchCollection, EllipseCollection
 from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
@@ -170,9 +170,9 @@ class BaseVisualization:
         if hasattr(xp, "asnumpy"):
             array = xp.asnumpy(array)
 
+        self._common_scale = common_scale
         self._array = array
         self._coordinate_axes = coordinate_axes
-        self._common_scale = common_scale
 
         # if coordinate_labels is None:
         #     coordinate_labels = [None] * len(coordinate_axes)
@@ -195,7 +195,6 @@ class BaseVisualization:
         self._scale_label = scale_label
 
         self._autoscale = config.get("visualize.autoscale", False)
-
         self._num_coordinate_dims = len(coordinate_axes)
 
         # assert len(coordinate_axes) == self._num_coordinate_dims
@@ -234,11 +233,14 @@ class BaseVisualization:
 
         self.get_figure().canvas.header_visible = False
 
-        if self.axes.ncols > 1 and title:
-            self.set_column_titles(title)
+        # if self.axes.ncols > 1 and title:
+        #     self.set_column_titles(title)
+        #
+        # if self.axes.nrows > 1 and title:
+        #     self.set_row_titles()
 
-        if self.axes.nrows > 1 and title:
-            self.set_row_titles()
+    def _get_array_for_scaling(self):
+        return self._array
 
     def get_figure(self):
         return self.axes[0, 0].get_figure()
@@ -392,29 +394,29 @@ class BaseVisualization:
 
         return array
 
-    def _validate_value_limits(self, value_limits: list[float, float] = None):
-        if value_limits is None:
-            fixed_value_lim = [None, None]
-        else:
-            fixed_value_lim = value_limits.copy()
-
-        if self._common_scale:
-            array = self._get_array_for_current_indices()
-            common_ylim = _get_value_limits(array, fixed_value_lim, self._limits_margin)
-        else:
-            common_ylim = None
-
-        value_limits = np.zeros(self.axes.shape + (2,))
-        for i in np.ndindex(self.axes.shape):
-            array = self._get_array_for_axis(i)
-            if common_ylim is None:
-                value_limits[i] = _get_value_limits(
-                    array, fixed_value_lim, self._limits_margin
-                )
-            else:
-                value_limits[i] = common_ylim
-
-        return value_limits
+    # def _validate_value_limits(self, value_limits: list[float, float] = None):
+    #     if value_limits is None:
+    #         fixed_value_lim = [None, None]
+    #     else:
+    #         fixed_value_lim = value_limits.copy()
+    #
+    #     if self._common_scale:
+    #         array = self._get_array_for_current_indices()
+    #         common_ylim = _get_value_limits(array, fixed_value_lim, self._limits_margin)
+    #     else:
+    #         common_ylim = None
+    #
+    #     value_limits = np.zeros(self.axes.shape + (2,))
+    #     for i in np.ndindex(self.axes.shape):
+    #         array = self._get_array_for_axis(i)
+    #         if common_ylim is None:
+    #             value_limits[i] = _get_value_limits(
+    #                 array, fixed_value_lim, self._limits_margin
+    #             )
+    #         else:
+    #             value_limits[i] = common_ylim
+    #
+    #     return value_limits
 
     def _get_coordinate_labels(self):
         return [axis.format_label(units) for axis, units in zip(self._coordinate_axes)]
@@ -699,15 +701,14 @@ class VisualizationLines(BaseVisualization):
         interact: bool = False,
         title: bool | str = True,
         legend: bool = True,
-        ax=None,
+        **kwargs,
     ):
         super().__init__(
-            array=array,
-            coordinate_axes=coordinate_axes,
-            scale_axis=scale_axis,
-            ensemble_axes_metadata=ensemble_axes,
+            array,
+            coordinate_axes,
+            scale_axis,
+            ensemble_axes,
             common_scale=common_scale,
-            ax=ax,
             aspect=False,
             explode=explode,
             overlay=overlay,
@@ -751,7 +752,7 @@ class VisualizationLines(BaseVisualization):
     def set_artists(self, **kwargs):
         x = self._coordinate_axes[0].coordinates(self._array.shape[-1])
 
-        labels = _get_overlay_labels(self.ensemble_axes_metadata, self.axes_types)
+        labels = self._get_overlay_labels()
         artists = np.zeros(self.axes.shape, dtype=object)
 
         for i in np.ndindex(self.axes.shape):
@@ -888,35 +889,45 @@ class ScatterArtist(Artist2D):
         self,
         ax,
         data,
-        positions,
         cmap,
         vmin: float = None,
         vmax: float = None,
         power: float = 1.0,
         logscale: bool = False,
+        scale_spots=60
     ):
+        intensities = data[:, 0]
+        scales = intensities * scale_spots
+        positions = data[:, 1:3]
+
+        vmin, vmax = _get_value_limits(intensities, value_limits=[vmin, vmax])
         norm = _get_norm(vmin, vmax, power, logscale)
 
         super().__init__(norm)
 
-        self._image = ax.scatter(
-            *positions[:, :2].T,
-            c=data,
-            # origin="lower",
-            # interpolation="none",
+        self._ellipse_collection = EllipseCollection(
+            widths=scales,
+            heights=scales,
+            angles=0.0,
+            units="xy",
+            array=intensities,
             cmap=cmap,
+            offsets=positions,
+            transOffset=ax.transData,
         )
 
-        # self._image.set_norm(norm)
+        self._ellipse_collection.set_norm(norm)
+
+        ax.add_collection(self._ellipse_collection)
 
     # def set_extent(self, extent):
     #     self._image.set_extent(extent)
 
     def set_data(self, data):
-        self._image.set_data(data.T)
+        self._ellipse_collection.set_array(data.T)
 
     def set_cmap(self, cmap):
-        self._image.set_cmap(cmap)
+        self._ellipse_collection.set_cmap(cmap)
 
     def set_cbars(self, caxes, label=None, **kwargs):
         self._cbar = plt.colorbar(self._image, cax=caxes[0])
@@ -985,6 +996,9 @@ class DomainColoringArtist(Artist2D):
         self._image_phase.set_alpha(alpha)
 
     def set_value_limits(self, value_limits: tuple[float, float] = None):
+
+
+
         self._norm.vmin = value_limits[0]
         self._norm.vmax = value_limits[1]
         self._update_alpha()
@@ -1140,8 +1154,7 @@ class BaseVisualization2D(BaseVisualization):
                 caxes = self.axes._caxes[i]
                 artist.set_cbars(caxes=caxes, label=label)
             else:
-                pass
-                # raise NotImplementedError
+                raise NotImplementedError
 
     def set_complex_conversion(self, complex_conversion: str):
         self._complex_conversion = complex_conversion
@@ -1333,6 +1346,10 @@ class VisualizationImshow(BaseVisualization2D):
         interact: bool = False,
         **kwargs,
     ):
+
+        if common_scale is True:
+            vmin, vmax = _get_value_limits(array, value_limits=[vmin, max])
+
         super().__init__(
             array,
             coordinate_axes,
@@ -1361,6 +1378,7 @@ class VisualizationImshow(BaseVisualization2D):
     def set_artists(
         self,
         value_limits: list[float] = None,
+        common_scale:bool=None,
         power: float = 1.0,
         logscale: bool = False,
         cmap: str = None,
@@ -1368,7 +1386,12 @@ class VisualizationImshow(BaseVisualization2D):
         self.remove_artists()
 
         shape = self.array.shape[-2:]
-        value_limits = self._validate_value_limits(value_limits)
+
+        if common_scale:
+            vmin, vmax = _get_value_limits(self.array, value_limits=value_limits)
+        else:
+            vmin = None
+            vmax = None
 
         extent = flatten_list_of_lists(
             _get_coordinate_limits(self._coordinate_axes, shape=shape)
@@ -1377,7 +1400,7 @@ class VisualizationImshow(BaseVisualization2D):
 
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
-            vmin, vmax = value_limits[i]
+            #vmin, vmax = value_limits[i]
             array = self._get_array_for_axis(axis_index=i)
             cmap = self._validate_cmap(cmap)
 
@@ -1413,9 +1436,9 @@ class VisualizationScatter(BaseVisualization2D):
     def __init__(
         self,
         array,
-        positions,
         coordinate_axes,
-        scale_axis,
+        ax=None,
+        scale_axis=None,
         ensemble_axes: list[AxisMetadata] = None,
         common_scale: bool = False,
         explode: Sequence[int] | bool = False,
@@ -1428,9 +1451,7 @@ class VisualizationScatter(BaseVisualization2D):
         figsize: tuple[float, float] = None,
         title: str | bool = True,
         interact: bool = False,
-        **kwargs,
     ):
-        self._positions = positions
 
         super().__init__(
             array=array,
@@ -1450,7 +1471,11 @@ class VisualizationScatter(BaseVisualization2D):
             title=title,
         )
 
-        # extent = [positions[:,0].min()]
+        xlim = (min(coordinate_axes[0].values), max(coordinate_axes[0].values))
+        ylim = (min(coordinate_axes[1].values), max(coordinate_axes[0].values))
+
+        self.set_xlim(xlim)
+        self.set_ylim(ylim)
 
     def set_artists(
         self,
@@ -1460,13 +1485,12 @@ class VisualizationScatter(BaseVisualization2D):
         cmap: str = None,
     ):
         self.remove_artists()
-
-        value_limits = self._validate_value_limits(value_limits)
+        vmin, vmax = None, None
         artists = np.zeros(self.axes.shape, dtype=object)
 
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
-            vmin, vmax = value_limits[i]
+            # vmin, vmax = value_limits[i]
             array = self._get_array_for_axis(axis_index=i)
             cmap = self._validate_cmap(cmap)
 
@@ -1484,7 +1508,6 @@ class VisualizationScatter(BaseVisualization2D):
                 artist = ScatterArtist(
                     ax=ax,
                     data=array,
-                    positions=self._positions,
                     cmap=cmap,
                     vmin=vmin,
                     vmax=vmax,
