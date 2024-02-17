@@ -188,7 +188,6 @@ class BaseVisualization:
         #
         # self._coordinate_labels = coordinate_labels
 
-        print(ax)
         if scale_axis is None:
             scale_axis = ScaleAxis()
 
@@ -235,11 +234,11 @@ class BaseVisualization:
 
         self.get_figure().canvas.header_visible = False
 
-        # if self.axes.ncols > 1 and title:
-        #     self.set_column_titles(title)
-        #
-        # if self.axes.nrows > 1 and title:
-        #     self.set_row_titles()
+        if self.axes.ncols > 1 and title:
+            self.set_column_titles(title)
+
+        if self.axes.nrows > 1 and title:
+            self.set_row_titles()
 
     def get_figure(self):
         return self.axes[0, 0].get_figure()
@@ -700,14 +699,15 @@ class VisualizationLines(BaseVisualization):
         interact: bool = False,
         title: bool | str = True,
         legend: bool = True,
-        **kwargs,
+        ax=None,
     ):
         super().__init__(
-            array,
-            coordinate_axes,
-            scale_axis,
-            ensemble_axes,
+            array=array,
+            coordinate_axes=coordinate_axes,
+            scale_axis=scale_axis,
+            ensemble_axes_metadata=ensemble_axes,
             common_scale=common_scale,
+            ax=ax,
             aspect=False,
             explode=explode,
             overlay=overlay,
@@ -751,7 +751,7 @@ class VisualizationLines(BaseVisualization):
     def set_artists(self, **kwargs):
         x = self._coordinate_axes[0].coordinates(self._array.shape[-1])
 
-        labels = self._get_overlay_labels()
+        labels = _get_overlay_labels(self.ensemble_axes_metadata, self.axes_types)
         artists = np.zeros(self.axes.shape, dtype=object)
 
         for i in np.ndindex(self.axes.shape):
@@ -848,8 +848,6 @@ class ImageArtist(Artist2D):
             cmap=cmap,
             extent=extent,
         )
-
-        print(extent)
 
         self._image.set_norm(norm)
 
@@ -1142,7 +1140,8 @@ class BaseVisualization2D(BaseVisualization):
                 caxes = self.axes._caxes[i]
                 artist.set_cbars(caxes=caxes, label=label)
             else:
-                raise NotImplementedError
+                pass
+                # raise NotImplementedError
 
     def set_complex_conversion(self, complex_conversion: str):
         self._complex_conversion = complex_conversion
@@ -1371,8 +1370,6 @@ class VisualizationImshow(BaseVisualization2D):
         shape = self.array.shape[-2:]
         value_limits = self._validate_value_limits(value_limits)
 
-        print(_get_coordinate_limits(self._coordinate_axes, shape=shape))
-
         extent = flatten_list_of_lists(
             _get_coordinate_limits(self._coordinate_axes, shape=shape)
         )
@@ -1436,10 +1433,10 @@ class VisualizationScatter(BaseVisualization2D):
         self._positions = positions
 
         super().__init__(
-            array,
-            coordinate_axes,
-            scale_axis,
-            ensemble_axes,
+            array=array,
+            coordinate_axes=coordinate_axes,
+            scale_axis=scale_axis,
+            ensemble_axes=ensemble_axes,
             common_scale=common_scale,
             explode=explode,
             overlay=overlay,
