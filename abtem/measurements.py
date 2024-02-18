@@ -2902,108 +2902,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def azimuthal_average(
         self,
         max_angle: float = None,
-        radial_sampling: float = None,
-        weighting_function: str = "step",
-        width: float = 1.0,
-    ) -> ReciprocalSpaceLineProfiles:
-        """
-        Calculate the azimuthal averages of the diffraction patterns.
-
-        Parameters
-        ----------
-        max_angle : float, optional
-            The maximum included scattering angle in the azimuthal averages [mrad].
-        order : float, optional
-            The spline interpolation order. Default is 1.
-        radial_sampling : float, optional
-            The radial sampling of the azimuthal averages [mrad]. Default is equal to the smallest value of the x and y
-            component of the angular sampling.
-        weigthing_method : str
-
-        """
-
-        def _map_azimuthal_average(
-            array,
-            angular_coordinates,
-            max_angle,
-            radial_sampling,
-            weighting_function,
-            width,
-        ):
-            x, y = np.meshgrid(*angular_coordinates, indexing="ij")
-            r = np.sqrt(x**2 + y**2)
-
-            centers = np.arange(0, max_angle, radial_sampling)
-
-            values = np.zeros(array.shape[:-2] + centers.shape)
-            for i, center in enumerate(centers):
-                if weighting_function == "step":
-                    mask = np.abs(r - center) < width
-                elif weighting_function == "gaussian":
-                    mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
-                else:
-                    raise ValueError()
-
-                weight = np.sum(mask)
-
-                if weight > 0:
-                    values[..., i] = np.sum(array * mask, axis=(-2, -1)) / weight
-                else:
-                    values[..., i] = 0.0
-
-            return values
-
-        if max_angle is None:
-            max_angle = -min(min(self.angular_limits))
-
-        if radial_sampling is None:
-            radial_sampling = min(self.angular_sampling) / 2.0
-
-        width = width * radial_sampling
-
-        if self.is_lazy:
-            xp = get_array_module(self.array)
-            n = int(max_angle / radial_sampling)
-            base_axes = tuple(
-                range(
-                    len(self.ensemble_shape),
-                    len(self.ensemble_shape) + len(self.base_shape),
-                )
-            )
-            array = self.array.map_blocks(
-                _map_azimuthal_average,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
-                weighting_function=weighting_function,
-                width=width,
-                drop_axis=base_axes,
-                new_axis=base_axes[0],
-                chunks=self.array.chunks[:-2] + (n,),
-                meta=xp.array((), dtype=np.float32),
-            )
-        else:
-            array = _map_azimuthal_average(
-                self.array,
-                angular_coordinates=self.angular_coordinates,
-                max_angle=max_angle,
-                radial_sampling=radial_sampling,
-                weighting_function=weighting_function,
-                width=width,
-            )
-
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
-
-        return ReciprocalSpaceLineProfiles(
-            array,
-            sampling=radial_sampling / (wavelength * 1e3),
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=self.metadata,
-        )
-
-    def azimuthal_average(
-        self,
-        max_angle: float = None,
         radial_sampling: float = 1.0,
         weighting_function: str = "step",
         width: float = 1.0,
@@ -3102,7 +3000,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
     def fourier_shell_correlation(
-        self, other, radial_sampling=1, width=1, weighting_function="step"
+        self,
+        other: DiffractionPatterns,
+        radial_sampling: float = 1.0,
+        width: float = 1.0,
+        weighting_function: str = "step",
     ):
         fsc = (self**0.5 * other**0.5).azimuthal_average(
             radial_sampling=radial_sampling,
@@ -3755,7 +3657,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         metadata: dict = None,
     ):
         assert len(miller_indices) == array.shape[-1]
-        assert len(miller_indices) == len(positions)
+        assert len(miller_indices) == positions.shape[-2]
 
         super().__init__(
             array=array,
@@ -3847,7 +3749,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         miller_indices = self.miller_indices[mask]
         intensities = self.intensities[..., mask]
-        positions = self.positions[mask]
+        positions = self.positions[..., mask, :]
 
         return self.__class__(
             intensities,
@@ -3914,16 +3816,25 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         -------
         cropped : IndexedDiffractionPatterns
         """
+
+        ensemble_axes = tuple(range(self.ensemble_dims))
+
         if max_angle is not None and max_frequency is None:
-            mask = np.linalg.norm(self.angular_positions, axis=1) < max_angle
+            mask = np.any(
+                np.linalg.norm(self.angular_positions, axis=-1) < max_angle,
+                axis=ensemble_axes,
+            )
         elif max_frequency is not None and max_angle is None:
-            mask = np.linalg.norm(self.positions, axis=1) < max_angle
+            mask = np.any(
+                np.linalg.norm(self.positions, axis=-1) < max_angle, axis=ensemble_axes
+            )
         else:
             raise ValueError()
 
         miller_indices = self.miller_indices[mask]
         array = self.array[..., mask]
-        positions = self.positions[mask]
+        positions = self.positions[..., mask, :]
+
         return self.__class__(
             array,
             miller_indices,
@@ -4046,7 +3957,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         miller_indices = np.delete(self.miller_indices, to_delete, axis=0)
         intensities = np.delete(self.intensities, to_delete, axis=-1)
-        positions = np.delete(self.positions, to_delete, axis=0)
+        positions = np.delete(self.positions, to_delete, axis=-2)
 
         return self.__class__(
             intensities,
@@ -4068,11 +3979,12 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         vmax: float = None,
         power: float = 1.0,
         common_color_scale: bool = False,
-        scale: float = 1,
+        scale: float = 0.9,
         explode: bool | Sequence[bool] = None,
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
+        annotation_threshold: float = 0.1,
         interact: bool = False,
         display: bool = True,
     ):
@@ -4127,7 +4039,19 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         scale_axis = self._scale_axis_from_metadata()
 
         base_axes_metadata = self._plot_base_axes_metadata(units)
-        array = np.concatenate((self.array[:, None], self.positions), axis=-1)
+
+        data = np.zeros(self.ensemble_shape, dtype=object)
+        for i in np.ndindex(data.shape):
+            data.itemset(
+                i,
+                {
+                    "intensities": self.array[i],
+                    "positions": self.positions[i],
+                    "hkl": self.miller_indices,
+                },
+            )
+
+        # array = np.concatenate((self.array[:, None], self.positions), axis=-1)
 
         offset_x = self.positions[:, 0].min()
         extent_x = self.positions[:, 0].ptp()
@@ -4136,12 +4060,22 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         extent_y = self.positions[:, 1].ptp()
 
         coordinate_axes = [
-            NonLinearAxis(label="x", values=[offset_x, offset_x + extent_x]),
-            NonLinearAxis(label="y", values=[offset_y, offset_y + extent_y]),
+            NonLinearAxis(
+                label="x",
+                values=[offset_x, offset_x + extent_x],
+                units="1/Å",
+                _tex_label="$k_x$",
+            ),
+            NonLinearAxis(
+                label="y",
+                values=[offset_y, offset_y + extent_y],
+                units="1/Å",
+                _tex_label="$k_x$",
+            ),
         ]
 
         visualization = VisualizationScatter(
-            array=array,
+            array=data,
             coordinate_axes=coordinate_axes,
             scale_axis=scale_axis,
             ensemble_axes=self.ensemble_axes_metadata,
@@ -4152,10 +4086,12 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             vmax=vmax,
             power=power,
             common_scale=common_color_scale,
+            scale=scale,
             explode=explode,  # overlay=overlay,
             figsize=figsize,
             interact=interact,
             title=title,
+            annotation_threshold=annotation_threshold,
         )
 
         if not display and not interact:

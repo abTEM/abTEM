@@ -182,4 +182,8 @@ def index_diffraction_spots(
 
     intensity = intensity[..., max_intensity > intensity_min]
 
+    if len(intensity.shape) > 1:
+        reps = intensity.shape[:-1] + (1, 1)
+        g_vec = np.tile(g_vec[(None,) * (len(reps) - 2)], reps=reps)
+
     return hkl, g_vec, nm, intensity

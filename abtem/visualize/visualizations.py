@@ -20,6 +20,7 @@ from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Circle
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+from scipy import spatial
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
@@ -343,7 +344,7 @@ class BaseVisualization:
             i for i, axes_type in enumerate(self._axes_types) if axes_type == "range"
         )
 
-        array = array.sum(axis=summed_axes)
+        # array = array.sum(axis=summed_axes)
 
         if np.iscomplexobj(array) and self._complex_conversion not in (
             "domain_coloring",
@@ -802,9 +803,14 @@ class VisualizationLines(BaseVisualization):
 
 class Artist2D:
     @abstractmethod
-    def __init__(self, norm):
+    def __init__(self, axes, norm):
         self._norm = norm
         self._cbars = []
+        self._axes = axes
+
+    @property
+    def axes(self):
+        return self._axes
 
     @abstractmethod
     def set_data(self, data):
@@ -826,6 +832,11 @@ class Artist2D:
         pass
 
 
+class CmapArtist2D(Artist2D):
+    def __init__(self, artist, ax, norm):
+        pass
+
+
 class ImageArtist(Artist2D):
     def __init__(
         self,
@@ -840,7 +851,7 @@ class ImageArtist(Artist2D):
     ):
         norm = _get_norm(vmin, vmax, power, logscale)
 
-        super().__init__(norm)
+        super().__init__(ax, norm)
 
         self._image = ax.imshow(
             data.T,
@@ -884,6 +895,14 @@ class ImageArtist(Artist2D):
             self._image.norm = self._norm
 
 
+def calculate_disk_scaling_factor(points, radii):
+    pairwise_distances = spatial.distance.squareform(spatial.distance.pdist(points))
+    np.fill_diagonal(pairwise_distances, np.inf)
+    required_distances = radii[:, None] + radii[None]
+    scaling_factors = pairwise_distances / required_distances
+    return np.min(scaling_factors) * 2
+
+
 class ScatterArtist(Artist2D):
     def __init__(
         self,
@@ -894,20 +913,29 @@ class ScatterArtist(Artist2D):
         vmax: float = None,
         power: float = 1.0,
         logscale: bool = False,
-        scale_spots=60
+        scale: float = 0.9,
+        annotation_threshold: float = 0.1,
     ):
-        intensities = data[:, 0]
-        scales = intensities * scale_spots
-        positions = data[:, 1:3]
+        intensities = data["intensities"]
+        positions = data["positions"][:, :2]
+        hkl = data["hkl"]
 
+        base_scale = np.inf
+        for i in np.ndindex(positions.shape[:-2]):
+            new_base_scale = calculate_disk_scaling_factor(positions[i], intensities[i])
+            base_scale = min(base_scale, new_base_scale)
+
+        self._base_scale = base_scale
+
+        radii = intensities * scale * base_scale
         vmin, vmax = _get_value_limits(intensities, value_limits=[vmin, vmax])
         norm = _get_norm(vmin, vmax, power, logscale)
 
-        super().__init__(norm)
+        super().__init__(axes=ax, norm=norm)
 
         self._ellipse_collection = EllipseCollection(
-            widths=scales,
-            heights=scales,
+            widths=radii,
+            heights=radii,
             angles=0.0,
             units="xy",
             array=intensities,
@@ -920,17 +948,80 @@ class ScatterArtist(Artist2D):
 
         ax.add_collection(self._ellipse_collection)
 
+        self._make_annotations(
+            ax=ax,
+            hkl=hkl,
+            positions=positions,
+            intensities=intensities,
+            radii=radii,
+            threshold=annotation_threshold,
+            alignment="top",
+        )
+
+    def _get_annotation_positions(self, positions, radii, alignment):
+        positions = positions.copy()
+        if alignment == "top":
+            positions[:, 1] += radii / 2
+        elif alignment == "bottom":
+            positions[:, 1] -= radii / 2
+        elif alignment != "center":
+            raise ValueError()
+        return positions
+
+    def _make_annotations(
+        self, ax, hkl, positions, intensities: np.array, radii, threshold, alignment
+    ):
+        positions = self._get_annotation_positions(positions, radii, alignment)
+        visibilities = intensities > threshold
+
+        if alignment == "top":
+            va = "bottom"
+        elif alignment == "center":
+            va = "center"
+        elif alignment == "bottom":
+            va = "top"
+        else:
+            raise ValueError()
+
+        for hkl, position, visible, radius in zip(hkl, positions, visibilities, radii):
+            if config.get("visualize.use_tex"):
+                text = " \ ".join(
+                    [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
+                )
+                text = f"${text}$"
+            else:
+                text = "{} {} {}".format(*hkl)
+
+            annotation = ax.annotate(
+                text,
+                xy=position,
+                ha="center",
+                va=va,
+                # size=size,
+                visible=visible,
+                # **kwargs,
+            )
+
     # def set_extent(self, extent):
     #     self._image.set_extent(extent)
 
+    def _get_radii(
+        self,
+        positions,
+        intensities,
+    ):
+        pass
+
     def set_data(self, data):
-        self._ellipse_collection.set_array(data.T)
+        intensities = data["intensities"]
+
+        self._ellipse_collection.set_array(intensities)
 
     def set_cmap(self, cmap):
         self._ellipse_collection.set_cmap(cmap)
 
     def set_cbars(self, caxes, label=None, **kwargs):
-        self._cbar = plt.colorbar(self._image, cax=caxes[0])
+        self._cbar = plt.colorbar(self._ellipse_collection, cax=caxes[0])
 
         self._cbar.set_label(label, **kwargs)
         self._cbar.formatter.set_powerlimits((-2, 2))
@@ -996,9 +1087,6 @@ class DomainColoringArtist(Artist2D):
         self._image_phase.set_alpha(alpha)
 
     def set_value_limits(self, value_limits: tuple[float, float] = None):
-
-
-
         self._norm.vmin = value_limits[0]
         self._norm.vmax = value_limits[1]
         self._update_alpha()
@@ -1091,15 +1179,16 @@ class BaseVisualization2D(BaseVisualization):
         array,
         coordinate_axes,
         scale_axis,
-        ax=None,
+        ax: Axes = None,
         ensemble_axes: list[AxisMetadata] = None,
         common_scale: bool = False,
         explode: Sequence[int] | bool = False,
         overlay: Sequence[int] | bool = False,
         cmap: str = None,
-        power: float = 1.0,
         vmin: float = None,
         vmax: float = None,
+        power: float = 1.0,
+        logscale: bool = False,
         cbar: bool = False,
         figsize: tuple[float, float] = None,
         title: str | bool = True,
@@ -1134,14 +1223,20 @@ class BaseVisualization2D(BaseVisualization):
             share_y=True,
         )
 
-        self.set_artists(value_limits=[vmin, vmax], power=power)
         self.set_xlabel(coordinate_axes[0].format_label())
         self.set_ylabel(coordinate_axes[1].format_label())
-
-        if cbar:
-            self.set_cbars()
-
         # self._size_bars = []
+
+    @abstractmethod
+    def set_artists(
+        self,
+        value_limits=None,
+        power=None,
+        logscale=False,
+        common_scale=None,
+        cbar=False,
+    ):
+        pass
 
     def set_cbars(self, label=None, **kwargs):
         if label is None:
@@ -1338,35 +1433,42 @@ class VisualizationImshow(BaseVisualization2D):
         overlay: Sequence[int] | bool = False,
         cmap: str = None,
         power: float = 1.0,
+        logscale: bool = False,
         vmin: float = None,
         vmax: float = None,
         cbar: bool = False,
         figsize: tuple[float, float] = None,
         title: str | bool = True,
         interact: bool = False,
-        **kwargs,
     ):
-
         if common_scale is True:
-            vmin, vmax = _get_value_limits(array, value_limits=[vmin, max])
+            vmin, vmax = _get_value_limits(array, value_limits=[vmin, vmax])
 
         super().__init__(
-            array,
-            coordinate_axes,
+            array=array,
+            coordinate_axes=coordinate_axes,
             ax=ax,
             scale_axis=scale_axis,
             ensemble_axes=ensemble_axes,
+            vmin=vmin,
+            vmax=vmax,
+            power=power,
             common_scale=common_scale,
             explode=explode,
             overlay=overlay,
             cmap=cmap,
-            power=power,
-            vmin=vmin,
-            vmax=vmax,
             cbar=cbar,
             interact=interact,
             figsize=figsize,
             title=title,
+        )
+
+        self.set_artists(
+            value_limits=[vmin, vmax],
+            power=power,
+            logscale=logscale,
+            common_scale=common_scale,
+            cbar=cbar,
         )
 
         shape = self.array.shape[-2:]
@@ -1378,10 +1480,11 @@ class VisualizationImshow(BaseVisualization2D):
     def set_artists(
         self,
         value_limits: list[float] = None,
-        common_scale:bool=None,
+        common_scale: bool = None,
         power: float = 1.0,
         logscale: bool = False,
         cmap: str = None,
+        cbar: bool = False,
     ):
         self.remove_artists()
 
@@ -1400,7 +1503,7 @@ class VisualizationImshow(BaseVisualization2D):
 
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
-            #vmin, vmax = value_limits[i]
+            # vmin, vmax = value_limits[i]
             array = self._get_array_for_axis(axis_index=i)
             cmap = self._validate_cmap(cmap)
 
@@ -1431,13 +1534,16 @@ class VisualizationImshow(BaseVisualization2D):
 
         self._artists = artists
 
+        if cbar:
+            self.set_cbars()
+
 
 class VisualizationScatter(BaseVisualization2D):
     def __init__(
         self,
         array,
         coordinate_axes,
-        ax=None,
+        ax: Axes = None,
         scale_axis=None,
         ensemble_axes: list[AxisMetadata] = None,
         common_scale: bool = False,
@@ -1445,16 +1551,19 @@ class VisualizationScatter(BaseVisualization2D):
         overlay: Sequence[int] | bool = False,
         cmap: str = None,
         power: float = 1.0,
+        logscale: bool = False,
         vmin: float = None,
         vmax: float = None,
         cbar: bool = False,
+        scale: float = 0.9,
         figsize: tuple[float, float] = None,
         title: str | bool = True,
         interact: bool = False,
+        annotation_threshold: float = 0.1,
     ):
-
         super().__init__(
             array=array,
+            ax=ax,
             coordinate_axes=coordinate_axes,
             scale_axis=scale_axis,
             ensemble_axes=ensemble_axes,
@@ -1463,12 +1572,23 @@ class VisualizationScatter(BaseVisualization2D):
             overlay=overlay,
             cmap=cmap,
             power=power,
+            logscale=logscale,
             vmin=vmin,
             vmax=vmax,
             cbar=cbar,
             interact=interact,
             figsize=figsize,
             title=title,
+        )
+
+        self.set_artists(
+            value_limits=[vmin, vmax],
+            power=power,
+            logscale=logscale,
+            common_scale=common_scale,
+            cbar=cbar,
+            scale=scale,
+            annotation_threshold=annotation_threshold,
         )
 
         xlim = (min(coordinate_axes[0].values), max(coordinate_axes[0].values))
@@ -1483,6 +1603,10 @@ class VisualizationScatter(BaseVisualization2D):
         power: float = 1.0,
         logscale: bool = False,
         cmap: str = None,
+        common_scale: bool = False,
+        cbar: bool = False,
+        scale: float = 0.9,
+        annotation_threshold: float = 0.1,
     ):
         self.remove_artists()
         vmin, vmax = None, None
@@ -1495,15 +1619,7 @@ class VisualizationScatter(BaseVisualization2D):
             cmap = self._validate_cmap(cmap)
 
             if np.iscomplexobj(self.array) and (self._complex_conversion == "none"):
-                artist = DomainColoringArtist(
-                    ax,
-                    array,
-                    cmap,
-                    vmin=vmin,
-                    vmax=vmax,
-                    power=power,
-                    logscale=logscale,
-                )
+                raise NotImplementedError
             else:
                 artist = ScatterArtist(
                     ax=ax,
@@ -1513,11 +1629,16 @@ class VisualizationScatter(BaseVisualization2D):
                     vmax=vmax,
                     power=power,
                     logscale=logscale,
+                    scale=scale,
+                    annotation_threshold=annotation_threshold,
                 )
 
             artists.itemset(i, artist)
 
         self._artists = artists
+
+        if cbar:
+            self.set_cbars()
 
 
 def make_toggle_hkl_button(visualization):
