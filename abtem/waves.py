@@ -1601,7 +1601,7 @@ class Probe(_WavesBuilder):
 
         scan = _validate_scan(scan, probe)
 
-        if len(scan) == 1:
+        if len(scan) == 1 and len(scan.shape) == 1:
             squeeze = True
         else:
             squeeze = False

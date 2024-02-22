@@ -1053,6 +1053,7 @@ class DomainColoringArtist(Artist2D):
         vmax: float = None,
         power: float = 1.0,
         logscale: bool = False,
+        extent=None,
     ):
         norm = _get_norm(vmin, vmax, power, logscale)
 
@@ -1067,6 +1068,7 @@ class DomainColoringArtist(Artist2D):
             vmin=-np.pi,
             vmax=np.pi,
             cmap=cmap,
+            extent=extent,
         )
         self._image_amplitude = ax.imshow(
             abs_array.T,
@@ -1074,10 +1076,11 @@ class DomainColoringArtist(Artist2D):
             interpolation="none",
             cmap="gray",
             zorder=-1,
+            extent=extent,
         )
 
         self._image_amplitude.set_norm(norm)
-        super().__init__(norm=norm)
+        super().__init__(axes=ax, norm=norm)
 
     def _update_alpha(self):
         data = self._image_amplitude.get_array().data

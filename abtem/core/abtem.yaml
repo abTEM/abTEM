@@ -2,6 +2,7 @@ device: cpu
 fft: fftw
 local_diagnostics:
   progress_bar: true
+  task_level_progress: false
 dask:
   fuse: true
   worker-saturation: 1.0
