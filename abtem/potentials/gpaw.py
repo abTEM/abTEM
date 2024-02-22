@@ -27,7 +27,7 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.parametrizations import EwaldParametrization
+from abtem.parametrizations import EwaldParametrization, LobatoParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
@@ -36,7 +36,7 @@ from abtem.inelastic.phonons import (
 )
 from abtem.potentials.charge_density import _generate_slices
 from abtem.potentials.charge_density import _interpolate_slice
-from abtem.potentials.iam import _PotentialBuilder, Potential
+from abtem.potentials.iam import _PotentialBuilder, Potential, PotentialArray
 
 try:
     from gpaw import GPAW
@@ -234,6 +234,10 @@ class _DummyParametrization:
     def potential(self, symbol):
         return self._potential
 
+    @property
+    def sigmas(self):
+        return {}
+
 
 def _generate_slices(
     interpolators,
@@ -400,6 +404,7 @@ class GPAWPotential(_PotentialBuilder):
         frozen_phonons.atoms.calc = None
 
         super().__init__(
+            array_object=PotentialArray,
             gpts=gpts,
             sampling=sampling,
             cell=cell,
@@ -415,6 +420,10 @@ class GPAWPotential(_PotentialBuilder):
     @property
     def frozen_phonons(self):
         return self._frozen_phonons
+
+    @property
+    def num_configurations(self):
+        return self.frozen_phonons.num_configs
 
     @property
     def repetitions(self):
@@ -464,7 +473,7 @@ class GPAWPotential(_PotentialBuilder):
         calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
         calc.initialize(random_atoms)
 
-        return _get_all_electron_density(
+        return self._get_all_electron_density(
             nt_sG=nt_sG,
             gd=gd,
             D_asp=calculator.D_asp,

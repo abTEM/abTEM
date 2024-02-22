@@ -15,10 +15,7 @@ def reciprocal_cell(cell):
     return np.linalg.pinv(cell).transpose()
 
 
-def reciprocal_space_gpts(
-    cell: np.ndarray,
-    k_max: float | tuple[float, float, float],
-) -> tuple[int, int, int]:
+def reciprocal_space_gpts(cell: np.ndarray, k_max: float | tuple[float, float, float], ) -> tuple[int, int, int]:
     if isinstance(k_max, Number):
         k_max = (k_max,) * 3
 
@@ -26,19 +23,12 @@ def reciprocal_space_gpts(
 
     dk = np.linalg.norm(reciprocal_cell(cell), axis=1)
 
-    gpts = (
-        int(np.ceil(k_max[0] / dk[0])) * 2 + 1,
-        int(np.ceil(k_max[1] / dk[1])) * 2 + 1,
-        int(np.ceil(k_max[2] / dk[2])) * 2 + 1,
-    )
+    gpts = (int(np.ceil(k_max[0] / dk[0])) * 2 + 1, int(np.ceil(k_max[1] / dk[1])) * 2 + 1,
+            int(np.ceil(k_max[2] / dk[2])) * 2 + 1,)
     return gpts
 
 
-def make_hkl_grid(
-    cell: np.ndarray,
-    k_max: float | tuple[float, float, float],
-    axes=(0, 1, 2),
-) -> np.ndarray:
+def make_hkl_grid(cell: np.ndarray, k_max: float | tuple[float, float, float], axes=(0, 1, 2), ) -> np.ndarray:
     gpts = reciprocal_space_gpts(cell, k_max)
 
     freqs = tuple(np.fft.fftfreq(n, d=1 / n).astype(int) for n in gpts)
@@ -72,7 +62,7 @@ def _find_projected_pixel_index(g, shape, sampling):
 
 def excitation_errors(g, energy):
     wavelength = energy2wavelength(energy)
-    return g[..., 2] - 0.5 * wavelength * (g**2).sum(axis=-1)
+    return g[..., 2] - 0.5 * wavelength * (g ** 2).sum(axis=-1)
 
 
 def estimate_necessary_excitation_error(energy, k_max):
@@ -87,9 +77,7 @@ def match_hkl_to_pixel(hkl, g_vec, shape, sampling, sg=None):
     if sg is None:
         return nm
 
-    unique, indices, inverse = np.unique(
-        nm, return_index=True, return_inverse=True, axis=0
-    )
+    unique, indices, inverse = np.unique(nm, return_index=True, return_inverse=True, axis=0)
 
     best_hkl = np.zeros((len(unique), 3), dtype=int)
     best_g_vec = np.zeros((len(unique), 3), dtype=float)
@@ -119,9 +107,7 @@ def filter_by_threshold(arrays, values, threshold) -> tuple[np.ndarray, ...]:
     return out
 
 
-def validate_cell(
-    cell: Atoms | Cell | float | tuple[float, float, float]
-) -> np.ndarray:
+def validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> np.ndarray:
     if isinstance(cell, Atoms):
         cell = cell.cell
 
@@ -139,17 +125,8 @@ def validate_cell(
     return cell
 
 
-def index_diffraction_spots(
-    array,
-    sampling,
-    cell,
-    energy,
-    k_max,
-    sg_max,
-    rotation=(0.0, 0.0, 0.0),
-    rotation_axes="zxz",
-    intensity_min=1e-12,
-):
+def index_diffraction_spots(array, sampling, cell, energy, k_max, sg_max, rotation=(0.0, 0.0, 0.0), rotation_axes="zxz",
+        intensity_min=1e-12, ):
     R = euler_to_rotation(*rotation, axes=rotation_axes)
 
     cell = validate_cell(cell)
@@ -161,9 +138,7 @@ def index_diffraction_spots(
     g_vec = hkl @ reciprocal_cell(cell)
 
     sg = excitation_errors(g_vec, energy)
-    hkl, g_vec, sg = filter_by_threshold(
-        arrays=(hkl, g_vec, sg), values=sg, threshold=sg_max
-    )
+    hkl, g_vec, sg = filter_by_threshold(arrays=(hkl, g_vec, sg), values=sg, threshold=sg_max)
 
     hkl, g_vec, sg, nm = match_hkl_to_pixel(hkl, g_vec, array.shape[-2:], sampling, sg)
 
@@ -174,12 +149,67 @@ def index_diffraction_spots(
     else:
         max_intensity = intensity.max(axis=tuple(range(0, len(intensity.shape) - 1)))
 
-    hkl, g_vec, sg, nm = filter_by_threshold(
-        arrays=(hkl, g_vec, sg, nm),
-        values=-max_intensity,
-        threshold=-intensity_min,
-    )
+    hkl, g_vec, sg, nm = filter_by_threshold(arrays=(hkl, g_vec, sg, nm), values=-max_intensity,
+        threshold=-intensity_min, )
 
     intensity = intensity[..., max_intensity > intensity_min]
 
     return hkl, g_vec, nm, intensity
+
+
+def _format_miller_indices(hkl):
+    return "{} {} {}".format(*hkl)
+
+
+def _miller_to_miller_bravais(hkl):
+    h, k, l = hkl
+
+    H = 2 * h - k
+    K = 2 * k - h
+    I = -H - K
+    L = l
+
+    return H, K, I, L
+
+# def _equivalent_miller_indices(hkl):
+#     is_negation = np.zeros((len(hkl), len(hkl)), dtype=bool)
+#
+#     for i in range(hkl.shape[1]):
+#         negated = hkl.copy()
+#         negated[:, i] = -negated[:, i]
+#         is_negation += np.all(hkl[:, None] == negated[None], axis=2)
+#
+#     is_negation += np.all(hkl[:, None] == -hkl[None], axis=2)
+#
+#     sorted = np.sort(hkl, axis=1)
+#     is_permutation = np.all(sorted[:, None] == sorted[None], axis=-1)
+#
+#     is_connected = is_negation + is_permutation
+#     n, labels = connected_components(csr_matrix(is_connected))
+#     return labels
+#
+#
+# def _split_at_threshold(values, threshold):
+#     order = np.argsort(values)
+#     max_value = values.max()
+#
+#     split = (np.diff(values[order]) > (max_value * threshold)) * (
+#         np.diff(values[order]) > 1e-6
+#     )
+#
+#     split = np.insert(split, 0, False)
+#     return np.cumsum(split)[np.argsort(order)]
+#
+#
+# def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
+#     labels = _equivalent_miller_indices(hkl)
+#
+#     spots = np.zeros(len(hkl), dtype=bool)
+#     for indices in label_to_index(labels):
+#         sub_labels = _split_at_threshold(intensities[indices], intensity_split)
+#         for sub_indices in label_to_index(sub_labels):
+#             order = np.lexsort(np.rot90(hkl[indices][sub_indices]))
+#             spots[indices[sub_indices[order][-1]]] = True
+#
+#     return spots
+#     return hkl, g_vec, nm, intensity

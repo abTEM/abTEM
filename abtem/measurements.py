@@ -46,7 +46,7 @@ from abtem.core.grid import (
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
 from abtem.distributions import BaseDistribution
-from abtem.indexing import (  # _format_miller_indices,
+from abtem.indexing import (_format_miller_indices,
     index_diffraction_spots,
     estimate_necessary_excitation_error,
 )
@@ -983,7 +983,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             vmin=vmin,
             vmax=vmax,
             power=power,
-            common_scale=common_color_scale,
+            common_color_scale=common_color_scale,
             explode=explode,
             overlay=overlay,
             figsize=figsize,
@@ -1702,7 +1702,6 @@ class _BaseMeasurement1D(BaseMeasurements):
             overlay=overlay,
             figsize=figsize,
             interact=interact,
-            **kwargs,
         )
 
         if interact and display:
@@ -4127,6 +4126,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         scale_axis = self._scale_axis_from_metadata()
 
         base_axes_metadata = self._plot_base_axes_metadata(units)
+
         array = np.concatenate((self.array[:, None], self.positions), axis=-1)
 
         offset_x = self.positions[:, 0].min()
