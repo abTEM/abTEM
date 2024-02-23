@@ -49,6 +49,7 @@ from abtem.distributions import BaseDistribution
 from abtem.indexing import (  # _format_miller_indices,
     index_diffraction_spots,
     estimate_necessary_excitation_error,
+    _format_miller_indices,
 )
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize import (
@@ -2173,7 +2174,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         cell: Cell | float | tuple[float, float, float],
         rotation=(0.0, 0.0, 0.0),
         rotation_axes="zxz",
-        intensity_min: float = 1e-6,
+        threshold: float = 1e-6,
         energy: float = None,
         # integration_radius: float = 0.0,
         centering: str = "P",
@@ -2214,7 +2215,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             sg_max=sg_max,
             rotation=rotation,
             rotation_axes=rotation_axes,
-            intensity_min=intensity_min,
+            intensity_min=threshold,
+            centering=centering,
         )
 
         return IndexedDiffractionPatterns(
@@ -4053,11 +4055,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         # array = np.concatenate((self.array[:, None], self.positions), axis=-1)
 
-        offset_x = self.positions[:, 0].min()
-        extent_x = self.positions[:, 0].ptp()
+        offset_x = self.positions[..., 0].min()
+        extent_x = self.positions[..., 0].ptp()
 
-        offset_y = self.positions[:, 1].min()
-        extent_y = self.positions[:, 1].ptp()
+        offset_y = self.positions[..., 1].min()
+        extent_y = self.positions[..., 1].ptp()
 
         coordinate_axes = [
             NonLinearAxis(

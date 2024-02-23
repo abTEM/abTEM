@@ -175,7 +175,7 @@ class LaplaceOperator:
 
 
 class DivergedError(Exception):
-    def __init__(self, message="the series diverged"):
+    def __init__(self, message="the multislice exponential series diverged"):
         super().__init__(message)
 
 

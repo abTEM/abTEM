@@ -5,6 +5,8 @@ from numbers import Number
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 from abtem.atoms import euler_to_rotation, is_cell_orthogonal
 from abtem.core.energy import energy2wavelength
@@ -139,6 +141,45 @@ def validate_cell(
     return cell
 
 
+def _F_reflection_conditions(hkl):
+    all_even = (hkl % 2 == 0).all(axis=1)
+    all_odd = (hkl % 2 == 1).all(axis=1)
+    return all_even + all_odd
+
+
+def _I_reflection_conditions(hkl):
+    return (hkl.sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _A_reflection_conditions(hkl):
+    return (hkl[1:].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _B_reflection_conditions(hkl):
+    return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _C_reflection_conditions(hkl):
+    return (hkl[:-1].sum(axis=1) % 2 == 0).all(axis=1)
+
+
+def _reflection_condition_mask(hkl: np.ndarray, centering: str):
+    if centering == "P":
+        return np.ones(len(hkl), dtype=bool)
+    elif centering == "F":
+        return _F_reflection_conditions(hkl)
+    elif centering == "I":
+        return _I_reflection_conditions(hkl)
+    elif centering == "A":
+        return _A_reflection_conditions(hkl)
+    elif centering == "B":
+        return _B_reflection_conditions(hkl)
+    elif centering == "C":
+        return _C_reflection_conditions(hkl)
+    else:
+        raise ValueError("lattice centering must be one of P, I, F, A, B or C")
+
+
 def index_diffraction_spots(
     array,
     sampling,
@@ -149,6 +190,7 @@ def index_diffraction_spots(
     rotation=(0.0, 0.0, 0.0),
     rotation_axes="zxz",
     intensity_min=1e-12,
+    centering: str = "P",
 ):
     R = euler_to_rotation(*rotation, axes=rotation_axes)
 
@@ -157,6 +199,9 @@ def index_diffraction_spots(
     cell = R @ cell
 
     hkl = make_hkl_grid(cell, k_max)
+
+    mask = _reflection_condition_mask(hkl, centering=centering)
+    hkl = hkl[mask]
 
     g_vec = hkl @ reciprocal_cell(cell)
 
@@ -187,3 +232,61 @@ def index_diffraction_spots(
         g_vec = np.tile(g_vec[(None,) * (len(reps) - 2)], reps=reps)
 
     return hkl, g_vec, nm, intensity
+
+
+def _format_miller_indices(hkl):
+    return "{} {} {}".format(*hkl)
+
+
+def _miller_to_miller_bravais(hkl):
+    h, k, l = hkl
+
+    H = 2 * h - k
+    K = 2 * k - h
+    I = -H - K
+    L = l
+
+    return H, K, I, L
+
+
+def _equivalent_miller_indices(hkl):
+    is_negation = np.zeros((len(hkl), len(hkl)), dtype=bool)
+
+    for i in range(hkl.shape[1]):
+        negated = hkl.copy()
+        negated[:, i] = -negated[:, i]
+        is_negation += np.all(hkl[:, None] == negated[None], axis=2)
+
+    is_negation += np.all(hkl[:, None] == -hkl[None], axis=2)
+
+    sorted = np.sort(hkl, axis=1)
+    is_permutation = np.all(sorted[:, None] == sorted[None], axis=-1)
+
+    is_connected = is_negation + is_permutation
+    n, labels = connected_components(csr_matrix(is_connected))
+    return labels
+
+
+def _split_at_threshold(values, threshold):
+    order = np.argsort(values)
+    max_value = values.max()
+
+    split = (np.diff(values[order]) > (max_value * threshold)) * (
+        np.diff(values[order]) > 1e-6
+    )
+
+    split = np.insert(split, 0, False)
+    return np.cumsum(split)[np.argsort(order)]
+
+
+def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
+    labels = _equivalent_miller_indices(hkl)
+
+    spots = np.zeros(len(hkl), dtype=bool)
+    for indices in label_to_index(labels):
+        sub_labels = _split_at_threshold(intensities[indices], intensity_split)
+        for sub_indices in label_to_index(sub_labels):
+            order = np.lexsort(np.rot90(hkl[indices][sub_indices]))
+            spots[indices[sub_indices[order][-1]]] = True
+
+    return spots

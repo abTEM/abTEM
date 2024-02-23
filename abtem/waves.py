@@ -65,7 +65,7 @@ from abtem.multislice import (
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, _validate_potential
-from abtem.scan import BaseScan, GridScan, _validate_scan
+from abtem.scan import BaseScan, GridScan, _validate_scan, CustomScan
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _validate_tilt
 from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
@@ -1601,7 +1601,7 @@ class Probe(_WavesBuilder):
 
         scan = _validate_scan(scan, probe)
 
-        if len(scan) == 1:
+        if isinstance(scan, CustomScan):
             squeeze = True
         else:
             squeeze = False
@@ -1696,7 +1696,7 @@ class Probe(_WavesBuilder):
         scan: tuple | BaseScan = None,
         detectors: BaseDetector | list[BaseDetector] = None,
         sites: SliceIndexedAtoms | Atoms = None,
-        detectors_elastic: BaseDetector | list[BaseDetector] = None,
+        # detectors_elastic: BaseDetector | list[BaseDetector] = None,
         double_channel: bool = True,
         threshold: float = 1.0,
         max_batch: int | str = "auto",
