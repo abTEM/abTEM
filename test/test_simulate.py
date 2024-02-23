@@ -1,11 +1,12 @@
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given
+from hypothesis import given, reproduce_failure
 
 import strategies as abtem_st
 from abtem import PixelatedDetector, AnnularDetector
 from abtem.scan import CustomScan, LineScan, GridScan
 from utils import gpu
+
 
 # @reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
 @given(data=st.data())
@@ -106,11 +107,14 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
     assert exit_waves.shape[0] == potential.num_configurations
     assert exit_waves.gpts == potential.gpts
 
-#@reproduce_failure('6.80.0', b'AXicY2BAAkwwBqNFAwNhwEqacrhqQkwgAACZyAF9')
+
+# @reproduce_failure('6.80.0', b'AXicY2BAAkwwBqNFAwNhwEqacrhqQkwgAACZyAF9')
+# @reproduce_failure("6.96.4", b"AXicY2BAAoxwhkUDA2HASoJyRkIKiNKKnQkEAOBNAX0=")
+# @reproduce_failure("6.96.4", b"AXicY2BAAoxwhkUDA2HASoJyRkIKiNNLwBjsKlE1AQAgawF/")
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "not_lazy"])
+@pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-@pytest.mark.parametrize("frozen_phonons", [True])
+@pytest.mark.parametrize("frozen_phonons", [True, False])
 @pytest.mark.parametrize(
     "detector",
     [
@@ -123,14 +127,8 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 )
 @pytest.mark.parametrize(
     "scan",
-    [
-        abtem_st.grid_scan,
-        abtem_st.line_scan,
-        abtem_st.custom_scan
-        #GridScan(),
-        #LineScan(),
-        #CustomScan(),
-    ],
+    [abtem_st.grid_scan, abtem_st.line_scan, abtem_st.custom_scan],
+    # [abtem_st.line_scan],
 )
 @pytest.mark.parametrize(
     "waves_builder",
@@ -146,7 +144,7 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
     potential = data.draw(
         abtem_st.potential(no_frozen_phonons=not frozen_phonons, ensemble_mean=False)
     )
-    #scan.match_probe(probe)
+    # scan.match_probe(probe)
     probe.grid.match(potential)
 
     if isinstance(scan, CustomScan) and isinstance(detector, AnnularDetector):
@@ -155,15 +153,23 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
     measurement_shape = detector._out_shape(probe)
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 
-    try:
-        assert (
-            measurement.shape
-            == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+    if isinstance(scan, CustomScan) and scan.shape == (1,):
+        expected_shape = potential.ensemble_shape + measurement_shape
+    else:
+        expected_shape = (
+            potential.ensemble_shape + scan.ensemble_shape + measurement_shape
         )
-    except:
-        print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
-        print(measurement.shape)
-        raise
+
+    # print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
+    # print(measurement.shape)
+    # try:
+    assert measurement.shape == expected_shape
+    #     )
+    # except:
+    #     print(frozen_phonons)
+    #     print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
+    #     print(measurement.shape)
+    #     raise
 
     assert measurement.dtype == detector._out_dtype(probe)
     assert type(measurement) == detector._out_type(probe.build(scan))
@@ -172,7 +178,6 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
         assert measurement.base_axes_metadata == detector._out_base_axes_metadata(
             probe.build(scan)
         )
-
 
 
 # # @given(data=st.data(),

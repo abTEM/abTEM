@@ -204,7 +204,7 @@ class BaseVisualization:
             ensemble_axes_metadata = []
 
         self._ensemble_axes_metadata = ensemble_axes_metadata
-        self._ensemble_shape = array.shape[: -self._num_coordinate_dims]
+        self._ensemble_shape = array.shape[: len(ensemble_axes_metadata)]
         self._limits_margin = limits_margin
 
         self._axes_types = _determine_axes_types(
@@ -234,11 +234,11 @@ class BaseVisualization:
 
         self.get_figure().canvas.header_visible = False
 
-        # if self.axes.ncols > 1 and title:
-        #     self.set_column_titles(title)
-        #
-        # if self.axes.nrows > 1 and title:
-        #     self.set_row_titles()
+        if self.axes.ncols > 1 and title:
+            self.set_column_titles(title)
+
+        if self.axes.nrows > 1 and title:
+            self.set_row_titles()
 
     def _get_array_for_scaling(self):
         return self._array
@@ -705,10 +705,10 @@ class VisualizationLines(BaseVisualization):
         **kwargs,
     ):
         super().__init__(
-            array,
-            coordinate_axes,
-            scale_axis,
-            ensemble_axes,
+            array=array,
+            coordinate_axes=coordinate_axes,
+            scale_axis=scale_axis,
+            ensemble_axes_metadata=ensemble_axes,
             common_scale=common_scale,
             aspect=False,
             explode=explode,
@@ -753,7 +753,7 @@ class VisualizationLines(BaseVisualization):
     def set_artists(self, **kwargs):
         x = self._coordinate_axes[0].coordinates(self._array.shape[-1])
 
-        labels = self._get_overlay_labels()
+        labels = _get_overlay_labels(self.ensemble_axes_metadata, self.axes_types)
         artists = np.zeros(self.axes.shape, dtype=object)
 
         for i in np.ndindex(self.axes.shape):
@@ -1595,7 +1595,7 @@ class VisualizationScatter(BaseVisualization2D):
         )
 
         xlim = (min(coordinate_axes[0].values), max(coordinate_axes[0].values))
-        ylim = (min(coordinate_axes[1].values), max(coordinate_axes[0].values))
+        ylim = (min(coordinate_axes[1].values), max(coordinate_axes[1].values))
 
         self.set_xlim(xlim)
         self.set_ylim(ylim)
