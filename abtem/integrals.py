@@ -26,7 +26,7 @@ from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import disk_meshgrid
 from abtem.core.grid import polar_spatial_frequencies
 from abtem.core.grid import spatial_frequencies
-from abtem.core.utils import EqualityMixin, CopyMixin
+from abtem.core.utils import EqualityMixin, CopyMixin, get_dtype
 from abtem.parametrizations import validate_parametrization
 
 if cp is not None:
@@ -400,7 +400,7 @@ def superpose_deltas(
     if round_positions:
         rounded = xp.round(positions).astype(xp.int32)
         i, j = rounded[:, 0][None] % shape[0], rounded[:, 1][None] % shape[1]
-        v = xp.array([1.0], dtype=xp.float32)[:, None]
+        v = xp.array([1.0], dtype=get_dtype(complex=False))[:, None]
     else:
         rounded = xp.floor(positions).astype(xp.int32)
         rows, cols = rounded[:, 0], rounded[:, 1]
@@ -409,7 +409,9 @@ def superpose_deltas(
         xy = x * y
         i = xp.array([rows % shape[0], (rows + 1) % shape[0]] * 2)
         j = xp.array([cols % shape[1]] * 2 + [(cols + 1) % shape[1]] * 2)
-        v = xp.array([1 + xy - y - x, x - xy, y - xy, xy], dtype=xp.float32)
+        v = xp.array(
+            [1 + xy - y - x, x - xy, y - xy, xy], dtype=get_dtype(complex=False)
+        )
 
     if weights is not None:
         v = v * weights[None]
@@ -463,12 +465,12 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         k2 = kx[:, None] ** 2 + ky[None] ** 2
         f = self.parametrization.projected_scattering_factor(symbol)(k2)
-        f = xp.asarray(f, dtype=xp.float32)
+        f = xp.asarray(f, dtype=get_dtype(complex=False))
 
         if symbol in self.parametrization.sigmas.keys():
             sigma = self.parametrization.sigmas[symbol]
             f = f * xp.exp(
-                -xp.asarray(k2, dtype=xp.float32)
+                -xp.asarray(k2, dtype=get_dtype(complex=False))
                 * (xp.pi * sigma / xp.sqrt(3 / 2)) ** 2
             )
 
@@ -502,9 +504,9 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     ):
         xp = get_array_module(device)
         if len(atoms) == 0:
-            return xp.zeros(gpts, dtype=xp.float32)
+            return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
-        array = xp.zeros(gpts, dtype=xp.float32)
+        array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
             scattering_factor = self.get_scattering_factor(
                 chemical_symbols[number], gpts, sampling, device
@@ -512,11 +514,13 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
             positions = atoms.positions[atoms.numbers == number]
 
-            positions = (positions[:, :2] / sampling).astype(xp.float32)
+            positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
 
-            temp_array = xp.zeros(gpts, dtype=xp.float32)
+            temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
 
-            temp_array = superpose_deltas(positions, temp_array).astype(xp.complex64)
+            temp_array = superpose_deltas(positions, temp_array).astype(
+                get_dtype(complex=True)
+            )
 
             temp_array = fft2(temp_array, overwrite_x=True)
 
@@ -756,7 +760,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         # )
 
         projection = lambda z: potential(
-           np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+            np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
         )
         # * np.exp(-(radial_gpts[:, None] ** 2) / 10000)
 
@@ -811,9 +815,8 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
     ) -> np.ndarray:
         xp = get_array_module(device)
 
-        array = xp.zeros(gpts, dtype=xp.float32)
+        array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
-
             table = self.get_integral_table(chemical_symbols[number], sampling)
 
             positions = atoms.positions[atoms.numbers == number]
@@ -826,10 +829,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             )
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
 
-            positions = xp.asarray(positions, dtype=np.float32)
-
-            # sampling = xp.array(sampling, dtype=xp.float32)
-            # positions[:, :2] = xp.round(positions[:, :2] / sampling) * sampling
+            positions = xp.asarray(positions, dtype=get_dtype(complex=False))
 
             radial_potential_derivative = xp.zeros_like(radial_potential)
             radial_potential_derivative[:, :-1] = (
@@ -837,11 +837,10 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             )
 
             if len(self._parametrization.sigmas):
-                temp = xp.zeros(gpts, dtype=xp.float32)
+                temp = xp.zeros(gpts, dtype=get_dtype(complex=False))
             else:
                 temp = array
 
-            # temp_array = xp.zeros(gpts, dtype=xp.float32)
             if xp is cp:
                 interpolate_radial_functions_cuda(
                     array=temp,
@@ -866,8 +865,14 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             symbol = chemical_symbols[number]
 
             if symbol in self._parametrization.sigmas:
-                sigma = self._parametrization.sigmas[symbol] / np.array(sampling) / np.sqrt(3)
-                temp = get_ndimage_module(temp).gaussian_filter(temp, sigma=sigma, mode="wrap")
+                sigma = (
+                    self._parametrization.sigmas[symbol]
+                    / np.array(sampling)
+                    / np.sqrt(3)
+                )
+                temp = get_ndimage_module(temp).gaussian_filter(
+                    temp, sigma=sigma, mode="wrap"
+                )
                 array += temp
 
         return array

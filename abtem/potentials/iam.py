@@ -38,14 +38,17 @@ from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import EqualityMixin, CopyMixin
+from abtem.core.utils import EqualityMixin, CopyMixin, get_dtype
 from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     _validate_seeds,
     AtomsEnsemble,
 )
-from abtem.integrals import ScatteringFactorProjectionIntegrals, QuadratureProjectionIntegrals
+from abtem.integrals import (
+    ScatteringFactorProjectionIntegrals,
+    QuadratureProjectionIntegrals,
+)
 from abtem.measurements import Images
 from abtem.slicing import (
     _validate_slice_thickness,
@@ -108,7 +111,6 @@ class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCM
         thicknesses = np.cumsum(self.slice_thickness)
 
         if self.exit_planes[0] == -1:
-
             return tuple(
                 np.insert(
                     thicknesses[np.array(self.exit_planes[1:], dtype=int)], 0, 0.0
@@ -273,7 +275,6 @@ def _validate_exit_planes(exit_planes, num_slices):
 
 
 def _require_cell_transform(cell, box, plane, origin):
-
     if box == tuple(np.diag(cell)):
         return False
 
@@ -295,7 +296,7 @@ def _require_cell_transform(cell, box, plane, origin):
 class _FieldBuilder(BaseField):
     def __init__(
         self,
-        array_object : Type[FieldArray],
+        array_object: Type[FieldArray],
         slice_thickness: float | tuple[float, ...],
         exit_planes: int | tuple[int, ...],
         cell: np.ndarray | Cell,
@@ -421,7 +422,10 @@ class _FieldBuilder(BaseField):
 
             if self.ensemble_shape:
                 new_axis = tuple(
-                    range(len(self.ensemble_shape), len(self.ensemble_shape) + len(self.base_shape))
+                    range(
+                        len(self.ensemble_shape),
+                        len(self.ensemble_shape) + len(self.base_shape),
+                    )
                 )
             else:
                 new_axis = tuple(range(1, len(self.base_shape)))
@@ -432,7 +436,7 @@ class _FieldBuilder(BaseField):
                 first_slice=first_slice,
                 last_slice=last_slice,
                 chunks=chunks,
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
 
         else:
@@ -440,7 +444,7 @@ class _FieldBuilder(BaseField):
 
             array = xp.zeros(
                 self.ensemble_shape + (last_slice - first_slice,) + self.base_shape[1:],
-                dtype=xp.float32,
+                dtype=get_dtype(complex=False),
             )
 
             if self.ensemble_shape:
@@ -451,7 +455,6 @@ class _FieldBuilder(BaseField):
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
                     ):
-
                         array[i + (j,)] = slic.array[0]
 
             else:
@@ -485,7 +488,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         integrator=None,
         device: str = None,
     ):
-
         self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
         self._sliced_atoms = None
@@ -566,7 +568,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return atoms
 
     def _prepare_atoms(self):
-
         atoms = self.get_transformed_atoms()
 
         if self.integrator.finite:
@@ -649,14 +650,15 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         for start, stop in generate_chunks(
             last_slice - first_slice, chunks=1, start=first_slice
         ):
-
             if len(numbers) > 1 or stop - start > 1:
-                array = xp.zeros((stop - start,) + self.base_shape[1:], dtype=np.float32)
+                array = xp.zeros(
+                    (stop - start,) + self.base_shape[1:],
+                    dtype=get_dtype(complex=False),
+                )
             else:
                 array = None
 
             for i, slice_idx in enumerate(range(start, stop)):
-
                 atoms = sliced_atoms.get_atoms_in_slices(slice_idx)
 
                 new_array = self._integrator.integrate_on_grid(
@@ -674,9 +676,12 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     array = new_array[None]
 
             if array is None:
-                array = xp.zeros((stop - start,) + self.base_shape[1:], dtype=np.float32)
+                array = xp.zeros(
+                    (stop - start,) + self.base_shape[1:],
+                    dtype=get_dtype(complex=False),
+                )
 
-            #array -= array.min()
+            # array -= array.min()
 
             exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
 
@@ -828,12 +833,15 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         integrator: FieldIntegrator = None,
         device: str = None,
     ):
-
         if integrator is None:
             if projection == "finite":
-                integrator = QuadratureProjectionIntegrals(parametrization=parametrization)
+                integrator = QuadratureProjectionIntegrals(
+                    parametrization=parametrization
+                )
             elif projection == "infinite":
-                integrator = ScatteringFactorProjectionIntegrals(parametrization=parametrization)
+                integrator = ScatteringFactorProjectionIntegrals(
+                    parametrization=parametrization
+                )
             else:
                 raise NotImplementedError
 
@@ -854,7 +862,6 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
 
 
 class FieldArray(BaseField, ArrayObject):
-
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
@@ -905,7 +912,7 @@ class FieldArray(BaseField, ArrayObject):
     ):
         raise RuntimeError("potential is already built")
 
-    def generate_slices(self, first_slice:int=0, last_slice:int=None):
+    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
         """
         Generate the slices for the potential.
 
@@ -1035,9 +1042,11 @@ class FieldArray(BaseField, ArrayObject):
         """
         metadata = {"label": "potential", "units": "eV / e"}
         array = self.array.sum(-self._base_dims)
-        #array -= array.min((-2, -1), keepdims=True)
+        # array -= array.min((-2, -1), keepdims=True)
 
-        ensemble_axes_metadata = self.ensemble_axes_metadata + self.base_axes_metadata[1:-2]
+        ensemble_axes_metadata = (
+            self.ensemble_axes_metadata + self.base_axes_metadata[1:-2]
+        )
 
         return Images(
             array=array,
@@ -1115,14 +1124,16 @@ class PotentialArray(BasePotential, FieldArray):
         xp = get_array_module(self.array)
 
         def _transmission_function(array, energy):
-            array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
+            dtype = get_dtype(complex=False)
+            sigma = dtype(energy2sigma(energy))
+            array = complex_exponential(sigma * array)
             return array
 
         if self.is_lazy:
             array = self._array.map_blocks(
                 _transmission_function,
                 energy=energy,
-                meta=xp.array((), dtype=xp.complex64),
+                meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
             array = _transmission_function(self._array, energy=energy)
@@ -1184,7 +1195,6 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         sampling: float | tuple[float, float] = None,
         energy: float = None,
     ):
-
         self._accelerator = Accelerator(energy=energy)
         super().__init__(array, slice_thickness, extent, sampling)
 
@@ -1280,7 +1290,6 @@ class CrystalPotential(_PotentialBuilder):
         exit_planes: int = None,
         seeds: int | tuple[int, ...] = None,
     ):
-
         if num_frozen_phonons is None and seeds is None:
             self._seeds = None
         else:
@@ -1417,7 +1426,6 @@ class CrystalPotential(_PotentialBuilder):
         return output
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
-
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         if chunks == ():
@@ -1427,7 +1435,6 @@ class CrystalPotential(_PotentialBuilder):
             arrays = []
 
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-
                 if self.seeds is not None:
                     seeds = self.seeds[start:stop]
                 else:
@@ -1440,7 +1447,6 @@ class CrystalPotential(_PotentialBuilder):
 
             array = da.concatenate(arrays)
         else:
-
             potential_unit = self.potential_unit
             # if self.potential_unit.array:
             #    atoms = atoms.compute()

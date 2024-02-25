@@ -421,7 +421,7 @@ def multislice_and_detect(
     transpose: bool = False,
     pbar: bool = False,
     method: str = "conventional",
-    **kwargs
+    **kwargs,
 ) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
@@ -475,6 +475,7 @@ def multislice_and_detect(
                 laplace=laplace_operator,
                 max_terms=max_terms,
             )
+
     else:
         raise ValueError()
 

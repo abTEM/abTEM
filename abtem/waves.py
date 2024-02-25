@@ -44,6 +44,7 @@ from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
     tuple_range,
+    get_dtype,
 )
 from abtem.detectors import (
     BaseDetector,
@@ -125,7 +126,7 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin):
     @property
     def dtype(self):
         """The datatype of waves."""
-        return np.complex64
+        return get_dtype(complex=True)
 
     @property
     @abstractmethod
@@ -635,10 +636,9 @@ class Waves(BaseWaves, ArrayObject):
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
-        xp = get_array_module(self.array)
-
         if self.is_lazy:
-            array = self.array.map_blocks(_intensity, dtype=xp.float32)
+            dtype = get_dtype(complex=False)
+            array = self.array.map_blocks(_intensity, dtype=dtype)
         else:
             array = _intensity(self.array)
 
@@ -723,7 +723,7 @@ class Waves(BaseWaves, ArrayObject):
                 new_shape=gpts,
                 normalization=normalization,
                 chunks=self.array.chunks[:-2] + gpts,
-                meta=xp.array((), dtype=xp.complex64),
+                meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
             array = fft_interpolate(
@@ -832,7 +832,7 @@ class Waves(BaseWaves, ArrayObject):
         validate_gpts(new_gpts)
 
         if self.is_lazy:
-            dtype = xp.complex64 if return_complex else xp.float32
+            dtype = get_dtype(complex=return_complex)
 
             pattern = self.array.map_blocks(
                 _diffraction_pattern,
@@ -1088,7 +1088,7 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         if chunks is None:
             chunks = self._default_ensemble_chunks
             chunks = validate_chunks(
-                self.ensemble_shape, chunks, limit="auto", dtype=np.complex64
+                self.ensemble_shape, chunks, limit="auto", dtype=get_dtype(complex=True)
             )
 
         chunks = validate_chunks(self.ensemble_shape, chunks)
@@ -1183,7 +1183,7 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
         array = blocks.map_blocks(
             waves_builder._build_waves,
-            meta=xp.array((), dtype=np.complex64),
+            meta=xp.array((), dtype=get_dtype(complex=True)),
             new_axis=tuple_range(2, len(waves_builder.ensemble_shape)),
             chunks=blocks.chunks + waves_builder.gpts,
             wrapped=False,
@@ -1273,11 +1273,13 @@ class PlaneWave(_WavesBuilder):
 
         if waves_builder.normalize:
             array = xp.full(
-                waves_builder.gpts, 1 / np.prod(waves_builder.gpts), dtype=xp.complex64
+                waves_builder.gpts,
+                1 / np.prod(waves_builder.gpts),
+                dtype=get_dtype(complex=True),
             )
 
         else:
-            array = xp.ones(waves_builder.gpts, dtype=xp.complex64)
+            array = xp.ones(waves_builder.gpts, dtype=get_dtype(complex=True))
 
         waves = Waves(
             array,

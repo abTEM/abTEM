@@ -11,6 +11,7 @@ import numpy as np
 
 from abtem.core.backend import cp
 from abtem.core.backend import get_array_module
+from abtem.core.config import config
 
 
 def is_array_like(x):
@@ -233,3 +234,18 @@ def label_to_index(labels, max_label=None):
 def get_data_path(file):
     this_file = os.path.abspath(os.path.dirname(file))
     return os.path.join(this_file, "data")
+
+
+def get_dtype(complex):
+    dtype = config.get("precission")
+
+    if dtype == "float32" and complex:
+        return np.complex64
+    elif dtype == "float32":
+        return np.float32
+    elif dtype == "float64" and complex:
+        return np.complex128
+    elif dtype == "float64":
+        return np.float64
+    else:
+        raise RuntimeError("")

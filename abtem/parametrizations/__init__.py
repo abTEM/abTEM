@@ -13,8 +13,9 @@ from scipy.optimize import least_squares
 
 from abtem.array import concatenate
 from abtem.core.axes import OrdinalAxis
+from abtem.core.config import config
 from abtem.core.constants import kappa
-from abtem.core.utils import EqualityMixin
+from abtem.core.utils import EqualityMixin, get_dtype
 from abtem.measurements import ReciprocalSpaceLineProfiles, RealSpaceLineProfiles
 from abtem.parametrizations.functions import kirkland, ewald, peng, lobato
 
@@ -70,7 +71,6 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     def __init__(
         self, parameters: dict[str, np.ndarray] | str, sigmas: dict[str, float] = None
     ):
-
         self._parameters = validate_parameters(parameters)
         self._sigmas = validate_sigmas(sigmas)
 
@@ -297,7 +297,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         try:
             func = self._functions[name]
             parameters = self.scaled_parameters(symbol + charge_symbol, name)
-            parameters = np.array(parameters, dtype=np.float32)
+            dtype = get_dtype(complex=False)
+            parameters = np.array(parameters, dtype=dtype)
             return lambda r, *args, **kwargs: func(r, parameters, *args, **kwargs)
         except KeyError:
             raise RuntimeError(
@@ -400,7 +401,6 @@ class KirklandParametrization(Parametrization):
     def __init__(
         self, parameters: str | dict = "kirkland.json", sigmas: dict[str, float] = None
     ):
-
         super().__init__(parameters=parameters, sigmas=sigmas)
 
     def fit(self, Z, k, f, guess=None):
@@ -438,7 +438,6 @@ class KirklandParametrization(Parametrization):
         p_optimal = apply_constraint(p_optimal)
         self.parameters[chemical_symbols[Z]] = p_optimal
         return p_optimal
-
 
     def scaled_parameters(self, symbol: str, name: str) -> np.ndarray:
         parameters = np.array(self.parameters[symbol])
@@ -538,9 +537,9 @@ class LobatoParametrization(Parametrization):
         scaled_parameters = np.vstack((a, b))
 
         scaled_parameters = {
-            "potential": scaled_parameters.astype(np.float32),
+            "potential": scaled_parameters,
             "scattering_factor": parameters,
-            "projected_potential": scaled_parameters.astype(np.float32),
+            "projected_potential": scaled_parameters,
             "projected_scattering_factor": scaled_parameters,
             "x_ray_scattering_factor": parameters,
             "charge": parameters,
@@ -663,9 +662,7 @@ def validate_parametrization(parametrization: str | Parametrization) -> Parametr
 
 
 def validate_parameters(parameters: str | dict) -> dict:
-
     if isinstance(parameters, str):
-
         if os.path.isabs(parameters):
             path = parameters
         else:

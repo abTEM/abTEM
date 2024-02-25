@@ -243,11 +243,20 @@ class BaseVisualization:
 
         self.get_figure().canvas.header_visible = False
 
-        if self.axes.ncols > 1 and title:
+        if isinstance(title, str) or (
+            hasattr(self.axes, "ncols") and (self.axes.ncols > 1)
+        ):
             self.set_column_titles(title)
 
-        if self.axes.nrows > 1 and title:
+        if hasattr(self.axes, "nrows") and (self.axes.nrows > 1):
             self.set_row_titles()
+
+        # if hasattr(self.axes, "ncols") and (self.axes.ncols > 1):
+        #     if self.axes.ncols > 1 and title:
+        #         self.set_column_titles(title)
+        #
+        #     if self.axes.nrows > 1 and title:
+        #         self.set_row_titles()
 
     def _get_array_for_scaling(self):
         return self._array
@@ -886,8 +895,11 @@ class ImageArtist(Artist2D):
     def set_cmap(self, cmap):
         self._image.set_cmap(cmap)
 
-    def set_cbars(self, caxes, label=None, **kwargs):
-        self._cbar = plt.colorbar(self._image, cax=caxes[0])
+    def set_cbars(self, caxes=None, label=None, **kwargs):
+        if caxes is not None:
+            self._cbar = plt.colorbar(self._image, cax=caxes[0])
+        else:
+            self._cbar = plt.colorbar(self._image)
 
         self._cbar.set_label(label, **kwargs)
         self._cbar.formatter.set_powerlimits((-2, 2))
@@ -1264,9 +1276,10 @@ class BaseVisualization2D(BaseVisualization):
 
             if hasattr(self.axes, "set_cbar_layout"):
                 caxes = self.axes._caxes[i]
-                artist.set_cbars(caxes=caxes, label=label)
             else:
-                raise NotImplementedError
+                caxes = None
+
+            artist.set_cbars(caxes=caxes, label=label)
 
     def set_complex_conversion(self, complex_conversion: str):
         self._complex_conversion = complex_conversion
@@ -1480,11 +1493,13 @@ class VisualizationImshow(BaseVisualization2D):
             figsize=figsize,
             title=title,
         )
+
         shape = self.array.shape[-2:]
         xlim, ylim = _get_coordinate_limits(coordinate_axes, shape=shape)
 
         self.set_artists(
-            value_limits=[vmin, vmax],
+            vmin=vmin,
+            vmax=vmax,
             power=power,
             logscale=logscale,
             common_scale=common_scale,
@@ -1498,7 +1513,8 @@ class VisualizationImshow(BaseVisualization2D):
 
     def set_artists(
         self,
-        value_limits: list[float] = None,
+        vmin=None,
+        vmax=None,
         common_scale: bool = None,
         power: float = 1.0,
         logscale: bool = False,
@@ -1511,10 +1527,7 @@ class VisualizationImshow(BaseVisualization2D):
         shape = self.array.shape[-2:]
 
         if common_scale:
-            vmin, vmax = _get_value_limits(self.array, value_limits=value_limits)
-        else:
-            vmin = None
-            vmax = None
+            vmin, vmax = _get_value_limits(self.array, value_limits=[vmin, vmax])
 
         extent = flatten_list_of_lists(
             _get_coordinate_limits(self._coordinate_axes, shape=shape)

@@ -23,7 +23,7 @@ from abtem.core.energy import (
 )
 from abtem.core.fft import fft_crop
 from abtem.core.grid import HasGridMixin, polar_spatial_frequencies, Grid
-from abtem.core.utils import expand_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.distributions import (
     BaseDistribution,
     _unpack_distributions,
@@ -257,7 +257,7 @@ def soft_aperture(
     """
     xp = get_array_module(alpha)
 
-    semiangle_cutoff = xp.array(semiangle_cutoff, dtype=xp.float32)
+    semiangle_cutoff = xp.array(semiangle_cutoff, dtype=get_dtype(complex=False))
 
     base_ndims = len(alpha.shape)
 
@@ -266,7 +266,7 @@ def soft_aperture(
         semiangle_cutoff, phi, match_dims=[(-2, -1), (-2, -1)]
     )
 
-    angular_sampling = xp.array(angular_sampling, dtype=xp.float32) * 1e-3
+    angular_sampling = xp.array(angular_sampling, dtype=get_dtype(complex=False)) * 1e-3
 
     denominator = xp.sqrt(
         (xp.cos(phi) * angular_sampling[0]) ** 2
@@ -304,7 +304,7 @@ def hard_aperture(alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution)
     hard_aperture_array : 2D or 3D np.ndarray
     """
     xp = get_array_module(alpha)
-    return xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
+    return xp.array(alpha <= semiangle_cutoff).astype(get_dtype(complex=False))
 
 
 class Aperture(BaseAperture):
@@ -611,10 +611,10 @@ class Zernike(BaseAperture):
         center_hole_cutoff = self.center_hole_cutoff / 1e3
         phase_shift = self.phase_shift
 
-        amplitude = xp.asarray(alpha < semiangle_cutoff, dtype=np.float32)
+        amplitude = xp.asarray(alpha < semiangle_cutoff, dtype=get_dtype(complex=False))
         phase_array = xp.asarray(
             xp.logical_and(alpha > center_hole_cutoff, alpha < semiangle_cutoff),
-            dtype=np.float32,
+            dtype=get_dtype(complex=False),
         )
         phase = xp.exp(1.0j * phase_shift * phase_array)
         array = amplitude * phase
@@ -687,7 +687,7 @@ class TemporalEnvelope(BaseTransferFunction):
 
         array = xp.exp(
             -((0.5 * xp.pi / self.wavelength * focal_spread * alpha**2) ** 2)
-        ).astype(xp.float32)
+        ).astype(get_dtype(complex=False))
 
         return array
 
@@ -1207,7 +1207,9 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         xp = get_array_module(alpha)
 
         if not self._has_aberrations:
-            return xp.ones(self.ensemble_shape + alpha.shape, dtype=xp.complex64)
+            return xp.ones(
+                self.ensemble_shape + alpha.shape, dtype=get_dtype(complex=True)
+            )
 
         parameters, weights = _unpack_distributions(
             *tuple(self.aberration_coefficients.values()), shape=alpha.shape, xp=xp
@@ -1217,9 +1219,9 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
 
         axis = tuple(range(0, len(self.ensemble_shape)))
         alpha = xp.expand_dims(alpha, axis=axis)
-        phi = xp.expand_dims(phi, axis=axis).astype(xp.float32)
+        phi = xp.expand_dims(phi, axis=axis).astype(get_dtype(complex=False))
 
-        array = xp.zeros(alpha.shape, dtype=np.float32)
+        array = xp.zeros(alpha.shape, dtype=get_dtype(complex=False))
         if self._nonzero_coefficients(("C10", "C12", "phi12")):
             array = array + (
                 1
@@ -1281,14 +1283,15 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
                 )
             )
 
-        array *= np.float32(2 * xp.pi / self.wavelength)
+        dtype = get_dtype(complex=False)
+        array *= dtype(2 * xp.pi / self.wavelength)
         array = complex_exponential(-array)
 
         if cp is not None:
             weights = cp.asnumpy(weights)
 
         if weights is not None:
-            array = xp.asarray(weights, dtype=xp.float32) * array
+            array = xp.asarray(weights, dtype=dtype) * array
 
         return array
 
@@ -1605,7 +1608,7 @@ class CTF(_HasAberrations, BaseAperture):
         self.accelerator.check_is_defined()
 
         sampling = max_angle / (gpts - 1) / (self.wavelength * 1e3)
-        alpha = np.linspace(0, max_angle * 1e-3, gpts).astype(np.float32)
+        alpha = np.linspace(0, max_angle * 1e-3, gpts).astype(get_dtype(complex=False))
 
         components = dict()
 

@@ -7,7 +7,7 @@ import numpy as np
 
 from abtem.core import config
 from abtem.core.backend import get_array_module, xp_to_str
-from abtem.core.utils import CopyMixin, EqualityMixin
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 
 
 def validate_gpts(gpts):
@@ -71,7 +71,6 @@ class Grid(CopyMixin, EqualityMixin):
         lock_gpts: bool = False,
         lock_sampling: bool = False,
     ):
-
         self._dimensions = dimensions
 
         if isinstance(endpoint, bool):
@@ -382,7 +381,9 @@ class HasGridMixin:
         self.grid.sampling = sampling
 
     @property
-    def reciprocal_space_sampling(self) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
+    def reciprocal_space_sampling(
+        self,
+    ) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
         """Reciprocal-space sampling in reciprocal Ångstrom."""
         return self.grid.reciprocal_space_sampling
 
@@ -393,7 +394,10 @@ class HasGridMixin:
 
 
 def spatial_frequencies(
-    gpts: tuple[int, ...], sampling: tuple[float, ...], return_grid: bool = False, xp=np, dtype=np.float32
+    gpts: tuple[int, ...],
+    sampling: tuple[float, ...],
+    return_grid: bool = False,
+    xp=np,
 ):
     """
     Calculate spatial frequencies of a grid.
@@ -410,6 +414,7 @@ def spatial_frequencies(
     tuple of arrays
     """
 
+    dtype = get_dtype(complex=False)
     xp = get_array_module(xp)
 
     out = ()
@@ -423,10 +428,10 @@ def spatial_frequencies(
 
 
 def polar_spatial_frequencies(
-    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np, dtype=np.float32
+    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np
 ) -> tuple[np.ndarray, np.ndarray]:
     xp = get_array_module(xp)
-    kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp), dtype=dtype)
+    kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
     phi = xp.arctan2(ky[None], kx[:, None])
     return k, phi

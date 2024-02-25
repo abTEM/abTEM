@@ -2,19 +2,19 @@ import warnings
 from numbers import Number
 
 import numpy as np
-import pandas as pd
-import scipy
 
 from abtem import PotentialArray, Waves
 from abtem.bloch.matrix_exponential import expm
 from abtem.core.axes import ThicknessAxis
-from abtem.core.backend import get_array_module, cp
+from abtem.core.backend import get_array_module
 from abtem.core.chunks import equal_sized_chunks
 from abtem.core.constants import kappa
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft_interpolate, ifftn
 from abtem.core.grid import Grid
+from abtem.core.utils import get_dtype
 from abtem.parametrizations import validate_parametrization
+from abtem.core.backend import validate_device
 
 
 def _F_reflection_conditions(hkl):
@@ -69,17 +69,17 @@ class StructureFactors:
         k_max,
         parametrization="lobato",
         thermal_sigma=None,
-        spherical_cutoff: bool = True,
-        device: str = "cpu",
+        cutoff: str = "taper",
+        device: str = None,
     ):
         self._atoms = atoms
         self._thermal_sigma = thermal_sigma
         self._k_max = k_max
         self._hkl = self._make_hkl_grid()
         self._g_vec = self._hkl @ self._atoms.cell.reciprocal()
-        self._spherical_cutoff = spherical_cutoff
+        self._cutoff = cutoff
         self._parametrization = validate_parametrization(parametrization)
-        self._device = device
+        self._device = validate_device(device)
 
     def __len__(self):
         return len(self._hkl)
@@ -137,7 +137,20 @@ class StructureFactors:
         Z_unique, Z_inverse = np.unique(self.atoms.numbers, return_inverse=True)
         g_unique, g_inverse = np.unique(self.g_vec_length, return_inverse=True)
 
-        f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=np.complex128)
+        f_e_uniq = np.zeros(
+            (Z_unique.size, g_unique.size), dtype=get_dtype(complex=True)
+        )
+
+        if self._cutoff == "taper":
+            T = 0.005
+            alpha = 1 - 0.025
+            cutoff = 1 / (1 + np.exp((g_unique / self.k_max - alpha) / T))
+        elif self._cutoff == "sharp":
+            cutoff = g_unique > self.k_max
+        elif self._cutoff == "none":
+            cutoff = 1.0
+        else:
+            raise RuntimeError()
 
         for idx, Z in enumerate(Z_unique):
             if self._thermal_sigma is not None:
@@ -151,7 +164,7 @@ class StructureFactors:
 
             f_e_uniq[idx, :] = scattering_factor(g_unique**2) * DWF
 
-            # f_e_uniq[idx, g_unique > self.k_max] = 0.0
+            f_e_uniq[idx, :] *= cutoff
 
         return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
 
@@ -162,9 +175,9 @@ class StructureFactors:
 
         xp = get_array_module(self._device)
 
-        f_e = xp.asarray(f_e)
-        positions = xp.asarray(positions)
-        hkl = xp.asarray(self.hkl.T)
+        f_e = xp.asarray(f_e, dtype=get_dtype(complex=True))
+        positions = xp.asarray(positions, dtype=get_dtype(complex=False))
+        hkl = xp.asarray(self.hkl.T, get_dtype(complex=False))
 
         struct_factors = xp.sum(
             f_e * xp.exp(-2.0j * np.pi * positions[:] @ hkl),
@@ -192,7 +205,7 @@ class StructureFactors:
         # v = v * self.atoms.cell.volume / (kappa * np.prod(sampling))
         # v -= v.min()
 
-        potential = np.fft.ifftn(array)
+        potential = ifftn(array)
         potential = potential * np.prod(potential.shape) / kappa
         potential -= potential.min()
 
@@ -276,9 +289,13 @@ def calculate_M_matrix(hkl, cell, energy):
 
 
 def calculate_A_matrix(hkl, cell, energy, structure_factor):
-    g = hkl @ cell.reciprocal()
+    xp = get_array_module(structure_factor)
+
+    g = xp.asarray(hkl @ cell.reciprocal())
+    Mii = calculate_M_matrix(hkl, cell, energy)
+    hkl = xp.asarray(hkl)
+
     gmh = hkl[None] - hkl[:, None]
-    structure_factor = structure_factor.copy()
 
     A = (
         structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]]
@@ -288,13 +305,14 @@ def calculate_A_matrix(hkl, cell, energy, structure_factor):
         / np.pi
     )
 
-    Mii = calculate_M_matrix(hkl, cell, energy)
+    Mii = xp.asarray(Mii)
     A *= Mii[None] * Mii[:, None]
 
-    diag = 2 * 1 / energy2wavelength(energy) * excitation_errors(g, energy)
+    sg = xp.asarray(excitation_errors(g, energy))
+    diag = 2 * 1 / energy2wavelength(energy) * sg
     diag *= Mii
 
-    np.fill_diagonal(A, diag)
+    xp.fill_diagonal(A, diag)
     return A
 
 
@@ -318,7 +336,7 @@ class BlochWaves:
         sg_max: float,
         k_max: float = None,
         centering: str = "P",
-        device: str = "cpu",
+        device: str = None,
     ):
         self._structure_factor = structure_factor
         self._energy = energy
@@ -329,8 +347,7 @@ class BlochWaves:
             warnings.warn(
                 "provided k_max exceed half the k_max of the scattering factors, some couplings are not included"
             )
-
-        self._device = device
+        self._device = validate_device(device)
 
         self._hkl_mask = filter_vectors(
             hkl=structure_factor.hkl,

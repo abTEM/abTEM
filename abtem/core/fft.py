@@ -10,6 +10,7 @@ from abtem.core.grid import spatial_frequencies
 from threadpoolctl import threadpool_limits
 import warnings
 
+from abtem.core.utils import get_dtype
 
 try:
     import pyfftw
@@ -356,7 +357,8 @@ def fft_interpolate(
     old_size = np.prod(array.shape[-len(new_shape) :])
 
     is_complex = np.iscomplexobj(array)
-    array = array.astype(xp.complex64)
+
+    array = array.astype(get_dtype(complex=True))
 
     if len(new_shape) == 2:
         array = fft2(array, overwrite_x=overwrite_x)
@@ -368,13 +370,9 @@ def fft_interpolate(
         else:
             axes = tuple(range(len(array.shape)))
 
-        print(axes)
-
-        array = ifftn(
-            fft_crop(fftn(array, axes=axes), new_shape),
-            overwrite_x=overwrite_x,
-            axes=axes,
-        )
+        array = fftn(array, overwrite_x=overwrite_x, axes=axes)
+        array = fft_crop(array, new_shape)
+        array = ifftn(array, overwrite_x=overwrite_x, axes=axes)
 
     if not is_complex:
         array = array.real
