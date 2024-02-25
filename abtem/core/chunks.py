@@ -70,7 +70,7 @@ def validate_chunks(
 
     if len(shape) == 1 and len(chunks) != len(shape):
         assert sum(chunks) == shape[0]
-        return chunks,
+        return (chunks,)
 
     validated_chunks = ()
     for s, c in zip(shape, chunks):
@@ -195,7 +195,9 @@ def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = Non
         num_chunks = (num_items + (-num_items % chunks)) // chunks
 
     if num_items < num_chunks:
-        raise RuntimeError("num_chunks may not be larger than num_items")
+        raise RuntimeError(
+            f"num_chunks ({num_chunks}) may not be larger than num_items ({num_items})"
+        )
 
     elif num_items % num_chunks == 0:
         return tuple([num_items // num_chunks] * num_chunks)

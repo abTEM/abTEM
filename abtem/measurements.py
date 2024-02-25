@@ -44,7 +44,7 @@ from abtem.core.grid import (
     spatial_frequencies,
 )
 from abtem.core.units import _get_conversion_factor, _validate_units
-from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
+from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index, normalize_axes
 from abtem.distributions import BaseDistribution
 from abtem.indexing import (  # _format_miller_indices,
     index_diffraction_spots,
@@ -540,6 +540,13 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             _tex_label=None,
         )
 
+    def to_measurement_ensemble(self):
+        return MeasurementsEnsemble(
+            array=self.array,
+            ensemble_axes_metadata=self.axes_metadata,
+            metadata=self.metadata,
+        )
+
     @abstractmethod
     def show(self, *args, **kwargs):
         """Documented in subclasses"""
@@ -577,28 +584,99 @@ class MeasurementsEnsemble(BaseMeasurements):
 
     def show(
         self,
+        display_axes=(-2, -1),
         ax: Axes = None,
-        common_scale: bool = True,
+        cbar: bool = False,
+        cmap: str = None,
+        vmin: float = None,
+        vmax: float = None,
+        power: float = 1.0,
+        common_color_scale: bool = False,
         explode: bool | Sequence[int] = None,
         overlay: bool | Sequence[int] = None,
         figsize: tuple[int, int] = None,
-        title: str = None,
+        title: bool | str = True,
         units: str = None,
-        legend: bool = False,
         interact: bool = False,
         display: bool = True,
         **kwargs,
-    ):
-        # if not interact:
-        #     self.compute()
+    ) -> VisualizationImshow:
+        """
+        Show the image(s) using matplotlib.
 
-        visualization = VisualizationLines(
-            array=self.array,
-            coordinate_axes=self.ensemble_axes_metadata[-1:],
-            scale_axis=self._scale_axis_from_metadata(),
-            ensemble_axes=self.ensemble_axes_metadata[:-1],
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            If given the plots are added to the axis. This is not available for exploded plots.
+        cbar : bool, optional
+            Add colorbar(s) to the image(s). The size and padding of the colorbars may be adjusted using the
+            `set_cbar_size` and `set_cbar_padding` methods.
+        cmap : str, optional
+            Matplotlib colormap name used to map scalar data to colors. If the measurement is complex the colormap
+            must be one of 'hsv' or 'hsluv'.
+        vmin : float, optional
+            Minimum of the intensity color scale. Default is the minimum of the array values.
+        vmax : float, optional
+            Maximum of the intensity color scale. Default is the maximum of the array values.
+        power : float
+            Show image on a power scale.
+        common_color_scale : bool, optional
+            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
+            it is requested). Default is False.
+        explode : bool, optional
+            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
+            ensemble item is shown. May be given as a sequence of axis indices to create a grid of images from
+            the specified axes. The default is determined by the axis metadata.
+        figsize : two int, optional
+            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+        title : bool or str, optional
+            Set the column title of the images. If True is given instead of a string the title will be given by the
+            value corresponding to the "name" key of the axes metadata dictionary, if this item exists.
+        units : str
+            The units used for the x and y axes. The given units must be compatible with the axes of the images.
+        interact : bool
+            If True, create an interactive visualization. This requires enabling the ipympl Matplotlib backend.
+        display : bool, optional
+            If True (default) the figure is displayed immediately.
+
+        Returns
+        -------
+        measurement_visualization_2d : VisualizationImshow
+        """
+
+        if not interact:
+            self.compute()
+
+        scale_axis = self._scale_axis_from_metadata()
+
+        # base_axes_metadata = self._plot_base_axes_metadata(units)
+
+        array = self.array
+
+        if display_axes != (-2, -1):
+            array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
+
+        display_axes = normalize_axes(display_axes, self.shape)
+
+        base_axes_metadata = [self.axes_metadata[i] for i in display_axes]
+        ensemble_axes_metadata = [
+            self.axes_metadata[i]
+            for i in range(len(self.shape))
+            if i not in display_axes
+        ]
+
+        visualization = VisualizationImshow(
+            array=array,
+            coordinate_axes=base_axes_metadata,
+            scale_axis=scale_axis,
+            ensemble_axes=ensemble_axes_metadata,
             ax=ax,
-            common_scale=common_scale,
+            cbar=cbar,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            power=power,
+            common_scale=common_color_scale,
             explode=explode,
             overlay=overlay,
             figsize=figsize,
@@ -616,6 +694,48 @@ class MeasurementsEnsemble(BaseMeasurements):
             ipython_display(visualization.layout_widgets())
 
         return visualization
+
+    # def show(
+    #     self,
+    #     ax: Axes = None,
+    #     common_scale: bool = True,
+    #     explode: bool | Sequence[int] = None,
+    #     overlay: bool | Sequence[int] = None,
+    #     figsize: tuple[int, int] = None,
+    #     title: str = None,
+    #     units: str = None,
+    #     legend: bool = False,
+    #     interact: bool = False,
+    #     display: bool = True,
+    #     **kwargs,
+    # ):
+    #     # if not interact:
+    #     #     self.compute()
+    #
+    #     visualization = VisualizationLines(
+    #         array=self.array,
+    #         coordinate_axes=self.ensemble_axes_metadata[-1:],
+    #         scale_axis=self._scale_axis_from_metadata(),
+    #         ensemble_axes=self.ensemble_axes_metadata[:-1],
+    #         ax=ax,
+    #         common_scale=common_scale,
+    #         explode=explode,
+    #         overlay=overlay,
+    #         figsize=figsize,
+    #         interact=interact,
+    #         title=title,
+    #         **kwargs,
+    #     )
+    #
+    #     if not display and not interact:
+    #         plt.close()
+    #
+    #     if interact and display:
+    #         from IPython.display import display as ipython_display
+    #
+    #         ipython_display(visualization.layout_widgets())
+    #
+    #     return visualization
 
 
 class _BaseMeasurement2D(BaseMeasurements):
@@ -3098,40 +3218,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
                     _tex_label="$k_y$",
                 ),
             ]
-
-    def _plot_extent_x(self, units: str = None):
-        if units is None:
-            units = "1/Å"
-
-        if units == "mrad":
-            return list(self.angular_limits[0])
-        elif units == "1/Å":
-            return [
-                self.limits[0][0] - self.sampling[0] / 2,
-                self.limits[0][1] + self.sampling[0] / 2,
-            ]
-
-        elif units == "bins":
-            return _bin_extent(self.base_shape[0])
-        else:
-            raise RuntimeError()
-
-    def _plot_extent_y(self, units: str = None):
-        if units is None:
-            units = "1/Å"
-
-        if units == "mrad":
-            return list(self.angular_limits[1])
-        elif units == "1/Å":
-            return [
-                self.limits[1][0] - self.sampling[1] / 2,
-                self.limits[1][1] + self.sampling[1] / 2,
-            ]
-
-        elif units == "bins":
-            return _bin_extent(self.base_shape[1])
-        else:
-            raise RuntimeError()
 
 
 class PolarMeasurements(BaseMeasurements):

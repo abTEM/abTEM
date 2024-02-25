@@ -24,7 +24,7 @@ from scipy import spatial
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
-from abtem.core.axes import ScaleAxis
+from abtem.core.axes import ScaleAxis, LinearAxis, NonLinearAxis
 from abtem.core.backend import get_array_module
 from abtem.core.colors import hsluv_cmap
 from abtem.core.utils import label_to_index, flatten_list_of_lists
@@ -105,21 +105,30 @@ def _get_axes_titles(axes_metadata, axes_types, axes_shape):
     return titles_product
 
 
-def _get_coordinate_limits(axes_metadata: list[AxisMetadata], shape, margin=None):
-    # shape = self._array.shape[-self._num_coordinate_dims :]
+def _get_coordinate_limits(axes_metadata: list[AxisMetadata], shape=None, margin=None):
+    if shape is None:
+        shape = (None,) * len(axes_metadata)
+
     limits = []
     for axis, n in zip(axes_metadata, shape):
-        coordinates = axis.coordinates(n)
+        if isinstance(axis, LinearAxis):
+            if n is None:
+                raise RuntimeError()
 
-        min_limit = coordinates[0] - axis.sampling / 2
-        max_limit = coordinates[-1] + axis.sampling / 2
+            coordinates = axis.coordinates(n)
 
-        if margin:
-            margin = (max_limit - min_limit) * margin
-            min_limit -= margin
-            max_limit += margin
+            min_limit = coordinates[0] - axis.sampling / 2
+            max_limit = coordinates[-1] + axis.sampling / 2
 
-        limits.append([min_limit, max_limit])
+            if margin:
+                margin = (max_limit - min_limit) * margin
+                min_limit -= margin
+                max_limit += margin
+
+            limits.append([min_limit, max_limit])
+        elif isinstance(axis, NonLinearAxis):
+            limits.append([min(axis.values), max(axis.values)])
+
     return limits
 
 
@@ -848,17 +857,22 @@ class ImageArtist(Artist2D):
         extent=None,
         power: float = 1.0,
         logscale: bool = False,
+        **kwargs,
     ):
         norm = _get_norm(vmin, vmax, power, logscale)
 
         super().__init__(ax, norm)
 
+        interpolation = kwargs.pop("interpolation", "none")
+        origin = kwargs.pop("origin", "lower")
+
         self._image = ax.imshow(
             data.T,
-            origin="lower",
-            interpolation="none",
+            origin=origin,
             cmap=cmap,
             extent=extent,
+            interpolation=interpolation,
+            **kwargs,
         )
 
         self._image.set_norm(norm)
@@ -1443,6 +1457,7 @@ class VisualizationImshow(BaseVisualization2D):
         figsize: tuple[float, float] = None,
         title: str | bool = True,
         interact: bool = False,
+        **kwargs,
     ):
         if common_scale is True:
             vmin, vmax = _get_value_limits(array, value_limits=[vmin, vmax])
@@ -1465,6 +1480,8 @@ class VisualizationImshow(BaseVisualization2D):
             figsize=figsize,
             title=title,
         )
+        shape = self.array.shape[-2:]
+        xlim, ylim = _get_coordinate_limits(coordinate_axes, shape=shape)
 
         self.set_artists(
             value_limits=[vmin, vmax],
@@ -1472,13 +1489,12 @@ class VisualizationImshow(BaseVisualization2D):
             logscale=logscale,
             common_scale=common_scale,
             cbar=cbar,
+            cmap=cmap,
+            **kwargs,
         )
 
-        shape = self.array.shape[-2:]
-        xlim, ylim = _get_coordinate_limits(coordinate_axes, shape=shape)
-
-        self.set_xlim(xlim)
-        self.set_ylim(ylim)
+        # self.set_xlim(xlim)
+        # self.set_ylim(ylim)
 
     def set_artists(
         self,
@@ -1488,6 +1504,7 @@ class VisualizationImshow(BaseVisualization2D):
         logscale: bool = False,
         cmap: str = None,
         cbar: bool = False,
+        **kwargs,
     ):
         self.remove_artists()
 
@@ -1502,6 +1519,10 @@ class VisualizationImshow(BaseVisualization2D):
         extent = flatten_list_of_lists(
             _get_coordinate_limits(self._coordinate_axes, shape=shape)
         )
+
+        if kwargs.get("origin", None) == "upper":
+            extent = extent[:2] + extent[2:][::-1]
+
         artists = np.zeros(self.axes.shape, dtype=object)
 
         for i in np.ndindex(self.axes.shape):
@@ -1531,6 +1552,7 @@ class VisualizationImshow(BaseVisualization2D):
                     extent=extent,
                     power=power,
                     logscale=logscale,
+                    **kwargs,
                 )
 
             artists.itemset(i, artist)
@@ -1594,8 +1616,7 @@ class VisualizationScatter(BaseVisualization2D):
             annotation_threshold=annotation_threshold,
         )
 
-        xlim = (min(coordinate_axes[0].values), max(coordinate_axes[0].values))
-        ylim = (min(coordinate_axes[1].values), max(coordinate_axes[1].values))
+        xlim, ylim = _get_coordinate_limits(coordinate_axes, None)
 
         self.set_xlim(xlim)
         self.set_ylim(ylim)

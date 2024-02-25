@@ -121,9 +121,27 @@ def insert_empty_axis(match_axis1, match_axis2):
             break
 
 
-def normalize_axes(dims, shape: tuple[int, ...]):
-    num_dims = len(shape)
-    return tuple(dim if dim >= 0 else num_dims + dim for dim in dims)
+def normalize_axes(axes, shape):
+    """
+    Normalize the axes tuple so that all axes are non-negative.
+
+    Parameters:
+    - shape: The shape of the numpy array (as returned by np.shape())
+    - axes: A tuple or integer representing the axes. Can contain negative indices.
+
+    Returns:
+    - A tuple with normalized axes.
+    """
+    ndim = len(shape)
+
+    # Ensure that 'axes' is a tuple
+    if not isinstance(axes, tuple):
+        axes = (axes,)
+
+    # Normalize negative indices
+    normalized_axes = tuple(axis if axis >= 0 else axis + ndim for axis in axes)
+
+    return normalized_axes
 
 
 def _get_dims_to_broadcast(
