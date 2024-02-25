@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import scipy.ndimage
-import sympy
 from numba import stencil, njit
 
 from abtem.core.backend import get_array_module
@@ -16,30 +15,126 @@ if TYPE_CHECKING:
     from abtem.waves import Waves
     from abtem.potentials.iam import PotentialArray
 
+fd_coefficients = {
+    2: [1.0, -2.0, 1.0],
+    4: [
+        -0.08333333333333333,
+        1.3333333333333333,
+        -2.5,
+        1.3333333333333333,
+        -0.08333333333333333,
+    ],
+    6: [
+        0.011111111111111112,
+        -0.15,
+        1.5,
+        -2.7222222222222223,
+        1.5,
+        -0.15,
+        0.011111111111111112,
+    ],
+    8: [
+        -0.0017857142857142857,
+        0.025396825396825397,
+        -0.2,
+        1.6,
+        -2.8472222222222223,
+        1.6,
+        -0.2,
+        0.025396825396825397,
+        -0.0017857142857142857,
+    ],
+    10: [
+        0.00031746031746031746,
+        -0.00496031746031746,
+        0.03968253968253968,
+        -0.23809523809523808,
+        1.6666666666666667,
+        -2.9272222222222224,
+        1.6666666666666667,
+        -0.23809523809523808,
+        0.03968253968253968,
+        -0.00496031746031746,
+        0.00031746031746031746,
+    ],
+    12: [
+        -6.012506012506013e-05,
+        0.001038961038961039,
+        -0.008928571428571428,
+        0.05291005291005291,
+        -0.26785714285714285,
+        1.7142857142857142,
+        -2.9827777777777778,
+        1.7142857142857142,
+        -0.26785714285714285,
+        0.05291005291005291,
+        -0.008928571428571428,
+        0.001038961038961039,
+        -6.012506012506013e-05,
+    ],
+    14: [
+        1.1892869035726179e-05,
+        -0.00022662522662522663,
+        0.0021212121212121214,
+        -0.013257575757575758,
+        0.06481481481481481,
+        -0.2916666666666667,
+        1.75,
+        -3.02359410430839,
+        1.75,
+        -0.2916666666666667,
+        0.06481481481481481,
+        -0.013257575757575758,
+        0.0021212121212121214,
+        -0.00022662522662522663,
+        1.1892869035726179e-05,
+    ],
+    16: [
+        -2.428127428127428e-06,
+        5.074290788576503e-05,
+        -0.000518000518000518,
+        0.003480963480963481,
+        -0.017676767676767676,
+        0.07542087542087542,
+        -0.3111111111111111,
+        1.7777777777777777,
+        -3.05484410430839,
+        1.7777777777777777,
+        -0.3111111111111111,
+        0.07542087542087542,
+        -0.017676767676767676,
+        0.003480963480963481,
+        -0.000518000518000518,
+        5.074290788576503e-05,
+        -2.428127428127428e-06,
+    ],
+    18: [
+        5.078436450985471e-07,
+        -1.1569313039901276e-05,
+        0.00012844298558584272,
+        -0.0009324009324009324,
+        0.005034965034965035,
+        -0.022027972027972027,
+        0.08484848484848485,
+        -0.32727272727272727,
+        1.8,
+        -3.0795354623330815,
+        1.8,
+        -0.32727272727272727,
+        0.08484848484848485,
+        -0.022027972027972027,
+        0.005034965034965035,
+        -0.0009324009324009324,
+        0.00012844298558584272,
+        -1.1569313039901276e-05,
+        5.078436450985471e-07,
+    ],
+}
 
-# def _get_central_offsets(derivative, accuracy):
-#     assert accuracy % 2 == 0
-#     num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
-#     num_side = num_central // 2
-#     offsets = list(range(-num_side, num_side + 1))
-#     return offsets
-#
-#
-# def _build_matrix(offsets):
-#     A = [([1 for _ in offsets])]
-#     for i in range(1, len(offsets)):
-#         A.append([j**i for j in offsets])
-#
-#     return np.array(A, dtype=float)
-#
-#
-# def _build_rhs(offsets, derivative):
-#     b = [0 for _ in offsets]
-#     b[derivative] = math.factorial(derivative)
-#     return np.array(b, dtype=float)
 
+def _build_matrix(offsets: list[int]):
+    import sympy
 
-def _build_matrix(offsets: list[int]) -> sympy.Matrix:
     """Constructs the equation system matrix for the finite difference coefficients"""
     A = [([1 for _ in offsets])]
     for i in range(1, len(offsets)):
@@ -47,19 +142,17 @@ def _build_matrix(offsets: list[int]) -> sympy.Matrix:
     return sympy.Matrix(A)
 
 
-def _build_rhs(offsets: list[int], deriv: int) -> sympy.Matrix:
+def _build_rhs(offsets: list[int], deriv: int):
+    import sympy
+
     """The right hand side of the equation system matrix"""
     b = [0 for _ in offsets]
     b[deriv] = math.factorial(deriv)
     return sympy.Matrix(b)
 
 
-def finite_difference_coefficients(derivative: int, accuracy: int = 2) -> np.ndarray:
-    if accuracy % 2 == 1 or accuracy <= 0:
-        raise ValueError("accuracy order must be a positive even integer")
-
-    if derivative < 0:
-        raise ValueError("derivative degree must be a positive integer")
+def _calculate_finite_difference_coefficient(derivative: int, accuracy: int = 2):
+    import sympy
 
     num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
     num_side = num_central // 2
@@ -72,12 +165,17 @@ def finite_difference_coefficients(derivative: int, accuracy: int = 2) -> np.nda
     return coefs
 
 
-# def _finite_difference_coefficients(derivative, accuracy):
-#     offsets = _get_central_offsets(derivative, accuracy)
-#     A = _build_matrix(offsets)
-#     b = _build_rhs(offsets, derivative)
-#     coefs = np.linalg.solve(A, b)
-#     return coefs
+def finite_difference_coefficients(derivative: int, accuracy: int = 2):
+    if accuracy % 2 == 1 or accuracy <= 0:
+        raise ValueError("accuracy order must be a positive even integer")
+
+    if derivative < 0:
+        raise ValueError("derivative degree must be a positive integer")
+
+    if accuracy <= 18:
+        return np.array(fd_coefficients[accuracy])
+
+    return _calculate_finite_difference_coefficient(derivative, accuracy)
 
 
 def _laplace_stencil_array(accuracy):

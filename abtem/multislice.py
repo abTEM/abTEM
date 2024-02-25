@@ -34,8 +34,8 @@ from abtem.potentials.iam import (
     PotentialArray,
     _validate_potential,
 )
-from abtem.laplacian import LaplaceOperator
-from abtem.laplacian import multislice_step as realspace_multislice_step
+from abtem.finite_difference import LaplaceOperator
+from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
