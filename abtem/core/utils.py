@@ -237,7 +237,7 @@ def get_data_path(file):
 
 
 def get_dtype(complex):
-    dtype = config.get("precission")
+    dtype = config.get("precision")
 
     if dtype == "float32" and complex:
         return np.complex64

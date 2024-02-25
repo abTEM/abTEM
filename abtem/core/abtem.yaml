@@ -1,6 +1,6 @@
 device: cpu
 fft: fftw
-precission: float64
+precision: float64
 local_diagnostics:
   progress_bar: true
   task_level_progress: false
