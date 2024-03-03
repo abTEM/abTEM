@@ -3,18 +3,23 @@ from numbers import Number
 
 import numpy as np
 
-from abtem import PotentialArray, Waves
-from abtem.bloch.matrix_exponential import expm
+from abtem import PotentialArray, Waves, IndexedDiffractionPatterns
 from abtem.core.axes import ThicknessAxis
 from abtem.core.backend import get_array_module
+from abtem.core.backend import validate_device
 from abtem.core.chunks import equal_sized_chunks
+from abtem.core.complex import abs2
 from abtem.core.constants import kappa
 from abtem.core.energy import energy2sigma, energy2wavelength
-from abtem.core.fft import fft_interpolate, ifftn
+from abtem.core.fft import fft_interpolate
 from abtem.core.grid import Grid
 from abtem.core.utils import get_dtype
 from abtem.parametrizations import validate_parametrization
-from abtem.core.backend import validate_device
+from scipy.linalg import expm as expm_scipy
+from abtem.core.backend import cp
+
+if cp is not None:
+    from abtem.bloch.matrix_exponential import expm as expm_cupy
 
 
 def _F_reflection_conditions(hkl):
@@ -69,7 +74,7 @@ class StructureFactors:
         k_max,
         parametrization="lobato",
         thermal_sigma=None,
-        cutoff: str = "taper",
+        cutoff: str = "none",
         device: str = None,
     ):
         self._atoms = atoms
@@ -205,7 +210,11 @@ class StructureFactors:
         # v = v * self.atoms.cell.volume / (kappa * np.prod(sampling))
         # v -= v.min()
 
-        potential = ifftn(array)
+        xp = get_array_module(array)
+
+        potential = xp.fft.ifftn(array)
+
+        # potential = np.fft.ifftn(array)
         potential = potential * np.prod(potential.shape) / kappa
         potential -= potential.min()
 
@@ -316,8 +325,17 @@ def calculate_A_matrix(hkl, cell, energy, structure_factor):
     return A
 
 
+def expm(a):
+    xp = get_array_module(a)
+    if xp == cp:
+        return expm_cupy(a)
+    else:
+        return expm_scipy(a)
+
+
 def calculate_scattering_matrix(A, hkl, cell, z, energy):
     xp = get_array_module(A)
+
     S = expm(1.0j * xp.pi * z * A * energy2wavelength(energy))
 
     Mii = calculate_M_matrix(hkl, cell, energy)
@@ -349,6 +367,8 @@ class BlochWaves:
             )
         self._device = validate_device(device)
 
+        self._sg_max = sg_max
+
         self._hkl_mask = filter_vectors(
             hkl=structure_factor.hkl,
             cell=structure_factor.atoms.cell,
@@ -361,6 +381,14 @@ class BlochWaves:
     @property
     def hkl_mask(self):
         return self._hkl_mask
+
+    @property
+    def hkl(self):
+        return self.structure_factor.hkl[self.hkl_mask]
+
+    @property
+    def g_vec(self):
+        return self.structure_factor.g_vec[self.hkl_mask]
 
     @property
     def structure_factor(self):
@@ -380,12 +408,30 @@ class BlochWaves:
 
     def excitation_errors(self):
         g = self.structure_factor.g_vec[self.hkl_mask]
-        return excitation_errors(g, self.wavelength)
+        return excitation_errors(g, self.energy)
 
     @property
     def structure_matrix_nbytes(self):
         bytes_per_element = 128 // 8
         return self.num_beams**2 * bytes_per_element
+
+    def get_kinematical_diffraction_pattern(self, excitation_error_sigma: float = None):
+        hkl = self.hkl
+        g_vec = self.g_vec
+
+        S = self.structure_factor.calculate().flatten()[self.hkl_mask]
+        sg = self.excitation_errors()
+
+        S = abs2(S)
+
+        if excitation_error_sigma is None:
+            excitation_error_sigma = self._sg_max / 3
+
+        intensity = S * np.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
+
+        return IndexedDiffractionPatterns(
+            miller_indices=hkl, array=intensity, positions=g_vec
+        )
 
     def calculate_structure_matrix(self):
         hkl = self.structure_factor.hkl[self.hkl_mask]
@@ -412,22 +458,50 @@ class BlochWaves:
         )
         return S
 
-    def calculate_exit_wave(self, thickness, n_steps, shape):
+    def calculate_diffraction_patterns(self, thicknesses, return_complex: bool = False):
         hkl = self.structure_factor.hkl[self.hkl_mask]
         cell = self.structure_factor.atoms.cell
-        dz = thickness / n_steps
+        A = self.calculate_structure_matrix()
+
+        xp = get_array_module(A)
+
+        Mii = xp.asarray(calculate_M_matrix(hkl, cell, self.energy))
+
+        v, C = xp.linalg.eigh(A)
+        gamma = v * self.wavelength / 2.0
+        C /= Mii
+        C_inv = xp.conjugate(C.T)
+
+        initial = np.all(hkl == 0, axis=1).astype(complex)
+        initial = xp.asarray(initial)
+
+        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
+        array[0] = initial
+
+        for i, thickness in enumerate(thicknesses):
+            array[i] = C @ (
+                xp.exp(2.0j * xp.pi * thickness * gamma) * (C_inv @ initial)
+            )
+
+        if not return_complex:
+            array = abs2(array)
+
+        ensemble_axes_metadata = [
+            ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
+        ]
+
+        g_vec = np.tile(self.g_vec[None], (len(thicknesses), 1, 1))
+
+        return IndexedDiffractionPatterns(
+            miller_indices=hkl,
+            array=array,
+            positions=g_vec,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+        )
+
+    def calculate_exit_wave(self, thickness, n_steps, shape):
+        cell = self.structure_factor.atoms.cell
         thicknesses = np.linspace(0, thickness, num=n_steps)
-        S = self.calculate_scattering_matrix(dz)
-        xp = get_array_module(S)
-
-        psi_all = xp.zeros(shape=(n_steps, len(hkl)), dtype=complex)
-        psi = (hkl == 0).all(axis=1).astype(complex)
-
-        psi = xp.asarray(psi)
-
-        for i in range(n_steps):
-            psi = xp.dot(S, psi)
-            psi_all[i] = psi
 
         wave_bw = xp.zeros(
             (len(psi_all),) + shape + (np.abs(hkl[:, 2]).max() + 1,), dtype=complex

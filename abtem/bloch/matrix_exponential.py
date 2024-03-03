@@ -1,6 +1,6 @@
 import math
 
-import cupy
+from abtem.core.backend import cp
 import numpy as np
 
 # ### expm ###
@@ -52,16 +52,16 @@ def expm(a):
 
     """
     if a.size == 0:
-        return cupy.zeros((0, 0), dtype=a.dtype)
+        return cp.zeros((0, 0), dtype=a.dtype)
 
     n = a.shape[0]
 
     # try reducing the norm
-    mu = cupy.diag(a).sum() / n
-    A = a - cupy.eye(n) * mu
+    mu = cp.diag(a).sum() / n
+    A = a - cp.eye(n) * mu
 
     # scale factor
-    nrmA = cupy.linalg.norm(A, ord=1).item()
+    nrmA = cp.linalg.norm(A, ord=1).item()
 
     scale = nrmA > th13
     if scale:
@@ -76,13 +76,13 @@ def expm(a):
     A4 = A2 @ A2
     A6 = A2 @ A4
 
-    E = cupy.eye(A.shape[0])
+    E = cp.eye(A.shape[0])
 
-    u1, u2, v1, v2 = _expm_inner(E, A, A2, A4, A6, cupy.asarray(b))
+    u1, u2, v1, v2 = _expm_inner(E, A, A2, A4, A6, cp.asarray(b))
     u = A @ (A6 @ u1 + u2)
     v = A6 @ v1 + v2
 
-    r13 = cupy.linalg.solve(-u + v, u + v)
+    r13 = cp.linalg.solve(-u + v, u + v)
 
     # squaring
     x = r13
@@ -95,7 +95,7 @@ def expm(a):
     return x
 
 
-@cupy.fuse
+@cp.fuse
 def _expm_inner(E, A, A2, A4, A6, b):
     u1 = b[13] * A6 + b[11] * A4 + b[9] * A2
     u2 = b[7] * A6 + b[5] * A4 + b[3] * A2 + b[1] * E
