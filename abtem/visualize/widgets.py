@@ -64,7 +64,7 @@ def _make_update_indices_function(visualization, sliders):
         with sliders[0].hold_trait_notifications():
             visualization.set_ensemble_indices(indices)
             if visualization._autoscale:
-                visualization.set_values_lim()
+                visualization.set_value_limits()
 
     return update_indices
 
@@ -232,7 +232,7 @@ def make_scale_button(
 
     def scale_button_clicked(*args):
         for visualization in visualizations:
-            visualization.set_values_lim()
+            visualization.set_value_limits()
 
     scale_button = widgets.Button(description="Scale")
     scale_button.on_click(scale_button_clicked)

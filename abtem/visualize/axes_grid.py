@@ -76,7 +76,6 @@ def _make_grid_layout(
     cbar_loc: str = "right",
     direction: str = "col",
 ):
-    sss
     sizes_layout = []
     for i, ax in enumerate(axes):
         if direction == "col":
@@ -146,13 +145,13 @@ class AxesGrid:
             raise NotImplementedError()
 
         self._sizes = {
-            "cbar_spacing": Size.Fixed(1.),
+            "cbar_spacing": Size.Fixed(0.5),
             "padding": Size.Fixed(0.1),
             "cbar_shift": Size.Fixed(0.0),
             "cbar_width": Size.Fixed(0.15),
             "left": Size.Fixed(0.0),
-            "right": Size.Fixed(0.0),
-            "top": Size.Fixed(0.0),
+            "right": Size.Fixed(0.2),
+            "top": Size.Fixed(0.2),
             "bottom": Size.Fixed(0.0),
         }
 
@@ -454,11 +453,15 @@ def _determine_axes_types(
         explode = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
     elif explode is False:
         explode = ()
+        axes_types = [axes_type for axes_type in axes_types if axes_type != "explode"]
 
     if overlay is True:
         overlay = tuple(range(max(num_ensemble_axes - 2, 0), num_ensemble_axes))
     elif overlay is False:
         overlay = ()
+        axes_types = [
+            axes_type if axes_type != "overlay" else "index" for axes_type in axes_types
+        ]
 
     axes_types = list(axes_types)
     for i, axis_type in enumerate(axes_types):
