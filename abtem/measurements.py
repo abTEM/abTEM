@@ -98,6 +98,17 @@ def _bin_extent(n):
         return -n // 2 + 0.5, n // 2 + 0.5
 
 
+def _move_scan_axes_to_back(measurement):
+    ensemble_axes = tuple(range(len(measurement.ensemble_shape)))
+
+    source = _scan_axes(measurement)
+    destination = tuple(range(len(ensemble_axes) - len(source), len(ensemble_axes)))
+
+    if source != destination:
+        measurement = moveaxis(measurement, source, destination)
+    return measurement
+
+
 def _reduced_scanned_images_or_line_profiles(
     new_array,
     old_measurement,
@@ -108,10 +119,23 @@ def _reduced_scanned_images_or_line_profiles(
 
     metadata = {**old_measurement.metadata, **metadata}
 
-    if _scanned_measurement_type(old_measurement) is RealSpaceLineProfiles:
-        sampling = old_measurement.ensemble_axes_metadata[-1].sampling
+    ensemble_axes = tuple(range(len(old_measurement.ensemble_shape)))
 
-        ensemble_axes_metadata = old_measurement.ensemble_axes_metadata[:-1]
+    source = _scan_axes(old_measurement)
+    destination = tuple(range(len(ensemble_axes) - len(source), len(ensemble_axes)))
+    scan_axes_metadata = [old_measurement.ensemble_axes_metadata[i] for i in source]
+    ensemble_axes_metadata = [
+        m
+        for i, m in enumerate(old_measurement.ensemble_axes_metadata)
+        if i not in source
+    ]
+
+    if source != destination:
+        xp = get_array_module(new_array)
+        new_array = xp.moveaxis(new_array, source, destination)
+
+    if len(scan_axes_metadata) == 1:
+        sampling = scan_axes_metadata[-1].sampling
 
         return RealSpaceLineProfiles(
             new_array,
@@ -120,12 +144,10 @@ def _reduced_scanned_images_or_line_profiles(
             metadata=metadata,
         )
 
-    elif _scanned_measurement_type(old_measurement) is Images:
-        ensemble_axes_metadata = old_measurement.ensemble_axes_metadata[:-2]
-
+    elif len(scan_axes_metadata) == 2:
         sampling = (
-            old_measurement.ensemble_axes_metadata[-2].sampling,
-            old_measurement.ensemble_axes_metadata[-1].sampling,
+            scan_axes_metadata[-2].sampling,
+            scan_axes_metadata[-1].sampling,
         )
 
         images = Images(
@@ -150,19 +172,25 @@ def _reduced_scanned_images_or_line_profiles(
 
 
 def _scan_axes(self):
-    num_trailing_scan_axes = 0
-    for axis in reversed(self.ensemble_axes_metadata):
-        if not isinstance(axis, ScanAxis) or num_trailing_scan_axes == 2:
+    num_scan_axes = 0
+    scan_axes = ()
+    for i, axis in enumerate(self.ensemble_axes_metadata):
+        if num_scan_axes == 2:
             break
 
-        num_trailing_scan_axes += 1
+        if isinstance(axis, ScanAxis):
+            scan_axes += (i,)
+            num_scan_axes += 1
 
-    return tuple(
-        range(
-            len(self.ensemble_shape) - num_trailing_scan_axes,
-            len(self.ensemble_shape),
-        )
-    )
+    scan_axes = scan_axes[-2:]
+
+    return scan_axes
+    # return tuple(
+    #     range(
+    #         len(self.ensemble_shape) - num_trailing_scan_axes,
+    #         len(self.ensemble_shape),
+    #     )
+    # )
 
 
 def _scan_sampling(measurements):
@@ -367,6 +395,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         """Calculates the phase of a complex-valued measurement."""
         self._check_is_complex()
         self.metadata["label"] = "phase"
+        self.metadata["units"] = "rad."
         return self._apply_element_wise_func(get_array_module(self.array).angle)
 
     def abs(self) -> T:
@@ -3818,6 +3847,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         kwargs["positions"] = np.array(kwargs["positions"], dtype=np.float32)
         return kwargs
 
+    def __getitem__(self, items):
+        new = super().__getitem__(items)
+        new._positions = new._positions[items]
+        return new
+
     def remove_low_intensity(self, threshold: float = 1e-3):
         """
         Remove diffraction spots with intensity below a threshold for all ensemble dimensions.
@@ -4067,7 +4101,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         vmax: float = None,
         power: float = 1.0,
         common_color_scale: bool = False,
-        scale: float = 0.9,
+        scale: float = 0.5,
         explode: bool | Sequence[bool] = None,
         figsize: tuple[int, int] = None,
         title: bool | str = True,

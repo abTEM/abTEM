@@ -1624,7 +1624,36 @@ def swapaxes(array_object, axis1, axis2):
     cls = array_object.__class__
 
     axes_metadata = copy.copy(array_object.axes_metadata)
-    axes_metadata[axis2], axes_metadata[axis1] = axes_metadata[axis1], axes_metadata[axis2]
+    axes_metadata[axis2], axes_metadata[axis1] = (
+        axes_metadata[axis1],
+        axes_metadata[axis2],
+    )
+
+    return cls.from_array_and_metadata(
+        array=array, axes_metadata=axes_metadata, metadata=array_object.metadata
+    )
+
+
+def move_item(lst, from_index, to_index):
+    element = lst.pop(from_index)
+    lst.insert(to_index, element)
+    return lst
+
+
+def moveaxis(array_object, source, destination):
+    xp = get_array_module(array_object.array)
+
+    if array_object.is_lazy:
+        array = da.moveaxis(array_object.array, source, destination)
+    else:
+        array = xp.moveaxis(array_object.array, source, destination)
+
+    cls = array_object.__class__
+
+    axes_metadata = copy.copy(array_object.axes_metadata)
+
+    for s, d in zip(reversed(source), reversed(destination)):
+        axes_metadata = move_item(axes_metadata, s, d)
 
     return cls.from_array_and_metadata(
         array=array, axes_metadata=axes_metadata, metadata=array_object.metadata
