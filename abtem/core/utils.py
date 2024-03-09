@@ -76,6 +76,7 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
                 if isinstance(value, EqualityMixin):
                     equal = safe_equality(value, b.__dict__[key])
 
+        # print(equal, key, b.__dict__[key], a.__dict__[key])
         if equal is False:
             return False
 

@@ -205,6 +205,7 @@ class ScatterArtist(Artist2D):
         vmin, vmax = _get_value_limits(intensities, value_limits=[vmin, vmax])
         norm = _get_norm(vmin, vmax, power, logscale)
 
+        self._norm = norm
         self._scale = scale
         radii = self._calculate_radii(norm, scale, intensities)
 
@@ -408,8 +409,10 @@ class DomainColoringArtist(Artist2D):
         self._cbar_phase = plt.colorbar(self._image_phase, cax=caxes[0])
         self._cbar_amplitude = plt.colorbar(self._image_amplitude, cax=caxes[1])
 
-        self._cbar_phase.set_label("arg", rotation=0, ha="center", va="top")
-        self._cbar_phase.ax.yaxis.set_label_coords(0.5, -0.02)
+        self._cbar_phase.set_label(
+            "phase [rad.]"
+        )  # , rotation=0, ha="center", va="top")
+        # self._cbar_phase.ax.yaxis.set_label_coords(0.5, -0.02)
         self._cbar_phase.set_ticks([-np.pi, -np.pi / 2, 0, +np.pi / 2, np.pi])
         self._cbar_phase.set_ticklabels(
             [
@@ -420,8 +423,10 @@ class DomainColoringArtist(Artist2D):
                 r"$\pi$",
             ]
         )
-        self._cbar_amplitude.set_label("abs", rotation=0, ha="center", va="top")
-        self._cbar_amplitude.ax.yaxis.set_label_coords(0.5, -0.02)
+        self._cbar_amplitude.set_label(
+            "amplitude [arb. unit]"
+        )  # , rotation=0, ha="center", va="top")
+        # self._cbar_amplitude.ax.yaxis.set_label_coords(0.5, -0.02)
         self._cbar_amplitude.formatter.set_powerlimits((0, 0))
         self._cbar_amplitude.formatter.set_useMathText(True)
         self._cbar_amplitude.ax.yaxis.set_offset_position("left")

@@ -448,6 +448,7 @@ def multislice_and_detect(
     """
     waves = waves.ensure_real_space()
     detectors = _validate_detectors(detectors)
+    waves = waves.copy()
 
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
@@ -544,6 +545,8 @@ def multislice_and_detect(
             detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
             for detector in detectors
         ]
+
+    # measurements[0] += potential.num_slices
 
     pbar.close_if_exists()
 

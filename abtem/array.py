@@ -482,17 +482,17 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 f"incompatible types ({self.__class__} != {other.__class__})"
             )
 
-        if self.shape != other.shape:
-            raise RuntimeError(f"incompatible shapes ({self.shape} != {other.shape})")
+        # if self.shape != other.shape:
+        #    raise RuntimeError(f"incompatible shapes ({self.shape} != {other.shape})")
 
-        for (key, value), (other_key, other_value) in zip(
-            self._copy_kwargs(exclude=("array", "metadata")).items(),
-            other._copy_kwargs(exclude=("array", "metadata")).items(),
-        ):
-            if np.any(value != other_value):
-                raise RuntimeError(
-                    f"incompatible values for {key} ({value} != {other_value})"
-                )
+        # for (key, value), (other_key, other_value) in zip(
+        #     self._copy_kwargs(exclude=("array", "metadata")).items(),
+        #     other._copy_kwargs(exclude=("array", "metadata")).items(),
+        # ):
+        #     if np.any(value != other_value):
+        #         raise RuntimeError(
+        #             f"incompatible values for {key} ({value} != {other_value})"
+        #         )
 
     def generate_ensemble(self, keepdims: bool = False):
         """
@@ -925,6 +925,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array = da.from_array(self.array, chunks=chunks)
 
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
+
+    def lazy(self, chunks: str = "auto") -> T:
+        return self.ensure_lazy(chunks)
 
     def compute(
         self,

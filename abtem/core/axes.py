@@ -237,7 +237,7 @@ class ReciprocalSpaceAxis(LinearAxis):
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ScanAxis(RealSpaceAxis):
-    pass
+    _main: bool = True
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

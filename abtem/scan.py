@@ -18,6 +18,7 @@ from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
+from abtem.measurements import _scan_axes
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
@@ -208,7 +209,6 @@ class CustomScan(BaseScan):
     """
 
     def __init__(self, positions: np.ndarray = (0.0, 0.0), squeeze: bool = False):
-
         positions = np.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
@@ -359,7 +359,6 @@ def _validate_coordinates(
     potential: BasePotential | Atoms,
     fractional: bool,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-
     if fractional:
         potential = _validate_potential(potential)
 
@@ -407,7 +406,6 @@ class LineScan(BaseScan):
         fractional: bool = False,
         potential: BasePotential | Atoms = None,
     ):
-
         self._gpts = gpts
         self._sampling = sampling
 
@@ -531,7 +529,6 @@ class LineScan(BaseScan):
         self._adjust_sampling()
 
     def _adjust_sampling(self):
-
         if self.extent is None or self.gpts is None:
             return
 
@@ -630,7 +627,13 @@ class LineScan(BaseScan):
     def _out_ensemble_axes_metadata(
         self, array_object: ArrayObject | T, index: int = 0
     ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
-        return [*self.ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
+        ensemble_axes_metadata = self.ensemble_axes_metadata
+
+        if len(_scan_axes(array_object)) > 0:
+            for axis in ensemble_axes_metadata:
+                axis._main = False
+
+        return [*ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
     @property
     def _default_ensemble_chunks(self):
@@ -757,7 +760,6 @@ class GridScan(HasGridMixin, BaseScan):
         fractional: bool = False,
         potential: BasePotential | Atoms = None,
     ):
-
         super().__init__()
 
         start, end = _validate_coordinates(start, end, potential, fractional)
@@ -881,7 +883,6 @@ class GridScan(HasGridMixin, BaseScan):
         return np.stack(np.meshgrid(*xi, indexing="ij"), axis=-1)
 
     def _sort_into_extents(self, extents):
-
         x = np.linspace(
             self.start[0], self.end[0], self.gpts[0], endpoint=self.endpoint[0]
         )
@@ -933,6 +934,17 @@ class GridScan(HasGridMixin, BaseScan):
                 )
             )
         return axes_metadata
+
+    def _out_ensemble_axes_metadata(
+        self, array_object: ArrayObject | T, index: int = 0
+    ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
+        ensemble_axes_metadata = self.ensemble_axes_metadata
+
+        if len(_scan_axes(array_object)) > 0:
+            for axis in ensemble_axes_metadata:
+                axis._main = False
+
+        return [*ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):

@@ -145,7 +145,7 @@ class AxesGrid:
             raise NotImplementedError()
 
         self._sizes = {
-            "cbar_spacing": Size.Fixed(0.5),
+            "cbar_spacing": Size.Fixed(0.9),
             "padding": Size.Fixed(0.1),
             "cbar_shift": Size.Fixed(0.0),
             "cbar_width": Size.Fixed(0.15),

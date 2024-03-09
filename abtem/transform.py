@@ -172,7 +172,6 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         transforms = []
 
         for transform in (self, other):
-
             if hasattr(transform, "transforms"):
                 transforms += transform.transforms
             else:
@@ -215,7 +214,6 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
     def _pack_multiple_outputs(
         self, array_object: T, new_arrays: np.ndarray | da.core.Array
     ):
-
         is_lazy = isinstance(new_arrays, da.core.Array)
         # if is_lazy:
         #    assert ensemble_shape == new_arrays.shape
@@ -273,7 +271,6 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         array_object: T,
         new_array: np.ndarray,
     ):
-
         ensemble_axes_metadata = self._out_ensemble_axes_metadata(array_object)
 
         base_axes_metadata = self._out_base_axes_metadata(array_object)
@@ -400,7 +397,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         return self._transforms[0]._num_outputs
 
     def set_output_specification(self, array_object):
-
         for transform in reversed(self.transforms):
             array_object = array_object.apply_transform(transform)
 
@@ -476,7 +472,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def _out_ensemble_axes_metadata(self, array_object, index=0) -> list[AxisMetadata]:
         if self._ensemble_axes_metadata is not None:
             return self._ensemble_axes_metadata[index]
-
         return self.ensemble_axes_metadata + array_object.ensemble_axes_metadata
 
     def _out_base_axes_metadata(self, array_object, index=0) -> list[AxisMetadata]:
@@ -540,7 +535,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def _calculate_new_array(
         self, array_object: T
     ) -> np.ndarray | tuple[np.ndarray, ...]:
-
         for transform in reversed(self.transforms):
             array_object = transform.apply(array_object)
 
@@ -606,7 +600,6 @@ class ReciprocalSpaceMultiplication(WavesTransform):
         in_place: bool = False,
         distributions: tuple[str, ...] = (),
     ):
-
         self._in_place = in_place
         super().__init__(distributions=distributions)
 

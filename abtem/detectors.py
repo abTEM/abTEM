@@ -22,6 +22,7 @@ from abtem.measurements import (
     _scanned_measurement_type,
     _polar_detector_bins,
     _scan_shape,
+    _scan_axes,
 )
 from abtem.transform import ArrayObjectTransform
 from abtem.visualize.visualizations import discrete_cmap
@@ -227,9 +228,21 @@ class AnnularDetector(BaseDetector):
 
         return inner, outer
 
+    def _out_ensemble_axes_metadata(
+        self, waves: BaseWaves, index: int = 0
+    ) -> list[AxisMetadata]:
+        source = _scan_axes(waves)
+        scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
+        ensemble_axes_metadata = [
+            m for i, m in enumerate(waves.ensemble_axes_metadata) if i not in source
+        ]
+        return ensemble_axes_metadata + scan_axes_metadata
+
     def _out_base_axes_metadata(
         self, waves: BaseWaves, index: int = 0
     ) -> list[AxisMetadata]:
+        # source = _scan_axes(waves)
+        # scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
         return []
 
     def _out_ensemble_shape(self, waves: BaseWaves, index: int = 0) -> tuple:

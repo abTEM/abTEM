@@ -194,7 +194,7 @@ class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCM
         image_ensemble : Images
             The potential slices as images.
         """
-        return self.build().complex_images()
+        return self.build().to_images()
 
     def show(self, project: bool = True, **kwargs):
         """

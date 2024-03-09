@@ -88,7 +88,7 @@ def _scanned_measurement_type(
         return Images
 
     else:
-        return MeasurementsEnsemble  # raise RuntimeError(  #     f"no measurement type for {measurement.__class__} with {len(_scan_shape(measurement))} scan "  #     f"axes"  # )
+        return MeasurementsEnsemble
 
 
 def _bin_extent(n):
@@ -98,15 +98,15 @@ def _bin_extent(n):
         return -n // 2 + 0.5, n // 2 + 0.5
 
 
-def _move_scan_axes_to_back(measurement):
-    ensemble_axes = tuple(range(len(measurement.ensemble_shape)))
-
-    source = _scan_axes(measurement)
-    destination = tuple(range(len(ensemble_axes) - len(source), len(ensemble_axes)))
-
-    if source != destination:
-        measurement = moveaxis(measurement, source, destination)
-    return measurement
+# def _move_scan_axes_to_back(measurement):
+#     ensemble_axes = tuple(range(len(measurement.ensemble_shape)))
+#
+#     source = _scan_axes(measurement)
+#     destination = tuple(range(len(ensemble_axes) - len(source), len(ensemble_axes)))
+#
+#     if source != destination:
+#         measurement = moveaxis(measurement, source, destination)
+#     return measurement
 
 
 def _reduced_scanned_images_or_line_profiles(
@@ -124,6 +124,7 @@ def _reduced_scanned_images_or_line_profiles(
     source = _scan_axes(old_measurement)
     destination = tuple(range(len(ensemble_axes) - len(source), len(ensemble_axes)))
     scan_axes_metadata = [old_measurement.ensemble_axes_metadata[i] for i in source]
+
     ensemble_axes_metadata = [
         m
         for i, m in enumerate(old_measurement.ensemble_axes_metadata)
@@ -132,7 +133,10 @@ def _reduced_scanned_images_or_line_profiles(
 
     if source != destination:
         xp = get_array_module(new_array)
-        new_array = xp.moveaxis(new_array, source, destination)
+        if old_measurement.is_lazy:
+            new_array = da.moveaxis(new_array, source, destination)
+        else:
+            new_array = xp.moveaxis(new_array, source, destination)
 
     if len(scan_axes_metadata) == 1:
         sampling = scan_axes_metadata[-1].sampling
@@ -171,26 +175,20 @@ def _reduced_scanned_images_or_line_profiles(
         return new_array
 
 
-def _scan_axes(self):
+def _scan_axes(measurement):
     num_scan_axes = 0
     scan_axes = ()
-    for i, axis in enumerate(self.ensemble_axes_metadata):
+    for i, axis in enumerate(measurement.ensemble_axes_metadata):
         if num_scan_axes == 2:
             break
 
-        if isinstance(axis, ScanAxis):
+        if isinstance(axis, ScanAxis) and axis._main is True:
             scan_axes += (i,)
             num_scan_axes += 1
 
     scan_axes = scan_axes[-2:]
 
     return scan_axes
-    # return tuple(
-    #     range(
-    #         len(self.ensemble_shape) - num_trailing_scan_axes,
-    #         len(self.ensemble_shape),
-    #     )
-    # )
 
 
 def _scan_sampling(measurements):
