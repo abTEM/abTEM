@@ -1,23 +1,18 @@
-from abtem.core import config
+import numpy as np
 
+from abtem.core import config
+from abtem.core.energy import energy2wavelength
+
+categories = {
+    "real_space": ["Å", "Angstrom", "nm", "um", "mm", "m"],
+    "reciprocal_space": ["1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"],
+    "angular": ["rad", "mrad", "deg"],
+    "energy": ["eV", "keV"],
+}
+
+# Use a dictionary comprehension to create the final mapping
 units_type = {
-    **dict(zip(("Å", "Angstrom", "nm", "um", "mm", "m"), ("real_space",) * 6)),
-    **dict(
-        zip(
-            ("1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"),
-            ("reciprocal_space",) * 6,
-        )
-    ),
-    **dict(zip(("rad", "mrad", "deg",), ("angular",) * 3)),
-    **dict(
-        zip(
-            (
-                "eV",
-                "keV",
-            ),
-            ("energy",) * 2,
-        )
-    ),
+    unit: category for category, units in categories.items() for unit in units
 }
 
 _conversion_factors = {
@@ -31,7 +26,11 @@ _conversion_factors = {
     "1/um": 1e4,
     "1/mm": 1e7,
     "1/m": 1e10,
+    "mrad": 1,
+    "rad": 1e3,
+    "deg": 1e3 / np.pi * 180.0,
 }
+
 _tex_units = {
     "Å": "\mathrm{\AA}",
     "nm": "\mathrm{nm}",
@@ -45,20 +44,19 @@ _tex_units = {
     "1/m": "\mathrm{m}^{-1}",
     "mrad": "\mathrm{mrad}",
     "deg": "\mathrm{deg}",
-    "e/Å^2": "\mathrm{e}^-/\mathrm{\AA}^2"
+    "e/Å^2": "\mathrm{e}^-/\mathrm{\AA}^2",
 }
 
 
 def _format_units(units):
     if config.get("visualize.use_tex", False):
-        units = _tex_units.get(units, f'\mathrm{{{units}}}')
+        units = _tex_units.get(units, f"\mathrm{{{units}}}")
         return f"${units}$"
     else:
         return units
 
 
 def _validate_units(units, old_units):
-
     if old_units is None and units is None:
         return None
     elif units is None:
@@ -92,5 +90,15 @@ def _validate_units(units, old_units):
         raise NotImplementedError
 
 
-def _get_conversion_factor(units, old_units):
+def _get_conversion_factor(units: str, old_units: str, energy: float = None):
+    if units_type[old_units] == "reciprocal_space" and units_type[units] == "angular":
+        if energy is None:
+            raise RuntimeError("")
+
+        wavelength = energy2wavelength(energy)
+        conversion = (
+            wavelength * 1e3 * _conversion_factors[_validate_units(units, "mrad")]
+        )
+        return conversion
+
     return _conversion_factors[_validate_units(units, old_units)]
