@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from abc import abstractmethod
-from typing import Literal
+from abc import abstractmethod, ABCMeta
+from typing import Literal, TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,6 +13,10 @@ from matplotlib.ticker import ScalarFormatter
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from abtem.core import config
+
+
+if TYPE_CHECKING:
+    from abtem.visualize.data import VisualizationData, ImageData, LinesData
 
 
 def _get_norm(vmin=None, vmax=None, power=1.0, logscale=False):
@@ -87,7 +91,7 @@ class ScaleBar:
         ax.add_artist(self._anchored_size_bar)
 
 
-class Artist:
+class Artist(metaclass=ABCMeta):
     @abstractmethod
     def set_data(self, data):
         pass
@@ -97,10 +101,18 @@ class Artist:
         pass
 
     @abstractmethod
-    def set_power(self):
+    def set_power(self, power=1.0):
         pass
 
     def set_logscale(self):
+        pass
+
+    @abstractmethod
+    def get_power(self):
+        pass
+
+    @abstractmethod
+    def _change_artist_type(self, artist, ax, data, **kwargs):
         pass
 
 
@@ -109,17 +121,12 @@ class Artist1D(Artist):
 
 
 class LinesArtist(Artist1D):
-    def __init__(
-        self,
-        ax: Axes,
-        x: np.ndarray,
-        y: np.ndarray,
-        value_limits: list[float] = None,
-        labels: str | list[str] = None,
-    ):
-        y = self._reshape_data(y)
-        self._lines = ax.plot(x, y, label=labels)
-        ax.set_ylim(value_limits)
+    def __init__(self, ax: Axes, data, label: list[str] = None, **kwargs):
+        y = self._reshape_data(data._y)
+        x = data._x
+        print(y.shape, label)
+        self._lines = ax.plot(x, y, label=label, **kwargs)
+        # ax.set_ylim(value_limits)
         self._ax = ax
 
     @staticmethod
@@ -128,12 +135,21 @@ class LinesArtist(Artist1D):
             data = np.moveaxis(data, -1, 0).reshape((data.shape[-1], -1))
         return data
 
-    def set_data(self, data: np.ndarray):
-        data = self._reshape_data(data)
+    def set_data(self, data: LinesData):
+        y = self._reshape_data(data._y)
+        x = data._x
 
         for i, line in enumerate(self._lines):
-            x = line.get_data()[0]
-            line.set_data(x, data)
+            line.set_data(x, y)
+
+    def _change_artist_type(self):
+        raise NotImplementedError
+
+    def get_power(self):
+        return 1
+
+    def set_power(self, power=1.0) -> None:
+        raise NotImplementedError
 
     def set_value_limits(self, value_limits: list[float] = None):
         data = np.stack([line.get_data()[1] for line in self._lines], axis=0)
@@ -141,7 +157,7 @@ class LinesArtist(Artist1D):
         self._ax.set_ylim(value_limits)
 
 
-class Artist2D:
+class Artist2D(Artist):
     @abstractmethod
     def set_data(self, data):
         pass
@@ -175,6 +191,7 @@ class Artist2D:
         if (power != 1.0) and isinstance(old_norm, colors.PowerNorm):
             old_norm.gamma = power
             artist.norm = old_norm
+            old_norm._changed()
         else:
             norm = _get_norm(vmin=old_norm.vmin, vmax=old_norm.vmax, power=power)
             artist.norm = norm
@@ -206,7 +223,7 @@ class ImageArtist(Artist2D):
     def __init__(
         self,
         ax: Axes,
-        data: np.ndarray,
+        data: ImageData,
         cmap: str | Colormap | None = None,
         vmin: float = None,
         vmax: float = None,
@@ -217,46 +234,71 @@ class ImageArtist(Artist2D):
         **kwargs,
     ):
         interpolation = kwargs.pop("interpolation", "none")
-
-        self._axes_imshow = ax.imshow(
-            data.T,
+        self._axes_image = ax.imshow(
+            data._array.T,
             origin=origin,
             cmap=cmap,
             extent=extent,
             interpolation=interpolation,
             **kwargs,
         )
-
         norm = _get_norm(vmin, vmax, power, logscale)
-        self._axes_imshow.set_norm(norm)
+        self._axes_image.set_norm(norm)
         self._cbar = None
 
     @property
-    def norm(self):
-        return self._axes_imshow.norm
+    def axes_image(self):
+        return self._axes_image
 
     @property
-    def axes_imshow(self):
-        return self._axes_imshow
+    def norm(self):
+        return self.axes_image.norm
 
-    def set_extent(self, extent):
-        self.axes_imshow.set_extent(extent)
+    @property
+    def num_cbars(self):
+        return 1
 
-    def set_data(self, data):
-        self.axes_imshow.set_data(data.T)
+    def get_power(self):
+        if hasattr(self.norm, "gamma"):
+            return self.norm.gamma
+        else:
+            return 1.0
 
-    def set_cmap(self, cmap):
-        self.axes_imshow.set_cmap(cmap)
+    def _change_artist_type(self, artist, ax, data, **kwargs):
+        kwargs = {
+            "extent": self.axes_image.get_extent(),
+            "cmap": self.axes_image.get_cmap(),
+        }
+        return artist(ax, data, **kwargs)
+
+    def get_value_limits(self):
+        array = self.axes_image.get_array()
+        return [array.min(), array.max()]
+
+    def get_xlim(self):
+        return self.axes_image.get_extent()[:2]
+
+    def get_ylim(self):
+        return self.axes_image.get_extent()[2:]
 
     def set_cbars(self, caxes=None, **kwargs):
         format = kwargs.pop("format", default_cbar_scalar_formatter())
-        self._make_cbar(self._axes_imshow, caxes[0], format=format, **kwargs)
+        self._make_cbar(self.axes_image, caxes[0], format=format, **kwargs)
+
+    def set_cmap(self, cmap):
+        self.axes_image.set_cmap(cmap)
+
+    def set_data(self, data):
+        self.axes_image.set_data(data._array.T)
+
+    def set_extent(self, extent):
+        self.axes_image.set_extent(extent)
+
+    def set_power(self, power: float = 1.0):
+        self._update_norm(self.norm, power, self.axes_image)
 
     def set_value_limits(self, value_limits: tuple[float, float] = None):
         self._set_vmin_vmax(self.norm, *value_limits)
-
-    def set_power(self, power: float = 1.0):
-        self._update_norm(self.norm, power, self._axes_imshow)
 
 
 class ScatterArtist(Artist2D):
@@ -271,6 +313,7 @@ class ScatterArtist(Artist2D):
         logscale: bool = False,
         scale: float = 0.5,
         annotation_threshold: float = 0.1,
+        annotations: list[str] = None,
         **kwargs,
     ):
         intensities = data["intensities"]
@@ -310,10 +353,10 @@ class ScatterArtist(Artist2D):
         )
 
     def get_ylim(self):
-        return [self.offsets[:, 1].min(), self.offsets[:, 1].max()]
+        return [self.offsets[:, 1].min() * 1.1, self.offsets[:, 1].max() * 1.1]
 
     def get_xlim(self):
-        return [self.offsets[:, 0].min(), self.offsets[:, 0].max()]
+        return [self.offsets[:, 0].min() * 1.1, self.offsets[:, 0].max() * 1.1]
 
     def get_value_limits(self):
         array = self.ellipse_collection.get_array()
@@ -330,6 +373,10 @@ class ScatterArtist(Artist2D):
     @property
     def offsets(self):
         return self.ellipse_collection.get_offsets()
+
+    @property
+    def num_cbars(self):
+        return 1
 
     @staticmethod
     def _calculate_radii(norm, scale, data):
@@ -414,7 +461,7 @@ class DomainColoringArtist(Artist2D):
     def __init__(
         self,
         ax: Axes,
-        data: np.ndarray,
+        data: ImageData,
         cmap: str | Colormap | None = None,
         vmin: float = None,
         vmax: float = None,
@@ -424,11 +471,11 @@ class DomainColoringArtist(Artist2D):
     ):
         norm = _get_norm(vmin, vmax, power, logscale)
 
-        abs_array = np.abs(data)
+        abs_array = np.abs(data._array)
         alpha = np.clip(norm(abs_array), a_min=0.0, a_max=1.0)
 
         self._phase_axes_image = ax.imshow(
-            np.angle(data).T,
+            np.angle(data._array).T,
             origin="lower",
             interpolation="none",
             alpha=alpha.T,
@@ -448,6 +495,26 @@ class DomainColoringArtist(Artist2D):
 
         self._amplitude_axes_image.set_norm(norm)
 
+    def get_power(self):
+        if hasattr(self.amplitude_norm, "gamma"):
+            return self.amplitude_norm.gamma
+        else:
+            return 1.0
+
+    def get_value_limits(self):
+        array = self.amplitude_axes_image.get_array()
+        return [array.min(), array.max()]
+
+    def get_xlim(self):
+        return self.amplitude_axes_image.get_extent()[:2]
+
+    def get_ylim(self):
+        return self.amplitude_axes_image.get_extent()[2:]
+
+    @property
+    def num_cbars(self):
+        return 2
+
     @property
     def amplitude_norm(self):
         return self.amplitude_axes_image.norm
@@ -466,6 +533,19 @@ class DomainColoringArtist(Artist2D):
         alpha = np.clip(alpha, a_min=0, a_max=1)
         self.phase_axes_image.set_alpha(alpha)
 
+    def _change_artist_type(self, artist, ax, data, **kwargs):
+        default_kwargs = {
+            "extent": self.amplitude_axes_image.get_extent(),
+            "cmap": self.amplitude_axes_image.get_cmap(),
+            # "interpolation": self.norm.vmin,
+            # "vmax": self.norm.vmax,
+            # "vmax": self.norm.vmax,
+        }
+
+        default_kwargs.update(kwargs)
+
+        return artist(ax, data, **default_kwargs)
+
     def set_value_limits(self, value_limits: tuple[float, float] = None):
         self._set_vmin_vmax(self.amplitude_norm, *value_limits)
         self._update_alpha()
@@ -482,12 +562,12 @@ class DomainColoringArtist(Artist2D):
         self.amplitude_axes_image.set_extent(extent)
 
     def set_data(self, data):
-        abs_array = np.abs(data)
+        abs_array = np.abs(data._array)
         alpha = self.amplitude_norm(abs_array)
         alpha = np.clip(alpha, a_min=0, a_max=1)
 
         self.phase_axes_image.set_alpha(alpha.T)
-        self.phase_axes_image.set_data(np.angle(data).T)
+        self.phase_axes_image.set_data(np.angle(data._array).T)
         self.amplitude_axes_image.set_data(abs_array.T)
 
     def set_cbars(self, caxes, label=None, **kwargs):

@@ -1,6 +1,5 @@
 from abtem.visualize.visualizations import (
-    VisualizationImshow,
-    VisualizationScatter,
-    VisualizationLines,
+    Visualization2D,
+    Visualization1D,
     show_atoms,
 )

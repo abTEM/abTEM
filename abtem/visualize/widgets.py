@@ -1,12 +1,18 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 from __future__ import annotations
 
-from typing import Sequence, Any
+from contextlib import ExitStack
+from typing import Sequence, Any, TYPE_CHECKING
 
 import numpy as np
 from traitlets.traitlets import link
 from matplotlib import colors
 from abtem.core import config
+from abtem.core.axes import AxisMetadata
+
+if TYPE_CHECKING:
+    from abtem.visualize.visualizations import BaseVisualization
+
 
 try:
     import ipywidgets as widgets
@@ -34,42 +40,26 @@ def _format_options(options):
     return formatted_options
 
 
-def _make_update_selection_sliders_button(sliders, indices):
+def make_reset_button(sliders):
     reset_button = widgets.Button(
         description="Reset sliders",
         disabled=False,
     )
 
+    default_indices = [slider.index for slider in sliders]
+
     def reset(*args):
-        for slider, index in zip(sliders, indices):
+        for slider, index in zip(sliders, default_indices):
             slider.index = index
 
     reset_button.on_click(reset)
-
     return reset_button
 
 
-def _make_update_indices_function(visualization, sliders):
-    def update_indices(change):
-        indices = ()
-        for slider in sliders:
-            idx = slider.index
-            if isinstance(idx, tuple):
-                idx = slice(*idx)
-            indices += (idx,)
-
-        if not sliders:
-            return
-
-        with sliders[0].hold_trait_notifications():
-            visualization.set_ensemble_indices(indices)
-            if visualization._autoscale:
-                visualization.set_value_limits()
-
-    return update_indices
-
-
-def make_continuous_update_button(sliders: list, continuous_update=None):
+def make_continuous_update_button(
+    sliders: list[widgets.SelectionSlider | widgets.SelectionRangeSlider],
+    continuous_update: bool = None,
+) -> widgets.ToggleButton:
     if continuous_update is None:
         continuous_update = config.get("visualize.continuous_update", False)
 
@@ -81,95 +71,56 @@ def make_continuous_update_button(sliders: list, continuous_update=None):
     return continuous_update_checkbox
 
 
-def make_sliders_from_ensemble_axes(
-    visualizations,
-    axes_types: Sequence[str, ...] = None,
-    continuous_update: bool = None,
-    callbacks: tuple[callable, ...] = (),
-    default_values: Any = None,
+def make_slider_from_ensemble_axis(
+    axis_metadata: AxisMetadata,
+    length,
+    slider_type=None,
+    continuous_update=None,
+    default_value=None,
 ):
+    if slider_type is None:
+        slider_type = axis_metadata._default_type
+
     if continuous_update is None:
         continuous_update = config.get("visualize.continuous_update", False)
 
-    if not isinstance(visualizations, Sequence):
-        visualizations = [visualizations]
+    values = np.array(axis_metadata.coordinates(length))
+    options = _format_options(values)
 
-    ensemble_axes_metadata = visualizations[0].ensemble_axes_metadata
-    ensemble_shape = visualizations[0].ensemble_shape
-    if axes_types is None:
-        axes_types = [metadata._default_type for metadata in ensemble_axes_metadata]
-    elif not (len(axes_types) == len(ensemble_shape)):
-        raise ValueError()
+    with config.set({"visualize.use_tex": False}):
+        label = axis_metadata.format_label()
 
-    for visualization in visualizations[1:]:
-        if not (
-            (
-                visualization.measurements.ensemble_axes_metadata
-                == ensemble_axes_metadata
-            )
-            and (visualization.measurements.ensemble_shape == ensemble_shape)
-        ):
-            raise ValueError()
-
-    if not isinstance(default_values, Sequence):
-        default_values = (default_values,) * len(ensemble_shape)
-
-    elif not (len(default_values) == len(ensemble_shape)):
-        raise ValueError()
-
-    sliders = []
-    default_indices = []
-    for axes_metadata, n, axes_type, default_value in zip(
-        ensemble_axes_metadata, ensemble_shape, axes_types, default_values
-    ):
-        values = np.array(axes_metadata.coordinates(n))
-        options = _format_options(values)
-
+    if slider_type == "range":
         if default_value is None:
-            index = 0
-        else:
-            index = int(np.argmin(np.abs(values - default_value)))
+            default_value = (values[0], values[-1])
 
-        default_indices.append(index)
+        index = (
+            int(np.argmin(np.abs(values - default_value[0]))),
+            int(np.argmin(np.abs(values - default_value[1]))),
+        )
 
-        with config.set({"visualize.use_tex": False}):
-            label = axes_metadata.format_label()
+        slider = widgets.SelectionRangeSlider(
+            description=label,
+            options=options,
+            continuous_update=continuous_update,
+            index=index,
+        )
+    elif slider_type == "index":
+        if default_value is None:
+            default_value = 0
 
-        if axes_type == "range":
-            sliders.append(
-                widgets.SelectionRangeSlider(
-                    description=label,
-                    options=options,
-                    continuous_update=continuous_update,
-                    index=(0, len(options) - 1),
-                )
-            )
-        elif axes_type == "index" or axes_type is None:
-            sliders.append(
-                widgets.SelectionSlider(
-                    description=label,
-                    options=options,
-                    continuous_update=continuous_update,
-                    index=index,
-                )
-            )
+        index = int(np.argmin(np.abs(values - default_value)))
 
-    for visualization in visualizations:
-        update_indices = _make_update_indices_function(visualization, sliders)
+        slider = widgets.SelectionSlider(
+            description=label,
+            options=options,
+            continuous_update=continuous_update,
+            index=index,
+        )
+    else:
+        raise ValueError("")
 
-        update_indices({})
-        for slider in sliders:
-            slider.observe(update_indices, "value")
-            for callback in callbacks:
-                slider.observe(callback, "value")
-
-    reset_button = _make_update_selection_sliders_button(
-        sliders, indices=default_indices
-    )
-
-    continuous_update_button = make_continuous_update_button(sliders, continuous_update)
-
-    return sliders, reset_button, continuous_update_button
+    return slider
 
 
 def _get_max_range(array, axes_types):
@@ -224,81 +175,173 @@ def _make_vmin_vmax_slider(visualization):
     return vmin_vmax_slider
 
 
-def make_scale_button(
-    visualizations,
-):
-    if not isinstance(visualizations, Sequence):
-        visualizations = [visualizations]
-
-    def scale_button_clicked(*args):
-        for visualization in visualizations:
-            visualization.set_value_limits()
-
-    scale_button = widgets.Button(description="Scale")
-    scale_button.on_click(scale_button_clicked)
-    return scale_button
+_default_cmap_options = [
+    "default",
+    "viridis",
+    "magma",
+    "gray",
+    "jet",
+    "hsluv",
+    "hsv",
+    "twilight",
+]
 
 
-def make_autoscale_button(
-    visualizations,
-):
-    if not isinstance(visualizations, Sequence):
-        visualizations = [visualizations]
+class BaseGUI(widgets.HBox):
+    def __init__(self, sliders, canvas, *args):
+        self._sliders = sliders
 
-    def autoscale_button_changed(change):
-        for visualization in visualizations:
-            if change["new"]:
-                visualization.autoscale = True
-            else:
-                visualization.autoscale = False
+        default_indices = [slider.index for slider in sliders]
 
-    autoscale_button = widgets.ToggleButton(
-        value=visualizations[0].autoscale,
-        description="Autoscale",
-        tooltip="Autoscale",
-    )
-    autoscale_button.observe(autoscale_button_changed, "value")
-    return autoscale_button
+        self._reset_button = widgets.Button(
+            description="Reset sliders",
+            disabled=False,
+        )
+
+        def reset(*args):
+            for slider, index in zip(sliders, default_indices):
+                slider.index = index
+
+        self._reset_button.on_click(reset)
+
+        self._continuous_update_toggle = widgets.ToggleButton(
+            description="Continuous update",
+            value=config.get("visualize.continuous_update", False),
+        )
+        for slider in sliders:
+            link(
+                (self._continuous_update_toggle, "value"),
+                (slider, "continuous_update"),
+            )
+
+        self._scale_button = widgets.Button(description="Scale")
+
+        self._autoscale_button = widgets.ToggleButton(
+            value=False,
+            description="Autoscale",
+            tooltip="Autoscale",
+        )
+
+        self._powerscale_slider = widgets.FloatSlider(
+            value=1.0,
+            min=0.01,
+            max=2.0,
+            step=0.01,
+            description="Power scale",
+            tooltip="Power scale",
+        )
+
+        widgets_column = [
+            *sliders,
+            widgets.HBox([self._reset_button, self._continuous_update_toggle]),
+            widgets.HBox([self._scale_button, self._autoscale_button]),
+            self._powerscale_slider,
+        ]
+
+        widgets_column = widgets_column + list(args)
+
+        widgets_vbox = widgets.VBox(widgets_column)
+
+        super().__init__(children=[widgets_vbox, canvas])
+
+    def attach_visualization(self, visualization):
+        def update_indices(change):
+            indices = tuple(slider.index for slider in self.sliders)
+
+            with ExitStack() as exit_stack:
+                for slider in self.sliders:
+                    exit_stack.enter_context(slider.hold_trait_notifications())
+
+                visualization.update_data_indices(indices)
+                if visualization.autoscale:
+                    visualization.set_value_limits()
+
+        for slider in self.sliders:
+            slider.observe(update_indices, "value")
+
+        self.scale_button.on_click(lambda *args: visualization.set_value_limits())
+
+        def autoscale_toggle_changed(change):
+            setattr(visualization, "autoscale", change["new"])
+
+        self.autoscale_button.observe(autoscale_toggle_changed, "value")
+        self.autoscale_button.value = visualization.autoscale
+
+        self.powerscale_slider.observe(
+            lambda change: visualization.set_power(change["new"]), "value"
+        )
+        self.powerscale_slider.value = visualization.artists[0, 0].get_power()
+
+    @property
+    def sliders(self):
+        return self._sliders
+
+    @property
+    def scale_button(self):
+        return self._scale_button
+
+    @property
+    def autoscale_button(self):
+        return self._autoscale_button
+
+    @property
+    def powerscale_slider(self):
+        return self._powerscale_slider
 
 
-def make_power_scale_slider(
-    visualizations,
-    **kwargs,
-):
-    if not isinstance(visualizations, Sequence):
-        visualizations = [visualizations]
+class ImageGUI(BaseGUI):
+    def __init__(self, sliders, canvas, cmap_options=None):
+        self._complex_dropdown = widgets.Dropdown(
+            options=[
+                ("Domain coloring", "none"),
+                ("Amplitude", "abs"),
+                ("Intensity", "intensity"),
+                ("Phase", "phase"),
+                ("Real", "real"),
+                ("Imaginary", "imag"),
+            ],
+            value="none",
+            description="Complex visualization:",
+        )
 
-    def powerscale_slider_changed(change):
-        for visualization in visualizations:
-            visualization.set_power(change["new"])
+        if cmap_options is None:
+            cmap_options = _default_cmap_options
 
-    default_kwargs = {
-        "min": 0.01,
-        "max": 2.0,
-        "step": 0.01,
-        "description": "Power",
-        "tooltip": "Power scale",
-    }
+        self._cmap_dropdown = widgets.Dropdown(
+            options=cmap_options,
+            value=cmap_options[0],
+            description="Colormap:",
+        )
 
-    kwargs = {**default_kwargs, **kwargs}
+        self.children = self.children
 
-    power = 1.0
-    # TODO
-    # for norm in visualizations[0]._normalization.ravel():
-    #     if isinstance(norm, colors.PowerNorm):
-    #         if power is None:
-    #             power = norm.gamma
-    #         else:
-    #             power = min(power, norm.gamma)
-    #     else:
-    #         if power is None:
-    #             power = 1.0
-    #         else:
-    #             power = min(power, 1.0)
+        super().__init__(sliders, canvas, self._cmap_dropdown)
 
-    power_scale_slider = widgets.FloatSlider(value=power, **kwargs)
-    power_scale_slider.observe(powerscale_slider_changed, "value")
-    return power_scale_slider
+    def attach_visualization(self, visualization):
+        super().attach_visualization(visualization)
+
+        def dropdown_changed(change):
+            cmap = change["new"]
+            if cmap == "default":
+                cmap = None
+            visualization.set_cmap(cmap)
+
+        self.cmap_dropdown.observe(dropdown_changed, "value")
+
+        self.complex_dropdown.observe(
+            lambda change: visualization.set_complex_conversion(change["new"]), "value"
+        )
+
+        if not visualization.data.is_complex:
+            self.complex_dropdown.disabled = True
+
+    @property
+    def cmap_dropdown(self):
+        return self._cmap_dropdown
+
+    @property
+    def complex_dropdown(self):
+        return self._complex_dropdown
 
 
 def make_complex_visualization_dropdown(
@@ -352,3 +395,17 @@ def make_cmap_dropdown(
     dropdown.observe(dropdown_changed, "value")
 
     return dropdown
+
+
+def make_toggle_hkl_button(visualization):
+    toggle_hkl_button = ipywidgets.ToggleButton(description="Toggle hkl", value=False)
+
+    def update_toggle_hkl_button(change):
+        if change["new"]:
+            visualization.set_miller_index_annotations()
+        else:
+            visualization.remove_miller_index_annotations()
+
+    toggle_hkl_button.observe(update_toggle_hkl_button, "value")
+
+    return toggle_hkl_button
