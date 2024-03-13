@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import Sequence, TYPE_CHECKING
 
-import ipywidgets
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,40 +14,26 @@ from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
 from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
-from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Circle
-
+from matplotlib.ticker import ScalarFormatter
+import matplotlib.colorbar as cbar
+import matplotlib as mpl
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
-from abtem.core.axes import ScaleAxis, LinearAxis, NonLinearAxis
-from abtem.core.backend import get_array_module
 from abtem.core.colors import hsluv_cmap
-from abtem.core.utils import label_to_index, flatten_list_of_lists
+from abtem.core.utils import label_to_index
 from abtem.visualize.artists import (
-    ScatterArtist,
     ImageArtist,
     DomainColoringArtist,
-    _get_value_limits,
     LinesArtist,
     ScaleBar,
+    validate_cmap,
 )
 from abtem.visualize.axes_grid import (
-    _find_axes_types,
     _validate_axes,
+    AxesGrid,
 )
 from abtem.visualize.data import VisualizationData
-
-# from abtem.visualize.widgets import (
-#     make_sliders_from_ensemble_axes,
-#     make_scale_button,
-#     make_autoscale_button,
-#     make_power_scale_slider,
-#     make_cmap_dropdown,
-#     make_complex_visualization_dropdown,
-# )
-
-if TYPE_CHECKING:
-    from abtem.core.axes import AxisMetadata
 
 
 def _format_options(options):
@@ -74,23 +58,6 @@ def discrete_cmap(num_colors, base_cmap):
     return matplotlib.colors.LinearSegmentedColormap.from_list("", colors, num_colors)
 
 
-def _get_joined_titles(measurement, formatting, **kwargs):
-    titles = []
-    for axes_metadata in measurement.ensemble_axes_metadata:
-        titles.append(axes_metadata.format_title(formatting, **kwargs))
-    return "\n".join(titles)
-
-
-def _get_overlay_labels(axes_metadata, axes_types):
-    labels = [
-        [i.format_title(".3f") for i in axis]
-        for axis, axis_type in zip(axes_metadata, axes_types)
-        if axis_type == "overlay"
-    ]
-    labels = list(itertools.product(*labels))
-    return [" - ".join(label) for label in labels]
-
-
 def _get_axes_titles(axes_metadata, axes_types, axes_shape):
     titles = []
 
@@ -112,7 +79,37 @@ def _get_axes_titles(axes_metadata, axes_types, axes_shape):
     return titles_product
 
 
-class BaseVisualization:
+def _make_cax(ax, use_gridspec=True, **kwargs):
+    if ax is None:
+        raise ValueError(
+            "Unable to determine Axes to steal space for Colorbar. "
+            "Either provide the *cax* argument to use as the Axes for "
+            "the Colorbar, provide the *ax* argument to steal space "
+            "from it, or add *mappable* to an Axes."
+        )
+    fig = (  # Figure of first axes; logic copied from make_axes.
+        [*ax.flat] if isinstance(ax, np.ndarray) else [*ax] if np.iterable(ax) else [ax]
+    )[0].figure
+    current_ax = fig.gca()
+    if (
+        fig.get_layout_engine() is not None
+        and not fig.get_layout_engine().colorbar_gridspec
+    ):
+        use_gridspec = False
+    if (
+        use_gridspec
+        and isinstance(ax, mpl.axes._base._AxesBase)
+        and ax.get_subplotspec()
+    ):
+        cax, kwargs = cbar.make_axes_gridspec(ax, **kwargs)
+    else:
+        cax, kwargs = cbar.make_axes(ax, **kwargs)
+    # make_axes calls add_{axes,subplot} which changes gca; undo that.
+    fig.sca(current_ax)
+    cax.grid(visible=False, which="both", axis="both")
+
+
+class Visualization:
     def __init__(
         self,
         data: VisualizationData,
@@ -120,26 +117,51 @@ class BaseVisualization:
         figsize: tuple[int, int] = None,
         aspect: bool = False,
         common_scale: bool = False,
+        xlabel: str = None,
+        ylabel: str = None,
         ncbars: int = 0,
-        interact: bool = False,
         share_x: bool = False,
         share_y: bool = False,
+        interactive: bool = True,
         column_titles: list[str] = None,
+        row_titles: list[str] = None,
+        **kwargs,
     ):
         self._data = data
         self._autoscale = config.get("visualize.autoscale", False)
 
-        self._axes = _validate_axes(
-            shape=data.axes_shape,
-            ax=ax,
-            ioff=interact,
-            aspect=aspect,
-            ncbars=ncbars,
-            common_color_scale=common_scale,
-            figsize=figsize,
-            sharex=share_x,
-            sharey=share_y,
-        )
+        if ax is None and interactive:
+            fig = plt.figure(figsize=figsize)
+        elif ax is None:
+            with plt.ioff():
+                fig = plt.figure(figsize=figsize)
+        else:
+            fig = ax.get_figure()
+
+        if ax is None:
+            shape = data.axes_shape + (0,) * (2 - len(data.axes_shape))
+            ncols, nrows = (max(shape[0], 1), max(shape[1], 1))
+
+            if common_scale:
+                cbar_mode = "single"
+            else:
+                cbar_mode = "each"
+
+            axes = AxesGrid(
+                fig=fig,
+                ncols=ncols,
+                nrows=nrows,
+                ncbars=ncbars,
+                cbar_mode=cbar_mode,
+                aspect=aspect,
+                sharex=share_x,
+                sharey=share_y,
+            )
+
+        else:
+            axes = np.array([[ax]])
+
+        self._axes = axes
         self._indices = ()
 
         self._complex_conversion = "none"
@@ -153,11 +175,18 @@ class BaseVisualization:
         if column_titles:
             self.set_column_titles(column_titles)
 
-        # if hasattr(self.axes, "nrows") and (self.axes.nrows > 1):
-        #     self.set_row_titles()
+        if row_titles:
+            self.set_row_titles(row_titles)
 
-    def get_figure(self):
-        return self.axes[0, 0].get_figure()
+        self.set_artists(**kwargs)
+
+        self.set_xlabel(xlabel)
+        self.set_ylabel(ylabel)
+
+        self.adjust_coordinate_limits_to_artists()
+
+        if common_scale:
+            self.set_common_value_limits()
 
     @property
     def autoscale(self):
@@ -179,6 +208,9 @@ class BaseVisualization:
     @property
     def axes(self):
         return self._axes
+
+    def get_figure(self):
+        return self.axes[0, 0].get_figure()
 
     def set_xlabel(self, label: str = None):
         for i in np.ndindex(self.axes.shape):
@@ -233,22 +265,12 @@ class BaseVisualization:
 
     def set_column_titles(
         self,
-        titles: str | list[str] | bool = None,
+        titles: str | list[str],
         pad: float = 10.0,
-        format: str = ".3g",
-        units: str = None,
         fontsize: float = 12,
         **kwargs,
     ):
-        if titles is None or titles is True:
-            titles = [
-                title[0]
-                for title in _get_axes_titles(
-                    self.ensemble_axes_metadata, self.axes_types, self.axes.shape
-                )[:: self.axes.shape[1]]
-            ]
-
-        elif isinstance(titles, str):
+        if isinstance(titles, str):
             titles = [titles] * self.axes.shape[0]
 
         for column_title in self._column_titles:
@@ -273,23 +295,11 @@ class BaseVisualization:
 
     def set_row_titles(
         self,
-        titles: str | list[str] = None,
+        titles: str | list[str],
         shift: float = 0.0,
-        format: str = ".3g",
-        units: str = None,
         fontsize: float = 12,
         **kwargs,
     ):
-        if titles is None:
-            titles = [
-                title[1]
-                for title in _get_axes_titles(
-                    self.ensemble_axes_metadata, self.axes_types, self.axes.shape
-                )[: self.axes.shape[1]]
-            ]
-        elif isinstance(titles, str):
-            titles = [titles] * self.axes.shape[1]
-
         for row_title in self._row_titles:
             row_title.remove()
 
@@ -311,55 +321,55 @@ class BaseVisualization:
 
         self._row_titles = row_titles
 
-    def set_panel_labels(
-        self,
-        labels: str = None,
-        frameon: bool = True,
-        loc: str = "upper left",
-        pad: float = 0.1,
-        borderpad: float = 0.1,
-        prop: dict = None,
-        formatting: str = ".3g",
-        units: str = None,
-        **kwargs,
-    ):
-        if labels is None:
-            titles = _get_axes_titles(
-                self.ensemble_axes_metadata, self.axes_types, self.axes.shape
-            )
-            labels = ["\n".join(title) for title in titles]
-
-        if not isinstance(labels, (tuple, list)):
-            raise ValueError()
-
-        if len(labels) != np.array(self.axes).size:
-            raise ValueError()
-
-        if prop is None:
-            prop = {}
-
-        for old_label in self._panel_labels:
-            old_label.remove()
-
-        panel_labels = []
-        for ax, label in zip(np.array(self.axes).ravel(), labels):
-            anchored_text = AnchoredText(
-                label,
-                pad=pad,
-                borderpad=borderpad,
-                frameon=frameon,
-                loc=loc,
-                prop=prop,
-                **kwargs,
-            )
-            anchored_text.formatting = formatting
-
-            anchored_text.patch.set_boxstyle("round,pad=0.,rounding_size=0.2")
-            ax.add_artist(anchored_text)
-
-            panel_labels.append(anchored_text)
-
-        self._panel_labels = panel_labels
+    # def set_panel_labels(
+    #     self,
+    #     labels: str = None,
+    #     frameon: bool = True,
+    #     loc: str = "upper left",
+    #     pad: float = 0.1,
+    #     borderpad: float = 0.1,
+    #     prop: dict = None,
+    #     formatting: str = ".3g",
+    #     units: str = None,
+    #     **kwargs,
+    # ):
+    #     if labels is None:
+    #         titles = _get_axes_titles(
+    #             self.ensemble_axes_metadata, self.axes_types, self.axes.shape
+    #         )
+    #         labels = ["\n".join(title) for title in titles]
+    #
+    #     if not isinstance(labels, (tuple, list)):
+    #         raise ValueError()
+    #
+    #     if len(labels) != np.array(self.axes).size:
+    #         raise ValueError()
+    #
+    #     if prop is None:
+    #         prop = {}
+    #
+    #     for old_label in self._panel_labels:
+    #         old_label.remove()
+    #
+    #     panel_labels = []
+    #     for ax, label in zip(np.array(self.axes).ravel(), labels):
+    #         anchored_text = AnchoredText(
+    #             label,
+    #             pad=pad,
+    #             borderpad=borderpad,
+    #             frameon=frameon,
+    #             loc=loc,
+    #             prop=prop,
+    #             **kwargs,
+    #         )
+    #         anchored_text.formatting = formatting
+    #
+    #         anchored_text.patch.set_boxstyle("round,pad=0.,rounding_size=0.2")
+    #         ax.add_artist(anchored_text)
+    #
+    #         panel_labels.append(anchored_text)
+    #
+    #     self._panel_labels = panel_labels
 
     def axis(self, mode: str = "all", ticks: bool = True, spines: bool = True):
         if mode == "all":
@@ -394,130 +404,83 @@ class BaseVisualization:
         self._indices = indices
         for i in np.ndindex(self.axes.shape):
             data = self._data.get_data_for_indices(indices, i)
+
             self._artists[i].set_data(data)
 
-    @abstractmethod
-    def set_artists(self, value_limits: list[float], power: float = 1):
-        pass
-
-    def layout_widgets(self):
-        widgets = self.make_widgets()
-
-        scale_box = ipywidgets.VBox(
-            [
-                ipywidgets.HBox(
-                    [
-                        widgets["reset_button"],
-                        widgets["continuous_update_button"],
-                    ]
-                ),
-                ipywidgets.HBox(
-                    [
-                        widgets["scale_button"],
-                        widgets["autoscale_button"],
-                    ]
-                ),
-            ]
-        )
-        scale_box.layout = ipywidgets.Layout(width="300px")
-
-        return ipywidgets.HBox(
-            [
-                ipywidgets.VBox(
-                    [
-                        ipywidgets.VBox(widgets["sliders"]),
-                        scale_box,
-                    ]
-                ),
-                widgets["canvas"],
-            ]
-        )
-
-
-class Visualization1D(BaseVisualization):
-    def __init__(
+    def set_artists(
         self,
-        data,
-        ax: Axes = None,
-        xlabel: str = None,
-        ylabel: str = None,
-        common_scale: bool = True,
-        figsize: tuple[float, float] = None,
-        interact: bool = False,
-        title: bool | str = True,
-        legend: bool = True,
         **kwargs,
     ):
-        super().__init__(
-            data=data,
-            ax=ax,
-            aspect=False,
-            interact=interact,
-            figsize=figsize,
-            share_x=True,
-            share_y=common_scale,
-            title=title,
-        )
+        self.remove_artists()
 
-        self.set_artists(**kwargs)
-
-        self.set_xlabel(xlabel)
-        self.set_ylabel(ylabel)
-
-        if data.overlay and legend:
-            self.set_legends()
-
-        if not common_scale:
-            self.axes.set_sizes(padding=0.5)
-
-        for ax in np.array(self.axes).ravel():
-            ax.ticklabel_format(
-                style="sci", axis="y", scilimits=(0, 0), useMathText=True
-            )
-            ax.get_yaxis().get_offset_text().set_horizontalalignment("center")
-            ax.yaxis.set_offset_position("left")
-
-    def set_artists(self, **kwargs):
         artists = np.zeros(self.axes.shape, dtype=object)
-
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
-            data = self.data.get_data_for_indices(self._indices, i)
+            caxes = self.axes._caxes[i]
 
-            artist = LinesArtist(ax, data, **kwargs)
+            data = self._data.get_data_for_indices(self._indices, i)
+            artist_type = data.get_artist()
+
+            artist = artist_type(
+                ax=ax,
+                caxes=caxes,
+                data=data,
+                **kwargs,
+            )
+
             artists.itemset(i, artist)
 
         self._artists = artists
 
-    def set_legends(self, loc: str = "first", **kwargs):
-        indices = [index for index in np.ndindex(*self.axes.shape)]
+    def apply_to_artists(self, name, locs: str | tuple[int, ...] = "all", **kwargs):
+        if isinstance(locs, str):
+            locs = self.axes._axis_location_to_indices(locs)
 
-        if loc == "first":
-            loc = indices[:1]
-        elif loc == "last":
-            loc = indices[-1:]
-        elif loc == "all":
-            loc = indices
+        if not hasattr(self._data.get_artist(), name):
+            raise RuntimeError(
+                f"artist of type '{self._data.get_artist().__name__}' does not have a method '{name}'"
+            )
+
+        for i in locs:
+            getattr(self.artists[i], name)(**kwargs)
+
+    def set_legend(self, **kwargs):
+        self.apply_to_artists("set_legend", locs="all", **kwargs)
+
+    def set_cbars(self, **kwargs):
+        self.apply_to_artists("set_cbars", locs="all", **kwargs)
+
+    def _change_artist_type(self):
+        artist = self.data.get_artist()
+
+        if self.data.complex_out:
+            self.axes.set_cbar_layout(ncbars=2)
+        else:
+            self.axes.set_cbar_layout(ncbars=1)
+
+        self.remove_artists()
 
         for i in np.ndindex(self.axes.shape):
-            if i in loc:
-                self.axes[i].legend(**kwargs)
+            ax = self.axes[i]
+            caxes = self.axes._caxes[i]
+            data = self._data.get_data_for_indices(self._indices, i)
+            self.artists[i] = self.artists[i]._change_artist_type(
+                artist, ax, data, caxes=caxes
+            )
+
+    def set_complex_conversion(self, complex_conversion: str):
+        self.data.complex_conversion = complex_conversion
+        self._change_artist_type()
+
+    def set_cmap(self, cmap):
+        cmap = validate_cmap(cmap, self.data)
+        self.apply_to_artists("set_cmap", cmap=cmap)
+
+    def set_scale_bars(self, locs: str = "lower right", **kwargs):
+        self.apply_to_artists("set_scale_bars", locs=locs, **kwargs)
 
 
-def validate_cmap(cmap, data):
-    if cmap is None:
-        if data.is_complex and data.complex_conversion in ("none", "phase"):
-            cmap = config.get("visualize.phase_cmap", "hsluv")
-        else:
-            cmap = config.get("visualize.cmap", "viridis")
-
-    if cmap == "hsluv":
-        cmap = hsluv_cmap
-
-    return cmap
-
-
-class Visualization2D(BaseVisualization):
+class Visualization2D(Visualization):
     def __init__(
         self,
         data: VisualizationData,
@@ -534,14 +497,13 @@ class Visualization2D(BaseVisualization):
         cbar: bool = False,
         figsize: tuple[float, float] = None,
         interact: bool = False,
-        row_titles: list[str] = None,
         column_titles: list[str] = None,
+        row_titles: list[str] = None,
         **kwargs,
     ):
         self._artists = None
         self._scale_bars = None
-
-        artist = self._get_artist_type(data)
+        artist = data.get_artist()
 
         if cbar:
             ncbars = artist.num_cbars
@@ -558,8 +520,8 @@ class Visualization2D(BaseVisualization):
             aspect=True,
             share_x=True,
             share_y=True,
-            # row_titles=row_titles,
-            # column_titles=column_titles,
+            column_titles=column_titles,
+            row_titles=row_titles,
         )
 
         cmap = validate_cmap(cmap, data)
@@ -584,12 +546,6 @@ class Visualization2D(BaseVisualization):
 
         if cbar:
             self.set_cbars(label=cbar_label)
-
-    def _get_artist_type(self, data, complex_conversion=None):
-        if data.is_complex and complex_conversion in ("domain_coloring", "none", None):
-            return DomainColoringArtist
-        else:
-            return ImageArtist
 
     def set_artists(
         self,
@@ -645,7 +601,6 @@ class Visualization2D(BaseVisualization):
         self.remove_artists()
 
         for i in np.ndindex(self.axes.shape):
-            print(self._indices)
             data = self._data.get_data_for_indices(self._indices, i)
             self.artists[i] = self.artists[i]._change_artist_type(
                 artist, self.axes[i], data
@@ -660,10 +615,6 @@ class Visualization2D(BaseVisualization):
 
         for artist in self.artists.ravel():
             artist.set_cmap(cmap)
-
-    def set_extent(self, extent: list[float] = None):
-        for artist in self._artists.ravel():
-            artist.set_extent(extent)
 
     def set_scale_bars(self, panel_locs: str = "lower right", **kwargs):
         if isinstance(panel_locs, str):

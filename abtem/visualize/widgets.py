@@ -11,7 +11,7 @@ from abtem.core import config
 from abtem.core.axes import AxisMetadata
 
 if TYPE_CHECKING:
-    from abtem.visualize.visualizations import BaseVisualization
+    from abtem.visualize.visualizations import Visualization
 
 
 try:
@@ -40,38 +40,7 @@ def _format_options(options):
     return formatted_options
 
 
-def make_reset_button(sliders):
-    reset_button = widgets.Button(
-        description="Reset sliders",
-        disabled=False,
-    )
-
-    default_indices = [slider.index for slider in sliders]
-
-    def reset(*args):
-        for slider, index in zip(sliders, default_indices):
-            slider.index = index
-
-    reset_button.on_click(reset)
-    return reset_button
-
-
-def make_continuous_update_button(
-    sliders: list[widgets.SelectionSlider | widgets.SelectionRangeSlider],
-    continuous_update: bool = None,
-) -> widgets.ToggleButton:
-    if continuous_update is None:
-        continuous_update = config.get("visualize.continuous_update", False)
-
-    continuous_update_checkbox = widgets.ToggleButton(
-        description="Continuous update", value=continuous_update
-    )
-    for slider in sliders:
-        link((continuous_update_checkbox, "value"), (slider, "continuous_update"))
-    return continuous_update_checkbox
-
-
-def make_slider_from_ensemble_axis(
+def slider_from_axes_metadata(
     axis_metadata: AxisMetadata,
     length,
     slider_type=None,
@@ -173,18 +142,6 @@ def _make_vmin_vmax_slider(visualization):
 
     vmin_vmax_slider.observe(vmin_vmax_slider_changed, "value")
     return vmin_vmax_slider
-
-
-_default_cmap_options = [
-    "default",
-    "viridis",
-    "magma",
-    "gray",
-    "jet",
-    "hsluv",
-    "hsv",
-    "twilight",
-]
 
 
 class BaseGUI(widgets.HBox):
@@ -289,6 +246,18 @@ class BaseGUI(widgets.HBox):
         return self._powerscale_slider
 
 
+_default_cmap_options = [
+    "default",
+    "viridis",
+    "magma",
+    "gray",
+    "jet",
+    "hsluv",
+    "hsv",
+    "twilight",
+]
+
+
 class ImageGUI(BaseGUI):
     def __init__(self, sliders, canvas, cmap_options=None):
         self._complex_dropdown = widgets.Dropdown(
@@ -313,9 +282,7 @@ class ImageGUI(BaseGUI):
             description="Colormap:",
         )
 
-        self.children = self.children
-
-        super().__init__(sliders, canvas, self._cmap_dropdown)
+        super().__init__(sliders, canvas, self._complex_dropdown, self._cmap_dropdown)
 
     def attach_visualization(self, visualization):
         super().attach_visualization(visualization)
@@ -344,61 +311,8 @@ class ImageGUI(BaseGUI):
         return self._complex_dropdown
 
 
-def make_complex_visualization_dropdown(
-    visualizations,
-):
-    if not isinstance(visualizations, Sequence):
-        visualizations = [visualizations]
-
-    def dropdown_changed(change):
-        for visualization in visualizations:
-            visualization.set_complex_conversion(change["new"])
-
-    dropdown = widgets.Dropdown(
-        options=[
-            ("Domain coloring", "none"),
-            ("Amplitude", "abs"),
-            ("Intensity", "intensity"),
-            ("Phase", "phase"),
-            ("Real", "real"),
-            ("Imaginary", "imag"),
-        ],
-        value="none",
-        description="Complex visualization:",
-    )
-
-    dropdown.observe(dropdown_changed, "value")
-    return dropdown
-
-
-def make_cmap_dropdown(
-    visualizations,
-):
-    if not isinstance(visualizations, Sequence):
-        visualizations = [visualizations]
-
-    def dropdown_changed(change):
-        cmap = change["new"]
-        if cmap == "default":
-            cmap = None
-        for visualization in visualizations:
-            visualization.set_cmaps(cmap)
-
-    options = ["default", "viridis", "magma", "gray", "jet", "hsluv", "hsv", "twilight"]
-
-    dropdown = widgets.Dropdown(
-        options=options,
-        value="default",
-        description="Colormap:",
-    )
-
-    dropdown.observe(dropdown_changed, "value")
-
-    return dropdown
-
-
 def make_toggle_hkl_button(visualization):
-    toggle_hkl_button = ipywidgets.ToggleButton(description="Toggle hkl", value=False)
+    toggle_hkl_button = widgets.ToggleButton(description="Toggle hkl", value=False)
 
     def update_toggle_hkl_button(change):
         if change["new"]:

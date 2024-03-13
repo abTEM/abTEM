@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from abc import abstractmethod
+from abc import abstractmethod, ABCMeta
 
 import numpy as np
 
-from abtem.visualize.artists import ImageArtist, DomainColoringArtist, LinesArtist
+from abtem.visualize.artists import (
+    ImageArtist,
+    DomainColoringArtist,
+    LinesArtist,
+    ScatterArtist,
+)
+from abtem.visualize.widgets import ImageGUI, BaseGUI
 
 
 def reduce_complex(array, method):
@@ -27,20 +33,32 @@ def reduce_complex(array, method):
     return array
 
 
-class VisualizationData:
+def _validate_axes_types(overlay, explode, ensemble_dims):
+    if explode is True:
+        explode = tuple(range(ensemble_dims))
+    elif explode is False:
+        explode = ()
+
+    if overlay is True:
+        overlay = tuple(range(ensemble_dims))
+    elif overlay is False:
+        overlay = ()
+
+    if len(overlay + explode) > ensemble_dims:
+        raise ValueError
+
+    if len(set(explode) & set(overlay)) > 0:
+        raise ValueError("An axis cannot be both exploded and overlaid.")
+
+    return overlay, explode
+
+
+class VisualizationData(metaclass=ABCMeta):
     def __init__(self, shape, complex_conversion, base_dims, overlay=(), explode=()):
         ensemble_dims = len(shape) - base_dims
         ensemble_shape = shape[:ensemble_dims]
 
-        if explode is True:
-            explode = tuple(range(ensemble_dims))
-        elif explode is False:
-            explode = ()
-
-        if overlay is True:
-            overlay = tuple(range(ensemble_dims))
-        elif overlay is False:
-            overlay = ()
+        overlay, explode = _validate_axes_types(overlay, explode, ensemble_dims)
 
         self._overlay = overlay
         self._explode = explode
@@ -55,18 +73,12 @@ class VisualizationData:
         if set(explode + overlay) & base_axes:
             raise ValueError("")
 
-        if len(overlay + explode) > ensemble_dims:
-            raise ValueError
-
-        if len(set(explode) & set(overlay)) > 0:
-            raise ValueError("An axis cannot be both exploded and overlaid.")
-
     @property
     def axes_shape(self):
         return tuple(
             n
             for i, n in enumerate(self._ensemble_shape)
-            if not i in self._indexing_axes
+            if not i in self._indexing_axes and i not in self.overlay
         )
 
     def _reduce_arrays(
@@ -91,11 +103,11 @@ class VisualizationData:
                     validated_indices += (slice(*indices[j]),)
                     summed_axes += (i - removed_axes,)
                 j += 1
-            elif i in self._explode:
+            elif i in self.explode:
                 validated_indices += (axis_indices[k],)
                 k += 1
                 removed_axes += 1
-            else:
+            elif i not in self.overlay:
                 validated_indices += (0,)
 
         output = ()
@@ -118,6 +130,10 @@ class VisualizationData:
     @property
     def ensemble_shape(self):
         return self._ensemble_shape
+
+    @property
+    def index_axes(self):
+        return self._indexing_axes
 
     @property
     @abstractmethod
@@ -144,6 +160,10 @@ class VisualizationData:
     def get_artist(self):
         pass
 
+    @abstractmethod
+    def get_gui(self):
+        pass
+
 
 class LinesData(VisualizationData):
     def __init__(self, x, y, complex_conversion: str = "none", overlay=(), explode=()):
@@ -167,6 +187,9 @@ class LinesData(VisualizationData):
         else:
             return LinesArtist
 
+    def get_gui(self):
+        return BaseGUI
+
     def get_data_for_indices(self, indices, axis_indices):
         (y,) = self._reduce_arrays(self._y, indices=indices, axis_indices=axis_indices)
         y = reduce_complex(y, self.complex_conversion)
@@ -176,7 +199,14 @@ class LinesData(VisualizationData):
 
 
 class ImageData(VisualizationData):
-    def __init__(self, array, complex_conversion: str = "none", overlay=(), explode=()):
+    def __init__(
+        self,
+        array,
+        complex_conversion: str = "none",
+        overlay=(),
+        explode=(),
+        value_label: str = None,
+    ):
         self._array = array
         super().__init__(
             shape=array.shape,
@@ -187,14 +217,24 @@ class ImageData(VisualizationData):
         )
 
     @property
+    def array(self):
+        return self._array
+
+    @property
     def is_complex(self):
         return np.iscomplexobj(self._array)
+
+    def get_value_label(self):
+        pass
 
     def get_artist(self):
         if self.complex_out:
             return DomainColoringArtist
         else:
             return ImageArtist
+
+    def get_gui(self):
+        return ImageGUI
 
     def get_data_for_indices(self, indices, axis_indices):
         (array,) = self._reduce_arrays(
@@ -205,25 +245,51 @@ class ImageData(VisualizationData):
 
 
 class PointsData(VisualizationData):
-    def __init__(self, points, array):
+    def __init__(
+        self,
+        points,
+        array,
+        complex_conversion: str = "none",
+        overlay=(),
+        explode=(),
+    ):
         self._points = points
         self._array = array
+
+        super().__init__(
+            shape=array.shape,
+            complex_conversion=complex_conversion,
+            base_dims=1,
+            overlay=overlay,
+            explode=explode,
+        )
 
     @property
     def is_complex(self):
         return np.iscomplexobj(self._array)
 
+    @property
+    def array(self):
+        return self._array
+
+    @property
+    def points(self):
+        return self._points
+
+    def get_artist(self):
+        if self.complex_out:
+            raise NotImplementedError
+        else:
+            return ScatterArtist
+
+    @property
     def ensemble_shape(self):
         return self._array.shape[:-1]
 
-    def get_array_for_index(self, index, complex_conversion=None):
-        array = self._array[index]
-        points = self._points[index]
-        array = complex_conversion(array, complex_conversion)
+    def get_data_for_indices(self, indices, axis_indices):
+        points, array = self._reduce_arrays(
+            self._points, self._array, indices=indices, axis_indices=axis_indices
+        )
 
-        xp = get_array_module(array)
-
-        if hasattr(xp, "asnumpy"):
-            array = xp.asnumpy(array)
-
-        return self.__class__(array, points)
+        array = reduce_complex(self._array, self.complex_conversion)
+        return self.__class__(points, array, complex_conversion=self.complex_conversion)

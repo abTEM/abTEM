@@ -332,64 +332,12 @@ class AxesGrid:
         return self._axes.shape
 
 
-def _axes_grid_cols_and_rows(shape):
-    if len(shape) > 0:
-        ncols = shape[0]
-    else:
-        ncols = 1
-
-    if len(shape) > 1:
-        nrows = shape[1]
-    else:
-        nrows = 1
-
-    return ncols, nrows
-
-
-def _find_axes_types(
-    ensemble_axes_metadata,
-    explode: bool | tuple[bool, ...] | None,
-    overlay: bool | tuple[bool, ...] | None,
-):
-    num_ensemble_axes = len(ensemble_axes_metadata)
-
-    default_axes_types = [
-        axis._default_type if axis._default_type is not None else "index"
-        for axis in ensemble_axes_metadata
-    ]
-
-    if explode is True:
-        explode = tuple(range(num_ensemble_axes))
-    elif explode is False or explode is None:
-        explode = ()
-
-    if overlay is True:
-        overlay = tuple(range(num_ensemble_axes))
-    elif overlay is False or overlay is None:
-        overlay = ()
-
-    if len(set(explode) & set(overlay)) > 0:
-        raise ValueError("An axis cannot be both exploded and overlaid.")
-
-    axes_types = []
-    for i in range(num_ensemble_axes):
-        if i in explode:
-            axes_types.append("explode")
-        elif i in overlay:
-            axes_types.append("overlay")
-        else:
-            axes_types.append(default_axes_types[i])
-
-    return axes_types
-
-
 def _validate_axes(
     shape,
     ax: Axes = None,
     ncbars: int = 0,
     common_color_scale: bool = False,
     figsize: tuple[float, float] = None,
-    ioff: bool = False,
     aspect: bool = True,
     sharex: bool = True,
     sharey: bool = True,
