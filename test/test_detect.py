@@ -14,8 +14,9 @@ from abtem.detectors import (
 from abtem.waves import Probe
 from utils import gpu
 
-#@reproduce_failure('6.61.0', b'AXicY2AAgwMGDCiA0aIBSAIAF6sBqg==')
-#"@reproduce_failure('6.59.0', b'AXicY2AAgwMGDCiA0aKBiYEBABexAaw=')
+
+# @reproduce_failure('6.61.0', b'AXicY2AAgwMGDCiA0aIBSAIAF6sBqg==')
+# "@reproduce_failure('6.59.0', b'AXicY2AAgwMGDCiA0aKBiYEBABexAaw=')
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -79,18 +80,28 @@ def test_annular_detector(data, lazy, device):
         assert measurement.device == "cpu"
 
 
+# @reproduce_failure("6.96.4", b"AXicY2BgZEAHBwyQ2JaMQMA5E8ZnKUBSiKRVAgB64wMe")
+# @reproduce_failure("6.96.4", b"AXicY+BkZEAHBwyQ2JZAgpEZrojx32aEJJJWKwCFMwPm")
+# @reproduce_failure("6.96.4", b"AXicYxBlZEAHBwyQ2MFAgrX9EYzP0t+PkKxBMK0BtY0FYQ==")
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [False])
-@pytest.mark.parametrize("device", [gpu, "cpu"])
-
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_integrate_consistent(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))
 
     assume(min(waves.cutoff_angles) > 10.0)
 
+    min_extent = max(waves.angular_sampling)
+    max_extent = np.floor(min(waves.cutoff_angles)) - 1.0
+
+    assume(min_extent < max_extent)
+
     extent = np.floor(
         data.draw(
-            st.floats(min_value=1.0, max_value=np.floor(min(waves.cutoff_angles)) - 1.0)
+            st.floats(
+                min_value=min_extent,
+                max_value=max_extent,
+            )
         )
     )
     inner = np.floor(
@@ -98,8 +109,15 @@ def test_integrate_consistent(data, lazy, device):
     )
     outer = inner + extent
 
+    assume(
+        AnnularDetector(inner=inner, outer=outer).get_detector_region(waves).array.sum()
+        > 0
+    )
+
     annular_measurement = AnnularDetector(inner=inner, outer=outer).detect(waves)
-    flexible_measurement = FlexibleAnnularDetector().detect(waves)
+    flexible_measurement = FlexibleAnnularDetector(
+        step_size=1, outer=np.floor(min(waves.cutoff_angles))
+    ).detect(waves)
     pixelated_measurement = PixelatedDetector(max_angle="cutoff").detect(waves)
 
     assert annular_measurement == flexible_measurement.integrate_radial(inner, outer)
@@ -118,10 +136,15 @@ def test_interpolate_diffraction_patterns(gpts, extent, device):
         extent=(extent * 2, extent),
         gpts=(gpts * 2, gpts),
         device=device,
-        soft = False
+        soft=False,
     )
     probe2 = Probe(
-        energy=100e3, semiangle_cutoff=30, extent=extent, gpts=gpts, device=device, soft=False
+        energy=100e3,
+        semiangle_cutoff=30,
+        extent=extent,
+        gpts=gpts,
+        device=device,
+        soft=False,
     )
 
     measurement1 = (
@@ -131,6 +154,8 @@ def test_interpolate_diffraction_patterns(gpts, extent, device):
         .to_cpu()
     )
 
-    measurement2 = probe2.build(lazy=False).diffraction_patterns(max_angle=None).to_cpu()
+    measurement2 = (
+        probe2.build(lazy=False).diffraction_patterns(max_angle=None).to_cpu()
+    )
 
     assert np.allclose(measurement1.array, measurement2.array)

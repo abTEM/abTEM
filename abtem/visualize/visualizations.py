@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import itertools
-from abc import abstractmethod
+from typing import TYPE_CHECKING
 
 import matplotlib
+import matplotlib as mpl
+import matplotlib.colorbar as cbar
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
@@ -15,25 +17,23 @@ from matplotlib.collections import PatchCollection
 from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
-from matplotlib.ticker import ScalarFormatter
-import matplotlib.colorbar as cbar
-import matplotlib as mpl
+
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
-from abtem.core.colors import hsluv_cmap
 from abtem.core.utils import label_to_index
 from abtem.visualize.artists import (
     ImageArtist,
     DomainColoringArtist,
     LinesArtist,
-    ScaleBar,
     validate_cmap,
 )
 from abtem.visualize.axes_grid import (
-    _validate_axes,
     AxesGrid,
 )
-from abtem.visualize.data import VisualizationData
+from abtem.visualize.widgets import slider_from_axes_metadata
+
+if TYPE_CHECKING:
+    from abtem.measurements import BaseMeasurements
 
 
 def _format_options(options):
@@ -107,39 +107,113 @@ def _make_cax(ax, use_gridspec=True, **kwargs):
     # make_axes calls add_{axes,subplot} which changes gca; undo that.
     fig.sca(current_ax)
     cax.grid(visible=False, which="both", axis="both")
+    return cax
+
+
+def _validate_axes_types(overlay, explode, ensemble_dims):
+    if explode is True:
+        explode = tuple(range(ensemble_dims))
+    elif explode is False:
+        explode = ()
+
+    if overlay is True:
+        overlay = tuple(range(ensemble_dims))
+    elif overlay is False:
+        overlay = ()
+
+    if len(overlay + explode) > ensemble_dims:
+        raise ValueError
+
+    if len(set(explode) & set(overlay)) > 0:
+        raise ValueError("An axis cannot be both exploded and overlaid.")
+
+    return overlay, explode
+
+
+def convert_complex(measurement: BaseMeasurements, method: str) -> BaseMeasurements:
+    if not measurement.is_complex:
+        return measurement
+
+    if method in ("domain_coloring", "none", None):
+        return measurement
+
+    if method in ("phase", "angle"):
+        measurement = measurement.phase()
+    elif method in ("amplitude", "abs"):
+        measurement = measurement.abs()
+    elif method in ("intensity", "abs2"):
+        measurement = measurement.intensity()
+    elif method in ("real",):
+        measurement = measurement.real()
+    elif method in ("imaginary", "imag"):
+        measurement = measurement.imag()
+    else:
+        raise ValueError(f"complex conversion '{method}" f"' not implemented")
+
+    return measurement
+
+
+def _get_artist_type(measurement, complex_conversion):
+    if len(measurement.base_shape) == 2:
+        if measurement.is_complex and (
+            complex_conversion in ("domain_coloring", "none", None)
+        ):
+            return DomainColoringArtist
+        else:
+            return ImageArtist
+    elif len(measurement.base_shape) == 1:
+        return LinesArtist
 
 
 class Visualization:
     def __init__(
         self,
-        data: VisualizationData,
+        measurement,
         ax: Axes = None,
         figsize: tuple[int, int] = None,
         aspect: bool = False,
         common_scale: bool = False,
-        xlabel: str = None,
-        ylabel: str = None,
-        ncbars: int = 0,
+        overlay: bool | tuple[int, ...] = False,
+        explode: bool | tuple[int, ...] = False,
         share_x: bool = False,
         share_y: bool = False,
+        cbar: bool = False,
         interactive: bool = True,
-        column_titles: list[str] = None,
-        row_titles: list[str] = None,
+        title: str = None,
         **kwargs,
     ):
-        self._data = data
-        self._autoscale = config.get("visualize.autoscale", False)
+        self._measurement = measurement
 
-        if ax is None and interactive:
-            fig = plt.figure(figsize=figsize)
-        elif ax is None:
+        overlay, explode = _validate_axes_types(
+            overlay, explode, len(measurement.ensemble_shape)
+        )
+
+        self._overlay = overlay
+        self._explode = explode
+
+        if ax is None and not interactive:
             with plt.ioff():
                 fig = plt.figure(figsize=figsize)
+
+        elif ax is None:
+            fig = plt.figure(figsize=figsize)
         else:
             fig = ax.get_figure()
 
+        artist_type = _get_artist_type(measurement, complex_conversion="none")
+
+        if cbar:
+            ncbars = artist_type.num_cbars
+        else:
+            ncbars = 0
+
         if ax is None:
-            shape = data.axes_shape + (0,) * (2 - len(data.axes_shape))
+            axes_shape = tuple(
+                n
+                for i, n in enumerate(measurement.ensemble_shape)
+                if not i in self.indexing_axes and i not in overlay
+            )
+            shape = axes_shape + (0,) * (2 - len(axes_shape))
             ncols, nrows = (max(shape[0], 1), max(shape[1], 1))
 
             if common_scale:
@@ -162,9 +236,11 @@ class Visualization:
             axes = np.array([[ax]])
 
         self._axes = axes
+
         self._indices = ()
 
         self._complex_conversion = "none"
+        self._autoscale = config.get("visualize.autoscale", False)
         self._column_titles = []
         self._row_titles = []
         self._panel_labels = []
@@ -172,34 +248,110 @@ class Visualization:
 
         self.get_figure().canvas.header_visible = False
 
-        if column_titles:
+        if isinstance(title, str):
+            self.set_column_titles(title)
+
+        elif title and len(explode) > 0:
+            column_titles = [
+                l.format_title(".3g") for l in measurement.axes_metadata[explode[0]]
+            ]
+
             self.set_column_titles(column_titles)
 
-        if row_titles:
+        if title and len(explode) > 1:
+            row_titles = [
+                l.format_title(".3g") for l in measurement.axes_metadata[explode[1]]
+            ]
+
             self.set_row_titles(row_titles)
 
         self.set_artists(**kwargs)
-
-        self.set_xlabel(xlabel)
-        self.set_ylabel(ylabel)
 
         self.adjust_coordinate_limits_to_artists()
 
         if common_scale:
             self.set_common_value_limits()
 
+        if artist_type is DomainColoringArtist:
+            self.axes.set_sizes(cbar_spacing=0.5)
+
+    def interact(self, gui_type, display):
+        if not "ipympl" in matplotlib.get_backend():
+            raise RuntimeError(
+                f"interactive visualizations requires the 'ipympl' matplotlib backend"
+            )
+
+        sliders = [
+            slider_from_axes_metadata(
+                self.measurement.axes_metadata[i], self.measurement.shape[i]
+            )
+            for i in self.indexing_axes
+        ]
+
+        gui = gui_type(sliders, self.axes.fig.canvas)
+        gui.attach_visualization(self)
+
+        if display:
+            from IPython.display import display as ipython_display
+
+            ipython_display(gui)
+
+        return gui
+
     @property
     def autoscale(self):
         return self._autoscale
+
+    @property
+    def indexing_axes(self):
+        ensemble_axes = set(range(len(self.measurement.ensemble_shape)))
+        return tuple(ensemble_axes - set(self._overlay) - set(self._explode))
 
     @autoscale.setter
     def autoscale(self, autoscale: bool):
         self._autoscale = autoscale
         self.set_value_limits()
 
+    def _reduce_measurement(
+        self, indices: tuple[int | tuple[int, int], ...], axis_indices
+    ) -> BaseMeasurements:
+        assert len(indices) <= len(self.indexing_axes)
+        assert len(axis_indices) == 2
+
+        validated_indices = ()
+        summed_axes = ()
+        removed_axes = 0
+        j = 0
+        k = 0
+        for i in range(len(self._measurement.ensemble_shape)):
+            if i in self.indexing_axes:
+                if j >= len(indices):
+                    validated_indices += (0,)
+                elif isinstance(indices[j], int):
+                    validated_indices += (indices[j],)
+                    removed_axes += 1
+                elif isinstance(indices[j], tuple):
+                    validated_indices += (slice(*indices[j]),)
+                    summed_axes += (i - removed_axes,)
+                j += 1
+            elif i in self._explode:
+                validated_indices += (axis_indices[k],)
+                k += 1
+                removed_axes += 1
+            elif i not in self._overlay:
+                validated_indices += (0,)
+
+        measurement = self._measurement[validated_indices]
+        if len(summed_axes) > 0:
+            measurement = measurement.sum(axis=summed_axes)
+
+        measurement = convert_complex(measurement, self._complex_conversion)
+
+        return measurement
+
     @property
-    def data(self):
-        return self._data
+    def measurement(self) -> BaseMeasurements:
+        return self._measurement
 
     @property
     def artists(self):
@@ -213,21 +365,16 @@ class Visualization:
         return self.axes[0, 0].get_figure()
 
     def set_xlabel(self, label: str = None):
-        for i in np.ndindex(self.axes.shape):
-            self.axes[i].set_xlabel(label)
+        self.apply_to_artists("set_xlabel", label=label)
 
     def set_ylabel(self, label: str = None):
-        for i, j in np.ndindex(self.axes.shape):
-            if i == 0:
-                self.axes[i, j].set_ylabel(label)
-
-    def set_ylim(self, ylim: tuple[float, float] | list[float] = None):
-        for i in np.ndindex(self.axes.shape):
-            self.axes[i].set_ylim(ylim)
+        self.apply_to_artists("set_ylabel", label=label)
 
     def set_xlim(self, xlim: tuple[float, float] | list[float] = None):
-        for axes in np.array(self.axes).ravel():
-            axes.set_xlim(xlim)
+        self.apply_to_artists("set_xlim", xlim=xlim)
+
+    def set_ylim(self, ylim: tuple[float, float] | list[float] = None):
+        self.apply_to_artists("set_ylim", ylim=ylim)
 
     def adjust_coordinate_limits_to_artists(self):
         xlim = [np.inf, -np.inf]
@@ -395,16 +542,21 @@ class Visualization:
                 ax.spines["left"].set_visible(False)
 
     def remove_artists(self):
-        for ax in np.array(self.axes).ravel():
-            for child in ax.get_children():
-                if isinstance(child, AxesImage):
-                    child.remove()
+        if self.artists is None:
+            return
+
+        for artist in self.artists.ravel():
+            artist.remove()
+
+        # for ax in np.array(self.axes).ravel():
+        #     for child in ax.get_children():
+        #         if isinstance(child, AxesImage):
+        #             child.remove()
 
     def update_data_indices(self, indices):
         self._indices = indices
         for i in np.ndindex(self.axes.shape):
-            data = self._data.get_data_for_indices(indices, i)
-
+            data = self._reduce_measurement(indices, i)
             self._artists[i].set_data(data)
 
     def set_artists(
@@ -412,19 +564,28 @@ class Visualization:
         **kwargs,
     ):
         self.remove_artists()
+        artist_type = _get_artist_type(
+            self.measurement, complex_conversion=self._complex_conversion
+        )
 
         artists = np.zeros(self.axes.shape, dtype=object)
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
-            caxes = self.axes._caxes[i]
 
-            data = self._data.get_data_for_indices(self._indices, i)
-            artist_type = data.get_artist()
+            if hasattr(self.axes, "_caxes"):
+                caxes = self.axes._caxes[i]
+
+                if self.axes._cbar_mode == "single" and not i == (0, 0):
+                    caxes = None
+            else:
+                caxes = [_make_cax(ax) for _ in range(artist_type.num_cbars)]
+
+            measurement = self._reduce_measurement(self._indices, i)
 
             artist = artist_type(
                 ax=ax,
                 caxes=caxes,
-                data=data,
+                measurement=measurement,
                 **kwargs,
             )
 
@@ -433,13 +594,18 @@ class Visualization:
         self._artists = artists
 
     def apply_to_artists(self, name, locs: str | tuple[int, ...] = "all", **kwargs):
+        artist_type = _get_artist_type(self._measurement, self._complex_conversion)
+
+        if not hasattr(artist_type, name):
+            raise RuntimeError(
+                f"artist of type '{artist_type.__name__}' does not have a method '{name}'"
+            )
+
+        if not hasattr(self.axes, "_axis_location_to_indices"):
+            locs = tuple(i for i in np.ndindex(self.axes.shape))
+
         if isinstance(locs, str):
             locs = self.axes._axis_location_to_indices(locs)
-
-        if not hasattr(self._data.get_artist(), name):
-            raise RuntimeError(
-                f"artist of type '{self._data.get_artist().__name__}' does not have a method '{name}'"
-            )
 
         for i in locs:
             getattr(self.artists[i], name)(**kwargs)
@@ -451,192 +617,22 @@ class Visualization:
         self.apply_to_artists("set_cbars", locs="all", **kwargs)
 
     def _change_artist_type(self):
-        artist = self.data.get_artist()
-
-        if self.data.complex_out:
-            self.axes.set_cbar_layout(ncbars=2)
-        else:
-            self.axes.set_cbar_layout(ncbars=1)
-
-        self.remove_artists()
-
-        for i in np.ndindex(self.axes.shape):
-            ax = self.axes[i]
-            caxes = self.axes._caxes[i]
-            data = self._data.get_data_for_indices(self._indices, i)
-            self.artists[i] = self.artists[i]._change_artist_type(
-                artist, ax, data, caxes=caxes
-            )
+        artist_type = _get_artist_type(
+            self._measurement, complex_conversion=self._complex_conversion
+        )
+        self.axes.set_cbar_layout(ncbars=artist_type.num_cbars)
+        self.set_artists()
 
     def set_complex_conversion(self, complex_conversion: str):
-        self.data.complex_conversion = complex_conversion
+        self._complex_conversion = complex_conversion
         self._change_artist_type()
 
     def set_cmap(self, cmap):
-        cmap = validate_cmap(cmap, self.data)
+        cmap = validate_cmap(cmap, self.measurement, self._complex_conversion)
         self.apply_to_artists("set_cmap", cmap=cmap)
 
     def set_scale_bars(self, locs: str = "lower right", **kwargs):
         self.apply_to_artists("set_scale_bars", locs=locs, **kwargs)
-
-
-class Visualization2D(Visualization):
-    def __init__(
-        self,
-        data: VisualizationData,
-        ax: Axes = None,
-        xlabel: str = None,
-        ylabel: str = None,
-        cbar_label: str = None,
-        common_scale: bool = False,
-        cmap: str = None,
-        power: float = 1.0,
-        logscale: bool = False,
-        vmin: float = None,
-        vmax: float = None,
-        cbar: bool = False,
-        figsize: tuple[float, float] = None,
-        interact: bool = False,
-        column_titles: list[str] = None,
-        row_titles: list[str] = None,
-        **kwargs,
-    ):
-        self._artists = None
-        self._scale_bars = None
-        artist = data.get_artist()
-
-        if cbar:
-            ncbars = artist.num_cbars
-        else:
-            ncbars = 0
-
-        super().__init__(
-            data=data,
-            ax=ax,
-            common_scale=common_scale,
-            ncbars=ncbars,
-            interact=interact,
-            figsize=figsize,
-            aspect=True,
-            share_x=True,
-            share_y=True,
-            column_titles=column_titles,
-            row_titles=row_titles,
-        )
-
-        cmap = validate_cmap(cmap, data)
-
-        self.set_artists(
-            artist_type=artist,
-            vmin=vmin,
-            vmax=vmax,
-            power=power,
-            logscale=logscale,
-            cmap=cmap,
-            **kwargs,
-        )
-
-        self.set_xlabel(xlabel)
-        self.set_ylabel(ylabel)
-
-        self.adjust_coordinate_limits_to_artists()
-
-        if common_scale:
-            self.set_common_value_limits()
-
-        if cbar:
-            self.set_cbars(label=cbar_label)
-
-    def set_artists(
-        self,
-        artist_type,
-        vmin: float = None,
-        vmax: float = None,
-        power: float = 1.0,
-        logscale: bool = False,
-        cmap: str = None,
-        **kwargs,
-    ):
-        self.remove_artists()
-
-        artists = np.zeros(self.axes.shape, dtype=object)
-        for i in np.ndindex(self.axes.shape):
-            ax = self.axes[i]
-            data = self._data.get_data_for_indices(self._indices, i)
-
-            artist = artist_type(
-                ax=ax,
-                data=data,
-                cmap=cmap,
-                vmin=vmin,
-                vmax=vmax,
-                power=power,
-                logscale=logscale,
-                **kwargs,
-            )
-
-            artists.itemset(i, artist)
-
-        self._artists = artists
-
-    def set_cbars(self, **kwargs):
-        for i in np.ndindex(self.axes.shape):
-            artist = self._artists[i]
-
-            if hasattr(self.axes, "_caxes"):
-                caxes = self.axes._caxes[i]
-            else:
-                caxes = None
-
-            artist.set_cbars(caxes=caxes, **kwargs)
-
-    def _change_artist_type(self):
-        artist = self.data.get_artist()
-
-        if self.data.complex_out:
-            self.axes.set_cbar_layout(ncbars=2)
-        else:
-            self.axes.set_cbar_layout(ncbars=1)
-
-        self.remove_artists()
-
-        for i in np.ndindex(self.axes.shape):
-            data = self._data.get_data_for_indices(self._indices, i)
-            self.artists[i] = self.artists[i]._change_artist_type(
-                artist, self.axes[i], data
-            )
-
-    def set_complex_conversion(self, complex_conversion: str):
-        self.data.complex_conversion = complex_conversion
-        self._change_artist_type()
-
-    def set_cmap(self, cmap):
-        cmap = validate_cmap(cmap, self.data)
-
-        for artist in self.artists.ravel():
-            artist.set_cmap(cmap)
-
-    def set_scale_bars(self, panel_locs: str = "lower right", **kwargs):
-        if isinstance(panel_locs, str):
-            panel_locs = self.axes._axis_location_to_indices(panel_locs)
-
-        self._scale_bars = []
-        for panel_loc in panel_locs:
-            axes = self.axes[panel_loc]
-            self._scale_bars.append(ScaleBar(ax=axes, **kwargs))
-
-    # def add_area_indicator(self, area_indicator, panel="first", **kwargs):
-    #     xlim = self.axes[0, 0].get_xlim()
-    #     ylim = self.axes[0, 0].get_ylim()
-    #
-    #     for i, ax in enumerate(np.array(self.axes).ravel()):
-    #         if panel == "first" and i == 0:
-    #             area_indicator._add_to_visualization(ax, **kwargs)
-    #         elif panel == "all":
-    #             area_indicator._add_to_visualization(ax, **kwargs)
-    #
-    #         ax.set_xlim(xlim)
-    #         ax.set_ylim(ylim)
 
 
 _cube = np.array(

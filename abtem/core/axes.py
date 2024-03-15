@@ -65,9 +65,9 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
 def format_title(
     axes, formatting: str = ".3f", units: str = None, include_label: bool = True
 ):
-    try:
+    if units:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
-    except KeyError:
+    else:
         value = axes.values[0]
 
     units = _validate_units(units, axes.units)
@@ -105,7 +105,7 @@ class AxisMetadata:
     label: str = ""
     units: str = None
     _tex_label: str = None
-    _default_type: str = None
+    _default_type: str = "index"
     _concatenate: bool = True
     _ensemble_mean: bool = False
     _squeeze: bool = False
@@ -219,6 +219,14 @@ class LinearAxis(AxisMetadata):
             _concatenate=self._concatenate,
         )
 
+    def convert_units(self, units: str, **kwargs):
+        new_copy = self.copy()
+        new_copy.units = units
+        conversion = _get_conversion_factor(units, old_units=self.units, **kwargs)
+        new_copy.sampling = new_copy.sampling * conversion
+        new_copy.offset = new_copy.offset * conversion
+        return new_copy
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class RealSpaceAxis(LinearAxis):
@@ -248,6 +256,24 @@ class OrdinalAxis(AxisMetadata):
         return format_title(
             self, formatting=formatting, include_label=include_label, **kwargs
         )
+
+    def format_all_titles(self):
+        titles = []
+        for i, value in enumerate(self.values):
+            if i == 0:
+                value = f"{value}"
+            else:
+                value = ""
+
+            title = f"{self.label} "
+
+            if value:
+                title = f"{title} = {value}"
+
+            if self.units:
+                titles += f"{title} [{self.units}]"
+
+        return titles
 
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):
@@ -403,6 +429,29 @@ class ScaleAxis:
 
     def format_label(self):
         return format_label(self)
+
+
+categories = {
+    "phase [rad]": ("phase", "angle"),
+    "amplitude": ("amplitude", "abs"),
+    "intensity [arb. unit]": ("intensity", "abs2"),
+    "real": ("real",),
+    "imaginary": ("imaginary", "imag"),
+}
+
+complex_labels = {
+    unit: category for category, units in categories.items() for unit in units
+}
+
+# labels = {"phase"}
+#
+# class ComplexScaleAxis:
+#     label: str = ""
+#     units: str = None
+#     _tex_label: str | None = None
+#
+#     def format_label(self):
+#         return format_label(self)
 
 
 def axis_to_dict(axis: AxisMetadata):

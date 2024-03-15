@@ -91,6 +91,9 @@ def _validate_units(units, old_units):
 
 
 def _get_conversion_factor(units: str, old_units: str, energy: float = None):
+    if units is None:
+        return 1.0
+
     if units_type[old_units] == "reciprocal_space" and units_type[units] == "angular":
         if energy is None:
             raise RuntimeError("")

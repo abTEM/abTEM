@@ -26,7 +26,11 @@ from utils import ensure_is_tuple, gpu, array_is_close
 def test_scanned_measurement_type():
     array = np.zeros((10, 10, 10, 10, 10))
 
-    ensemble_axes_metadata = [ScanAxis(), OrdinalAxis(values=(1,) * 10), ScanAxis()]
+    ensemble_axes_metadata = [
+        ScanAxis(_main=False),
+        OrdinalAxis(values=(1,) * 10),
+        ScanAxis(),
+    ]
     measurement = DiffractionPatterns(
         array,
         sampling=0.1,

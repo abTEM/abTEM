@@ -258,6 +258,36 @@ _default_cmap_options = [
 ]
 
 
+class LinesGUI(BaseGUI):
+    def __init__(self, sliders, canvas):
+        self._complex_dropdown = widgets.Dropdown(
+            options=[
+                ("Real and imaginary", "none"),
+                ("Amplitude", "abs"),
+                ("Intensity", "intensity"),
+                ("Phase", "phase"),
+            ],
+            value="none",
+            description="Complex visualization:",
+        )
+
+        super().__init__(sliders, canvas, self._complex_dropdown)
+
+    @property
+    def complex_dropdown(self):
+        return self._complex_dropdown
+
+    def attach_visualization(self, visualization):
+        super().attach_visualization(visualization)
+
+        self.complex_dropdown.observe(
+            lambda change: visualization.set_complex_conversion(change["new"]), "value"
+        )
+
+        if not visualization.measurement.is_complex:
+            self.complex_dropdown.disabled = True
+
+
 class ImageGUI(BaseGUI):
     def __init__(self, sliders, canvas, cmap_options=None):
         self._complex_dropdown = widgets.Dropdown(
@@ -299,7 +329,7 @@ class ImageGUI(BaseGUI):
             lambda change: visualization.set_complex_conversion(change["new"]), "value"
         )
 
-        if not visualization.data.is_complex:
+        if not visualization.measurement.is_complex:
             self.complex_dropdown.disabled = True
 
     @property

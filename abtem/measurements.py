@@ -31,7 +31,6 @@ from abtem.core.axes import (
     LinearAxis,
     NonLinearAxis,
     ScanAxis,
-    OrdinalAxis,
     ScaleAxis,
 )
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
@@ -52,11 +51,9 @@ from abtem.indexing import (  # _format_miller_indices,
     _format_miller_indices,
 )
 from abtem.noise import NoiseTransform, ScanNoiseTransform
-from abtem.visualize import (
-    VisualizationLines,
-    VisualizationImshow,
-    VisualizationScatter,
-)
+from abtem.visualize.artists import ImageArtist, DomainColoringArtist
+from abtem.visualize.visualizations import Visualization
+from abtem.visualize.widgets import ImageGUI, BaseGUI, LinesGUI
 
 # Enables CuPy-accelerated functions if it is available.
 if cp is not None:
@@ -324,7 +321,7 @@ def _interpolate_stack(array, positions, mode, order, **kwargs):
     array = xp.pad(array, ((0, 0), (2 * order,) * 2, (2 * order,) * 2), mode=mode)
 
     positions = positions + 2 * order
-    output = xp.zeros((array.shape[0], positions.shape[0]), dtype=np.float32)
+    output = xp.zeros((array.shape[0], positions.shape[0]), dtype=array.dtype)
 
     for i in range(array.shape[0]):
         map_coordinates(array[i], positions.T, output=output[i], order=order, **kwargs)
@@ -382,11 +379,15 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def real(self) -> T:
         """Returns the real part of a complex-valued measurement."""
         self._check_is_complex()
+        self.metadata["label"] = "real"
+        self.metadata["units"] = "arb. unit"
         return self._apply_element_wise_func(get_array_module(self.array).real)
 
     def imag(self) -> T:
         """Returns the imaginary part of a complex-valued measurement."""
         self._check_is_complex()
+        self.metadata["label"] = "imaginary"
+        self.metadata["units"] = "arb. unit"
         return self._apply_element_wise_func(get_array_module(self.array).imag)
 
     def phase(self) -> T:
@@ -399,6 +400,8 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     def abs(self) -> T:
         """Calculates the absolute value of a complex-valued measurement."""
         # self._check_is_complex()
+        self.metadata["label"] = "amplitude"
+        self.metadata["units"] = "arb. unit"
         return self._apply_element_wise_func(get_array_module(self.array).abs)
 
     def intensity(self) -> T:
@@ -409,7 +412,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         return self._apply_element_wise_func(abs2)
 
     def relative_difference(
-        self, other: "BaseMeasurements", min_relative_tol: float = 0.0
+        self, other: BaseMeasurements, min_relative_tol: float = 0.0
     ) -> T:
         """
         Calculates the relative difference with respect to another compatible measurement.
@@ -627,7 +630,7 @@ class MeasurementsEnsemble(BaseMeasurements):
         interact: bool = False,
         display: bool = True,
         **kwargs,
-    ) -> VisualizationImshow:
+    ) -> Visualization:
         """
         Show the image(s) using matplotlib.
 
@@ -692,7 +695,7 @@ class MeasurementsEnsemble(BaseMeasurements):
             if i not in display_axes
         ]
 
-        visualization = VisualizationImshow(
+        visualization = Visualization2D(
             array=array,
             coordinate_axes=base_axes_metadata,
             scale_axis=scale_axis,
@@ -839,8 +842,8 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         from abtem.scan import LineScan
 
-        if self.is_complex:
-            raise NotImplementedError
+        # if self.is_complex:
+        #    raise NotImplementedError
 
         if (sampling is None) and (gpts is None):
             sampling = min(self.sampling)
@@ -913,10 +916,6 @@ class _BaseMeasurement2D(BaseMeasurements):
             metadata["width"] = width
 
         ensemble_axes_metadata = self.ensemble_axes_metadata
-
-        for axis in ensemble_axes_metadata:
-            if isinstance(axis, OrdinalAxis):
-                axis._default_type = "overlay"
 
         return self._get_1d_equivalent()(
             array=array,
@@ -1062,14 +1061,15 @@ class _BaseMeasurement2D(BaseMeasurements):
         vmax: float = None,
         power: float = 1.0,
         common_color_scale: bool = False,
-        explode: bool | Sequence[int] = None,
-        overlay: bool | Sequence[int] = None,
+        explode: bool | Sequence[int] = (),
+        overlay: bool | Sequence[int] = (),
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
         interact: bool = False,
         display: bool = True,
-    ) -> VisualizationImshow:
+        **kwargs,
+    ) -> Visualization:
         """
         Show the image(s) using matplotlib.
 
@@ -1113,45 +1113,30 @@ class _BaseMeasurement2D(BaseMeasurements):
         measurement_visualization_2d : VisualizationImshow
         """
 
-        if not interact:
-            self.compute()
-
-        scale_axis = self._scale_axis_from_metadata()
-
-        base_axes_metadata = self._plot_base_axes_metadata(units)
-
-        visualization = VisualizationImshow(
-            array=self.array,
-            coordinate_axes=base_axes_metadata,
-            scale_axis=scale_axis,
-            ensemble_axes=self.ensemble_axes_metadata,
+        visualization = Visualization(
+            measurement=self,
             ax=ax,
-            cbar=cbar,
-            cmap=cmap,
+            common_scale=common_color_scale,
+            figsize=figsize,
+            title=title,
+            aspect=True,
+            share_x=True,
+            share_y=True,
+            explode=explode,
+            overlay=overlay,
+            interactive=not interact and display,
             vmin=vmin,
             vmax=vmax,
             power=power,
-            common_scale=common_color_scale,
-            explode=explode,
-            overlay=overlay,
-            figsize=figsize,
-            interact=interact,
-            title=title,
+            cmap=cmap,
+            cbar=cbar,
+            **kwargs,
         )
 
-        if not display and not interact:
-            plt.close()
-
-        if interact and display:
-            from IPython.display import display as ipython_display
-
-            ipython_display(visualization.layout_widgets())
+        if interact:
+            gui = visualization.interact(ImageGUI, display=display)
 
         return visualization
-
-    @abstractmethod
-    def _plot_base_axes_metadata(self, units):
-        pass
 
 
 class Images(_BaseMeasurement2D):
@@ -1788,16 +1773,16 @@ class _BaseMeasurement1D(BaseMeasurements):
         self,
         ax: Axes = None,
         common_scale: bool = True,
-        explode: bool | Sequence[int] = None,
+        explode: bool | Sequence[int] = False,
         overlay: bool | Sequence[int] = None,
         figsize: tuple[int, int] = None,
-        title: str = None,
+        title: str = True,
         units: str = None,
         legend: bool = False,
         interact: bool = False,
         display: bool = True,
         **kwargs,
-    ) -> VisualizationLines:
+    ) -> Visualization:
         """
         Show the reciprocal-space line profile(s) using matplotlib.
 
@@ -1831,32 +1816,31 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         Returns
         -------
-        visualization : MeasurementVisualization1D
+        visualization : Visualization
         """
 
-        if not interact:
-            self.compute()
+        if overlay is None and explode is False:
+            overlay = True
+        elif overlay is False or overlay is None:
+            overlay = ()
 
-        scale_axis = self._scale_axis_from_metadata()
-
-        visualization = VisualizationLines(
-            array=self.array,
-            coordinate_axes=self.base_axes_metadata,
-            scale_axis=scale_axis,
-            ensemble_axes=self.ensemble_axes_metadata,
+        visualization = Visualization(
+            measurement=self,
             ax=ax,
-            common_scale=common_scale,
+            figsize=figsize,
+            title=title,
+            aspect=False,
+            share_x=True,
+            share_y=common_scale,
             explode=explode,
             overlay=overlay,
-            figsize=figsize,
-            interact=interact,
+            interactive=not interact and display,
+            legend=legend,
             **kwargs,
         )
 
-        if interact and display:
-            from IPython.display import display as ipython_display
-
-            ipython_display(visualization.layout_widgets())
+        if interact:
+            gui = visualization.interact(LinesGUI, display=display)
 
         return visualization
 
@@ -3222,29 +3206,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return array
 
-    def _plot_base_axes_metadata(self, units: str = None):
-        if units is None:
-            return self.base_axes_metadata
-
-        if units == "mrad":
-            return [
-                ReciprocalSpaceAxis(
-                    sampling=self.angular_sampling[0],
-                    offset=self.angular_limits[0][0],
-                    label="kx",
-                    units="mrad",
-                    fftshift=self.fftshift,
-                    _tex_label="$k_x$",
-                ),
-                ReciprocalSpaceAxis(
-                    sampling=self.angular_sampling[1],
-                    offset=self.angular_limits[1][0],
-                    label="ky",
-                    units="mrad",
-                    fftshift=self.fftshift,
-                    _tex_label="$k_y$",
-                ),
-            ]
+    # def _plot_base_axes_metadata(self, units: str = None):
+    #     if units is None:
+    #         return self.base_axes_metadata
+    #
+    #     if units == "mrad":
+    #         return [
+    #             ReciprocalSpaceAxis(
+    #                 sampling=self.angular_sampling[0],
+    #                 offset=self.angular_limits[0][0],
+    #                 label="kx",
+    #                 units="mrad",
+    #                 fftshift=self.fftshift,
+    #                 _tex_label="$k_x$",
+    #             ),
+    #             ReciprocalSpaceAxis(
+    #                 sampling=self.angular_sampling[1],
+    #                 offset=self.angular_limits[1][0],
+    #                 label="ky",
+    #                 units="mrad",
+    #                 fftshift=self.fftshift,
+    #                 _tex_label="$k_y$",
+    #             ),
+    #         ]
 
 
 class PolarMeasurements(BaseMeasurements):
@@ -3670,7 +3654,7 @@ class PolarMeasurements(BaseMeasurements):
         units: str = None,
         interact: bool = False,
         display: bool = True,
-    ) -> VisualizationImshow:
+    ) -> Visualization:
         """
         Show the image(s) using matplotlib.
 
@@ -4107,6 +4091,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         annotation_threshold: float = 0.1,
         interact: bool = False,
         display: bool = True,
+        **kwargs,
     ):
         """
         Show the diffraction spots using matplotlib.
@@ -4158,64 +4143,65 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         scale_axis = self._scale_axis_from_metadata()
 
-        base_axes_metadata = self._plot_base_axes_metadata(units)
+        if units is None:
+            units = "1/Å"
 
-        data = np.zeros(self.ensemble_shape, dtype=object)
-        for i in np.ndindex(data.shape):
-            data.itemset(
-                i,
-                {
-                    "intensities": self.array[i],
-                    "positions": self.positions[i],
-                    "hkl": self.miller_indices,
-                },
-            )
+        energy = self.metadata.get("energy", None)
+        conversion = _get_conversion_factor(units, old_units="1/Å", energy=energy)
 
-        # array = np.concatenate((self.array[:, None], self.positions), axis=-1)
+        data = PointsData(self.positions[:, :2] * conversion, self.array)
 
-        offset_x = self.positions[..., 0].min()
-        extent_x = self.positions[..., 0].ptp()
+        annotations = []
+        for hkl in self.miller_indices:
+            if config.get("visualize.use_tex"):
+                annotation = " \ ".join(
+                    [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
+                )
+                annotations.append(f"${annotation}$")
+            else:
+                annotations.append("{} {} {}".format(*hkl))
 
-        offset_y = self.positions[..., 1].min()
-        extent_y = self.positions[..., 1].ptp()
+        # np.zeros(self.ensemble_shape, dtype=object)
+        # for i in np.ndindex(data.shape):
+        #     data.itemset(
+        #         i,
+        #         {
+        #             "intensities": self.array[i],
+        #             "positions": self.positions[i] * conversion,
+        #             "hkl": self.miller_indices,
+        #         },
+        #     )
 
-        coordinate_axes = [
-            NonLinearAxis(
-                label="x",
-                values=[offset_x, offset_x + extent_x],
-                units="1/Å",
-                _tex_label="$k_x$",
-            ),
-            NonLinearAxis(
-                label="y",
-                values=[offset_y, offset_y + extent_y],
-                units="1/Å",
-                _tex_label="$k_x$",
-            ),
-        ]
+        scale *= conversion**2
 
-        visualization = VisualizationScatter(
-            array=data,
-            coordinate_axes=coordinate_axes,
-            scale_axis=scale_axis,
-            ensemble_axes=self.ensemble_axes_metadata,
+        xlabel = LinearAxis(label="k_x", units="1/Å", _tex_label="$k_x$").format_label(
+            units
+        )
+        ylabel = LinearAxis(label="k_y", units="1/Å", _tex_label="$k_y$").format_label(
+            units
+        )
+
+        visualization = Visualization2D(
             ax=ax,
+            data=data,
+            xlabel=xlabel,
+            ylabel=ylabel,
             cbar=cbar,
             cmap=cmap,
             vmin=vmin,
             vmax=vmax,
             power=power,
             common_scale=common_color_scale,
-            scale=scale,
-            explode=explode,  # overlay=overlay,
             figsize=figsize,
             interact=interact,
-            title=title,
+            scale=scale,
             annotation_threshold=annotation_threshold,
+            annotations=annotations,
+            **kwargs,
         )
 
-        if not display and not interact:
-            plt.close()
+        if display and not interact:
+            plt.show(visualization.get_figure())
 
         if interact and display:
             from IPython.display import display as ipython_display

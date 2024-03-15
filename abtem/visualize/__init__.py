@@ -1,4 +1,4 @@
 from abtem.visualize.visualizations import (
-    Visualization2D,
+    Visualization,
     show_atoms,
 )
