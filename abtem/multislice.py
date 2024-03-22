@@ -899,6 +899,8 @@ class MultisliceTransform(ArrayObjectTransform):
 
         detectors = _validate_detectors(detectors)
 
+        print(detectors)
+        
         if not "pbar" in multislice_func_kwargs.keys():
             multislice_func_kwargs["pbar"] = config.get(
                 "local_diagnostics.task_level_progress", False
@@ -1022,6 +1024,7 @@ class MultisliceTransform(ArrayObjectTransform):
         )
 
     def _calculate_new_array(self, waves):
+        
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

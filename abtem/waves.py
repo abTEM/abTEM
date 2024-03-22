@@ -985,11 +985,57 @@ class Waves(BaseWaves, ArrayObject):
         multislice_transform = MultisliceTransform(
             potential=potential, detectors=detectors
         )
-
+        
         waves = self.apply_transform(transform=multislice_transform)
 
-        return _reduce_ensemble(waves)
+        return waves
+        #return _reduce_ensemble(waves)
 
+    def scan(
+        self,
+        scan: BaseScan | np.ndarray | Sequence,
+        potential: Atoms | BasePotential=None,
+        detectors: BaseDetector | Sequence[BaseDetector] = None,
+        max_batch: int | str = "auto",
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        """
+        Run the multislice algorithm from probe wave functions over the provided scan.
+
+        Parameters
+        ----------
+        potential : BasePotential or Atoms
+            The scattering potential.
+        scan : BaseScan
+            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+        detectors : BaseDetector, list of BaseDetector, optional
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
+            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            "dask.chunk-size-gpu".
+        
+        Returns
+        -------
+        detected_waves : BaseMeasurements or list of BaseMeasurement
+            The detected measurement (if detector(s) given).
+        exit_waves : Waves
+            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
+        """
+        scan = _validate_scan(scan)
+        
+        waves = self.apply_transform(scan, max_batch=max_batch)
+
+        if potential is None:
+            return waves
+        
+        measurements = waves.multislice(
+            potential=potential,
+            detectors=detectors,
+        )
+
+        return measurements
+        
     def show(self, complex_images: bool = False, **kwargs):
         """
         Show the wave-function intensities.

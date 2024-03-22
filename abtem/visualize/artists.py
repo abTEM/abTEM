@@ -6,20 +6,33 @@ from typing import Literal, TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import colors
+from matplotlib import colors, artist
 from matplotlib.axes import Axes
-from matplotlib.collections import EllipseCollection
+from matplotlib.collections import (
+    CircleCollection,
+    Collection,
+    mpath,
+    transforms,
+)
+from matplotlib.transforms import Affine2D
 from matplotlib.colors import Colormap
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import ScalarFormatter
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from abtem.core import config
+from abtem.core.axes import LinearAxis
 from abtem.core.colors import hsluv_cmap
 from abtem.core.units import _get_conversion_factor
+from abtem.core.delegate import DelegateTo
 
 if TYPE_CHECKING:
     from matplotlib.text import Annotation
+    from abtem.measurements import (
+        IndexedDiffractionPatterns,
+        DiffractionPatterns,
+        MeasurementsEnsemble,
+    )
 
 
 def _get_norm(vmin=None, vmax=None, power=1.0, logscale=False):
@@ -35,11 +48,14 @@ def _get_norm(vmin=None, vmax=None, power=1.0, logscale=False):
     return norm
 
 
-def _get_value_limits(array, value_limits, margin=None):
+def _get_value_limits(array, value_limits: tuple[float, float] = None, margin=None):
     if np.iscomplexobj(array):
         array = np.abs(array)
 
-    value_limits = value_limits.copy()
+    if value_limits is None:
+        value_limits = [None, None]
+
+    value_limits = list(value_limits).copy()
 
     if value_limits[0] is None:
         value_limits[0] = float(np.nanmin(array))
@@ -119,8 +135,9 @@ class AreaIndicator:
 
 
 class Artist(metaclass=ABCMeta):
-    def __init__(self, ax):
+    def __init__(self, ax, measurement):
         self._ax = ax
+        self._measuremet = measurement.compute()
 
     @abstractmethod
     def get_xlim(self):
@@ -183,7 +200,7 @@ class LinesArtist(Artist1D):
         legend: bool = False,
         **kwargs,
     ):
-        super().__init__(ax)
+        super().__init__(ax=ax, measurement=measurement)
 
         y = self._reshape_data(measurement.array)
         x = measurement.base_axes_metadata[-1].coordinates(measurement.shape[-1])
@@ -214,6 +231,10 @@ class LinesArtist(Artist1D):
 
         if label and legend:
             self.set_legend()
+
+        formatter = ScalarFormatter(useMathText=True)
+        formatter.set_powerlimits((-2, 2))
+        ax.yaxis.set_major_formatter(formatter)
 
     def remove(self):
         for line in self._lines:
@@ -330,8 +351,15 @@ class Artist2D(Artist):
         pass
 
     @staticmethod
-    def _set_vmin_vmax(norm, vmin, vmax):
-        norm.vmin = vmin
+    def _set_vmin_vmax(norm, vmin, vmax, array=None):
+        if vmin is None and array is not None:
+            vmin = array.min()
+
+        if vmax is None and array is not None:
+            vmax = array.max()
+
+        with norm.callbacks.blocked():
+            norm.vmin = vmin
         norm.vmax = vmax
 
     @staticmethod
@@ -391,6 +419,8 @@ def validate_cmap(cmap, measurement, complex_conversion="none"):
 
     if cmap == "hsluv":
         cmap = hsluv_cmap
+    elif isinstance(cmap, str) and cmap[:5] == "solid":
+        cmap = colors.ListedColormap([cmap.split(" ")[-1]])
 
     return cmap
 
@@ -435,21 +465,27 @@ class ImageArtist(Artist2D):
     def __init__(
         self,
         ax: Axes,
-        measurement,
+        measurement: Images | DiffractionPatterns | MeasurementsEnsemble,
         caxes: list[Axes] = None,
         cmap: str | Colormap | None = None,
         vmin: float = None,
         vmax: float = None,
         power: float = 1.0,
         logscale: bool = False,
-        origin: Literal["upper", "lower"] | None = None,
+        origin: Literal["upper", "lower"] | None = "lower",
         units: str = None,
         **kwargs,
     ):
-        super().__init__(ax)
+        
+        super().__init__(ax=ax, measurement=measurement)
 
-        extent = get_extent(measurement, units=None)
+        if measurement.is_complex:
+            raise ValueError("Complex measurements are not supported.")
 
+        extent = get_extent(measurement, units=units)
+
+        cmap = validate_cmap(cmap, measurement)
+        
         self._axes_image = ax.imshow(
             measurement.array.T,
             origin=origin,
@@ -520,175 +556,75 @@ class ImageArtist(Artist2D):
         self._set_vmin_vmax(self.norm, *value_limits)
 
 
-class ScatterArtist(Artist2D):
-    num_cbars = 1
+class ScaledCircleCollection(Collection):
 
-    def __init__(
-        self,
-        ax: Axes,
-        data: PointsData,
-        caxes: list[Axes] = None,
-        cmap: str | Colormap | None = None,
-        vmin: float = None,
-        vmax: float = None,
-        power: float = 1.0,
-        logscale: bool = False,
-        scale: float = 0.5,
-        annotation_threshold: float = 0.1,
-        annotations: list[str] = None,
-        **kwargs,
-    ):
-        # intensities = data["intensities"]
-        # positions = data["positions"][:, :2]
-        # hkl = data["hkl"]
-
-        vmin, vmax = _get_value_limits(data.array, value_limits=[vmin, vmax])
-        norm = _get_norm(vmin, vmax, power, logscale)
-
-        radii = self._calculate_radii(norm, scale, data.array)
-
-        self._ellipse_collection = EllipseCollection(
-            widths=radii,
-            heights=radii,
-            angles=0.0,
-            units="xy",
-            array=data.array,
-            cmap=cmap,
-            offsets=data.points,
-            transOffset=ax.transData,
-            **kwargs,
-        )
-
-        ax.add_collection(self._ellipse_collection)
-
-        self._ellipse_collection.set_norm(norm)
-
+    def __init__(self, array, scale=1., **kwargs):
+        super().__init__(array=array, **kwargs)
+        self.set_transform(transforms.IdentityTransform())
+        self._transforms = np.empty((0, 3, 3))
+        self._paths = [mpath.Path.unit_circle()]
         self._scale = scale
-        self._annotation_threshold = annotation_threshold
-        self._annotation_placement = "top"
-        self._annotations = None
+        self._radii = self._calculate_radii()
+        self._set_transforms()
+        self.callbacks.connect("changed", lambda *args: self._update_radii())
+        
+    def _set_transforms(self):
+        ax = self.axes
+        self._transforms = np.zeros((len(self._radii), 3, 3))
+        self._transforms[:, 0, 0] = self._radii
+        self._transforms[:, 1, 1] = self._radii
+        self._transforms[:, 2, 2] = 1.0
 
-        if annotations:
-            assert len(annotations) == len(data.points)
+        if ax is not None:
+            A = ax.transData.get_affine().get_matrix().copy()
+            A[:2, 2:] = 0
+            self.set_transform(transforms.Affine2D(A))
 
-            self.set_annotations(
-                annotations,
-                threshold=annotation_threshold,
-                placement="top",
-            )
+    @artist.allow_rasterization
+    def draw(self, renderer):
+        self._set_transforms()
+        super().draw(renderer)
 
-    def get_ylim(self):
-        return [self.offsets[:, 1].min() * 1.1, self.offsets[:, 1].max() * 1.1]
+    def get_radii(self):
+        return self._radii
+    
+    def set_norm(self, norm):
+        super().set_norm(norm)
+        self.norm.callbacks.connect("changed", lambda *args: self._update_radii())
 
-    def get_xlim(self):
-        return [self.offsets[:, 0].min() * 1.1, self.offsets[:, 0].max() * 1.1]
-
-    def get_value_limits(self):
-        array = self.ellipse_collection.get_array()
-        return [array.min(), array.max()]
-
-    @property
-    def ellipse_collection(self) -> EllipseCollection:
-        return self._ellipse_collection
-
-    @property
-    def norm(self):
-        return self.ellipse_collection.norm
-
-    @property
-    def offsets(self):
-        return self.ellipse_collection.get_offsets()
-
-    @property
-    def radii(self):
-        return self.ellipse_collection._widths
-
-    @staticmethod
-    def _calculate_radii(norm, scale, data):
-        radii = (norm(data) * scale) ** 0.5
-        radii = np.clip(radii, 0.0001, None)
+    def set_array(self, array):
+        super().set_array(array)
+        self.changed()
+    
+    def _calculate_radii(self):
+        norm = self.norm
+        data = self.get_array()
+        radii = np.sqrt(norm(data) * self._scale)
         return radii
 
-    def get_power(self):
-        if hasattr(self.norm, "gamma"):
-            return self.norm.gamma
-        else:
-            return 1.0
+    def _update_radii(self):
+        self._radii = self._calculate_radii()
 
-    def set_data(self, data: np.ndarray):
-        self._ellipse_collection.set_array(data["intensities"])
-        self._ellipse_collection.set_offsets(data["positions"])
-        # self.norm._changed()
-        self._set_radii()
+    def get_scale(self):
+        return self._scale
+    
+    def set_scale(self, scale):
+        self._scale = scale
+        self._update_radii()
+        self.changed()
 
-    def _set_radii(self):
-        data = self._ellipse_collection.get_array().data
-        radii = self._calculate_radii(self.norm, self._scale, data)
 
-        self._ellipse_collection._widths = radii
-        self._ellipse_collection._heights = radii
-        self._ellipse_collection.set()
+class CircleAnnotations:
+    _placement_to_alignment = {"top":"bottom", "center":"center", "bottom":"top"}
+    
+    def __init__(self, circle_collection, annotations, threshold:float=0, fontsize=8, placement="top", **kwargs):
+        self._circle_collection = circle_collection
+        self._threshold = threshold
+        self._placement = placement
 
-    def set_cmap(self, cmap: str):
-        self.ellipse_collection.set_cmap(cmap)
-
-    def set_cbars(self, caxes=None, **kwargs):
-        self._make_cbar(self.ellipse_collection, caxes[0], **kwargs)
-
-    def set_value_limits(self, value_limits: tuple[float, float] = None):
-        self._set_vmin_vmax(self.norm, *value_limits)
-        self._set_radii()
-
-    def set_power(self, power: float = 1.0):
-        self._update_norm(self.norm, power, self._ellipse_collection)
-        self._set_radii()
-
-    def _get_annotation_positions(self, placement):
-        positions = self.offsets.copy()
-        radii = self.radii
-
-        if placement == "top":
-            positions[:, 1] += radii
-        elif placement == "bottom":
-            positions[:, 1] -= radii
-        elif placement != "center":
-            raise ValueError()
-
-        return positions
-
-    def _get_annotation_vilibilities(self, threshold) -> np.ndarray:
-        return np.array(self.ellipse_collection.get_array() > threshold)
-
-    def update_annotations(self):
-        visibilities = self._get_annotation_vilibilities(self._annotation_threshold)
-        positions = self._get_annotation_positions(self._annotation_placement)
-
-        for annotation, visible, position in zip(
-            self.annotations, visibilities, positions
-        ):
-            annotation.set_visible(visible)
-            annotation.set_position(positions)
-
-    @property
-    def annotations(self) -> list[Annotation]:
-        return self._annotations
-
-    def set_annotations(self, annotations, placement, threshold, **kwargs):
-        if placement == "top":
-            va = "bottom"
-        elif placement == "center":
-            va = "center"
-        elif placement == "bottom":
-            va = "top"
-        else:
-            raise ValueError()
-
-        self._annotation_threshold = threshold
-        self._annotation_placement = placement
-
-        ax = self.ellipse_collection.axes
-        positions = self._get_annotation_positions(placement)
-        visibilities = self._get_annotation_vilibilities(self._annotation_threshold)
+        ax = circle_collection.axes
+        positions = self._get_positions()
+        visibilities = self._get_visibilities()
 
         self._annotations = []
         for annotation, position, visible in zip(annotations, positions, visibilities):
@@ -697,11 +633,206 @@ class ScatterArtist(Artist2D):
                     annotation,
                     xy=position,
                     ha="center",
-                    va=va,
+                    va=self._placement_to_alignment.get(placement),
                     visible=visible,
+                    fontsize=fontsize,
                     **kwargs,
                 )
             )
+        circle_collection.callbacks.connect("changed", lambda *args: self._update_visibilities())
+        circle_collection.callbacks.connect("changed", lambda *args: self._update_positions())
+
+    def __getattr__(self, name):
+        try:
+            super(self.__class__).__getattr__(name)
+        except AttributeError:
+            pass
+
+        def method(*args, **kwargs):
+            return tuple(getattr(annotation, name)(*args, **kwargs) for annotation in self._annotations)
+        
+        return method 
+    
+    def get_threshold(self):
+        return self._threshold
+        
+    def set_threshold(self, threshold):
+        self._threshold = threshold
+        self._update_visibilities()
+
+    def set_placement(self, placement):
+        self._placement = placement
+        self.set_verticalalignment(self._placement_to_alignment[placement])
+        self._update_positions()
+    
+    def _get_visibilities(self):
+        return self._circle_collection.get_array() > self._threshold
+    
+    def _get_positions(self):
+        positions = self._circle_collection.get_offsets().copy()
+        radii = self._circle_collection.get_radii()
+
+        if self._placement == "top":
+            positions[:, 1] += radii
+        elif self._placement == "bottom":
+            positions[:, 1] -= radii
+        elif self._placement != "center":
+            raise ValueError()
+
+        return positions
+    
+    def _update_visibilities(self):
+        visibilities = self._get_visibilities()
+        for annotation, visible in zip(self._annotations, visibilities):
+            annotation.set_visible(visible)
+    
+    def _update_positions(self):
+        positions = self._get_positions()
+        for annotation, position in zip(
+            self._annotations, positions
+        ):
+            annotation.set_position(position)
+
+
+class ScatterArtist(Artist2D):
+    num_cbars = 1
+
+    def __init__(
+        self,
+        ax: Axes,
+        measurement: IndexedDiffractionPatterns,
+        caxes: list[Axes] = None,
+        cmap: str | Colormap | None = None,
+        value_limits: tuple(float, float) = None,
+        power: float = 1.0,
+        logscale: bool = False,
+        units: str = None,
+        scale: float = 0.5,
+        annotation_threshold: float = 0.1,
+        **kwargs,
+    ):
+
+        super().__init__(ax=ax, measurement=measurement)
+
+        vmin, vmax = _get_value_limits(measurement.array, value_limits=value_limits)
+        norm = _get_norm(vmin, vmax, power, logscale)
+
+        energy = measurement.metadata.get("energy", None)
+
+        self._unit_conversion = _get_conversion_factor(
+            units, old_units="1/Å", energy=energy
+        )
+        
+        cmap = validate_cmap(cmap, measurement)
+
+        self._circles = ScaledCircleCollection(
+            array=measurement.array,
+            cmap=cmap,
+            offsets=measurement.positions[:, :2] * self._unit_conversion,
+            transOffset=ax.transData,
+            norm=norm,
+            scale=scale,
+            **kwargs,
+        )
+
+        ax.add_collection(self._circles)
+
+        units = "1/Å" if units is None else units
+        
+        x_axis = LinearAxis(label="k_x", units=units, _tex_label="$k_x$")
+        y_axis = LinearAxis(label="k_y", units=units, _tex_label="$k_y$")
+        
+        self.set_xlabel(x_axis.format_label(units))
+        self.set_ylabel(y_axis.format_label(units))
+        
+        annotations = []
+        for hkl in measurement.miller_indices:
+            if config.get("visualize.use_tex"):
+                annotation = " \ ".join(
+                    [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
+                )
+                annotations.append(f"${annotation}$")
+            else:
+                annotations.append("{} {} {}".format(*hkl))
+
+        self._annotations = CircleAnnotations(self._circles, annotations, annotation_threshold)
+
+        if caxes:
+            cbar_label = measurement._scale_axis_from_metadata().format_label()
+            self.set_cbars(caxes=caxes, label=cbar_label)
+
+    def __getattr__(self, name):
+        if name in self.__dict__:
+            return self.__dict__[name]
+        
+        if hasattr(self._circles, name):
+            return getattr(self._circles, name)
+        
+        raise AttributeError(f"{self.__class__.__name__} object has no attribute {name}")
+    
+    @property
+    def circle_collection(self) -> FixedCircleCollection:
+        return self._circles
+
+    @property
+    def annotations(self):
+        return self._annotations 
+    
+    @property
+    def annotations(self) -> list[Annotation]:
+        return self._annotations
+
+    def get_ylim(self):
+        return [self.get_offsets()[:, 1].min() * 1.1, self.get_offsets()[:, 1].max() * 1.1]
+
+    def get_xlim(self):
+        return [self.get_offsets()[:, 0].min() * 1.1, self.get_offsets()[:, 0].max() * 1.1]
+
+    def get_value_limits(self):
+        array = self.circle_collection.get_array()
+        return [array.min(), array.max()]
+
+    def remove(self):
+        self.circle_collection.remove()
+
+    def get_power(self):
+        if hasattr(self.norm, "gamma"):
+            return self.norm.gamma
+        else:
+            return 1.0
+
+    def set_data(self, measurement: np.ndarray):
+        self._circles.set_array(measurement.array)
+        self._circles.set_offsets(measurement.positions[:, :2] * self._unit_conversion)
+
+    def set_annotations(self, **kwargs):
+        for k, v in kwargs.items():
+            getattr(self._annotations, f"set_{k}")(**{k: v})
+    
+    def get_annotation_threshold(self):
+        return self._annotations.get_annotation_threshold()
+    
+    def set_annotation_threshold(self, threshold):
+        self._annotations.set_threshold(threshold=threshold)
+    
+    def get_scale(self):
+        return self.circle_collection.get_scale()
+    
+    def set_scale(self, scale: float):
+        self.circle_collection.set_scale(scale)
+
+    def set_cmap(self, cmap: str):
+        self.circle_collection.set_cmap(cmap)
+
+    def set_cbars(self, caxes=None, **kwargs):
+        self._make_cbar(self.circle_collection, caxes[0], **kwargs)
+
+    def set_value_limits(self, value_limits: tuple[float, float] = None):
+        data = self._circles.get_array().data
+        self._set_vmin_vmax(self.norm, *value_limits, data)
+
+    def set_power(self, power: float = 1.0):
+        self._update_norm(self.norm, power, self._circles)
 
 
 class DomainColoringArtist(Artist2D):
@@ -720,7 +851,7 @@ class DomainColoringArtist(Artist2D):
         units: str = None,
         **kwargs,
     ):
-        super().__init__(ax)
+        super().__init__(ax=ax, measurement=measurement)
 
         norm = _get_norm(vmin, vmax, power, logscale)
 
@@ -753,11 +884,12 @@ class DomainColoringArtist(Artist2D):
         )
 
         self._amplitude_axes_image.set_norm(norm)
-
+        self._amplitude_cbar = None
+        
         self.set_xlabel(measurement.base_axes_metadata[0].format_label(units))
         self.set_ylabel(measurement.base_axes_metadata[1].format_label(units))
 
-        if caxes is not None:
+        if caxes is not None and len(caxes):
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes, label=cbar_label)
 
@@ -799,9 +931,11 @@ class DomainColoringArtist(Artist2D):
         alpha = np.clip(alpha, a_min=0, a_max=1)
         self.phase_axes_image.set_alpha(alpha)
 
-    def set_value_limits(self, value_limits: tuple[float, float] = None):
+    def set_value_limits(self, value_limits: tuple[float, float] = (None, None)):
         self._set_vmin_vmax(self.amplitude_norm, *value_limits)
         self._update_alpha()
+        if self._amplitude_cbar:
+            self._amplitude_cbar.ax.yaxis.set_offset_position("left")
 
     def set_cmap(self, cmap):
         self.phase_axes_image.set_cmap(cmap)
@@ -843,7 +977,7 @@ class DomainColoringArtist(Artist2D):
 
         format = default_cbar_scalar_formatter()
 
-        amplitude_cbar = self._make_cbar(
+        self._amplitude_cbar = self._make_cbar(
             self.amplitude_axes_image, cax=caxes[1], format=format, **kwargs
         )
 
@@ -860,9 +994,9 @@ class DomainColoringArtist(Artist2D):
             ]
         )
 
-        amplitude_cbar.set_label("abs", rotation=0, ha="center", va="top")
-        amplitude_cbar.ax.yaxis.set_label_coords(0.5, -0.02)
-        amplitude_cbar.ax.yaxis.set_offset_position("left")
+        self._amplitude_cbar.set_label("abs", rotation=0, ha="center", va="top")
+        self._amplitude_cbar.ax.yaxis.set_label_coords(0.5, -0.02)
+        self._amplitude_cbar.ax.yaxis.set_offset_position("left")
 
 
 class OverlayImshowArtist(Artist2D):

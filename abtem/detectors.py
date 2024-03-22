@@ -564,7 +564,7 @@ class _AbstractRadialDetector(BaseDetector):
 
         Returns
         -------
-        visualization : MeasurementVisualization2D
+        visualization : Visualization
         """
 
         if waves is not None:
@@ -617,7 +617,7 @@ class _AbstractRadialDetector(BaseDetector):
                 offset=(0.0, 0.0),
                 return_indices=False,
             )
-
+            
             regions = regions.astype(np.float32)
             regions[..., regions < 0] = np.nan
 

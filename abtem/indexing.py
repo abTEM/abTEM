@@ -11,6 +11,7 @@ from scipy.sparse.csgraph import connected_components
 from abtem.atoms import euler_to_rotation, is_cell_orthogonal
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import label_to_index
+from typing import Union, Tuple
 
 
 def reciprocal_cell(cell):
@@ -54,7 +55,9 @@ def make_hkl_grid(
     return hkl
 
 
-def _pixel_edges(shape, sampling):
+def _pixel_edges(
+    shape: tuple[int, int], sampling: tuple[float, float]
+) -> tuple[np.ndarray, np.ndarray]:
     x = np.fft.fftshift(np.fft.fftfreq(shape[0], d=1 / shape[0]))
     y = np.fft.fftshift(np.fft.fftfreq(shape[1], d=1 / shape[1]))
     x = (x - 0.5) * sampling[0]
@@ -62,7 +65,11 @@ def _pixel_edges(shape, sampling):
     return x, y
 
 
-def _find_projected_pixel_index(g, shape, sampling):
+def _find_projected_pixel_index(
+    g: tuple[np.ndarray, np.ndarray],
+    shape: tuple[int, int],
+    sampling: tuple[float, float],
+) -> np.ndarray:
     x, y = _pixel_edges(shape, sampling)
 
     n = np.digitize(g[:, 0], x) - 1
@@ -72,7 +79,7 @@ def _find_projected_pixel_index(g, shape, sampling):
     return nm
 
 
-def excitation_errors(g, energy):
+def excitation_errors(g: np.ndarray, energy: float) -> np.ndarray:
     wavelength = energy2wavelength(energy)
     return g[..., 2] - 0.5 * wavelength * (g**2).sum(axis=-1)
 
@@ -141,57 +148,83 @@ def validate_cell(
     return cell
 
 
-def _F_reflection_conditions(hkl):
-    all_even = (hkl % 2 == 0).all(axis=1)
-    all_odd = (hkl % 2 == 1).all(axis=1)
-    return all_even + all_odd
+def reflection_condition_mask(hkl: np.ndarray, centering: str) -> np.ndarray:
+    """
+    Returns a boolean mask indicating which reflections satisfy the reflection condition
+    based on the given lattice centering.
 
+    Parameters
+    ----------
+    hkl : np.ndarray
+        Array of shape (N, 3) representing the Miller indices of reflections.
+    centering : str
+        The lattice centering type. Must be one of "P", "I", "F", "A", "B", or "C".
 
-def _I_reflection_conditions(hkl):
-    return (hkl.sum(axis=1) % 2 == 0).all(axis=1)
+    Returns
+    -------
+    np.ndarray
+        Boolean mask indicating which reflections satisfy the reflection condition.
+    """
 
-
-def _A_reflection_conditions(hkl):
-    return (hkl[1:].sum(axis=1) % 2 == 0).all(axis=1)
-
-
-def _B_reflection_conditions(hkl):
-    return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
-
-
-def _C_reflection_conditions(hkl):
-    return (hkl[:-1].sum(axis=1) % 2 == 0).all(axis=1)
-
-
-def _reflection_condition_mask(hkl: np.ndarray, centering: str):
     if centering == "P":
         return np.ones(len(hkl), dtype=bool)
     elif centering == "F":
-        return _F_reflection_conditions(hkl)
+        all_even = (hkl % 2 == 0).all(axis=1)
+        all_odd = (hkl % 2 == 1).all(axis=1)
+        return all_even + all_odd
     elif centering == "I":
-        return _I_reflection_conditions(hkl)
+        return (hkl.sum(axis=1) % 2 == 0).all(axis=1)
     elif centering == "A":
-        return _A_reflection_conditions(hkl)
+        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0).all(axis=1)
     elif centering == "B":
-        return _B_reflection_conditions(hkl)
+        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0).all(axis=1)
     elif centering == "C":
-        return _C_reflection_conditions(hkl)
+        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
     else:
         raise ValueError("lattice centering must be one of P, I, F, A, B or C")
 
 
 def index_diffraction_spots(
-    array,
-    sampling,
-    cell,
-    energy,
-    k_max,
-    sg_max,
-    rotation=(0.0, 0.0, 0.0),
-    rotation_axes="zxz",
-    intensity_min=1e-12,
+    array: np.ndarray,
+    sampling: tuple[float, float],
+    cell: Atoms | Cell | float | tuple[float, float, float],
+    energy: float,
+    k_max: float,
+    sg_max: float,
+    rotation: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    rotation_axes: str = "zxz",
+    intensity_min: float = 1e-12,
     centering: str = "P",
-):
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Indexes diffraction spots in an array.
+
+    Parameters:
+        array : np.ndarray
+            The input array containing diffraction spot intensities.
+        sampling : tuple[float, float]
+            The sampling rate of the array in the x and y directions [Å].
+        cell : Atoms | Cell | float | tuple[float, float, float]
+            The unit cell of the crystal structure.
+        energy : float
+            The energy of the incident electrons [eV].
+        k_max : float
+            The maximum value of the wavevector transfer [1/Å].
+        sg_max : float
+            The maximum value of the excitation error [1/Å].
+        rotation : tuple[float, float, float], optional
+            The Euler rotation angles of the crystal structure [rad.]. Defaults to (0.0, 0.0, 0.0).
+        rotation_axes : str, optional
+            The intrinsic Euler rotation axes convention. Defaults to "zxz".
+        intensity_min : float, optional
+            The minimum intensity threshold. Defaults to 1e-12.
+        centering : str, optional
+            The centering of the crystal structure. Defaults to "P".
+
+    Returns:
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+            A tuple containing the indexed hkl values, wavevector transfer values, pixel coordinates, and intensities.
+    """
     R = euler_to_rotation(*rotation, axes=rotation_axes)
 
     cell = validate_cell(cell)
@@ -200,7 +233,7 @@ def index_diffraction_spots(
 
     hkl = make_hkl_grid(cell, k_max)
 
-    mask = _reflection_condition_mask(hkl, centering=centering)
+    mask = reflection_condition_mask(hkl, centering=centering)
     hkl = hkl[mask]
 
     g_vec = hkl @ reciprocal_cell(cell)
@@ -234,11 +267,20 @@ def index_diffraction_spots(
     return hkl, g_vec, nm, intensity
 
 
-def _format_miller_indices(hkl):
-    return "{} {} {}".format(*hkl)
+def miller_to_miller_bravais(hkl: tuple[int, int, int]):
+    """
+    Convert Miller indices to Miller-Bravais indices.
 
+    Parameters
+    ----------
+    hkl : tuple
+        The Miller indices (h, k, l).
 
-def _miller_to_miller_bravais(hkl):
+    Returns
+    -------
+    tuple
+        The Miller-Bravais indices (H, K, I, L).
+    """
     h, k, l = hkl
 
     H = 2 * h - k
@@ -249,44 +291,19 @@ def _miller_to_miller_bravais(hkl):
     return H, K, I, L
 
 
-def _equivalent_miller_indices(hkl):
-    is_negation = np.zeros((len(hkl), len(hkl)), dtype=bool)
+def check_translation_symmetry(atoms, translation, tol=1e-12):
+    positions = atoms.get_scaled_positions()
+    shifted_positions = positions + translation
 
-    for i in range(hkl.shape[1]):
-        negated = hkl.copy()
-        negated[:, i] = -negated[:, i]
-        is_negation += np.all(hkl[:, None] == negated[None], axis=2)
+    differences = shifted_positions[None] - positions[:, None]
+    differences[differences > 0.5] = 1.0 - differences[differences > 0.5]
+    distances = np.linalg.norm(differences, axis=-1)
 
-    is_negation += np.all(hkl[:, None] == -hkl[None], axis=2)
+    matching_index = np.argmin(distances, axis=1)
 
-    sorted = np.sort(hkl, axis=1)
-    is_permutation = np.all(sorted[:, None] == sorted[None], axis=-1)
+    min_distances = distances[matching_index, range(len(distances))]
 
-    is_connected = is_negation + is_permutation
-    n, labels = connected_components(csr_matrix(is_connected))
-    return labels
-
-
-def _split_at_threshold(values, threshold):
-    order = np.argsort(values)
-    max_value = values.max()
-
-    split = (np.diff(values[order]) > (max_value * threshold)) * (
-        np.diff(values[order]) > 1e-6
+    has_symmetry = np.all(
+        (min_distances < tol) * (atoms.numbers == atoms.numbers[matching_index])
     )
-
-    split = np.insert(split, 0, False)
-    return np.cumsum(split)[np.argsort(order)]
-
-
-def _find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
-    labels = _equivalent_miller_indices(hkl)
-
-    spots = np.zeros(len(hkl), dtype=bool)
-    for indices in label_to_index(labels):
-        sub_labels = _split_at_threshold(intensities[indices], intensity_split)
-        for sub_indices in label_to_index(sub_labels):
-            order = np.lexsort(np.rot90(hkl[indices][sub_indices]))
-            spots[indices[sub_indices[order][-1]]] = True
-
-    return spots
+    return has_symmetry

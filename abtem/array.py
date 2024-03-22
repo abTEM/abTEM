@@ -770,7 +770,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         elif not isinstance(items, tuple):
             raise NotImplementedError(
-                "Indices must be integers or slices or a tuple of integers or slices or None."
+                f"Indices must be integers or slices or a tuple of integers or slices or None, not {type(items).__name__}."
             )
 
         if keepdims:
@@ -804,8 +804,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if isinstance(item, Number):
                 metadata = {**metadata, **expanded_axes_metadata.item_metadata(item)}
             else:
-                axes_metadata += [expanded_axes_metadata[item].copy()]
-
+                try:
+                    axes_metadata += [expanded_axes_metadata[item].copy()]
+                except TypeError:
+                    axes_metadata += [expanded_axes_metadata.copy()]
+        
         axes_metadata += expanded_axes_metadatas[last_indexed:]
 
         d = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata", "metadata"))

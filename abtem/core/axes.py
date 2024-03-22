@@ -134,9 +134,16 @@ class AxisMetadata:
     def item_metadata(self, item):
         return {}
 
-    def __getitem__(self, item):
-        return self
-
+    def to_ordinal_axis(self, n):
+        values = tuple(range(n))
+        return OrdinalAxis(
+            label=self.label,
+            _tex_label=self._tex_label,
+            units=self.units,
+            values=values,
+            _concatenate=self._concatenate,
+        )
+    
     def _to_blocks(self, chunks):
         arr = np.empty((len(chunks[0]),), dtype=object)
         for i, slic in iterate_chunk_ranges(chunks):
@@ -209,9 +216,9 @@ class LinearAxis(AxisMetadata):
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )
 
-    def to_nonlinear_axis(self, n):
+    def to_ordinal_axis(self, n):
         values = tuple(self.coordinates(n))
-        return NonLinearAxis(
+        return OrdinalAxis(
             label=self.label,
             _tex_label=self._tex_label,
             units=self.units,
@@ -275,6 +282,10 @@ class OrdinalAxis(AxisMetadata):
 
         return titles
 
+    def to_ordinal_axis(self, n):
+        assert n == len(self)
+        return self
+    
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):
             raise RuntimeError()

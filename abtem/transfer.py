@@ -31,6 +31,7 @@ from abtem.distributions import (
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
 from abtem.transform import ReciprocalSpaceMultiplication
+from abtem.visualize.visualizations import convert_complex
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
@@ -1579,7 +1580,7 @@ class CTF(_HasAberrations, BaseAperture):
             .complex_images()
         )
 
-    def profiles(self, gpts: int = 1000, max_angle: float = None, phi: float = 0.0):
+    def profiles(self, gpts: int = 1000, max_angle: float = None, phi: float = 0.0, complex_representation:str="imaginary"):
         """
         Calculate radial line profiles for each included component (phase aberrations, aperture, temporal and spatial
         envelopes) of the contrast transfer function.
@@ -1613,14 +1614,15 @@ class CTF(_HasAberrations, BaseAperture):
         components = dict()
 
         components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
-
+        # components["ctf"] = convert_complex(components["ctf"], method=complex_representation)
+        
         if self._spatial_envelope.angular_spread != 0.0:
-            components["spatial_envelope"] = self._evaluate_to_match(
+            components["spatial envelope"] = self._evaluate_to_match(
                 self._spatial_envelope, alpha, phi
             )
 
         if self._temporal_envelope.focal_spread != 0.0:
-            components["temporal_envelope"] = self._evaluate_to_match(
+            components["temporal envelope"] = self._evaluate_to_match(
                 self._temporal_envelope, alpha, phi
             )
 
@@ -1638,7 +1640,7 @@ class CTF(_HasAberrations, BaseAperture):
 
             component_metadata = [
                 OrdinalAxis(
-                    label="", values=tuple(components.keys()), _default_type="overlay"
+                    label="", values=tuple(components.keys()),
                 )
             ]
 

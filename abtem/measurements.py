@@ -1,4 +1,5 @@
 """Module for describing abTEM measurement objects."""
+
 from __future__ import annotations
 
 import copy
@@ -45,15 +46,14 @@ from abtem.core.grid import (
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index, normalize_axes
 from abtem.distributions import BaseDistribution
-from abtem.indexing import (  # _format_miller_indices,
+from abtem.indexing import (
     index_diffraction_spots,
     estimate_necessary_excitation_error,
-    _format_miller_indices,
 )
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import ImageArtist, DomainColoringArtist
 from abtem.visualize.visualizations import Visualization
-from abtem.visualize.widgets import ImageGUI, BaseGUI, LinesGUI
+from abtem.visualize.widgets import ImageGUI, BaseGUI, LinesGUI, ScatterGUI
 
 # Enables CuPy-accelerated functions if it is available.
 if cp is not None:
@@ -265,7 +265,7 @@ def _polar_detector_bins(
     alpha, phi = polar_spatial_frequencies(
         gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
     )
-    phi = (phi + rotation) % (2 * np.pi)
+    phi = (phi - rotation) % (2 * np.pi)
 
     radial_bins = -np.ones(gpts, dtype=int)
     valid = (alpha >= inner) & (alpha < outer)
@@ -1125,11 +1125,11 @@ class _BaseMeasurement2D(BaseMeasurements):
             explode=explode,
             overlay=overlay,
             interactive=not interact and display,
-            vmin=vmin,
-            vmax=vmax,
+            value_limits=(vmin, vmax),
             power=power,
             cmap=cmap,
             cbar=cbar,
+            units=units,
             **kwargs,
         )
 
@@ -1608,18 +1608,6 @@ class _BaseMeasurement1D(BaseMeasurements):
             metadata=metadata,
         )
 
-    @abstractmethod
-    def _plot_extent(self, units):
-        pass
-
-    @abstractmethod
-    def _plot_x_label(self, units):
-        pass
-
-    @abstractmethod
-    def _plot_y_label(self, units):
-        pass
-
     @property
     def extent(self) -> float:
         """
@@ -1836,12 +1824,16 @@ class _BaseMeasurement1D(BaseMeasurements):
             overlay=overlay,
             interactive=not interact and display,
             legend=legend,
+            common_scale=common_scale,
             **kwargs,
         )
 
         if interact:
             gui = visualization.interact(LinesGUI, display=display)
 
+        if common_scale is False and visualization._explode:
+            visualization.axes.set_sizes(padding=0.8)
+        
         return visualization
 
 
@@ -3639,16 +3631,16 @@ class PolarMeasurements(BaseMeasurements):
 
     def show(
         self,
-        gpts: int | tuple[int, int] = (512, 512),
         ax: Axes = None,
+        gpts: int | tuple[int, int] = (512, 512),
         cbar: bool = False,
         cmap: str = None,
         vmin: float = None,
         vmax: float = None,
         power: float = 1.0,
         common_color_scale: bool = False,
-        explode: bool | Sequence[bool] = None,
-        overlay: bool | Sequence[int] = None,
+        explode: bool | Sequence[bool] = (),
+        overlay: bool | Sequence[int] = (),
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
@@ -4004,13 +3996,17 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         )
         return data
 
+    def _miller_indices_to_string(self):
+        return ["{} {} {}".format(*hkl) for hkl in self.miller_indices]
+
+
     def to_dataframe(self):
         """
         Convert the indexed diffraction patterns to pandas DataFrame.
 
         Returns
         -------
-        data_frame_of_indexed_spots : pd.DataFrame
+        data_frame : pd.DataFrame
         """
         import pandas as pd
 
@@ -4022,8 +4018,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
                 )
 
             intensities = {
-                _format_miller_indices(hkl): self.intensities[..., i]
-                for i, hkl in enumerate(self.miller_indices)
+                hkl: self.intensities[..., i]
+                for i, hkl in enumerate(self._miller_indices_to_string())
             }
 
             axes_metadata = self.ensemble_axes_metadata[0]
@@ -4042,8 +4038,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             return df
         else:
             intensities = {
-                _format_miller_indices(hkl): intensity
-                for hkl, intensity in zip(self.miller_indices, self.intensities)
+                hkl: intensity
+                for hkl, intensity in zip(self._miller_indices_to_string(), self.intensities)
             }
             return pd.DataFrame(intensities, index=[0])
 
@@ -4084,7 +4080,8 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         power: float = 1.0,
         common_color_scale: bool = False,
         scale: float = 0.5,
-        explode: bool | Sequence[bool] = None,
+        explode: bool | Sequence[bool] = (),
+        overlay: bool | Sequence[bool] = (),
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
@@ -4094,7 +4091,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         **kwargs,
     ):
         """
-        Show the diffraction spots using matplotlib.
+        Show the diffraction spots as an EllipseCollection using matplotlib.
 
         Parameters
         ----------
@@ -4124,10 +4121,10 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         figsize : two int, optional
             The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
         title : bool or str, optional
-            Set the column title of the images. If True is given instead of a string the title will be given by the
+            Set the column title of the plots. If True is given instead of a string the title will be given by the
             value corresponding to the "name" key of the axes metadata dictionary, if this item exists.
         units : str
-            The units used for the x and y axes. The given units must be compatible with the axes of the images.
+            The units used for the x and y axes. The given units must be compatible with the axes of the plots.
         interact : bool
             If True, create an interactive visualization. This requires enabling the ipympl Matplotlib backend.
         display : bool, optional
@@ -4135,78 +4132,31 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         Returns
         -------
-        measurement_visualization_2d : MeasurementVisualizationImshow
+        visualization : Visualization
         """
-
-        if not interact:
-            self.compute()
-
-        scale_axis = self._scale_axis_from_metadata()
-
-        if units is None:
-            units = "1/Å"
-
-        energy = self.metadata.get("energy", None)
-        conversion = _get_conversion_factor(units, old_units="1/Å", energy=energy)
-
-        data = PointsData(self.positions[:, :2] * conversion, self.array)
-
-        annotations = []
-        for hkl in self.miller_indices:
-            if config.get("visualize.use_tex"):
-                annotation = " \ ".join(
-                    [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
-                )
-                annotations.append(f"${annotation}$")
-            else:
-                annotations.append("{} {} {}".format(*hkl))
-
-        # np.zeros(self.ensemble_shape, dtype=object)
-        # for i in np.ndindex(data.shape):
-        #     data.itemset(
-        #         i,
-        #         {
-        #             "intensities": self.array[i],
-        #             "positions": self.positions[i] * conversion,
-        #             "hkl": self.miller_indices,
-        #         },
-        #     )
-
-        scale *= conversion**2
-
-        xlabel = LinearAxis(label="k_x", units="1/Å", _tex_label="$k_x$").format_label(
-            units
-        )
-        ylabel = LinearAxis(label="k_y", units="1/Å", _tex_label="$k_y$").format_label(
-            units
-        )
-
-        visualization = Visualization2D(
+        visualization = Visualization(
+            measurement=self,
             ax=ax,
-            data=data,
-            xlabel=xlabel,
-            ylabel=ylabel,
-            cbar=cbar,
-            cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
-            power=power,
             common_scale=common_color_scale,
             figsize=figsize,
-            interact=interact,
+            title=title,
+            aspect=True,
+            share_x=True,
+            share_y=True,
+            explode=explode,
+            overlay=overlay,
+            interactive=not interact and display,
+            value_limits=(vmin, vmax),
+            power=power,
+            cmap=cmap,
+            cbar=cbar,
             scale=scale,
             annotation_threshold=annotation_threshold,
-            annotations=annotations,
             **kwargs,
         )
 
-        if display and not interact:
-            plt.show(visualization.get_figure())
-
-        if interact and display:
-            from IPython.display import display as ipython_display
-
-            ipython_display(visualization.layout_widgets())
+        if interact:
+            gui = visualization.interact(ScatterGUI, display=display)
 
         return visualization
 

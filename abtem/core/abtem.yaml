@@ -1,5 +1,5 @@
 device: cpu
-fft: fftw
+fft: numpy
 precision: float32
 local_diagnostics:
   progress_bar: true

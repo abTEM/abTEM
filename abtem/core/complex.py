@@ -6,7 +6,7 @@ from abtem.core.backend import check_cupy_is_installed, cp
 from abtem.core.config import config
 
 
-@nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
+@nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64), nb.complex64(nb.complex64)])
 def _complex_exponential(x):
     """
     Calculate the complex exponential.
