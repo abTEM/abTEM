@@ -32,7 +32,7 @@ from abtem.visualize.artists import (
     LinesArtist,
     ScatterArtist,
     validate_cmap,
-    _get_value_limits
+    _get_value_limits,
 )
 from abtem.visualize.axes_grid import (
     AxesGrid,
@@ -169,7 +169,7 @@ def _get_artist_type(measurement, complex_conversion):
             return DomainColoringArtist
         else:
             return ImageArtist
-    elif hasattr(measurement, "positions"):
+    elif hasattr(measurement, "miller_indices"):
         return ScatterArtist
     elif len(measurement.base_shape) == 1:
         return LinesArtist
@@ -191,14 +191,16 @@ class Visualization:
         cbar: bool = False,
         interactive: bool = True,
         title: str = None,
+        xlim: tuple[float, float] = None,
+        ylim: tuple[float, float] = None,
         **kwargs,
     ):
-        self._measurement = measurement
+        self._measurement = measurement.to_cpu()
 
         overlay, explode = _validate_axes_types(
             overlay, explode, len(measurement.ensemble_shape)
         )
-        
+
         self._overlay = overlay
         self._explode = explode
 
@@ -263,24 +265,32 @@ class Visualization:
             self.set_column_titles(title)
 
         elif title and len(explode) > 0:
-            axes_metadata = measurement.axes_metadata[explode[0]].to_ordinal_axis(measurement.shape[explode[0]])
-            
+            axes_metadata = measurement.axes_metadata[explode[0]].to_ordinal_axis(
+                measurement.shape[explode[0]]
+            )
+
             column_titles = [
-                l.format_title(".3g", include_label=i==0) for i, l in enumerate(axes_metadata)
+                l.format_title(".3g", include_label=i == 0)
+                for i, l in enumerate(axes_metadata)
             ]
 
             self.set_column_titles(column_titles)
 
         if title and len(explode) > 1:
+            axes_metadata = measurement.axes_metadata[explode[1]].to_ordinal_axis(
+                measurement.shape[explode[1]]
+            )
+
             row_titles = [
-                l.format_title(".3g", include_label=i==0) for i, l in enumerate(measurement.axes_metadata[explode[1]])
+                l.format_title(".3g", include_label=i == 0)
+                for i, l in enumerate(axes_metadata)
             ]
 
             self.set_row_titles(row_titles)
 
         self._make_new_artists(**kwargs)
-        
-        self.adjust_coordinate_limits_to_artists()
+
+        self.adjust_coordinate_limits_to_artists(xlim=xlim, ylim=ylim)
 
         if common_scale:
             self.set_common_value_limits(value_limits)
@@ -378,10 +388,12 @@ class Visualization:
 
     def get_figure(self):
         return self.axes[0, 0].get_figure()
-    
-    def adjust_coordinate_limits_to_artists(self):
-        xlim = [np.inf, -np.inf]
-        ylim = [np.inf, -np.inf]
+
+    def adjust_coordinate_limits_to_artists(self, xlim=None, ylim=None):
+        if xlim is None:
+            xlim = [np.inf, -np.inf]
+        if ylim is None:
+            ylim = [np.inf, -np.inf]
         for artist in self.artists.ravel():
             new_xlim = artist.get_xlim()
             xlim = [min(new_xlim[0], xlim[0]), max(new_xlim[1], xlim[1])]
@@ -403,14 +415,18 @@ class Visualization:
     def set_ylim(self, ylim: tuple[float, float] | list[float] = None):
         self.set_artists("ylim", ylim=ylim)
 
-    def set_value_limits(self, value_limits: tuple[float, float] | list[float] = (None, None)):
+    def set_value_limits(
+        self, value_limits: tuple[float, float] | list[float] = (None, None)
+    ):
         self.set_artists("value_limits", value_limits=value_limits)
 
     def set_power(self, power: float = 1.0):
         self.set_artists("power", power=power)
 
     def set_common_value_limits(self, value_limits=(None, None)):
-        value_limits = _get_value_limits(self._measurement.array, value_limits=value_limits)
+        value_limits = _get_value_limits(
+            self._measurement.array, value_limits=value_limits
+        )
         self.set_value_limits(value_limits)
 
     def set_column_titles(
@@ -550,7 +566,7 @@ class Visualization:
 
         for artist in self.artists.ravel():
             artist.remove()
-    
+
     def update_data_indices(self, indices):
         self._indices = indices
         for i in np.ndindex(self.axes.shape):
@@ -565,7 +581,6 @@ class Visualization:
         artist_type = _get_artist_type(
             self.measurement, complex_conversion=self._complex_conversion
         )
-        
 
         artists = np.zeros(self.axes.shape, dtype=object)
         for i in np.ndindex(self.axes.shape):
@@ -573,15 +588,14 @@ class Visualization:
 
             if hasattr(self.axes, "_caxes"):
                 caxes = self.axes._caxes[i]
-                
+
                 if self.axes._cbar_mode == "single" and not i == (0, 0):
                     caxes = None
             else:
-                ss
                 caxes = [_make_cax(ax) for _ in range(artist_type.num_cbars)]
 
             measurement = self._reduce_measurement(self._indices, i)
-            
+
             artist = artist_type(
                 ax=ax,
                 caxes=caxes,
@@ -630,7 +644,6 @@ class Visualization:
 
     def set_scale_bars(self, locs: str = "lower right", **kwargs):
         self.set_artists("scale_bars", locs=locs, **kwargs)
-
 
 
 _cube = np.array(

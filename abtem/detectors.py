@@ -898,7 +898,7 @@ class PixelatedDetector(BaseDetector):
                     label="kx",
                     units="1/Å",
                     fftshift=True,
-                    _tex_label="$k_x$",
+                    tex_label="$k_x$",
                 ),
                 ReciprocalSpaceAxis(
                     sampling=sampling[1],
@@ -906,7 +906,7 @@ class PixelatedDetector(BaseDetector):
                     label="ky",
                     units="1/Å",
                     fftshift=True,
-                    _tex_label="$k_y$",
+                    tex_label="$k_y$",
                 ),
             ]
         else:

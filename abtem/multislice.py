@@ -1,4 +1,5 @@
 """Module for running the multislice algorithm."""
+
 from __future__ import annotations
 
 import copy
@@ -422,7 +423,7 @@ def multislice_and_detect(
     pbar: bool = False,
     method: str = "conventional",
     **kwargs,
-) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
+) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
@@ -565,7 +566,7 @@ def transition_potential_multislice_and_detect(
     conjugate: bool = False,
     transpose: bool = False,
     pbar=None,
-) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
+) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
@@ -899,8 +900,6 @@ class MultisliceTransform(ArrayObjectTransform):
 
         detectors = _validate_detectors(detectors)
 
-        print(detectors)
-        
         if not "pbar" in multislice_func_kwargs.keys():
             multislice_func_kwargs["pbar"] = config.get(
                 "local_diagnostics.task_level_progress", False
@@ -1024,7 +1023,7 @@ class MultisliceTransform(ArrayObjectTransform):
         )
 
     def _calculate_new_array(self, waves):
-        
+
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

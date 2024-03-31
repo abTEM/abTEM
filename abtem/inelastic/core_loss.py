@@ -491,7 +491,7 @@ class TransitionPotential(BaseTransitionPotential):
             OrdinalAxis(
                 values=values,
                 label="(l,ml)→(l',ml')",
-                _tex_label="$(\ell, m_l) → (\ell', m_l')$",
+                tex_label="$(\ell, m_l) → (\ell', m_l')$",
             )
         ]
 

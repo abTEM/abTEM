@@ -21,6 +21,15 @@ def is_array_like(x):
         return False
 
 
+def is_broadcastable(shape1, shape2):
+    for a, b in zip(shape1[::-1], shape2[::-1]):
+        if a == 1 or b == 1 or a == b:
+            pass
+        else:
+            return False
+    return True
+
+
 class CopyMixin:
     _exclude_from_copy: tuple = ()
 

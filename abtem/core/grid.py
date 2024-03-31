@@ -344,6 +344,9 @@ class Grid(CopyMixin, EqualityMixin):
 
         self.gpts = gpts
 
+    def spatial_frequencies(self):
+        return spatial_frequencies(self.gpts, self.sampling)
+
 
 class HasGridMixin:
     _grid: Grid

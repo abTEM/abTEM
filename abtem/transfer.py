@@ -1,4 +1,5 @@
 """Module to describe the contrast transfer function (CTF) and the related apertures."""
+
 from __future__ import annotations
 
 import copy
@@ -356,9 +357,10 @@ class Aperture(BaseAperture):
         if isinstance(self.semiangle_cutoff, BaseDistribution):
             ensemble_axes_metadata += [
                 ParameterAxis(
-                    label="semiangle cutoff",
+                    label="semiangle_cutoff",
                     values=self.semiangle_cutoff,
                     units="mrad",
+                    tex_label="$\\alpha_{cut}$",
                     _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
                 )
             ]
@@ -890,7 +892,7 @@ class _HasAberrations:
                         values=tuple(value.values),
                         units="Å",
                         _ensemble_mean=value.ensemble_mean,
-                        _tex_label=_tex_label,
+                        tex_label=_tex_label,
                     )
                 ]
         return axes_metadata
@@ -1580,7 +1582,13 @@ class CTF(_HasAberrations, BaseAperture):
             .complex_images()
         )
 
-    def profiles(self, gpts: int = 1000, max_angle: float = None, phi: float = 0.0, complex_representation:str="imaginary"):
+    def profiles(
+        self,
+        gpts: int = 1000,
+        max_angle: float = None,
+        phi: float = 0.0,
+        complex_representation: str = "imaginary",
+    ):
         """
         Calculate radial line profiles for each included component (phase aberrations, aperture, temporal and spatial
         envelopes) of the contrast transfer function.
@@ -1615,7 +1623,7 @@ class CTF(_HasAberrations, BaseAperture):
 
         components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
         # components["ctf"] = convert_complex(components["ctf"], method=complex_representation)
-        
+
         if self._spatial_envelope.angular_spread != 0.0:
             components["spatial envelope"] = self._evaluate_to_match(
                 self._spatial_envelope, alpha, phi
@@ -1640,7 +1648,8 @@ class CTF(_HasAberrations, BaseAperture):
 
             component_metadata = [
                 OrdinalAxis(
-                    label="", values=tuple(components.keys()),
+                    label="",
+                    values=tuple(components.keys()),
                 )
             ]
 

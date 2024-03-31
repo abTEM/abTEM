@@ -24,6 +24,7 @@ from matplotlib.axes import Axes
 from numba import prange, jit
 
 from abtem.array import ArrayObject, stack
+from abtem.atoms import euler_to_rotation
 from abtem.core import config
 from abtem.core.axes import (
     RealSpaceAxis,
@@ -46,9 +47,10 @@ from abtem.core.grid import (
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index, normalize_axes
 from abtem.distributions import BaseDistribution
-from abtem.indexing import (
+from abtem.bloch.indexing import (
     index_diffraction_spots,
     estimate_necessary_excitation_error,
+    validate_cell,
 )
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import ImageArtist, DomainColoringArtist
@@ -301,7 +303,7 @@ def _polar_detector_bins(
         return bins
 
 
-@jit(nopython=True, nogil=True, fastmath=True)
+@jit(nopython=True, nogil=True, fastmath=True, parallel=True)
 def _sum_run_length_encoded(array, result, separators):
     for x in prange(result.shape[1]):
         for i in range(result.shape[0]):
@@ -567,7 +569,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         return ScaleAxis(
             label=self.metadata.get("label", ""),
             units=self.metadata.get("units", None),
-            _tex_label=None,
+            tex_label=None,
         )
 
     def to_measurement_ensemble(self):
@@ -1249,10 +1251,10 @@ class Images(_BaseMeasurement2D):
     def base_axes_metadata(self) -> list[AxisMetadata]:
         return [
             RealSpaceAxis(
-                label="x", sampling=self.sampling[0], units="Å", _tex_label="$x$"
+                label="x", sampling=self.sampling[0], units="Å", tex_label="$x$"
             ),
             RealSpaceAxis(
-                label="y", sampling=self.sampling[1], units="Å", _tex_label="$y$"
+                label="y", sampling=self.sampling[1], units="Å", tex_label="$y$"
             ),
         ]
 
@@ -1833,7 +1835,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         if common_scale is False and visualization._explode:
             visualization.axes.set_sizes(padding=0.8)
-        
+
         return visualization
 
 
@@ -1871,7 +1873,7 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
     def base_axes_metadata(self) -> list[RealSpaceAxis]:
         return [
             RealSpaceAxis(
-                label="r", sampling=self.sampling, units="Å", _tex_label="$r$"
+                label="r", sampling=self.sampling, units="Å", tex_label="$r$"
             )
         ]
 
@@ -1950,7 +1952,7 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
     def base_axes_metadata(self) -> list[AxisMetadata]:
         return [
             ReciprocalSpaceAxis(
-                label="k", sampling=self.sampling, units="1/Å", _tex_label="$k$"
+                label="k", sampling=self.sampling, units="1/Å", tex_label="$k$"
             )
         ]
 
@@ -2243,7 +2245,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 label="kx",
                 units="1/Å",
                 fftshift=self.fftshift,
-                _tex_label="$k_x$",
+                tex_label="$k_x$",
             ),
             ReciprocalSpaceAxis(
                 sampling=self.sampling[1],
@@ -2251,7 +2253,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 label="ky",
                 units="1/Å",
                 fftshift=self.fftshift,
-                _tex_label="$k_y$",
+                tex_label="$k_y$",
             ),
         ]
 
@@ -2295,7 +2297,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def index_diffraction_spots(
         self,
         cell: Cell | float | tuple[float, float, float],
-        rotation=(0.0, 0.0, 0.0),
+        rotation: tuple[float, float, float] = (0.0, 0.0, 0.0),
         rotation_axes="zxz",
         threshold: float = 1e-6,
         energy: float = None,
@@ -2329,6 +2331,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         sampling = self.sampling
         sg_max = np.abs(estimate_necessary_excitation_error(energy, k_max))
 
+
+        
         hkl, g_vec, nm, intensity = index_diffraction_spots(
             array=self.array,
             sampling=sampling,
@@ -2342,10 +2346,19 @@ class DiffractionPatterns(_BaseMeasurement2D):
             centering=centering,
         )
 
+        cell = validate_cell(cell=cell)
+
+        R = euler_to_rotation(*rotation, axes=rotation_axes)
+        reciprocal_lattice_vectors = R @ cell.reciprocal()
+        reciprocal_lattice_vectors = np.tile(
+            reciprocal_lattice_vectors[(None,) * (len(intensity.shape) - 1)],
+            intensity.shape[:-1] + (1, 1),
+        )
+
         return IndexedDiffractionPatterns(
             intensity,
             hkl,
-            positions=g_vec,
+            reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
         )
@@ -3714,6 +3727,51 @@ class PolarMeasurements(BaseMeasurements):
         )
 
 
+@jit(nopython=True, nogil=True, fastmath=True)
+def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
+
+    k_max = 0.0
+    for i in range(len(hkl)):
+        lengths = (
+            (
+                hkl[i, 0] * reciprocal_lattice_vectors[..., 0, :]
+                + hkl[i, 1] * reciprocal_lattice_vectors[..., 1, :]
+                + hkl[i, 2] * reciprocal_lattice_vectors[..., 2, :]
+            )
+            ** 2
+        ).sum(-1)
+
+        if hasattr(lengths, "max"):
+            lengths = lengths.max()
+
+        k_max = max(k_max, lengths)
+
+    return np.sqrt(k_max)
+
+
+@jit(nopython=True, nogil=True, fastmath=True, parallel=True)
+def reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
+
+    for i in prange(len(hkl)):
+        lengths = (
+            (
+                hkl[i, 0] * reciprocal_lattice_vectors[..., 0, :]
+                + hkl[i, 1] * reciprocal_lattice_vectors[..., 1, :]
+                + hkl[i, 2] * reciprocal_lattice_vectors[..., 2, :]
+            )
+            ** 2
+        ).sum(-1)
+
+        include = lengths < k_max**2
+
+        if hasattr(lengths, "any"):
+            include = include.any()
+
+        mask[i] = include
+
+    return mask
+
+
 class IndexedDiffractionPatterns(BaseMeasurements):
     """
     Diffraction patterns indexed by their Miller indices.
@@ -3721,14 +3779,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
     Parameters
     ----------
     array : np.ndarray
-        1D or greater array of type `float`. The last axis represents the diffraction spots and should have the same
+        1D or greater array of type `float` or `complex`. The last axis represents the diffraction spots and should have the same
         length as the number of miller indices, any preceding axis represents an ensemble axis.
     miller_indices : np.ndarray
         The miller indices of the diffraction spots as an N x 3 array where N is the number of miller indices. The
         order of the miller indices must correspond to the array of intensities. The second axis represents each
         hkl miller index.
-    positions : np.ndarray
-        The reciprocal space coordinates of the diffraction spots as an N x 3 array. The first axis represents
+    reciprocal_lattice_vectors : np.ndarray
+        The reciprocal lattice vectors of the crystal as a 3 x 3 array. The first axis represents
         miller indices and the order of the items must correspond to the array of intensities. The second axis
         represents the reciprocal space positions in x, y and z [1/Å].
     ensemble_axes_metadata : list of AxisMetadata, optional
@@ -3743,12 +3801,23 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         self,
         array: np.ndarray,
         miller_indices: np.ndarray,
-        positions: np.ndarray,
+        reciprocal_lattice_vectors: np.ndarray,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-        assert len(miller_indices) == array.shape[-1]
-        assert len(miller_indices) == positions.shape[-2]
+
+        #if not reciprocal_lattice_vectors.shape[:-2] == array.shape[:-1]:
+        #    raise ValueError()
+
+        # if not len(miller_indices) == reciprocal_lattice_vectors.shape[-3]:
+        #     raise ValueError(
+        #         "The number of miller indices and reciprocal space positions must be equal."
+        #     )
+
+        if not len(miller_indices) == array.shape[-1]:
+            raise ValueError(
+                "The number of miller indices must be equal to the number of diffraction spots."
+            )
 
         super().__init__(
             array=array,
@@ -3758,7 +3827,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         self._miller_indices = miller_indices
         self._intensities = array
-        self._positions = positions
+        self._reciprocal_lattice_vectors = reciprocal_lattice_vectors
 
     def from_array_and_metadata(
         self, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
@@ -3780,11 +3849,36 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         return self._array
 
     @property
+    def reciprocal_lattice_vectors(self) -> np.ndarray:
+        """
+        Reciprocal lattice vectors of the diffraction spots.
+        """
+        return self._reciprocal_lattice_vectors
+
+    @property
     def positions(self) -> np.ndarray:
         """
         Reciprocal space positions of the diffraction spots.
         """
-        return self._positions
+        positions = self.miller_indices @ self.reciprocal_lattice_vectors
+        return positions
+    
+    @property
+    def all_positions(self) -> np.ndarray:
+        """
+        Reciprocal space positions of the diffraction spots.
+        """
+        repeats = ()
+        for n, m in zip(self.shape[:-1], self.reciprocal_lattice_vectors.shape[:-2]):
+            if n == m:
+                repeats += (1,)
+            elif m == 1:
+                repeats += (n,)
+            else:
+                raise RuntimeError("Incompatible shapes.")
+
+        positions = np.tile(self.positions, repeats + (1, 1))
+        return positions
 
     @property
     def miller_indices(self) -> np.ndarray:
@@ -3818,12 +3912,12 @@ class IndexedDiffractionPatterns(BaseMeasurements):
     def _unpack_kwargs(cls, attrs):
         kwargs = super()._unpack_kwargs(attrs)
         kwargs["miller_indices"] = np.array(kwargs["miller_indices"], dtype=int)
-        kwargs["positions"] = np.array(kwargs["positions"], dtype=np.float32)
         return kwargs
 
     def __getitem__(self, items):
-        new = super().__getitem__(items)
-        new._positions = new._positions[items]
+        new = self.get_items(
+            items, reciprocal_lattice_vectors=self.reciprocal_lattice_vectors
+        )
         return new
 
     def remove_low_intensity(self, threshold: float = 1e-3):
@@ -3845,12 +3939,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         miller_indices = self.miller_indices[mask]
         intensities = self.intensities[..., mask]
-        positions = self.positions[..., mask, :]
 
         return self.__class__(
             intensities,
             miller_indices,
-            positions,
+            reciprocal_lattice_vectors=self.reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self._metadata,
         )
@@ -3884,19 +3977,21 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             raise ValueError()
 
         order = np.argsort(criterion)
-        positions = self.positions[order]
         array = self.array[..., order]
         miller_indices = self.miller_indices[order]
+        reciprocal_lattice_vectors = self.reciprocal_lattice_vectors[..., order, :, :]
 
         return self.__class__(
             array,
             miller_indices,
-            positions,
+            reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self._metadata,
         )
 
-    def crop(self, max_angle: float = None, max_frequency: float = None):
+    def crop(
+        self, max_angle: float = None, k_max: float = None
+    ):
         """
         Crop the indexed diffraction patterns such that they only include spots with spatial frequencies
         (scattering angles) up to a given limit.
@@ -3905,36 +4000,38 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ----------
         max_angle : float, optional
             The maximum included scattering angle in the cropped diffraction patterns.
-        max_frequency : float, optional
-            The maximum included spatial frequency in the cropped diffraction patterns.
+        k_max : float, optional
+            The maximum included reciprocal lattice vector in the cropped diffraction spots.
 
         Returns
         -------
         cropped : IndexedDiffractionPatterns
         """
 
-        ensemble_axes = tuple(range(self.ensemble_dims))
+        if max_angle is not None and k_max is None:
+            wavelength = energy2wavelength(self._get_from_metadata("energy"))
+            k_max = max_angle / wavelength / 1e3
 
-        if max_angle is not None and max_frequency is None:
-            mask = np.any(
-                np.linalg.norm(self.angular_positions, axis=-1) < max_angle,
-                axis=ensemble_axes,
+        elif not k_max or max_angle:
+            raise ValueError(
+                "Either 'max_angle' or 'k_max' must be given."
             )
-        elif max_frequency is not None and max_angle is None:
-            mask = np.any(
-                np.linalg.norm(self.positions, axis=-1) < max_angle, axis=ensemble_axes
-            )
-        else:
-            raise ValueError()
+
+        mask = np.zeros(len(self.miller_indices), dtype=bool)
+        mask = reciprocal_lattice_vector_mask(
+            mask,
+            self.miller_indices.astype(self.reciprocal_lattice_vectors.dtype),
+            self.reciprocal_lattice_vectors,
+            k_max,
+        )
 
         miller_indices = self.miller_indices[mask]
         array = self.array[..., mask]
-        positions = self.positions[..., mask, :]
 
         return self.__class__(
             array,
             miller_indices,
-            positions,
+            reciprocal_lattice_vectors=self.reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self._metadata,
         )
@@ -3999,7 +4096,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
     def _miller_indices_to_string(self):
         return ["{} {} {}".format(*hkl) for hkl in self.miller_indices]
 
-
     def to_dataframe(self):
         """
         Convert the indexed diffraction patterns to pandas DataFrame.
@@ -4039,7 +4135,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         else:
             intensities = {
                 hkl: intensity
-                for hkl, intensity in zip(self._miller_indices_to_string(), self.intensities)
+                for hkl, intensity in zip(
+                    self._miller_indices_to_string(), self.intensities
+                )
             }
             return pd.DataFrame(intensities, index=[0])
 
@@ -4057,18 +4155,19 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         miller_indices = np.delete(self.miller_indices, to_delete, axis=0)
         intensities = np.delete(self.intensities, to_delete, axis=-1)
-        positions = np.delete(self.positions, to_delete, axis=-2)
 
         return self.__class__(
             intensities,
             miller_indices,
-            positions,
-            self.ensemble_axes_metadata,
-            self.metadata,
+            reciprocal_lattice_vectors=self.reciprocal_lattice_vectors,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self._metadata,
         )
 
-    def _plot_base_axes_metadata(self, units: str = None):
-        return self.base_axes_metadata
+    def max_reciprocal_space_vector_length(self):
+        return calculate_max_reciprocal_space_vector(
+            self.miller_indices, self.reciprocal_lattice_vectors
+        )
 
     def show(
         self,
@@ -4085,7 +4184,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
-        annotation_threshold: float = 0.1,
         interact: bool = False,
         display: bool = True,
         **kwargs,
@@ -4134,6 +4232,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         -------
         visualization : Visualization
         """
+
+        k_max = self.max_reciprocal_space_vector_length() * _get_conversion_factor(
+            units, "1/Å", self.metadata.get("energy", None)
+        )
+
+        xlim = [-k_max, k_max]
+        ylim = [-k_max, k_max]
+
         visualization = Visualization(
             measurement=self,
             ax=ax,
@@ -4151,7 +4257,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             cmap=cmap,
             cbar=cbar,
             scale=scale,
-            annotation_threshold=annotation_threshold,
+            units=units,
+            xlim=xlim,
+            ylim=ylim,
             **kwargs,
         )
 
@@ -4184,7 +4292,10 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         positions = {
             tuple(hkl): position
-            for hkl, position in zip(self.miller_indices, self.positions)
+            for hkl, position in zip(
+                self.miller_indices,
+                np.moveaxis(self.positions, -2, 0),
+            )
         }
         return positions
 
@@ -4196,29 +4307,40 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         axis: int,
     ):
         intensities = [spots.intensities_dict for spots in diffraction_spots]
-        positions_dicts = [spots.positions_dict for spots in diffraction_spots]
-        positions = {k: v for d in positions_dicts for k, v in d.items()}
+        positions = [spots.positions_dict for spots in diffraction_spots]
+
+        def merge_dicts_no_overwrite(dict1, dict2):
+            return {**dict1, **{k: v for k, v in dict2.items() if k not in dict1}}
+
+        merged = {}
+        for positions1 in positions:
+            merged = merge_dicts_no_overwrite(merged, positions1)
+
+        positions = [
+            merge_dicts_no_overwrite(positions1, merged) for positions1 in positions
+        ]
 
         miller_indices = list(
             set(itertools.chain(*[intensities1.keys() for intensities1 in intensities]))
         )
 
         new_intensities = {}
+        new_positions = {}
         for hkl in miller_indices:
             new_intensities[hkl] = []
+            new_positions[hkl] = []
 
-            for intensity in intensities:
-                new_intensities[hkl].append(intensity[hkl])
+            for intensities1, positions1 in zip(intensities, positions):
+                new_intensities[hkl].append(intensities1[hkl])
+                new_positions[hkl].append(positions1[hkl])
 
             new_intensities[hkl] = np.stack(new_intensities[hkl], axis=axis)
+            new_positions[hkl] = np.stack(new_positions[hkl], axis=axis)
 
-        positions = dict(sorted(positions.items()))
-        intensities = dict(sorted(new_intensities.items()))
+        miller_indices = np.stack(list(new_intensities.keys()), axis=0)
 
-        miller_indices = np.stack(list(intensities.keys()), axis=0)
-
-        positions = np.stack(list(positions.values()))
-        intensities = np.stack(list(intensities.values()), axis=-1)
+        positions = np.stack(list(new_positions.values()), axis=-2)
+        intensities = np.stack(list(new_intensities.values()), axis=-1)
 
         ensemble_axes_metadata = [
             axis_metadata.copy()

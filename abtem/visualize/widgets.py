@@ -1,4 +1,5 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
+
 from __future__ import annotations
 
 from contextlib import ExitStack
@@ -171,15 +172,19 @@ class BaseGUI(widgets.HBox):
                 (slider, "continuous_update"),
             )
 
-        self._scale_button = widgets.Button(description="Scale", layout=widgets.Layout(width="80px"))
+        self._scale_button = widgets.Button(
+            description="Scale", layout=widgets.Layout(width="80px")
+        )
 
-        self._common_scale_button = widgets.Button(description="Common scale", layout=widgets.Layout(width="126px"))
+        self._common_scale_button = widgets.Button(
+            description="Common scale", layout=widgets.Layout(width="126px")
+        )
 
         self._autoscale_button = widgets.ToggleButton(
             value=False,
             description="Autoscale",
             tooltip="Autoscale",
-            layout=widgets.Layout(width="86px")
+            layout=widgets.Layout(width="86px"),
         )
 
         self._powerscale_slider = widgets.FloatSlider(
@@ -194,12 +199,14 @@ class BaseGUI(widgets.HBox):
         widgets_column = [
             *sliders,
             widgets.HBox([self._reset_button, self._continuous_update_toggle]),
-            widgets.HBox([self._scale_button, self._common_scale_button, self._autoscale_button]),
+            widgets.HBox(
+                [self._scale_button, self._common_scale_button, self._autoscale_button]
+            ),
             self._powerscale_slider,
         ]
 
         widgets_column = widgets_column + list(args)
-        
+
         widgets_vbox = widgets.VBox(widgets_column)
 
         super().__init__(children=[widgets_vbox, canvas])
@@ -221,7 +228,9 @@ class BaseGUI(widgets.HBox):
 
         self.scale_button.on_click(lambda *args: visualization.set_value_limits())
 
-        self.common_scale_button.on_click(lambda *args: visualization.set_common_value_limits())
+        self.common_scale_button.on_click(
+            lambda *args: visualization.set_common_value_limits()
+        )
 
         def autoscale_toggle_changed(change):
             setattr(visualization, "autoscale", change["new"])
@@ -245,7 +254,7 @@ class BaseGUI(widgets.HBox):
     @property
     def common_scale_button(self):
         return self._common_scale_button
-    
+
     @property
     def autoscale_button(self):
         return self._autoscale_button
@@ -253,7 +262,6 @@ class BaseGUI(widgets.HBox):
     @property
     def powerscale_slider(self):
         return self._powerscale_slider
-
 
 
 class LinesGUI(BaseGUI):
@@ -297,7 +305,7 @@ class ImageGUI(BaseGUI):
         "hsv",
         "twilight",
     ]
-    
+
     def __init__(self, sliders, canvas, cmap_options=None):
         self._complex_dropdown = widgets.Dropdown(
             options=[
@@ -359,6 +367,7 @@ class ScatterGUI(BaseGUI):
         "solid black",
         "jet",
     ]
+
     def __init__(self, sliders, canvas, cmap_options=None):
 
         self._scale_slider = widgets.FloatSlider(
@@ -366,9 +375,14 @@ class ScatterGUI(BaseGUI):
         )
 
         self._annotations_slider = widgets.FloatLogSlider(
-            description="Annotations", min=-7, max=0, value=1, step=1e-3, continuous_update=False,
+            description="Annotations",
+            min=-7,
+            max=0,
+            value=1,
+            step=1e-2,
+            continuous_update=True,
         )
-        
+
         if cmap_options is None:
             cmap_options = self._default_cmap_options
 
@@ -378,26 +392,37 @@ class ScatterGUI(BaseGUI):
             description="Colormap",
         )
 
-        super().__init__(sliders, canvas, self._scale_slider, self._annotations_slider, self._cmap_dropdown)
+        super().__init__(
+            sliders,
+            canvas,
+            self._scale_slider,
+            self._annotations_slider,
+            self._cmap_dropdown,
+        )
 
     def attach_visualization(self, visualization):
         super().attach_visualization(visualization)
 
         scale = visualization.artists[0, 0].get_scale()
-        self.scale_slider.min = 0.
-        self.scale_slider.max = scale * 5.
+        self.scale_slider.min = 0.0
+        self.scale_slider.max = scale * 5.0
         self.scale_slider.step = scale * 0.05
         self.scale_slider.value = scale
 
-        self.scale_slider.observe(lambda change: visualization.set_artists("scale", scale=change["new"]), "value"
+        self.scale_slider.observe(
+            lambda change: visualization.set_artists("scale", scale=change["new"]),
+            "value",
         )
 
-        annotation_threshold = visualization.artists[0, 0].annotations.get_threshold()
+        annotation_threshold = visualization.artists[0, 0].annotations.threshold
         self.annotations_slider.value = annotation_threshold
-        self.annotations_slider.observe(lambda change: 
-                                        visualization.set_artists("annotations", threshold=change["new"]), "value"
+        self.annotations_slider.observe(
+            lambda change: visualization.set_artists(
+                "annotation_kwargs", threshold=change["new"]
+            ),
+            "value",
         )
-        
+
         def dropdown_changed(change):
             cmap = None if change["new"] == "default" else change["new"]
             visualization.set_cmap(cmap)
@@ -411,7 +436,7 @@ class ScatterGUI(BaseGUI):
     @property
     def annotations_slider(self):
         return self._annotations_slider
-    
+
     @property
     def cmap_dropdown(self):
         return self._cmap_dropdown

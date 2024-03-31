@@ -56,7 +56,7 @@ def _format_units(units):
         return units
 
 
-def _validate_units(units, old_units):
+def _validate_units(units, old_units=None):
     if old_units is None and units is None:
         return None
     elif units is None:

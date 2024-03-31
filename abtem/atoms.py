@@ -1,4 +1,5 @@
 """Module for modifying ASE `Atoms` objects for use in abTEM."""
+
 from __future__ import annotations
 
 from numbers import Number
@@ -15,7 +16,6 @@ from abtem.core.utils import label_to_index
 axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
 
 
-# Converting Cartesian string representations of Cartesian axes to numerical.
 def euler_sequence(axes: str, convention: str):
     """
     Parameters
@@ -72,7 +72,9 @@ def euler_sequence(axes: str, convention: str):
             "zyz": (2, 1, 1, 1),
         }
     else:
-        raise ValueError("")
+        raise ValueError(
+            f"convention must be either 'intrinsic', 'static', 'extrinsic', or 'rotating', not {convention}."
+        )
 
     return sequences[axes]
 
@@ -322,11 +324,11 @@ def euler_to_rotation(
     Parameters
     ----------
     ai : float
-        First Euler angle
+        First Euler angle.
     aj : float
-        Second Euler angle
+        Second Euler angle.
     ak : float
-        Third Euler angle
+        Third Euler angle.
     axes : str, optional
         String representation of the axes of rotation. Default is "xyz".
     convention : str, optional
@@ -589,6 +591,50 @@ def rotation_matrix_from_plane(
         return np.eye(3)
 
 
+def rotate_atoms(
+    atoms: Atoms,
+    axes: str = "zxz",
+    angles: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    convention: str = "intrinsic",
+) -> Atoms:
+    """
+    Rotate the positions and cell vectors of atoms using Euler angles.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The atoms object to rotate.
+    axes : str, optional
+        The sequence of axes for rotation. Default is "zxz".
+    angles : tuple[float, float, float], optional
+        The Euler angles in radians. Default is (0.0, 0.0, 0.0).
+    convention : str, optional
+        The convention for Euler angles. Default is "intrinsic".
+
+    Returns
+    -------
+    Atoms
+        The rotated atoms object.
+    """
+    atoms = atoms.copy()
+
+    if isinstance(angles, Number):
+        angles = (angles,)
+
+    angles = angles + (0.0,) * (3 - len(angles))
+
+    if not len(angles) == 3:
+        raise ValueError("Angles must be a tuple of length 3.")
+
+    axes = axes + "x" * (3 - len(axes))
+
+    R = euler_to_rotation(*angles, axes=axes, convention=convention)
+
+    atoms.positions[:] = np.dot(atoms.positions, R.T)
+    atoms.cell[:] = np.dot(atoms.cell, R.T)
+    return atoms
+
+
 def rotate_atoms_to_plane(
     atoms: Atoms,
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
@@ -791,7 +837,10 @@ def orthogonalize_cell(
         box = best_orthogonal_cell(atoms.cell, max_repetitions=max_repetitions)
 
     if tuple(np.diag(atoms.cell)) == tuple(box):
-        return atoms
+        if return_transform:
+            return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+        else:
+            return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):
         raise RuntimeError("Cell vectors must have non-zero length.")

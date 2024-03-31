@@ -1,4 +1,5 @@
 """Module for describing distributions of simulation parameters."""
+
 from __future__ import annotations
 
 from abc import abstractmethod, ABCMeta
@@ -392,12 +393,18 @@ def validate_distribution(
         return distribution.item()
 
     if isinstance(distribution, (tuple, list, np.ndarray)):
-        distribution = np.array(distribution)
+        try:
+            distribution = np.array(distribution)
+        except ValueError:
+            distribution = np.array(distribution, dtype=object)
+
         return DistributionFromValues(
             distribution, np.ones_like(distribution, dtype=np.float32)
         )
 
-    raise ValueError(f"value {distribution} is not a single number or could not be converted to a valid distribution")
+    raise ValueError(
+        f"value {distribution} is not a single number or could not be converted to a valid distribution"
+    )
 
 
 def _unpack_distributions(

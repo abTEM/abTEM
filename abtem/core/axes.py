@@ -17,9 +17,9 @@ from abtem.core.units import _get_conversion_factor, _format_units, _validate_un
 from abtem.core.utils import safe_equality
 
 
-def format_label(axes, units=None):
-    if axes._tex_label is not None and config.get("visualize.use_tex", False):
-        label = axes._tex_label
+def format_label(axes: AxisMetadata, units=None):
+    if axes.tex_label is not None and config.get("visualize.use_tex", False):
+        label = axes.tex_label
     else:
         label = axes.label
 
@@ -63,8 +63,12 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
 
 
 def format_title(
-    axes, formatting: str = ".3f", units: str = None, include_label: bool = True
+    axes: AxisMetadata,
+    formatting: str = ".3f",
+    units: str = None,
+    include_label: bool = True,
 ):
+
     if units:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
     else:
@@ -74,15 +78,18 @@ def format_title(
 
     use_tex = config.get("visualize.use_tex", False)
 
-    if include_label and use_tex and (axes._tex_label is not None):
-        label = f"{axes._tex_label} = "
+    if include_label and use_tex and (axes.tex_label is not None):
+        label = f"{axes.tex_label} = "
     elif include_label and (axes.label is not None) and len(axes.label):
         label = f"{axes.label} = "
     else:
         label = ""
 
     if use_tex and (units is not None):
-        units = f" {_format_units(units)}"
+        if axes.tex_units is not None:
+            units = f" {axes.tex_units}"
+        else:
+            units = f" {_format_units(units)}"
     elif units is not None:
         units = f" {units}"
     else:
@@ -90,11 +97,6 @@ def format_title(
 
     if use_tex:
         value = format_value(value, formatting)
-        # if isinstance(value, Number):
-        #     value = f"${value}$"
-        # else:
-        # value = f"{value}"
-
         return f"{label}{value}{units}"
     else:
         return f"{label}{value:>{formatting}}{units}"
@@ -104,7 +106,8 @@ def format_title(
 class AxisMetadata:
     label: str = ""
     units: str = None
-    _tex_label: str = None
+    tex_label: str = None
+    tex_units: str = None
     _default_type: str = "index"
     _concatenate: bool = True
     _ensemble_mean: bool = False
@@ -138,12 +141,12 @@ class AxisMetadata:
         values = tuple(range(n))
         return OrdinalAxis(
             label=self.label,
-            _tex_label=self._tex_label,
+            tex_label=self.tex_label,
             units=self.units,
             values=values,
             _concatenate=self._concatenate,
         )
-    
+
     def _to_blocks(self, chunks):
         arr = np.empty((len(chunks[0]),), dtype=object)
         for i, slic in iterate_chunk_ranges(chunks):
@@ -220,7 +223,7 @@ class LinearAxis(AxisMetadata):
         values = tuple(self.coordinates(n))
         return OrdinalAxis(
             label=self.label,
-            _tex_label=self._tex_label,
+            tex_label=self.tex_label,
             units=self.units,
             values=values,
             _concatenate=self._concatenate,
@@ -285,7 +288,7 @@ class OrdinalAxis(AxisMetadata):
     def to_ordinal_axis(self, n):
         assert n == len(self)
         return self
-    
+
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):
             raise RuntimeError()
@@ -436,7 +439,7 @@ class PrismPlaneWavesAxis(AxisMetadata):
 class ScaleAxis:
     label: str = ""
     units: str = None
-    _tex_label: str | None = None
+    tex_label: str | None = None
 
     def format_label(self):
         return format_label(self)

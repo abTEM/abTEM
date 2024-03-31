@@ -1,4 +1,5 @@
 """Module to describe wave function transformations."""
+
 from __future__ import annotations
 
 import itertools
@@ -30,6 +31,7 @@ from abtem.distributions import (
     validate_distribution,
     BaseDistribution,
 )
+
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -305,6 +307,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         -------
         transformed_array_object : ArrayObject
         """
+        # if not isinstance(array_object, ArrayObject):
+        # raise ValueError("Input must be an ArrayObject.")
+
         new_array = self._calculate_new_array(array_object)
         if self._num_outputs > 1:
             return self._pack_multiple_outputs(array_object, new_array)
@@ -325,12 +330,12 @@ class EnsembleTransform(EnsembleFromDistributions, ArrayObjectTransform):
     def _validate_distribution(distribution):
         return validate_distribution(distribution)
 
-    # def _validate_ensemble_axes_metadata(self, ensemble_axes_metadata):
-    #     if isinstance(ensemble_axes_metadata, AxisMetadata):
-    #         ensemble_axes_metadata = [ensemble_axes_metadata]
-    #
-    #     assert len(ensemble_axes_metadata) == len(self.ensemble_shape)
-    #     return ensemble_axes_metadata
+    def _validate_ensemble_axes_metadata(self, ensemble_axes_metadata):
+        if isinstance(ensemble_axes_metadata, AxisMetadata):
+            ensemble_axes_metadata = [ensemble_axes_metadata]
+
+        assert len(ensemble_axes_metadata) == len(self.ensemble_shape)
+        return ensemble_axes_metadata
 
     def _get_axes_metadata_from_distributions(self, **kwargs):
         ensemble_axes_metadata = []
@@ -361,6 +366,25 @@ class WavesTransform(EnsembleTransform):
     def apply(self, waves: Waves) -> Waves:
         waves = super().apply(waves)
         return waves
+
+
+class TransformFromFunc(WavesTransform):
+
+    def __init__(self, func, func_kwargs):
+        self._func = func
+        self._func_kwargs = func_kwargs
+        super().__init__()
+
+    @property
+    def func(self):
+        return self._func
+
+    @property
+    def func_kwargs(self):
+        return self._func_kwargs
+
+    def _calculate_new_array(self, array_object):
+        return self.func(array_object, **self.func_kwargs)
 
 
 class CompositeArrayObjectTransform(ArrayObjectTransform):

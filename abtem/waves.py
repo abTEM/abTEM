@@ -1,4 +1,5 @@
 """Module for describing wave functions of the incoming electron beam and the exit wave."""
+
 from __future__ import annotations
 
 import itertools
@@ -619,6 +620,36 @@ class Waves(BaseWaves, ArrayObject):
         d["reciprocal_space"] = False
         return self.__class__(**d)
 
+    def to_images(self, convert_complex: str = None) -> Images:
+        """
+        The complex array of the wave functions at the image plane.
+
+        Returns
+        -------
+        images : Images
+            The wave functions as an image.
+        """
+        array = self.array.copy()
+        metadata = copy(self.metadata)
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+        images = Images(
+            array,
+            sampling=self.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+        if not convert_complex:
+            return images
+
+        if convert_complex in ("intensity", "phase", "real", "imag"):
+            return getattr(images, convert_complex)()
+        else:
+            raise ValueError(
+                f"convert_complex must be one of 'intensity', 'phase', 'real', 'imag'"
+            )
+
     def intensity(self) -> Images:
         """
         Calculate the intensity of the wave functions.
@@ -628,47 +659,40 @@ class Waves(BaseWaves, ArrayObject):
         intensity_images : Images
             The intensity of the wave functions.
         """
+        return self.to_images(convert_complex="intensity")
 
-        def _intensity(array):
-            return abs2(array)
-
-        metadata = copy(self.metadata)
-        metadata["label"] = "intensity"
-        metadata["units"] = "arb. unit"
-
-        if self.is_lazy:
-            dtype = get_dtype(complex=False)
-            array = self.array.map_blocks(_intensity, dtype=dtype)
-        else:
-            array = _intensity(self.array)
-
-        return Images(
-            array,
-            sampling=self.sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=metadata,
-        )
-
-    def complex_images(self):
+    def phase(self) -> Images:
         """
-        The complex array of the wave functions at the image plane.
+        Calculate the phase of the wave functions.
 
         Returns
         -------
-        complex_images : Images
-            The wave functions as a complex image.
+        phase_images : Images
+            The phase of the wave functions.
         """
+        return self.to_images(convert_complex="phase")
 
-        array = self.array.copy()
-        metadata = copy(self.metadata)
-        metadata["label"] = "intensity"
-        metadata["units"] = "arb. unit"
-        return Images(
-            array,
-            sampling=self.sampling,
-            ensemble_axes_metadata=self.ensemble_axes_metadata,
-            metadata=metadata,
-        )
+    def real(self) -> Images:
+        """
+        Calculate the real part of the wave functions.
+
+        Returns
+        -------
+        real_images : Images
+            The real part of the wave functions.
+        """
+        return self.to_images(convert_complex="real")
+
+    def imag(self) -> Images:
+        """
+        Calculate the imaginary part of the wave functions.
+
+        Returns
+        -------
+        imaginary_images : Images
+            The imaginary part of the wave functions.
+        """
+        return self.to_images(convert_complex="imag")
 
     def downsample(
         self,
@@ -941,7 +965,7 @@ class Waves(BaseWaves, ArrayObject):
                     )
                     for transition_potential in transition_potentials
                 ],
-                _tex_label="$Z, n, \ell$",
+                tex_label="$Z, n, \ell$",
             )
 
             measurements = abtem.stack(
@@ -985,16 +1009,15 @@ class Waves(BaseWaves, ArrayObject):
         multislice_transform = MultisliceTransform(
             potential=potential, detectors=detectors
         )
-        
+
         waves = self.apply_transform(transform=multislice_transform)
 
-        return waves
-        #return _reduce_ensemble(waves)
+        return _reduce_ensemble(waves)
 
     def scan(
         self,
         scan: BaseScan | np.ndarray | Sequence,
-        potential: Atoms | BasePotential=None,
+        potential: Atoms | BasePotential = None,
         detectors: BaseDetector | Sequence[BaseDetector] = None,
         max_batch: int | str = "auto",
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
@@ -1014,7 +1037,7 @@ class Waves(BaseWaves, ArrayObject):
             The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
             automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
-        
+
         Returns
         -------
         detected_waves : BaseMeasurements or list of BaseMeasurement
@@ -1023,19 +1046,19 @@ class Waves(BaseWaves, ArrayObject):
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
         scan = _validate_scan(scan)
-        
+
         waves = self.apply_transform(scan, max_batch=max_batch)
 
         if potential is None:
             return waves
-        
+
         measurements = waves.multislice(
             potential=potential,
             detectors=detectors,
         )
 
         return measurements
-        
+
     def show(self, complex_images: bool = False, **kwargs):
         """
         Show the wave-function intensities.
@@ -1077,6 +1100,11 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         self._ensemble_names = ensemble_names
         self._device = device
         super().__init__()
+
+    def apply_transform(
+        self, transform, max_batch: int | str = "auto", lazy: bool = True
+    ):
+        return self.build(lazy=lazy).apply_transform(transform, max_batch=max_batch)
 
     def check_can_build(self, potential: BasePotential = None):
         """Check whether the wave functions can be built."""
@@ -1469,8 +1497,9 @@ class Probe(_WavesBuilder):
         sampling: float | tuple[float, float] = None,
         energy: float = None,
         soft: bool = True,
-        tilt: tuple[float | BaseDistribution, float | BaseDistribution]
-        | BaseDistribution = (
+        tilt: (
+            tuple[float | BaseDistribution, float | BaseDistribution] | BaseDistribution
+        ) = (
             0.0,
             0.0,
         ),

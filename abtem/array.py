@@ -1,4 +1,5 @@
 """Module for describing array objects."""
+
 from __future__ import annotations
 
 import copy
@@ -380,6 +381,41 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         base_axes = tuple(range(len(self.ensemble_shape), len(self.shape)))
         return len(set(axis).intersection(base_axes)) > 0
 
+    def apply_func(self, func, **kwargs) -> T:
+        from abtem.transform import TransformFromFunc
+
+        transform = TransformFromFunc(func, func_kwargs=kwargs)
+        return self.apply_transform(transform)
+
+    def get_from_metadata(self, name: str, broadcastable: bool = False):
+
+        axes_metadata_index = None
+        for i, (n, axis) in enumerate(zip(self.shape, self.ensemble_axes_metadata)):
+            if axis.label == name:
+                data = axis.coordinates(n)
+                axes_metadata_index = i
+
+        if axes_metadata_index is not None and broadcastable:
+            return np.array(data)[
+                (
+                    *((None,) * axes_metadata_index),
+                    slice(None),
+                    *((None,) * (len(self.ensemble_shape) - 1 - axes_metadata_index)),
+                )
+            ]
+        elif axes_metadata_index is not None:
+            if name in self.metadata.keys():
+                raise RuntimeError(
+                    f"Could not resolve metadata for {name}, found in both ensemble axes metadata and metadata"
+                )
+
+            return data
+        else:
+            try:
+                return self.metadata[name]
+            except KeyError:
+                raise RuntimeError(f"Could not resolve metadata for {name}")
+
     @classmethod
     def from_array_and_metadata(
         cls,
@@ -444,6 +480,22 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Underlying array describing the array object.
         """
         return self._array
+
+    @array.setter
+    def array(self, array):
+        """
+        Set underlying array describing the array object.
+        """
+        if not array.shape == self.shape:
+            raise ValueError("Shape of array must match shape of object.")
+
+        if not array.dtype == self.dtype:
+            raise ValueError("Datatype of array must match datatype of object.")
+
+        if self.is_lazy != isinstance(array, da.core.Array):
+            raise ValueError("Type of array must match type of object.")
+
+        self._array = array
 
     @property
     def dtype(self) -> np.dtype.base:
@@ -748,7 +800,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     __rtruediv__ = __truediv__
 
     def get_items(
-        self, items: int | tuple[int, ...] | slice, keepdims: bool = False
+        self, items: int | tuple[int, ...] | slice, keepdims: bool = False, **kwargs
     ) -> T:
         """
         Index the array and the corresponding axes metadata. Only ensemble axes can be indexed.
@@ -808,13 +860,18 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     axes_metadata += [expanded_axes_metadata[item].copy()]
                 except TypeError:
                     axes_metadata += [expanded_axes_metadata.copy()]
-        
+
         axes_metadata += expanded_axes_metadatas[last_indexed:]
 
         d = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata", "metadata"))
         d["array"] = self._array[items]
+
+        for key, value in kwargs.items():
+            d[key] = value[items]
+
         d["ensemble_axes_metadata"] = axes_metadata
         d["metadata"] = {**self.metadata, **metadata}
+
         return self.__class__(**d)
 
     def __getitem__(self, items) -> T:
@@ -1301,7 +1358,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self
 
     def to_hyperspy(self):
-        """Convert measurement to a Hyperspy signal."""
+        """Convert ArrayObject to a Hyperspy signal."""
 
         try:
             import hyperspy.api as hs
@@ -1346,6 +1403,27 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return s
 
+    def to_data_array(self):
+        """Convert ArrayObject to a xarray DataArray."""
+
+        try:
+            import xarray as xr
+        except ImportError:
+            raise ImportError(
+                "This functionality of *ab*TEM requires xarray, see https://xarray.dev/."
+            )
+
+        coords = {}
+        dims = []
+        for n, axis in zip(self.shape, self.axes_metadata):
+            x = np.array(axis.coordinates(n))
+            dims.append(axis.label)
+            coords[axis.label] = xr.DataArray(
+                x, name=axis.label, dims=(axis.label,), attrs={"units": axis.units}
+            )
+
+        return xr.DataArray(self.array, dims=dims, coords=coords, attrs=self.metadata)
+
     def _stack(self, arrays, axis_metadata, axis):
         xp = get_array_module(arrays[0].array)
 
@@ -1375,13 +1453,24 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             ensemble_axes_metadata = np.zeros(chunk_shape(chunks), dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
-                ensemble_axes_metadata.itemset(
-                    index,
-                    [
-                        self.ensemble_axes_metadata[i][slic[i]]
-                        for i, axis in enumerate(self.ensemble_axes_metadata)
-                    ],
-                )
+                new_ensemble_axes_metadata = []
+
+                # ensemble_axes_metadata.itemset(
+                #     index,
+                #     [
+                #         self.ensemble_axes_metadata[i][slic[i]]
+                #         for i, axis in enumerate(self.ensemble_axes_metadata)
+                #     ],
+                # )
+                for i, axis in enumerate(self.ensemble_axes_metadata):
+                    try:
+                        axis = axis[slic[i]]
+                    except TypeError:
+                        axis = axis.copy()
+
+                    new_ensemble_axes_metadata.append(axis)
+
+                ensemble_axes_metadata.itemset(index, new_ensemble_axes_metadata)
 
         if lazy:
             ensemble_axes_metadata = da.from_array(ensemble_axes_metadata, chunks=1)
