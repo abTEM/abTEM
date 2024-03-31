@@ -47,11 +47,6 @@ from abtem.core.grid import (
 from abtem.core.units import _get_conversion_factor, _validate_units
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index, normalize_axes
 from abtem.distributions import BaseDistribution
-from abtem.bloch.indexing import (
-    index_diffraction_spots,
-    estimate_necessary_excitation_error,
-    validate_cell,
-)
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import ImageArtist, DomainColoringArtist
 from abtem.visualize.visualizations import Visualization
@@ -2320,6 +2315,11 @@ class DiffractionPatterns(_BaseMeasurement2D):
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
         """
+        from abtem.bloch.indexing import (
+            index_diffraction_spots,
+            estimate_necessary_excitation_error,
+            validate_cell,
+        )
 
         if self.is_lazy:
             raise RuntimeError("indexing not implemented for lazy measurement")
