@@ -5,54 +5,10 @@ from numbers import Number
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components
 
-from abtem.atoms import euler_to_rotation, is_cell_orthogonal
-from abtem.core.energy import energy2wavelength
+from abtem.atoms import euler_to_rotation
 from abtem.core.utils import label_to_index
-from typing import Union, Tuple
-
-
-def reciprocal_cell(cell):
-    return np.linalg.pinv(cell).transpose()
-
-
-def reciprocal_space_gpts(
-    cell: np.ndarray,
-    k_max: float | tuple[float, float, float],
-) -> tuple[int, int, int]:
-    if isinstance(k_max, Number):
-        k_max = (k_max,) * 3
-
-    assert len(k_max) == 3
-
-    dk = np.linalg.norm(reciprocal_cell(cell), axis=1)
-
-    gpts = (
-        int(np.ceil(k_max[0] / dk[0])) * 2 + 1,
-        int(np.ceil(k_max[1] / dk[1])) * 2 + 1,
-        int(np.ceil(k_max[2] / dk[2])) * 2 + 1,
-    )
-    return gpts
-
-
-def make_hkl_grid(
-    cell: np.ndarray,
-    k_max: float | tuple[float, float, float],
-    axes=(0, 1, 2),
-) -> np.ndarray:
-    gpts = reciprocal_space_gpts(cell, k_max)
-
-    freqs = tuple(np.fft.fftfreq(n, d=1 / n).astype(int) for n in gpts)
-
-    freqs = tuple(freqs[axis] for axis in axes)
-
-    hkl = np.meshgrid(*freqs, indexing="ij")
-    hkl = np.stack(hkl, axis=-1)
-
-    hkl = hkl.reshape((-1, len(axes)))
-    return hkl
+from abtem.bloch.utils import reciprocal_cell, make_hkl_grid, excitation_errors, reflection_condition_mask
 
 
 def _pixel_edges(
@@ -77,11 +33,6 @@ def _find_projected_pixel_index(
 
     nm = np.concatenate((n[:, None], m[:, None]), axis=1)
     return nm
-
-
-def excitation_errors(g: np.ndarray, energy: float) -> np.ndarray:
-    wavelength = energy2wavelength(energy)
-    return g[..., 2] - 0.5 * wavelength * (g**2).sum(axis=-1)
 
 
 def estimate_necessary_excitation_error(energy, k_max):
@@ -142,46 +93,8 @@ def validate_cell(
     if isinstance(cell, np.ndarray) and cell.shape != (3, 3):
         cell = np.diag(cell)
 
-    if not is_cell_orthogonal(Cell(cell)):
-        raise NotImplementedError
+    return Cell(cell)
 
-    return cell
-
-
-def reflection_condition_mask(hkl: np.ndarray, centering: str) -> np.ndarray:
-    """
-    Returns a boolean mask indicating which reflections satisfy the reflection condition
-    based on the given lattice centering.
-
-    Parameters
-    ----------
-    hkl : np.ndarray
-        Array of shape (N, 3) representing the Miller indices of reflections.
-    centering : str
-        The lattice centering type. Must be one of "P", "I", "F", "A", "B", or "C".
-
-    Returns
-    -------
-    np.ndarray
-        Boolean mask indicating which reflections satisfy the reflection condition.
-    """
-
-    if centering == "P":
-        return np.ones(len(hkl), dtype=bool)
-    elif centering == "F":
-        all_even = (hkl % 2 == 0).all(axis=1)
-        all_odd = (hkl % 2 == 1).all(axis=1)
-        return all_even + all_odd
-    elif centering == "I":
-        return (hkl.sum(axis=1) % 2 == 0).all(axis=1)
-    elif centering == "A":
-        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0).all(axis=1)
-    elif centering == "B":
-        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0).all(axis=1)
-    elif centering == "C":
-        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
-    else:
-        raise ValueError("lattice centering must be one of P, I, F, A, B or C")
 
 
 def index_diffraction_spots(
@@ -225,11 +138,12 @@ def index_diffraction_spots(
         tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
             A tuple containing the indexed hkl values, wavevector transfer values, pixel coordinates, and intensities.
     """
-    R = euler_to_rotation(*rotation, axes=rotation_axes)
+    
 
     cell = validate_cell(cell)
-
-    cell = R @ cell
+    
+    R = euler_to_rotation(*rotation, axes=rotation_axes)
+    cell = np.dot(cell, R.T)
 
     hkl = make_hkl_grid(cell, k_max)
 
@@ -239,6 +153,7 @@ def index_diffraction_spots(
     g_vec = hkl @ reciprocal_cell(cell)
 
     sg = excitation_errors(g_vec, energy)
+
     hkl, g_vec, sg = filter_by_threshold(
         arrays=(hkl, g_vec, sg), values=sg, threshold=sg_max
     )
@@ -252,11 +167,11 @@ def index_diffraction_spots(
     else:
         max_intensity = intensity.max(axis=tuple(range(0, len(intensity.shape) - 1)))
 
-    hkl, g_vec, sg, nm = filter_by_threshold(
-        arrays=(hkl, g_vec, sg, nm),
-        values=-max_intensity,
-        threshold=-intensity_min,
-    )
+    # hkl, g_vec, sg, nm = filter_by_threshold(
+    #     arrays=(hkl, g_vec, sg, nm),
+    #     values=-max_intensity,
+    #     threshold=-intensity_min,
+    # )
 
     intensity = intensity[..., max_intensity > intensity_min]
 
