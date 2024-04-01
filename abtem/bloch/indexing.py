@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from numbers import Number
 
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
 
-from abtem.atoms import euler_to_rotation
-from abtem.core.utils import label_to_index
-from abtem.bloch.utils import reciprocal_cell, make_hkl_grid, excitation_errors, reflection_condition_mask
+from abtem.core.utils import is_broadcastable, label_to_index
+from abtem.bloch.utils import excitation_errors
 
 
 def _pixel_edges(
@@ -28,10 +26,10 @@ def _find_projected_pixel_index(
 ) -> np.ndarray:
     x, y = _pixel_edges(shape, sampling)
 
-    n = np.digitize(g[:, 0], x) - 1
-    m = np.digitize(g[:, 1], y) - 1
+    n = np.digitize(g[..., 0], x) - 1
+    m = np.digitize(g[..., 1], y) - 1
 
-    nm = np.concatenate((n[:, None], m[:, None]), axis=1)
+    nm = np.concatenate((n[..., None], m[..., None]), axis=-1)
     return nm
 
 
@@ -47,22 +45,29 @@ def match_hkl_to_pixel(hkl, g_vec, shape, sampling, sg=None):
     if sg is None:
         return nm
 
-    unique, indices, inverse = np.unique(
-        nm, return_index=True, return_inverse=True, axis=0
-    )
+    best_hkl = np.zeros(g_vec.shape[:-2] + (len(unique), 3), dtype=int)
+    # best_g_vec = np.zeros((len(unique), 3), dtype=float)
+    best_sg = np.zeros(g_vec.shape[:-2] + (len(unique),), dtype=float)
+    best_nm = np.zeros(g_vec.shape[:-2] + (len(unique), 2), dtype=int)
 
-    best_hkl = np.zeros((len(unique), 3), dtype=int)
-    best_g_vec = np.zeros((len(unique), 3), dtype=float)
-    best_sg = np.zeros((len(unique),), dtype=float)
-    best_nm = np.zeros((len(unique), 2), dtype=int)
-    for i, idx in enumerate(label_to_index(inverse)):
-        closest = np.argmin(np.abs(sg[idx]))
-        best_hkl[i] = hkl[idx][closest]
-        best_sg[i] = sg[idx][closest]
-        best_g_vec[i] = g_vec[idx][closest]
-        best_nm[i] = nm[indices[i]]
+    for i in np.ndindex(nm.shape[:-2]):
 
-    return best_hkl, best_g_vec, best_sg, best_nm
+        unique, indices, inverse = np.unique(
+            nm[i], return_index=True, return_inverse=True, axis=-2
+        )
+
+        best_hkl = np.zeros((len(unique), 3), dtype=int)
+        # best_g_vec = np.zeros((len(unique), 3), dtype=float)
+        best_sg = np.zeros((len(unique),), dtype=float)
+        best_nm = np.zeros((len(unique), 2), dtype=int)
+        for j, idx in enumerate(label_to_index(inverse)):
+            closest = np.argmin(np.abs(sg[idx]))
+            best_hkl[j + (i,)] = hkl[idx][closest]
+            best_sg[j + (i,)] = sg[idx][closest]
+            # best_g_vec[i] = g_vec[idx][closest]
+            best_nm[j + (i,)] = nm[indices[i]]
+
+    return best_hkl, best_sg, best_nm
 
 
 def filter_by_threshold(arrays, values, threshold) -> tuple[np.ndarray, ...]:
@@ -96,18 +101,33 @@ def validate_cell(
     return Cell(cell)
 
 
+def prefix_indices(shape):
+    return tuple(
+        np.arange(n)[(slice(None),) + (None,) * (len(shape) - i)]
+        for i, n in enumerate(shape)
+    )
+
+
+def overlapping_spots_mask(nm, sg):
+    mask = np.zeros(nm.shape[:-1], dtype=bool)
+    order = np.argsort(np.abs(sg), axis=-1)
+    order_reverse = np.argsort(order, axis=-1)
+
+    for i in np.ndindex(nm.shape[:-2]):
+        _, indices = np.unique(nm[i][order[i]], return_index=True, axis=-2)
+        mask[(i,) + (indices,)] = True
+
+    mask = mask[prefix_indices(mask.shape[:-1]) + (order_reverse,)]
+    return mask
+
 
 def index_diffraction_spots(
     array: np.ndarray,
+    hkl,
     sampling: tuple[float, float],
     cell: Atoms | Cell | float | tuple[float, float, float],
     energy: float,
-    k_max: float,
-    sg_max: float,
-    rotation: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    rotation_axes: str = "zxz",
-    intensity_min: float = 1e-12,
-    centering: str = "P",
+    orientation_matrices: np.ndarray = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Indexes diffraction spots in an array.
@@ -138,48 +158,25 @@ def index_diffraction_spots(
         tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
             A tuple containing the indexed hkl values, wavevector transfer values, pixel coordinates, and intensities.
     """
-    
 
-    cell = validate_cell(cell)
-    
-    R = euler_to_rotation(*rotation, axes=rotation_axes)
-    cell = np.dot(cell, R.T)
+    assert len(hkl.shape) == 2
+    assert hkl.shape[1] == 3
 
-    hkl = make_hkl_grid(cell, k_max)
+    if orientation_matrices is None:
+        orientation_matrices = np.eye(3)[(None,) * len(array.shape[:-2])]
 
-    mask = reflection_condition_mask(hkl, centering=centering)
-    hkl = hkl[mask]
+    assert is_broadcastable(array.shape[:-1], orientation_matrices.shape[:-2])
 
-    g_vec = hkl @ reciprocal_cell(cell)
+    reciprocal_lattice_vectors = np.matmul(cell.reciprocal(), np.swapaxes(orientation_matrices, -2, -1))
+    g_vec = hkl @ reciprocal_lattice_vectors
+
+    nm = _find_projected_pixel_index(g_vec, array.shape[-2:], sampling)
+    intensities = array[prefix_indices(array.shape[:-2]) + (nm[..., 0], nm[..., 1])]
 
     sg = excitation_errors(g_vec, energy)
+    intensities = intensities * overlapping_spots_mask(nm, sg)
 
-    hkl, g_vec, sg = filter_by_threshold(
-        arrays=(hkl, g_vec, sg), values=sg, threshold=sg_max
-    )
-
-    hkl, g_vec, sg, nm = match_hkl_to_pixel(hkl, g_vec, array.shape[-2:], sampling, sg)
-
-    intensity = array[..., nm[:, 0], nm[:, 1]]
-
-    if len(array.shape) == 2:
-        max_intensity = intensity
-    else:
-        max_intensity = intensity.max(axis=tuple(range(0, len(intensity.shape) - 1)))
-
-    # hkl, g_vec, sg, nm = filter_by_threshold(
-    #     arrays=(hkl, g_vec, sg, nm),
-    #     values=-max_intensity,
-    #     threshold=-intensity_min,
-    # )
-
-    intensity = intensity[..., max_intensity > intensity_min]
-
-    if len(intensity.shape) > 1:
-        reps = intensity.shape[:-1] + (1, 1)
-        g_vec = np.tile(g_vec[(None,) * (len(reps) - 2)], reps=reps)
-
-    return hkl, g_vec, nm, intensity
+    return intensities
 
 
 def miller_to_miller_bravais(hkl: tuple[int, int, int]):

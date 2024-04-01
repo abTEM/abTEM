@@ -561,7 +561,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             Member of the ensemble.
         """
         for i in np.ndindex(*self.ensemble_shape):
-            yield i, self.get_items(i, keepdims=keepdims)
+            yield i, self.__class__(**self.get_items(i, keepdims=keepdims))
 
     def mean(
         self,
@@ -799,24 +799,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     __rmul__ = __mul__
     __rtruediv__ = __truediv__
 
-    def get_items(
-        self, items: int | tuple[int, ...] | slice, keepdims: bool = False, **kwargs
-    ) -> T:
-        """
-        Index the array and the corresponding axes metadata. Only ensemble axes can be indexed.
-
-        Parameters
-        ----------
-        items : int or tuple of int or slice
-            The array is indexed according to this.
-        keepdims : bool, optional
-            If True, all ensemble axes are left in the result as dimensions with size one. Default is False.
-
-        Returns
-        -------
-        indexed_array : ArrayObject or subclass of ArrayObject
-            The indexed array object.
-        """
+    def _validate_items(self, items, keepdims: bool = False):
         if isinstance(items, (Number, slice, type(None), list, np.ndarray)):
             items = (items,)
 
@@ -841,6 +824,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ):
             raise RuntimeError("Base axes cannot be indexed.")
 
+        return items
+
+    def _get_ensemble_axes_metadata_items(self, items):
         expanded_axes_metadatas = [
             axis_metadata.copy() for axis_metadata in self.ensemble_axes_metadata
         ]
@@ -862,20 +848,42 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                     axes_metadata += [expanded_axes_metadata.copy()]
 
         axes_metadata += expanded_axes_metadatas[last_indexed:]
+        return axes_metadata, metadata
 
-        d = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata", "metadata"))
-        d["array"] = self._array[items]
+    def get_items(
+        self,
+        items: int | tuple[int, ...] | slice,
+        keepdims: bool = False,
+    ) -> T:
+        """
+        Index the array and the corresponding axes metadata. Only ensemble axes can be indexed.
 
-        for key, value in kwargs.items():
-            d[key] = value[items]
+        Parameters
+        ----------
+        items : int or tuple of int or slice
+            The array is indexed according to this.
+        keepdims : bool, optional
+            If True, all ensemble axes are left in the result as dimensions with size one. Default is False.
 
-        d["ensemble_axes_metadata"] = axes_metadata
-        d["metadata"] = {**self.metadata, **metadata}
+        Returns
+        -------
+        indexed_array : ArrayObject or subclass of ArrayObject
+            The indexed array object.
+        """
 
-        return self.__class__(**d)
+        items = self._validate_items(items, keepdims)
+        ensemble_axes_metadata, metadata = self._get_ensemble_axes_metadata_items(items)
+
+        kwargs = self._copy_kwargs(
+            exclude=("array", "ensemble_axes_metadata", "metadata")
+        )
+        kwargs["array"] = self._array[items]
+        kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
+        kwargs["metadata"] = {**self.metadata, **metadata}
+        return kwargs
 
     def __getitem__(self, items) -> T:
-        return self.get_items(items)
+        return self.__class__(**self.get_items(items))
 
     def expand_dims(
         self, axis: tuple[int, ...] = None, axis_metadata: list[AxisMetadata] = None

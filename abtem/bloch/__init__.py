@@ -1,1 +1,1 @@
-from abtem.bloch.bloch import StructureFactor, BlochWaves
+from abtem.bloch.dynamical import StructureFactor, BlochWaves

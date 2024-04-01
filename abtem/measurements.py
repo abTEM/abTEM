@@ -35,7 +35,7 @@ from abtem.core.axes import (
     ScanAxis,
     ScaleAxis,
 )
-from abtem.core.backend import cp, get_array_module, get_ndimage_module
+from abtem.core.backend import asnumpy, cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_interpolate, fft_crop
@@ -45,7 +45,13 @@ from abtem.core.grid import (
     spatial_frequencies,
 )
 from abtem.core.units import _get_conversion_factor, _validate_units
-from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index, normalize_axes
+from abtem.core.utils import (
+    CopyMixin,
+    EqualityMixin,
+    is_broadcastable,
+    label_to_index,
+    normalize_axes,
+)
 from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import ImageArtist, DomainColoringArtist
@@ -1867,9 +1873,7 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
     @property
     def base_axes_metadata(self) -> list[RealSpaceAxis]:
         return [
-            RealSpaceAxis(
-                label="r", sampling=self.sampling, units="Å", tex_label="$r$"
-            )
+            RealSpaceAxis(label="r", sampling=self.sampling, units="Å", tex_label="$r$")
         ]
 
     def tile(self, repetitions: int) -> "RealSpaceLineProfiles":
@@ -2292,9 +2296,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def index_diffraction_spots(
         self,
         cell: Cell | float | tuple[float, float, float],
-        rotation: tuple[float, float, float] = (0.0, 0.0, 0.0),
-        rotation_axes="zxz",
-        threshold: float = 1e-6,
+        orientation_matrices: np.ndarray = None,
+        # rotation: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        # rotation_axes="zxz",
+        sg_max: float = np.inf,
+        k_max: float = None,
+        # threshold: float = 1e-6,
         energy: float = None,
         # integration_radius: float = 0.0,
         centering: str = "P",
@@ -2320,43 +2327,67 @@ class DiffractionPatterns(_BaseMeasurement2D):
             estimate_necessary_excitation_error,
             validate_cell,
         )
+        from abtem.bloch.utils import make_hkl_grid, filter_reciprocal_space_vectors
 
-        if self.is_lazy:
-            raise RuntimeError("indexing not implemented for lazy measurement")
+        if orientation_matrices is None:
+            orientation_matrices = np.eye(3)[(None,) * len(self.array.shape[:-2])]
+
+        if not is_broadcastable(self.ensemble_shape, orientation_matrices.shape[:-2]):
+            raise ValueError(
+                "The ensemble shape and the shape of the orientation matrices must be broadcastable."
+            )
 
         if energy is None:
             energy = self._get_from_metadata("energy")
 
-        k_max = max(self.max_frequency)
-        sampling = self.sampling
-        sg_max = np.abs(estimate_necessary_excitation_error(energy, k_max))
+        if k_max is None:
+            k_max = max(self.max_frequency)
 
+        hkl = make_hkl_grid(cell, k_max)
 
-        
-        hkl, g_vec, nm, intensity = index_diffraction_spots(
-            array=self.array,
-            sampling=sampling,
-            cell=cell,
+        cell = validate_cell(cell)
+
+        mask = filter_reciprocal_space_vectors(
+            hkl,
+            cell,
             energy=energy,
-            k_max=k_max,
             sg_max=sg_max,
-            rotation=rotation,
-            rotation_axes=rotation_axes,
-            intensity_min=threshold,
+            k_max=k_max,
             centering=centering,
+            orientation_matrices=orientation_matrices,
         )
 
-        cell = validate_cell(cell=cell)
+        hkl = hkl[mask]
 
-        R = euler_to_rotation(*rotation, axes=rotation_axes)
-        reciprocal_lattice_vectors = R @ cell.reciprocal()
-        reciprocal_lattice_vectors = np.tile(
-            reciprocal_lattice_vectors[(None,) * (len(intensity.shape) - 1)],
-            intensity.shape[:-1] + (1, 1),
+        if self.is_lazy:
+            intensities = self.array.map_blocks(
+                index_diffraction_spots,
+                hkl=hkl,
+                sampling=self.sampling,
+                cell=cell,
+                energy=energy,
+                orientation_matrices=orientation_matrices,
+                drop_axis=len(self.array.shape) - 1,
+                chunks=self.array.chunks[:-2] + (hkl.shape[0],),
+                meta=np.array((), dtype=self.dtype),
+            )
+        else:
+            intensities = index_diffraction_spots(
+                array=self.array,
+                hkl=hkl,
+                sampling=self.sampling,
+                cell=cell,
+                energy=energy,
+                orientation_matrices=orientation_matrices,
+            )
+
+        reciprocal_lattice_vectors = np.matmul(
+            cell.reciprocal(),
+            np.swapaxes(orientation_matrices, -2, -1),
         )
 
         return IndexedDiffractionPatterns(
-            intensity,
+            intensities,
             hkl,
             reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
@@ -3028,11 +3059,24 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if gpts is None:
             raise ValueError()
 
-        xp = get_array_module(self.array)
-        array = xp.fft.fftshift(
-            fft_crop(xp.fft.ifftshift(self.array, axes=(-2, -1)), new_shape=gpts),
-            axes=(-2, -1),
-        )
+        def _do_crop(array):
+            xp = get_array_module(array)
+            array = xp.fft.fftshift(
+                fft_crop(xp.fft.ifftshift(array, axes=(-2, -1)), new_shape=gpts),
+                axes=(-2, -1),
+            )
+            return array
+
+        if self.is_lazy:
+            xp = get_array_module(self.array)
+            array = self.array.map_blocks(
+                _do_crop,
+                chunks=self.array.chunks[:-2] + gpts,
+                dtype=xp.array((), dtype=self.dtype),
+            )
+        else:
+            array = _do_crop(self.array)
+
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
         return self.__class__(**kwargs)
@@ -3749,7 +3793,7 @@ def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
     return np.sqrt(k_max)
 
 
-@jit(nopython=True, nogil=True, fastmath=True, parallel=True)
+# @jit(nopython=True, nogil=True, fastmath=True, parallel=True)
 def reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
 
     for i in prange(len(hkl)):
@@ -3806,7 +3850,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         metadata: dict = None,
     ):
 
-        #if not reciprocal_lattice_vectors.shape[:-2] == array.shape[:-1]:
+        # if not reciprocal_lattice_vectors.shape[:-2] == array.shape[:-1]:
         #    raise ValueError()
 
         # if not len(miller_indices) == reciprocal_lattice_vectors.shape[-3]:
@@ -3862,7 +3906,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         positions = self.miller_indices @ self.reciprocal_lattice_vectors
         return positions
-    
+
     @property
     def all_positions(self) -> np.ndarray:
         """
@@ -3915,10 +3959,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         return kwargs
 
     def __getitem__(self, items):
-        new = self.get_items(
-            items, reciprocal_lattice_vectors=self.reciprocal_lattice_vectors
+        items = self._validate_items(items)
+        kwargs = self.get_items(items)
+        items = tuple(
+            0 if (isinstance(i, int) and n == 1) else i
+            for i, n in zip(items, self.reciprocal_lattice_vectors.shape)
         )
-        return new
+        kwargs["reciprocal_lattice_vectors"] = self.reciprocal_lattice_vectors[items]
+        return self.__class__(**kwargs)
 
     def remove_low_intensity(self, threshold: float = 1e-3):
         """
@@ -3934,8 +3982,12 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         thresholded_spots : IndexedDiffractionPatterns
             The indexed diffraction spots with an intensity above the given threshold.
         """
-        ensemble_axes = tuple(range(len(self.ensemble_shape)))
-        mask = np.max(self.intensities, axis=ensemble_axes) > threshold
+        ensemble_axes = tuple(range(self.ensemble_dims))
+
+        xp = get_array_module(self.intensities)
+        mask = xp.max(self.intensities, axis=ensemble_axes) > threshold
+
+        mask = asnumpy(mask)
 
         miller_indices = self.miller_indices[mask]
         intensities = self.intensities[..., mask]
@@ -3968,6 +4020,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         -------
         sorted_spots : IndexedDiffractionPatterns
         """
+        if self.lazy:
+            raise RuntimeError("Cannot sort lazy IndexedDiffractionPatterns.")
+
         if criterion == "distance":
             criterion = -np.linalg.norm(self.positions, axis=1)
         elif criterion == "intensity":
@@ -3989,9 +4044,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             metadata=self._metadata,
         )
 
-    def crop(
-        self, max_angle: float = None, k_max: float = None
-    ):
+    def crop(self, max_angle: float = None, k_max: float = None):
         """
         Crop the indexed diffraction patterns such that they only include spots with spatial frequencies
         (scattering angles) up to a given limit.
@@ -4010,14 +4063,15 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         if max_angle is not None and k_max is None:
             wavelength = energy2wavelength(self._get_from_metadata("energy"))
+            # print(wavelength)
             k_max = max_angle / wavelength / 1e3
+            # print(k_max)
 
         elif not k_max or max_angle:
-            raise ValueError(
-                "Either 'max_angle' or 'k_max' must be given."
-            )
+            raise ValueError("Either 'max_angle' or 'k_max' must be given.")
 
         mask = np.zeros(len(self.miller_indices), dtype=bool)
+
         mask = reciprocal_lattice_vector_mask(
             mask,
             self.miller_indices.astype(self.reciprocal_lattice_vectors.dtype),
@@ -4290,11 +4344,14 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         A dictionary mapping miller indices to reciprocal space positions [1/Å].
         """
+        print(self.miller_indices.shape)
+        print(self.reciprocal_lattice_vectors.shape)
+
         positions = {
             tuple(hkl): position
             for hkl, position in zip(
                 self.miller_indices,
-                np.moveaxis(self.positions, -2, 0),
+                np.moveaxis(self.reciprocal_lattice_vectors, -2, 0),
             )
         }
         return positions
@@ -4307,40 +4364,44 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         axis: int,
     ):
         intensities = [spots.intensities_dict for spots in diffraction_spots]
-        positions = [spots.positions_dict for spots in diffraction_spots]
+        # positions = [spots.positions_dict for spots in diffraction_spots]
 
-        def merge_dicts_no_overwrite(dict1, dict2):
-            return {**dict1, **{k: v for k, v in dict2.items() if k not in dict1}}
+        # def merge_dicts_no_overwrite(dict1, dict2):
+        #     return {**dict1, **{k: v for k, v in dict2.items() if k not in dict1}}
 
-        merged = {}
-        for positions1 in positions:
-            merged = merge_dicts_no_overwrite(merged, positions1)
+        # merged = {}
+        # for positions1 in positions:
+        #     merged = merge_dicts_no_overwrite(merged, positions1)
 
-        positions = [
-            merge_dicts_no_overwrite(positions1, merged) for positions1 in positions
-        ]
+        # positions = [
+        #     merge_dicts_no_overwrite(positions1, merged) for positions1 in positions
+        # ]
 
         miller_indices = list(
             set(itertools.chain(*[intensities1.keys() for intensities1 in intensities]))
         )
 
         new_intensities = {}
-        new_positions = {}
+        # new_positions = {}
         for hkl in miller_indices:
             new_intensities[hkl] = []
-            new_positions[hkl] = []
+            # new_positions[hkl] = []
 
-            for intensities1, positions1 in zip(intensities, positions):
+            for intensities1 in intensities:
                 new_intensities[hkl].append(intensities1[hkl])
-                new_positions[hkl].append(positions1[hkl])
+                # new_positions[hkl].append(positions1[hkl])
 
             new_intensities[hkl] = np.stack(new_intensities[hkl], axis=axis)
-            new_positions[hkl] = np.stack(new_positions[hkl], axis=axis)
+            # new_positions[hkl] = np.stack(new_positions[hkl], axis=axis)
 
         miller_indices = np.stack(list(new_intensities.keys()), axis=0)
 
-        positions = np.stack(list(new_positions.values()), axis=-2)
+        # positions = np.stack(list(new_positions.values()), axis=-2)
         intensities = np.stack(list(new_intensities.values()), axis=-1)
+
+        positions = np.stack(
+            [spots.reciprocal_lattice_vectors for spots in diffraction_spots], axis=0
+        )
 
         ensemble_axes_metadata = [
             axis_metadata.copy()

@@ -6,6 +6,7 @@ import numpy as np
 from numba import njit, prange
 
 from abtem.core.energy import energy2wavelength
+from ase.cell import Cell
 
 
 def reciprocal_cell(cell):
@@ -50,8 +51,10 @@ def make_hkl_grid(
 
 
 def excitation_errors(g, energy):
+    assert g.shape[-1] == 3
     wavelength = energy2wavelength(energy)
-    sg = (-2 * g[:, 2] - wavelength * np.sum(g * g, axis=1)) / 2.0
+    # sg = (-2 * g[..., 2] - wavelength * np.sum(g * g, axis=-1)) / 2.0
+    sg = (-2 * g[..., 2] - wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)) / 2.0
     return sg
 
 
@@ -147,7 +150,9 @@ def filter_reciprocal_space_vectors(
             orientation_matrices = orientation_matrices[None]
 
         if not len(orientation_matrices.shape) == 3:
-            raise ValueError("'orientation_matrices' must have shape (3, 3) or (n, 3, 3)")
+            raise ValueError(
+                "'orientation_matrices' must have shape (3, 3) or (n, 3, 3)"
+            )
 
         mask = np.zeros(len(g), dtype=bool)
 
