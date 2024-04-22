@@ -1,7 +1,9 @@
-from typing import Sequence
+from __future__ import annotations
+
 import warnings
+from abc import ABCMeta, abstractmethod
 from functools import partial
-from numbers import Number
+from typing import Sequence
 
 import dask.array as da
 import numpy as np
@@ -10,17 +12,16 @@ from ase.cell import Cell
 from scipy.linalg import expm as expm_scipy
 from scipy.spatial.transform import Rotation
 
-
 from abtem.array import ArrayObject
 from abtem.atoms import is_cell_orthogonal
 from abtem.bloch.utils import (
+    calculate_g_vec,
     excitation_errors,
     filter_reciprocal_space_vectors,
+    get_reflection_condition,
     make_hkl_grid,
     reciprocal_space_gpts,
 )
-from abtem.potentials.iam import PotentialArray
-from abtem.waves import Waves
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis
 from abtem.core.backend import cp, get_array_module, validate_device
@@ -34,38 +35,17 @@ from abtem.core.fft import fft_interpolate, ifft2
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, flatten_list_of_lists, get_dtype
 from abtem.distributions import validate_distribution
-from abtem.parametrizations import validate_parametrization
 from abtem.measurements import IndexedDiffractionPatterns
+from abtem.parametrizations import validate_parametrization
+from abtem.potentials.iam import PotentialArray
+from abtem.waves import Waves
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
 
-def slice_potential(
-    potential: np.ndarray, depth: float, slice_thickness: float
-) -> tuple[np.ndarray, np.ndarray]:
-    n_slices = int(np.ceil(depth / slice_thickness))
-
-    n_per_slice = equal_sized_chunks(potential.shape[-1], n_slices)
-    dz = depth / potential.shape[-1]
-
-    start = np.cumsum((0,) + n_per_slice)
-
-    potential_sliced = np.stack(
-        [
-            np.sum(potential[..., start:stop], axis=-1) * dz
-            for start, stop in zip(start[:-1], start[1:])
-        ],
-        axis=-1,
-    )
-
-    slice_thickness = np.array(n_per_slice) * dz
-
-    return potential_sliced, slice_thickness
-
-
 def calculate_scattering_factors(
-    g, atoms, parametrization, k_max, thermal_sigma=0.0, cutoff="none"
+    g, atoms, parametrization, k_max, thermal_sigma=0.0, cutoff="taper"
 ):
     Z_unique, Z_inverse = np.unique(atoms.numbers, return_inverse=True)
     g_unique, g_inverse = np.unique(g, return_inverse=True)
@@ -74,14 +54,12 @@ def calculate_scattering_factors(
 
     if cutoff == "taper":
         T = 0.005
-        alpha = 1 - 0.025
+        alpha = 1 - 0.05
         cutoff = 1 / (1 + np.exp((g_unique / k_max - alpha) / T))
-    elif cutoff == "sharp":
+    elif cutoff == "hard":
         cutoff = g_unique > k_max
-    elif cutoff == "none":
-        cutoff = 1.0
     else:
-        raise RuntimeError()
+        raise ValueError("cutoff must be 'taper' or 'sharp'")
 
     for idx, Z in enumerate(Z_unique):
         if thermal_sigma is not None:
@@ -98,7 +76,93 @@ def calculate_scattering_factors(
     return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
 
 
-class StructureFactor:
+def calculate_structure_factors(
+    hkl,
+    atoms,
+    parametrization,
+    k_max: float,
+    thermal_sigma: float = None,
+    cutoff="taper",
+    device="cpu",
+):
+    positions = atoms.get_scaled_positions()
+    g = np.linalg.norm(calculate_g_vec(hkl, atoms.cell), axis=1)
+
+    f_e = calculate_scattering_factors(
+        g=g,
+        atoms=atoms,
+        k_max=k_max,
+        parametrization=parametrization,
+        cutoff=cutoff,
+        thermal_sigma=thermal_sigma,
+    )
+
+    xp = get_array_module(device)
+
+    f_e = xp.asarray(f_e, dtype=get_dtype(complex=True))
+    positions = xp.asarray(positions, dtype=get_dtype(complex=False))
+    hkl = xp.asarray(hkl.T, get_dtype(complex=False))
+
+    struct_factors = xp.sum(
+        f_e * xp.exp(-2.0j * np.pi * positions[:] @ hkl),
+        axis=0,
+    )
+
+    struct_factors /= atoms.cell.volume
+    return struct_factors
+
+
+class BaseStructureFactor(metaclass=ABCMeta):
+
+    def __len__(self):
+        return len(self.hkl)
+
+    @property
+    def gpts(self) -> tuple[int, int, int]:
+        """
+        Number of reciprocal space grid points.
+        """
+        return reciprocal_space_gpts(self.cell, self.k_max)
+
+    @property
+    @abstractmethod
+    def hkl(self):
+        pass
+
+    @property
+    @abstractmethod
+    def cell(self):
+        pass
+
+    @property
+    def g_vec(self):
+        return self.hkl @ self.cell.reciprocal()
+
+    @property
+    def g_vec_length(self):
+        return np.linalg.norm(self.g_vec, axis=1)
+
+    @property
+    @abstractmethod
+    def k_max(self):
+        pass
+
+    @abstractmethod
+    def get_potential_3d(self, **kwargs) -> np.ndarray:
+        pass
+
+    @abstractmethod
+    def get_projected_potential(
+        self,
+        slice_thickness: float | Sequence[float],
+        sampling: float | tuple[float, float] = None,
+        gpts: int | tuple[int, int] = None,
+        **kwargs,
+    ) -> PotentialArray:
+        pass
+
+
+class StructureFactor(BaseStructureFactor):
     """
     The StructureFactors class calculates the structure factors for a given set of atoms and parametrization.
 
@@ -112,8 +176,8 @@ class StructureFactor:
         Parametrization for the scattering factors.
     thermal_sigma : float
         Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
-    cutoff : {'taper', 'sharp' or 'none'}
-        Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'sharp' is a hard cutoff and 'none' is no cutoff.
+    cutoff : {'taper', 'hard'}
+        Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard' is a hard cutoff.
     device : str
         Device to use for calculations. Can be 'cpu' or 'gpu'.
     """
@@ -126,55 +190,27 @@ class StructureFactor:
         thermal_sigma: float = None,
         cutoff: str = "taper",
         device: str = None,
+        centering: str = "P",
     ):
 
         self._atoms = atoms
         self._thermal_sigma = thermal_sigma
-        self._k_max = k_max
-        self._hkl = make_hkl_grid(self.atoms.cell, self.k_max)
-        self._g_vec = self._hkl @ self._atoms.cell.reciprocal()
 
-        if not cutoff in ("taper", "sharp", "none"):
-            raise ValueError("cutoff must be 'taper', 'sharp' or 'none'")
+        hkl = make_hkl_grid(atoms.cell, k_max)
+
+        if centering.lower() != "p":
+            hkl = hkl[get_reflection_condition(hkl, centering)]
+
+        self._hkl = hkl
+
+        self._k_max = k_max
+
+        if not cutoff in ("taper", "sharp"):
+            raise ValueError("cutoff must be 'taper', 'sharp'")
 
         self._cutoff = cutoff
         self._parametrization = validate_parametrization(parametrization)
         self._device = validate_device(device)
-
-    def __len__(self):
-        return len(self._hkl)
-
-    @property
-    def gpts(self) -> tuple[int, int, int]:
-        """
-        Number of reciprocal space grid points.
-        """
-        # k_max = self._k_max
-
-        # if isinstance(self.k_max, Number):
-        #     k_max = (self.k_max,) * 3
-
-        # assert len(k_max) == 3
-
-        # dk = self.atoms.cell.reciprocal().lengths()
-        # gpts = (
-        #     int(np.ceil(k_max[0] / dk[0])) * 2 + 1,
-        #     int(np.ceil(k_max[1] / dk[1])) * 2 + 1,
-        #     int(np.ceil(k_max[2] / dk[2])) * 2 + 1,
-        # )
-        return reciprocal_space_gpts(self.atoms.cell, self.k_max)
-
-    @property
-    def hkl(self):
-        return self._hkl
-
-    @property
-    def g_vec(self):
-        return self._g_vec
-
-    @property
-    def g_vec_length(self):
-        return np.linalg.norm(self._g_vec, axis=1)
 
     @property
     def atoms(self):
@@ -184,44 +220,22 @@ class StructureFactor:
     def k_max(self):
         return self._k_max
 
+    @property
+    def hkl(self):
+        return self._hkl
+
+    @property
+    def cell(self):
+        return self.atoms.cell
+
+    @property
+    def parametrization(self):
+        return self._parametrization
+
     def calculate_scattering_factors(self) -> np.ndarray:
         """
         Calculate the scattering factors for each atomic species in the structure.
         """
-        # Z_unique, Z_inverse = np.unique(self.atoms.numbers, return_inverse=True)
-        # g_unique, g_inverse = np.unique(self.g_vec_length, return_inverse=True)
-
-        # f_e_uniq = np.zeros(
-        #     (Z_unique.size, g_unique.size), dtype=get_dtype(complex=True)
-        # )
-
-        # if self._cutoff == "taper":
-        #     T = 0.005
-        #     alpha = 1 - 0.025
-        #     cutoff = 1 / (1 + np.exp((g_unique / self.k_max - alpha) / T))
-        # elif self._cutoff == "sharp":
-        #     cutoff = g_unique > self.k_max
-        # elif self._cutoff == "none":
-        #     cutoff = 1.0
-        # else:
-        #     raise RuntimeError()
-
-        # for idx, Z in enumerate(Z_unique):
-        #     if self._thermal_sigma is not None:
-        #         DWF = np.exp(
-        #             -0.5 * self._thermal_sigma**2 * g_unique**2 * (2 * np.pi) ** 2
-        #         )
-        #     else:
-        #         DWF = 1.0
-
-        #     scattering_factor = self._parametrization.scattering_factor(Z)
-
-        #     f_e_uniq[idx, :] = scattering_factor(g_unique**2) * DWF
-
-        #     f_e_uniq[idx, :] *= cutoff
-
-        # return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
-
         return calculate_scattering_factors(
             self.g_vec_length,
             self.atoms,
@@ -231,41 +245,110 @@ class StructureFactor:
             self._cutoff,
         )
 
-    def build(self, lazy: bool = True):
-        positions = self.atoms.get_scaled_positions()
+    def build(self, lazy: bool = True) -> StructureFactorArray:
+        hkl = self.hkl
+        if lazy:
+            xp = get_array_module(self._device)
+            array = da.from_array(hkl, chunks=-1).map_blocks(
+                calculate_structure_factors,
+                atoms=self.atoms,
+                parametrization=self.parametrization,
+                thermal_sigma=self._thermal_sigma,
+                k_max=self.k_max,
+                cutoff=self._cutoff,
+                device=self._device,
+                drop_axis=1,
+                meta=xp.array((), dtype=get_dtype(complex=True)),
+            )
+        else:
+            array = calculate_structure_factors(
+                hkl,
+                self.atoms,
+                parametrization=self._parametrization,
+                thermal_sigma=self._thermal_sigma,
+                k_max=self.k_max,
+                cutoff=self._cutoff,
+                device=self._device,
+            )
 
-        f_e = self.calculate_scattering_factors()
+        return StructureFactorArray(array, self.hkl, self.atoms.cell, self.k_max)
 
-        xp = get_array_module(self._device)
-
-        f_e = xp.asarray(f_e, dtype=get_dtype(complex=True))
-        positions = xp.asarray(positions, dtype=get_dtype(complex=False))
-        hkl = xp.asarray(self.hkl.T, get_dtype(complex=False))
-
-        struct_factors = xp.sum(
-            f_e * xp.exp(-2.0j * np.pi * positions[:] @ hkl),
-            axis=0,
-        )
-
-        struct_factors /= self.atoms.cell.volume
-
-        return StructureFactorArray(
-            struct_factors, self.hkl, self.atoms.cell, self.k_max
-        )
-
-    def get_potential_3d(self):
-        return self.build().get_potential_3d()
+    def get_potential_3d(self, lazy: bool = True) -> np.ndarray:
+        return self.build(lazy=lazy).get_potential_3d()
 
     def get_projected_potential(
         self,
-        slice_thickness: float | Sequence[float],
+        slice_thickness: float | Sequence[float] = None,
         sampling: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
+        lazy: bool = True,
     ) -> PotentialArray:
-        return self.build().get_projected_potential(slice_thickness, sampling, gpts)
+        return self.build(lazy=lazy).get_projected_potential(
+            slice_thickness, sampling, gpts
+        )
 
 
-class StructureFactorArray(ArrayObject):
+def structure_factor_1d_to_3d(array, hkl, gpts):
+    xp = get_array_module(array)
+    array_3d = xp.zeros(gpts, dtype=array.dtype)
+    array_3d[hkl[:, 0], hkl[:, 1], hkl[:, 2]] = array
+    return array_3d
+
+
+def structure_factor_to_potential(array, hkl, gpts):
+    xp = get_array_module(array)
+    array = structure_factor_1d_to_3d(array, hkl, gpts)
+    potential = xp.fft.ifftn(array)
+    potential = potential * np.prod(potential.shape) / kappa
+    potential -= potential.min()
+    return potential.real
+
+
+def equal_slice_thicknesses(n, slice_thickness, depth):
+    dz = depth / n
+    n_slices = int(np.ceil(depth / slice_thickness))
+    n_per_slice = equal_sized_chunks(n, n_slices)
+    slice_thickness = np.array(n_per_slice) * dz
+    return slice_thickness, n_per_slice
+
+
+def slice_potential(
+    potential_3d: np.ndarray,
+    slice_chunks,
+    slice_thicknesses,
+    gpts=None,
+    rollaxis=True,
+) -> tuple[np.ndarray, np.ndarray]:
+
+    num_slices = len(slice_chunks)
+    assert num_slices == len(slice_thicknesses)
+
+    if gpts is not None and gpts != potential_3d.shape[:2]:
+        potential_3d = fft_interpolate(potential_3d, gpts + (potential_3d.shape[-1],))
+
+    # n_per_slice = equal_sized_chunks(potential_3d.shape[-1], num_slices)
+
+    z_samplings = tuple(
+        thickness / n for n, thickness in zip(slice_chunks, slice_thicknesses)
+    )
+
+    start = np.cumsum((0,) + slice_chunks)
+
+    potential_sliced = np.stack(
+        [
+            np.sum(potential_3d[..., start:stop], axis=-1) * dz
+            for start, stop, dz in zip(start[:-1], start[1:], z_samplings)
+        ],
+        axis=-1,
+    )
+
+    if rollaxis:
+        potential_sliced = np.rollaxis(potential_sliced, -1)
+
+    return potential_sliced
+
+
+class StructureFactorArray(BaseStructureFactor, ArrayObject):
     _base_dims = 1
 
     def __init__(
@@ -309,46 +392,83 @@ class StructureFactorArray(ArrayObject):
         return reciprocal_space_gpts(self.cell, self.k_max)
 
     def to_3d_array(self):
-        xp = get_array_module(self.array)
-        array = xp.zeros(self.gpts, dtype=self.array.dtype)
-        array[self.hkl[:, 0], self.hkl[:, 1], self.hkl[:, 2]] = self.array
+        if self.is_lazy:
+            xp = get_array_module(self.array)
+            array = da.map_blocks(
+                structure_factor_1d_to_3d,
+                self.array,
+                da.from_array(self.hkl, chunks=-1),
+                gpts=self.gpts,
+                chunks=self.gpts,
+                meta=xp.array((), dtype=self.array.dtype),
+            )
+        else:
+            array = structure_factor_1d_to_3d(self.array, self.hkl, self.gpts)
         return array
 
     def get_potential_3d(self):
-        array = self.to_3d_array()
-        xp = get_array_module(array)
-        potential = xp.fft.ifftn(array)
-        potential = potential * np.prod(potential.shape) / kappa
-        potential -= potential.min()
-        return potential.real
+        if self.is_lazy:
+            xp = get_array_module(self.array)
+            array = da.map_blocks(
+                structure_factor_to_potential,
+                self.array,
+                da.from_array(self.hkl, chunks=-1),
+                gpts=self.gpts,
+                chunks=self.gpts,
+                meta=xp.array((), dtype=get_dtype(complex=False)),
+            )
+        else:
+            array = structure_factor_to_potential(self.array, self.hkl, self.gpts)
+        return array
 
     def get_projected_potential(
         self,
-        slice_thickness: float | Sequence[float],
+        slice_thickness: float | Sequence[float] = None,
         sampling: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
     ) -> PotentialArray:
-        
+
         if not is_cell_orthogonal(self.cell):
             raise NotImplementedError(
                 "Converting structure factor to projected potential is not supported for non-orthogonal or rotated cells."
             )
-
-        potential = self.get_potential_3d()
 
         if sampling is not None:
             extent = np.diag(self.cell)[:2]
             grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
             gpts = grid.gpts
 
-        if gpts is not None:
-            potential = fft_interpolate(potential, gpts + (potential.shape[-1],))
+        potential_3d = self.get_potential_3d()
 
-        potential_sliced, slice_thickness = slice_potential(
-            potential, depth=self.cell[2, 2], slice_thickness=slice_thickness
+        if slice_thickness is None:
+            slice_thickness = self.cell[2, 2] / potential_3d.shape[-1]
+
+        if gpts is None:
+            gpts = potential_3d.shape[:2]
+
+        slice_thickness, slice_chunks = equal_slice_thicknesses(
+            n=potential_3d.shape[-1],
+            slice_thickness=slice_thickness,
+            depth=self.cell[2, 2],
         )
 
-        potential_sliced = np.rollaxis(potential_sliced, -1)
+        if self.is_lazy:
+            xp = get_array_module(potential_3d)
+            potential_sliced = potential_3d.map_blocks(
+                slice_potential,
+                slice_chunks=slice_chunks,
+                slice_thicknesses=slice_thickness,
+                gpts=gpts,
+                chunks=(len(slice_chunks),) + gpts,
+                meta=xp.array((), dtype=potential_3d.dtype),
+            )
+        else:
+            potential_sliced = slice_potential(
+                potential_3d,
+                slice_chunks=slice_chunks,
+                slice_thicknesses=slice_thickness,
+                gpts=gpts,
+            )
 
         sampling = (
             self.cell[0, 0] / potential_sliced.shape[-2],
@@ -370,28 +490,34 @@ def calculate_M_matrix(hkl, cell, energy):
     return Mii
 
 
-def calculate_A_matrix(hkl, cell, energy, structure_factor):
+def potential_prefactor(energy: float):
+    return energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
+
+
+def calculate_A_matrix(
+    hkl: np.ndarray,
+    cell: Cell | np.ndarray,
+    energy: float,
+    structure_factor: np.ndarray,
+    paraxial: bool = False,
+):
     xp = get_array_module(structure_factor)
 
-    g = xp.asarray(hkl @ cell.reciprocal())
+    g = xp.asarray(calculate_g_vec(hkl, cell))
 
     Mii = calculate_M_matrix(hkl, cell, energy)
     hkl = xp.asarray(hkl)
 
     gmh = hkl[None] - hkl[:, None]
 
-    A = (
-        structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]]
-        * energy2sigma(energy)
-        / kappa
-        / energy2wavelength(energy)
-        / np.pi
+    A = structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]] * potential_prefactor(
+        energy
     )
 
     Mii = xp.asarray(Mii)
     A *= Mii[None] * Mii[:, None]
 
-    sg = xp.asarray(excitation_errors(g, energy))
+    sg = xp.asarray(excitation_errors(g, energy, paraxial=paraxial))
     diag = 2 * 1 / energy2wavelength(energy) * sg
     diag *= Mii
 
@@ -430,6 +556,64 @@ def validate_k_max(k_max, structure_factor):
     return k_max
 
 
+def exctinction_distances(structure_factor, energy, cell):
+    xp = get_array_module(structure_factor)
+    V = cell.volume
+    return np.pi * V / (xp.abs(structure_factor) * energy2wavelength(energy) + 1e-12)
+
+
+# def select_beams(
+#     structure_factor,
+#     energy,
+#     cell,
+#     max_beams=None,
+#     k_max=None,
+#     sg_max=None,
+#     wg_max=None,
+#     ignore=None,
+#     criterion="sg",
+# ):
+#     array = structure_factor.array.copy()
+
+#     g_vec = calculate_g_vec(structure_factor.hkl, cell)
+#     g_vec_length = calculate_g_vec_length(structure_factor.hkl, cell)
+#     sg = np.abs(excitation_errors(g_vec, energy))
+
+#     if criterion == "sg":
+#         values = g_vec_length * sg
+
+#         if wg_max is not None:
+#             raise ValueError("wg_max is not used when criterion is 'sg'")
+
+#     elif criterion == "wg":
+#         xig = exctinction_distances(array, energy, cell)
+#         values = xig * sg
+
+#         if wg_max is not None:
+#             values[values > wg_max] = np.inf
+#         elif wg_max is None and max_beams is None:
+#             raise ValueError("wg_max must be provided if max_beams is not provided")
+#     else:
+#         raise ValueError("criterion must be 'sg' or 'wg'")
+
+#     if ignore is not None:
+#         values[ignore] = np.inf
+
+#     if sg_max is not None:
+#         values[sg > sg_max] = np.inf
+
+#     if k_max is not None:
+#         values[g_vec_length > k_max] = np.inf
+
+#     if max_beams is not None:
+#         mask = np.zeros(len(values), dtype=bool)
+#         mask[np.argsort(values)[:max_beams]] = True
+#     else:
+#         mask = values < np.inf
+
+#     return mask
+
+
 class BlochWaves:
     def __init__(
         self,
@@ -437,37 +621,83 @@ class BlochWaves:
         energy: float,
         sg_max: float = None,
         k_max: float = None,
-        max_beams: int = None,
+        paraxial: bool = False,
         orientation_matrix: np.ndarray = None,
         centering: str = "P",
-        selection_criterion: str = "sg",
         device: str = None,
     ):
-        self._structure_factor = structure_factor
-        self._energy = energy
-        self._sg_max = sg_max
-        self._k_max = validate_k_max(k_max, structure_factor)
-        cell = structure_factor.atoms.cell
+
+        cell = structure_factor.cell
 
         if orientation_matrix is not None:
             cell = Cell(np.dot(cell, orientation_matrix.T))
 
+        k_max = validate_k_max(k_max, structure_factor)
+
+        self._structure_factor = structure_factor
+        self._energy = energy
+        self._sg_max = sg_max
+        self._k_max = k_max
         self._cell = cell
         self._centering = centering
+        self._paraxial = paraxial
         self._device = validate_device(device)
 
-        g_vec = structure_factor.g_vec
-        sg = excitation_errors(g_vec, energy)
-        # xig =
+        # g_vec = structure_factor.g_vec
+        # sg = excitation_errors(g_vec, energy)
 
-        # self._hkl_mask = filter_reciprocal_space_vectors(
-        #     hkl=structure_factor.hkl,
-        #     cell=self._cell,
-        #     energy=energy,
-        #     sg_max=sg_max,
-        #     k_max=self._k_max,
-        #     centering=centering,
+        self._hkl_mask = filter_reciprocal_space_vectors(
+            hkl=structure_factor.hkl,
+            cell=self._cell,
+            energy=energy,
+            sg_max=sg_max,
+            k_max=self._k_max,
+            centering=centering,
+        )
+
+        # structure_factor = np.abs(
+        #     self._structure_factor.build(lazy=False).to_cpu().array
         # )
+        # #self._hkl_mask *= structure_factor > 7e-4
+        # self._hkl_mask = None
+
+        # self.set_hkl_mask(
+        #     max_beams,
+        #     sg_max=sg_max,
+        #     wg_max=wg_max,
+        #     criterion=selection_criterion,
+        #     ignore=None,
+        # )
+
+    # def set_hkl_mask(
+    #     self,
+    #     max_beams: int = None,
+    #     sg_max: float = None,
+    #     wg_max: float = None,
+    #     ignore: float = None,
+    #     criterion: str = "wg",
+    # ):
+    #     if hasattr(self.structure_factor, "build"):
+    #         structure_factor = self.structure_factor.build(lazy=False).to_cpu()
+
+    #     self._hkl_mask = select_beams(
+    #         structure_factor=structure_factor,
+    #         energy=self.energy,
+    #         cell=self.cell,
+    #         max_beams=max_beams,
+    #         k_max=self.k_max,
+    #         wg_max=wg_max,
+    #         sg_max=sg_max,
+    #         ignore=ignore,
+    #         criterion=criterion,
+    #     )
+
+    @property
+    def paraxial(self):
+        return self._paraxial
+
+    def __len__(self):
+        return int(np.sum(self.hkl_mask))
 
     @property
     def hkl_mask(self):
@@ -537,19 +767,25 @@ class BlochWaves:
 
         metadata = {"energy": self.energy, "sg_max": self._sg_max, "k_max": self.k_max}
 
+        reciprocal_lattice_vectors = self.cell.reciprocal()
+
         return IndexedDiffractionPatterns(
-            miller_indices=hkl, array=intensity, positions=g_vec, metadata=metadata
+            miller_indices=hkl,
+            array=intensity,
+            reciprocal_lattice_vectors=reciprocal_lattice_vectors,
+            metadata=metadata,
         )
 
-    def calculate_structure_matrix(self):
+    def calculate_structure_matrix(self, lazy: bool = True):
         hkl = self.hkl
-        structure_factor = self.structure_factor.calculate()
+        structure_factor = self.structure_factor.build(lazy=lazy)
 
         A = calculate_A_matrix(
             hkl=hkl,
             cell=self.cell,
             energy=self.energy,
-            structure_factor=structure_factor,
+            structure_factor=structure_factor.to_3d_array(),
+            paraxial=self.paraxial,
         )
         return A
 
@@ -569,7 +805,7 @@ class BlochWaves:
     def _calculate_array(self, thicknesses: np.ndarray):
         hkl = self.structure_factor.hkl[self.hkl_mask]
         cell = self.cell
-        A = self.calculate_structure_matrix()
+        A = self.calculate_structure_matrix(lazy=False)
 
         xp = get_array_module(A)
 
@@ -582,7 +818,7 @@ class BlochWaves:
 
         C_inv = xp.conjugate(C.T)
 
-        initial = np.all(hkl == 0, axis=1).astype(complex)
+        initial = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
         initial = xp.asarray(initial)
 
         array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
@@ -593,18 +829,29 @@ class BlochWaves:
 
         return array
 
-    def calculate_diffraction_patterns(self, thicknesses, return_complex: bool = False):
+    def calculate_diffraction_patterns(
+        self, thicknesses, return_complex: bool = False, lazy: bool = True
+    ):
+
+        if not hasattr(thicknesses, "__len__"):
+            thicknesses = [thicknesses]
+            ensemble_axes_metadata = []
+        else:
+            ensemble_axes_metadata = [
+                ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
+            ]
+
         hkl = self.structure_factor.hkl[self.hkl_mask]
         array = self._calculate_array(thicknesses)
+        reciprocal_lattice_vectors = self.cell.reciprocal()
+
+        if len(ensemble_axes_metadata) == 0:
+            array = array[0]
+        else:
+            reciprocal_lattice_vectors = reciprocal_lattice_vectors[None]
 
         if not return_complex:
             array = abs2(array)
-
-        ensemble_axes_metadata = [
-            ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
-        ]
-
-        reciprocal_lattice_vectors = self.cell.reciprocal()[None]
 
         return IndexedDiffractionPatterns(
             miller_indices=hkl,
@@ -618,11 +865,22 @@ class BlochWaves:
             },
         )
 
-    def calculate_exit_wave(self, thicknesses, gpts=None):
+    def calculate_exit_wave(
+        self,
+        thicknesses: float | Sequence[float],
+        gpts: tuple[int, int] = None,
+        normalization: str = "values",
+        lazy: bool = True,
+    ):
+
         hkl = self.hkl
         cell = self.cell
         g_vec = self.g_vec
-        array = self._calculate_array(thicknesses)
+
+        if lazy:
+            array = self._calculate_array(thicknesses)
+        else:
+            array = self._calculate_array(thicknesses)
 
         xp = get_array_module(array)
 
@@ -632,20 +890,18 @@ class BlochWaves:
             )
 
         if gpts is None:
-            gpts = tuple(hkl.max(0) - hkl.min(0))
+            gpts = tuple((hkl[:, :2].max(0) - hkl[:, :2].min(0)) * 2)
 
-        phase = xp.exp(
-            -2
-            * np.pi
-            * 1.0j
-            * xp.asarray(g_vec)[:, 2]
-            * xp.asarray(thicknesses)[:, None]
-        )
-
+        thicknesses1 = xp.asarray(thicknesses)
         array2 = xp.zeros(array.shape[:-1] + gpts, dtype=array.dtype)
-        array2[..., hkl[:, 0], hkl[:, 1], hkl[:, 2]] = array * phase
+        for i, hkli in enumerate(hkl):
+            phase = xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses1)
+            array2[..., hkli[0], hkli[1]] += array[..., i] * phase
 
-        array = ifft2(array2.sum(-1))
+        array = ifft2(array2)
+
+        if normalization == "values":
+            array *= np.prod(gpts)
 
         sampling = (cell[0, 0] / gpts[0], cell[1, 1] / gpts[1])
 
@@ -656,6 +912,7 @@ class BlochWaves:
             ensemble_axes_metadata=[
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ],
+            metadata={"normalization": "values"},
         )
 
         return waves
@@ -901,7 +1158,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             # )
 
             diffraction_patterns = bw.calculate_diffraction_patterns(
-                thicknesses, return_complex=return_complex
+                thicknesses, return_complex=return_complex, lazy=False
             )
 
             diffraction_patterns = diffraction_patterns.to_cpu()
@@ -974,6 +1231,14 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         if pbar is None:
             pbar = config.get("local_diagnostics.task_level_progress", False)
 
+        if not hasattr(thicknesses, "__len__"):
+            thicknesses = [thicknesses]
+            ensemble_axes_metadata = []
+        else:
+            ensemble_axes_metadata = [
+                ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
+            ]
+
         if lazy:
             array, hkl_mask = self._lazy_calculate_diffraction_patterns(
                 thicknesses=thicknesses,
@@ -996,7 +1261,10 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             np.swapaxes(orientation_matrices, -2, -1),
         )
 
-        reciprocal_lattice_vectors = reciprocal_lattice_vectors[..., None, :, :]
+        if not len(ensemble_axes_metadata):
+            array = array[..., 0, :]
+        else:
+            reciprocal_lattice_vectors = reciprocal_lattice_vectors[..., None, :, :]
 
         result = IndexedDiffractionPatterns(
             array=array,
@@ -1004,9 +1272,11 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             ensemble_axes_metadata=[
                 *self.ensemble_axes_metadata,
-                ThicknessAxis(label="z", units="Å", values=tuple(thicknesses)),
+                *ensemble_axes_metadata,
             ],
             metadata={
+                "label": "intensity",
+                "units": "arb. unit",
                 "energy": self.energy,
                 "sg_max": self.sg_max,
                 "k_max": self.k_max,

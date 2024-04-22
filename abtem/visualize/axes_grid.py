@@ -1,4 +1,5 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -6,17 +7,10 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
-from mpl_toolkits.axes_grid1 import Size, Divider
+from mpl_toolkits.axes_grid1 import Divider, Size
 from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
 
-from abtem.core.colors import hsluv_cmap
-from abtem.core.utils import interleave, flatten_list_of_lists
-
-
-if TYPE_CHECKING:
-    from abtem.measurements import (
-        BaseMeasurements,
-    )
+from abtem.core.utils import flatten_list_of_lists, interleave
 
 
 def _cbar_orientation(cbar_loc):
@@ -62,7 +56,7 @@ class AxesGrid:
             raise NotImplementedError()
 
         self._sizes = {
-            "cbar_spacing": Size.Fixed(0.9),
+            "cbar_spacing": Size.Fixed(1.1),
             "padding": Size.Fixed(0.1),
             "cbar_shift": Size.Fixed(0.0),
             "cbar_width": Size.Fixed(0.15),
@@ -89,7 +83,7 @@ class AxesGrid:
                 for ax in inner_axes:
                     ax._axislines["left"].toggle(ticklabels=False, label=False)
 
-    def _axis_location_to_indices(self, axis_location):
+    def axis_location_to_indices(self, axis_location):
         axis_locations = {
             "all": tuple(np.ndindex(self.shape)),
             "upper left": ((0, self.axes.shape[1] - 1),),
@@ -330,44 +324,3 @@ class AxesGrid:
     @property
     def shape(self) -> tuple[int, int]:
         return self._axes.shape
-
-
-def _validate_axes(
-    shape,
-    ax: Axes = None,
-    ncbars: int = 0,
-    common_color_scale: bool = False,
-    figsize: tuple[float, float] = None,
-    aspect: bool = True,
-    sharex: bool = True,
-    sharey: bool = True,
-) -> AxesGrid:
-    if common_color_scale:
-        cbar_mode = "single"
-    else:
-        cbar_mode = "each"
-
-    if ax is None:
-        with plt.ioff():
-            fig = plt.figure(figsize=figsize)
-    else:
-        fig = ax.get_figure()
-
-    if ax is None:
-        ncols, nrows = _axes_grid_cols_and_rows(shape)
-
-        axes = AxesGrid(
-            fig=fig,
-            ncols=ncols,
-            nrows=nrows,
-            ncbars=ncbars,
-            cbar_mode=cbar_mode,
-            aspect=aspect,
-            sharex=sharex,
-            sharey=sharey,
-        )
-
-    else:
-        axes = np.array([[ax]])
-
-    return axes

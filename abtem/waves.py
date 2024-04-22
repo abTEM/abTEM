@@ -74,7 +74,6 @@ from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
     ArrayObjectTransform,
 )
-from abtem.core import config
 
 
 def _ensure_parity(n, even, v=1):
@@ -875,8 +874,6 @@ class Waves(BaseWaves, ArrayObject):
                 fftshift=fftshift,
                 normalize=normalize,
             )
-
-        # pattern = xp.zeros(self.shape, dtype=xp.float32)
 
         diffraction_patterns = DiffractionPatterns(
             pattern,

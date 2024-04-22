@@ -62,6 +62,7 @@ def test_ensemble_shape(data, ensemble):
 )
 def test_ensembles(data, ensemble):
     ensemble = data.draw(ensemble())
+
     if len(ensemble.ensemble_shape) > 0:
         chunks = data.draw(
             st.integers(min_value=1, max_value=reduce(mul, ensemble.ensemble_shape))

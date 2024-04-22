@@ -35,7 +35,6 @@ import strategies as abtem_st
 #         probe.build()
 
 
-
 @pytest.mark.parametrize(
     "waves_builder", [abtem_st.probe, abtem_st.plane_wave, abtem_st.s_matrix]
 )
@@ -184,7 +183,7 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
 
     waves = waves_builder.build().compute()
 
-    #old_sum = waves.diffraction_patterns(max_angle="full").array.sum()
+    # old_sum = waves.diffraction_patterns(max_angle="full").array.sum()
 
     waves = waves.multislice(potential).compute()
 
@@ -193,9 +192,9 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
     except AttributeError:
         pass
 
-    #new_sum = waves.diffraction_patterns(max_angle="full").array.sum()
+    # new_sum = waves.diffraction_patterns(max_angle="full").array.sum()
 
-    #print(old_sum, new_sum, old_sum > new_sum, potential.array)
+    # print(old_sum, new_sum, old_sum > new_sum, potential.array)
     # print(waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)))
     #
     assert np.all(
@@ -228,7 +227,9 @@ def test_build_then_multislice(data, waves_builder, detectors, potential, lazy):
     if detectors is not None:
         detectors = data.draw(detectors())
 
-    waves = waves_builder.multislice(potential, detectors=detectors, lazy=lazy).compute()
+    waves = waves_builder.multislice(
+        potential, detectors=detectors, lazy=lazy
+    ).compute()
 
     build_waves = waves_builder.build(lazy=lazy)
     build_waves = build_waves.multislice(potential, detectors=detectors).compute()
@@ -299,7 +300,7 @@ def test_intensity(data, lazy, device):
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_images(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
-    images = waves.complex_images()
+    images = waves.to_images()
     assert images.shape == waves.shape
     assert images.array.dtype == np.complex64
 
@@ -321,10 +322,12 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     cutoff_gpts = waves.antialias_cutoff_gpts
     old_max = waves.intensity().array.max(axis=(-2, -1))
 
-    waves = waves.downsample(max_angle=max_angle, normalization=normalization)
+    downsampled_waves = waves.downsample(
+        max_angle=max_angle, normalization=normalization
+    )
 
     if isinstance(max_angle, float):
-        assume(max_angle < 0.8 * max(waves.cutoff_angles))
+        assume(max_angle < 0.8 * max(downsampled_waves.cutoff_angles))
         assume(max_angle > 1.2 * probe.aperture.semiangle_cutoff)
     elif max_angle == "valid":
         assume(
@@ -333,16 +336,19 @@ def test_downsample(data, max_angle, normalization, lazy, device):
     elif max_angle == "cutoff":
         assume(min(probe.cutoff_angles) > 1.1 * probe.aperture.semiangle_cutoff)
 
-    assert waves.gpts != old_gpts
-    assert waves.array.dtype == np.complex64
+    assert downsampled_waves.gpts != old_gpts
+    assert downsampled_waves.array.dtype == np.complex64
+
+    assume(downsampled_waves.gpts[0] > 4)
+    assume(downsampled_waves.gpts[1] > 4)
 
     if max_angle == "valid":
-        assert waves.gpts == valid_gpts
+        assert downsampled_waves.gpts == valid_gpts
     elif max_angle == "cutoff":
-        assert waves.gpts == cutoff_gpts
+        assert downsampled_waves.gpts == cutoff_gpts
 
     if normalization == "intensity":
-        assert_is_normalized(waves)
+        assert_is_normalized(downsampled_waves)
     elif normalization == "values":
         np.allclose(old_max, waves.intensity().array.max(axis=(-2, -1)))
 
@@ -380,13 +386,22 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
 def test_tile(data, repetitions, renormalize, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     old_extent = waves.extent
-    old_sum = waves.diffraction_patterns(max_angle=None).to_cpu().compute().array.sum((-2,-1))
+    old_sum = (
+        waves.diffraction_patterns(max_angle=None)
+        .to_cpu()
+        .compute()
+        .array.sum((-2, -1))
+    )
     tiled = waves.tile(repetitions, renormalize=renormalize)
-
 
     assert np.allclose(
         (old_extent[0] * repetitions[0], old_extent[1] * repetitions[1]), tiled.extent
     )
     if renormalize:
-        new_sum = tiled.diffraction_patterns(max_angle=None).to_cpu().compute().array.sum((-2, -1))
+        new_sum = (
+            tiled.diffraction_patterns(max_angle=None)
+            .to_cpu()
+            .compute()
+            .array.sum((-2, -1))
+        )
         assert np.allclose(old_sum, new_sum)

@@ -6,3 +6,6 @@
 .pytest_cache
 *.pyc
 *.egg-info
+**/__pycache__
+build
+.git_old

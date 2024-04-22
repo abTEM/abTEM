@@ -885,7 +885,12 @@ class _HasAberrations:
         for parameter_name, value in self._aberration_coefficients.items():
             if isinstance(value, BaseDistribution):
                 m = re.search(r"\d", parameter_name).start()
-                _tex_label = f"${parameter_name[:m]}_{{{parameter_name[m:]}}}$"
+
+                if parameter_name[:m] == "phi":
+                    _tex_label = f"$\\phi_{{{parameter_name[m:]}}}$"
+                else:
+                    _tex_label = f"${parameter_name[:m]}_{{{parameter_name[m:]}}}$"
+
                 axes_metadata += [
                     ParameterAxis(
                         label=parameter_name,
@@ -1579,7 +1584,7 @@ class CTF(_HasAberrations, BaseAperture):
         return (
             Probe(gpts=gpts, extent=extent, energy=self.energy, aperture=self)
             .build()
-            .complex_images()
+            .to_images()
         )
 
     def profiles(
@@ -1587,7 +1592,6 @@ class CTF(_HasAberrations, BaseAperture):
         gpts: int = 1000,
         max_angle: float = None,
         phi: float = 0.0,
-        complex_representation: str = "imaginary",
     ):
         """
         Calculate radial line profiles for each included component (phase aberrations, aperture, temporal and spatial
@@ -1618,6 +1622,8 @@ class CTF(_HasAberrations, BaseAperture):
 
         sampling = max_angle / (gpts - 1) / (self.wavelength * 1e3)
         alpha = np.linspace(0, max_angle * 1e-3, gpts).astype(get_dtype(complex=False))
+
+        # TODO : implement different complex representations
 
         components = dict()
 

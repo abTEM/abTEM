@@ -7,69 +7,47 @@ import itertools
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
 from numbers import Number
-from typing import (
-    TypeVar,
-    Dict,
-    Sequence,
-    Type,
-    TYPE_CHECKING,
-)
+from typing import TYPE_CHECKING, Dict, Sequence, Type, TypeVar
 
 import dask.array as da
-import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atom
 from ase.cell import Cell
 from matplotlib.axes import Axes
-from numba import prange, jit
+from numba import jit, prange
 
 from abtem.array import ArrayObject, stack
-from abtem.atoms import euler_to_rotation
 from abtem.core import config
-from abtem.core.axes import (
-    RealSpaceAxis,
-    AxisMetadata,
-    ReciprocalSpaceAxis,
-    LinearAxis,
-    NonLinearAxis,
-    ScanAxis,
-    ScaleAxis,
-)
-from abtem.core.backend import asnumpy, cp, get_array_module, get_ndimage_module
+from abtem.core.axes import (AxisMetadata, LinearAxis, NonLinearAxis,
+                             RealSpaceAxis, ReciprocalSpaceAxis, ScaleAxis,
+                             ScanAxis)
+from abtem.core.backend import (asnumpy, cp, get_array_module,
+                                get_ndimage_module)
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
-from abtem.core.fft import fft_interpolate, fft_crop
-from abtem.core.grid import (
-    adjusted_gpts,
-    polar_spatial_frequencies,
-    spatial_frequencies,
-)
+from abtem.core.fft import fft_crop, fft_interpolate
+from abtem.core.grid import (adjusted_gpts, polar_spatial_frequencies,
+                             spatial_frequencies)
 from abtem.core.units import _get_conversion_factor, _validate_units
-from abtem.core.utils import (
-    CopyMixin,
-    EqualityMixin,
-    is_broadcastable,
-    label_to_index,
-    normalize_axes,
-)
+from abtem.core.utils import (CopyMixin, EqualityMixin, is_broadcastable,
+                              label_to_index, normalize_axes)
 from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
-from abtem.visualize.artists import ImageArtist, DomainColoringArtist
+from abtem.visualize.artists import (DomainColoringArtist, ImageArtist,
+                                     LinesArtist)
 from abtem.visualize.visualizations import Visualization
-from abtem.visualize.widgets import ImageGUI, BaseGUI, LinesGUI, ScatterGUI
+from abtem.visualize.widgets import BaseGUI, ImageGUI, LinesGUI, ScatterGUI
 
 # Enables CuPy-accelerated functions if it is available.
 if cp is not None:
-    from abtem.core._cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
-    from abtem.core._cuda import interpolate_bilinear as interpolate_bilinear_cuda
+    from abtem.core._cuda import \
+        interpolate_bilinear as interpolate_bilinear_cuda
+    from abtem.core._cuda import \
+        sum_run_length_encoded as sum_run_length_encoded_cuda
 else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None
 
-try:
-    import ipywidgets as widgets
-except ImportError:
-    widgets = None
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
@@ -306,7 +284,7 @@ def _polar_detector_bins(
 
 @jit(nopython=True, nogil=True, fastmath=True, parallel=True)
 def _sum_run_length_encoded(array, result, separators):
-    for x in prange(result.shape[1]):
+    for x in prange(result.shape[1]): # noqa
         for i in range(result.shape[0]):
             for j in range(separators[x], separators[x + 1]):
                 result[i, x] += array[i, j]
@@ -443,6 +421,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         difference.metadata["label"] = "Relative difference"
         difference.metadata["units"] = "%"
+        difference.metadata["tex_units"] = "$\%$"
         return difference
 
     def normalize_ensemble(self, scale: str = "max", shift: str = "mean"):
@@ -499,8 +478,8 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
     def poisson_noise(
         self,
-        dose_per_area: float | Sequence[float] = None,
-        total_dose: float | Sequence[float] = None,
+        dose_per_area: float | Sequence[float] | None = None,
+        total_dose: float | Sequence[float] | None = None,
         samples: int = 1,
         seed: int = None,
     ):
@@ -530,11 +509,11 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             "Provide one of 'dose_per_area' or 'total_dose'."
         )
 
+        if (dose_per_area is not None) and (total_dose is not None):
+            raise RuntimeError("Provide one of 'dose_per_area' or 'total_dose'.")
+
         dose_axes_metadata = None
         if dose_per_area is not None:
-            if total_dose is not None:
-                raise wrong_dose_error
-
             if np.isscalar(dose_per_area):
                 total_dose = self._area_per_pixel * dose_per_area
             else:
@@ -617,16 +596,12 @@ class MeasurementsEnsemble(BaseMeasurements):
 
     def show(
         self,
-        display_axes=(-2, -1),
+        type: str = "lines",
         ax: Axes = None,
-        cbar: bool = False,
-        cmap: str = None,
-        vmin: float = None,
-        vmax: float = None,
         power: float = 1.0,
-        common_color_scale: bool = False,
-        explode: bool | Sequence[int] = None,
-        overlay: bool | Sequence[int] = None,
+        common_scale: bool = False,
+        explode: bool | Sequence[int] = (),
+        overlay: bool | Sequence[int] = (),
         figsize: tuple[int, int] = None,
         title: bool | str = True,
         units: str = None,
@@ -676,57 +651,47 @@ class MeasurementsEnsemble(BaseMeasurements):
         -------
         measurement_visualization_2d : VisualizationImshow
         """
+        pass
+        # if not interact:
+        #     self.compute()
 
-        if not interact:
-            self.compute()
+        # scale_axis = self._scale_axis_from_metadata()
 
-        scale_axis = self._scale_axis_from_metadata()
+        # # base_axes_metadata = self._plot_base_axes_metadata(units)
 
-        # base_axes_metadata = self._plot_base_axes_metadata(units)
+        # array = self.array
 
-        array = self.array
+        # # raise RuntimeError("Cannot infer pixel area from metadata.")
+        
+        # #if display_axes != (-2, -1):
+        # #    array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
 
-        if display_axes != (-2, -1):
-            array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
+        # display_axes = normalize_axes(display_axes, self.shape)
 
-        display_axes = normalize_axes(display_axes, self.shape)
+        # # base_axes_metadata = [self.axes_metadata[i] for i in display_axes]
+        # # ensemble_axes_metadata = [
+        # #     self.axes_metadata[i]
+        # #     for i in range(len(self.shape))
+        # #     if i not in display_axes
+        # # ]
 
-        base_axes_metadata = [self.axes_metadata[i] for i in display_axes]
-        ensemble_axes_metadata = [
-            self.axes_metadata[i]
-            for i in range(len(self.shape))
-            if i not in display_axes
-        ]
+        # artist_type = LinesArtist
 
-        visualization = Visualization2D(
-            array=array,
-            coordinate_axes=base_axes_metadata,
-            scale_axis=scale_axis,
-            ensemble_axes=ensemble_axes_metadata,
-            ax=ax,
-            cbar=cbar,
-            cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
-            power=power,
-            common_scale=common_color_scale,
-            explode=explode,
-            overlay=overlay,
-            figsize=figsize,
-            interact=interact,
-            title=title,
-            **kwargs,
-        )
+        # visualization = Visualization(
+        #     self,
+        #     ax=ax,
+        #     artist_type=artist_type,
+        #     power=power,
+        #     common_scale=common_scale,
+        #     explode=explode,
+        #     overlay=overlay,
+        #     figsize=figsize,
+        #     interact=interact,
+        #     title=title,
+        #     **kwargs,
+        # )
 
-        if not display and not interact:
-            plt.close()
-
-        if interact and display:
-            from IPython.display import display as ipython_display
-
-            ipython_display(visualization.layout_widgets())
-
-        return visualization
+        # return visualization
 
     # def show(
     #     self,
@@ -2297,13 +2262,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         self,
         cell: Cell | float | tuple[float, float, float],
         orientation_matrices: np.ndarray = None,
-        # rotation: tuple[float, float, float] = (0.0, 0.0, 0.0),
-        # rotation_axes="zxz",
-        sg_max: float = np.inf,
+        sg_max: float = None,
         k_max: float = None,
-        # threshold: float = 1e-6,
         energy: float = None,
-        # integration_radius: float = 0.0,
         centering: str = "P",
     ) -> IndexedDiffractionPatterns:
         """
@@ -2322,17 +2283,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
         """
-        from abtem.bloch.indexing import (
-            index_diffraction_spots,
-            estimate_necessary_excitation_error,
-            validate_cell,
-        )
-        from abtem.bloch.utils import make_hkl_grid, filter_reciprocal_space_vectors
+        from abtem.bloch.indexing import (estimate_necessary_excitation_error,
+                                          index_diffraction_spots,
+                                          validate_cell)
+        from abtem.bloch.utils import (filter_reciprocal_space_vectors,
+                                       make_hkl_grid)
 
-        if orientation_matrices is None:
-            orientation_matrices = np.eye(3)[(None,) * len(self.array.shape[:-2])]
-
-        if not is_broadcastable(self.ensemble_shape, orientation_matrices.shape[:-2]):
+        if orientation_matrices is not None and not is_broadcastable(
+            self.ensemble_shape, orientation_matrices.shape[:-2]
+        ):
             raise ValueError(
                 "The ensemble shape and the shape of the orientation matrices must be broadcastable."
             )
@@ -2343,9 +2302,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if k_max is None:
             k_max = max(self.max_frequency)
 
-        hkl = make_hkl_grid(cell, k_max)
+        if sg_max is None:
+            sg_max = estimate_necessary_excitation_error(energy, k_max)
 
         cell = validate_cell(cell)
+
+        hkl = make_hkl_grid(cell, k_max)
 
         mask = filter_reciprocal_space_vectors(
             hkl,
@@ -2380,6 +2342,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 energy=energy,
                 orientation_matrices=orientation_matrices,
             )
+
+        if orientation_matrices is None:
+            orientation_matrices = np.eye(3)[(None,) * len(self.array.shape[:-2])]
 
         reciprocal_lattice_vectors = np.matmul(
             cell.reciprocal(),
@@ -3072,7 +3037,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             array = self.array.map_blocks(
                 _do_crop,
                 chunks=self.array.chunks[:-2] + gpts,
-                dtype=xp.array((), dtype=self.dtype),
+                meta=xp.array((), dtype=self.dtype),
             )
         else:
             array = _do_crop(self.array)
@@ -3961,11 +3926,24 @@ class IndexedDiffractionPatterns(BaseMeasurements):
     def __getitem__(self, items):
         items = self._validate_items(items)
         kwargs = self.get_items(items)
-        items = tuple(
-            0 if (isinstance(i, int) and n == 1) else i
-            for i, n in zip(items, self.reciprocal_lattice_vectors.shape)
-        )
-        kwargs["reciprocal_lattice_vectors"] = self.reciprocal_lattice_vectors[items]
+
+        new_items = ()
+        for i, n in zip(items, self.reciprocal_lattice_vectors.shape):
+            if n == 1:
+                if isinstance(i, int):
+                    new_items += (0,)
+                else:
+                    new_items += (slice(None),)
+            else:
+                new_items += (i,)
+
+        # items = tuple(
+        #    0 if (isinstance(i, int) and (n == 1)) else slice(None)
+        #    for i, n in zip(items, self.reciprocal_lattice_vectors.shape)
+        # )
+        kwargs["reciprocal_lattice_vectors"] = self.reciprocal_lattice_vectors[
+            new_items
+        ]
         return self.__class__(**kwargs)
 
     def remove_low_intensity(self, threshold: float = 1e-3):
@@ -3982,6 +3960,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         thresholded_spots : IndexedDiffractionPatterns
             The indexed diffraction spots with an intensity above the given threshold.
         """
+        if self.is_lazy:
+            raise RuntimeError("Cannot threshold lazy IndexedDiffractionPatterns.")
+
         ensemble_axes = tuple(range(self.ensemble_dims))
 
         xp = get_array_module(self.intensities)
@@ -4063,9 +4044,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         if max_angle is not None and k_max is None:
             wavelength = energy2wavelength(self._get_from_metadata("energy"))
-            # print(wavelength)
             k_max = max_angle / wavelength / 1e3
-            # print(k_max)
 
         elif not k_max or max_angle:
             raise ValueError("Either 'max_angle' or 'k_max' must be given.")
@@ -4144,7 +4123,12 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             self.array,
             coords=coords,
             dims=dims,
+            attrs={
+                "long_name": "intensity",
+                "units": self.metadata.get("units", "arb. unit"),
+            },
         )
+
         return data
 
     def _miller_indices_to_string(self):
@@ -4344,8 +4328,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         A dictionary mapping miller indices to reciprocal space positions [1/Å].
         """
-        print(self.miller_indices.shape)
-        print(self.reciprocal_lattice_vectors.shape)
 
         positions = {
             tuple(hkl): position

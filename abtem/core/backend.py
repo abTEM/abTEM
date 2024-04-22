@@ -134,7 +134,7 @@ def asnumpy(array):
     return cp.asnumpy(array)
 
 
-def copy_to_device(array, device):
+def copy_to_device(array, device:str):
     old_xp = get_array_module(array)
     new_xp = get_array_module(device)
 

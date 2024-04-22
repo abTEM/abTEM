@@ -17,9 +17,9 @@ from abtem.core.units import _get_conversion_factor, _format_units, _validate_un
 from abtem.core.utils import safe_equality
 
 
-def format_label(axes: AxisMetadata, units=None):
-    if axes.tex_label is not None and config.get("visualize.use_tex", False):
-        label = axes.tex_label
+def format_label(axes, units=None):
+    if axes._tex_label is not None and config.get("visualize.use_tex", False):
+        label = axes._tex_label
     else:
         label = axes.label
 
@@ -47,7 +47,7 @@ def latex_float(f, formatting):
 
 
 def format_value(value: Union[tuple, float], formatting: str, tolerance: float = 1e-14):
-    if isinstance(value, (tuple, list, np.ndarray)):
+    if isinstance(value, tuple):
         return ", ".join(str(format_value(v, formatting=formatting)) for v in value)
 
     if isinstance(value, float):
@@ -63,33 +63,26 @@ def format_value(value: Union[tuple, float], formatting: str, tolerance: float =
 
 
 def format_title(
-    axes: AxisMetadata,
-    formatting: str = ".3f",
-    units: str = None,
-    include_label: bool = True,
+    axes, formatting: str = ".3f", units: str = None, include_label: bool = True
 ):
-
-    if units:
+    try:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
-    else:
+    except KeyError:
         value = axes.values[0]
 
     units = _validate_units(units, axes.units)
 
     use_tex = config.get("visualize.use_tex", False)
 
-    if include_label and use_tex and (axes.tex_label is not None):
-        label = f"{axes.tex_label} = "
+    if include_label and use_tex and (axes._tex_label is not None):
+        label = f"{axes._tex_label} = "
     elif include_label and (axes.label is not None) and len(axes.label):
         label = f"{axes.label} = "
     else:
         label = ""
-    
+
     if use_tex and (units is not None):
-        if axes.tex_units is not None:
-            units = f" {axes.tex_units}"
-        else:
-            units = f" {_format_units(units)}"
+        units = f" {_format_units(units)}"
     elif units is not None:
         units = f" {units}"
     else:
@@ -97,6 +90,11 @@ def format_title(
 
     if use_tex:
         value = format_value(value, formatting)
+        # if isinstance(value, Number):
+        #     value = f"${value}$"
+        # else:
+        # value = f"{value}"
+
         return f"{label}{value}{units}"
     else:
         return f"{label}{value:>{formatting}}{units}"
@@ -106,9 +104,8 @@ def format_title(
 class AxisMetadata:
     label: str = ""
     units: str = None
-    tex_label: str = None
-    tex_units: str = None
-    _default_type: str = "index"
+    _tex_label: str = None
+    _default_type: str = None
     _concatenate: bool = True
     _ensemble_mean: bool = False
     _squeeze: bool = False
@@ -137,15 +134,8 @@ class AxisMetadata:
     def item_metadata(self, item):
         return {}
 
-    def to_ordinal_axis(self, n):
-        values = tuple(range(n))
-        return OrdinalAxis(
-            label=self.label,
-            tex_label=self.tex_label,
-            units=self.units,
-            values=values,
-            _concatenate=self._concatenate,
-        )
+    def __getitem__(self, item):
+        return self
 
     def _to_blocks(self, chunks):
         arr = np.empty((len(chunks[0]),), dtype=object)
@@ -219,23 +209,15 @@ class LinearAxis(AxisMetadata):
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )
 
-    def to_ordinal_axis(self, n):
+    def to_nonlinear_axis(self, n):
         values = tuple(self.coordinates(n))
-        return OrdinalAxis(
+        return NonLinearAxis(
             label=self.label,
-            tex_label=self.tex_label,
+            _tex_label=self._tex_label,
             units=self.units,
             values=values,
             _concatenate=self._concatenate,
         )
-
-    def convert_units(self, units: str, **kwargs):
-        new_copy = self.copy()
-        new_copy.units = units
-        conversion = _get_conversion_factor(units, old_units=self.units, **kwargs)
-        new_copy.sampling = new_copy.sampling * conversion
-        new_copy.offset = new_copy.offset * conversion
-        return new_copy
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -255,7 +237,7 @@ class ReciprocalSpaceAxis(LinearAxis):
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ScanAxis(RealSpaceAxis):
-    _main: bool = True
+    pass
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -266,28 +248,6 @@ class OrdinalAxis(AxisMetadata):
         return format_title(
             self, formatting=formatting, include_label=include_label, **kwargs
         )
-
-    def format_all_titles(self):
-        titles = []
-        for i, value in enumerate(self.values):
-            if i == 0:
-                value = f"{value}"
-            else:
-                value = ""
-
-            title = f"{self.label} "
-
-            if value:
-                title = f"{title} = {value}"
-
-            if self.units:
-                titles += f"{title} [{self.units}]"
-
-        return titles
-
-    def to_ordinal_axis(self, n):
-        assert n == len(self)
-        return self
 
     def concatenate(self, other):
         if not safe_equality(self, other, ("values",)):
@@ -354,10 +314,7 @@ class NonLinearAxis(OrdinalAxis):
             values = [f"{self.values[i]:.2f}" for i in [0, 1, -1]]
             return f"{values[0]} {values[1]} ... {values[-1]}"
         else:
-            try:
-                return " ".join([f"{value:.2f}" for value in self.values])
-            except TypeError:
-                return self.values
+            return " ".join([f"{value:.2f}" for value in self.values])
 
     def format_title(self, formatting, **kwargs):
         return format_title(self, formatting=formatting, **kwargs)
@@ -442,33 +399,10 @@ class PrismPlaneWavesAxis(AxisMetadata):
 class ScaleAxis:
     label: str = ""
     units: str = None
-    tex_label: str | None = None
+    _tex_label: str | None = None
 
     def format_label(self):
         return format_label(self)
-
-
-categories = {
-    "phase [rad]": ("phase", "angle"),
-    "amplitude": ("amplitude", "abs"),
-    "intensity [arb. unit]": ("intensity", "abs2"),
-    "real": ("real",),
-    "imaginary": ("imaginary", "imag"),
-}
-
-complex_labels = {
-    unit: category for category, units in categories.items() for unit in units
-}
-
-# labels = {"phase"}
-#
-# class ComplexScaleAxis:
-#     label: str = ""
-#     units: str = None
-#     _tex_label: str | None = None
-#
-#     def format_label(self):
-#         return format_label(self)
 
 
 def axis_to_dict(axis: AxisMetadata):

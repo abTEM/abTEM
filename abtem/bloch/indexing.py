@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
 
-from abtem.core.utils import is_broadcastable, label_to_index
 from abtem.bloch.utils import excitation_errors
+from abtem.core.utils import is_broadcastable
 
 
 def _pixel_edges(
@@ -35,39 +34,8 @@ def _find_projected_pixel_index(
 
 def estimate_necessary_excitation_error(energy, k_max):
     hkl_corner = np.array([[np.sqrt(k_max), np.sqrt(k_max), 0]])
-    sg = excitation_errors(hkl_corner, energy)
+    sg = np.abs(excitation_errors(hkl_corner, energy).item())
     return sg
-
-
-def match_hkl_to_pixel(hkl, g_vec, shape, sampling, sg=None):
-    nm = _find_projected_pixel_index(g_vec, shape, sampling)
-
-    if sg is None:
-        return nm
-
-    best_hkl = np.zeros(g_vec.shape[:-2] + (len(unique), 3), dtype=int)
-    # best_g_vec = np.zeros((len(unique), 3), dtype=float)
-    best_sg = np.zeros(g_vec.shape[:-2] + (len(unique),), dtype=float)
-    best_nm = np.zeros(g_vec.shape[:-2] + (len(unique), 2), dtype=int)
-
-    for i in np.ndindex(nm.shape[:-2]):
-
-        unique, indices, inverse = np.unique(
-            nm[i], return_index=True, return_inverse=True, axis=-2
-        )
-
-        best_hkl = np.zeros((len(unique), 3), dtype=int)
-        # best_g_vec = np.zeros((len(unique), 3), dtype=float)
-        best_sg = np.zeros((len(unique),), dtype=float)
-        best_nm = np.zeros((len(unique), 2), dtype=int)
-        for j, idx in enumerate(label_to_index(inverse)):
-            closest = np.argmin(np.abs(sg[idx]))
-            best_hkl[j + (i,)] = hkl[idx][closest]
-            best_sg[j + (i,)] = sg[idx][closest]
-            # best_g_vec[i] = g_vec[idx][closest]
-            best_nm[j + (i,)] = nm[indices[i]]
-
-    return best_hkl, best_sg, best_nm
 
 
 def filter_by_threshold(arrays, values, threshold) -> tuple[np.ndarray, ...]:
@@ -75,8 +43,9 @@ def filter_by_threshold(arrays, values, threshold) -> tuple[np.ndarray, ...]:
     shape = None
     out = ()
     for array in arrays:
-        if shape and shape[0] != array.shape[0]:
-            raise ValueError()
+        if shape is not None:
+            if shape[0] != array.shape[0]:
+                raise ValueError()
 
         shape = array.shape
         out += (array[mask],)
@@ -115,7 +84,9 @@ def overlapping_spots_mask(nm, sg):
 
     for i in np.ndindex(nm.shape[:-2]):
         _, indices = np.unique(nm[i][order[i]], return_index=True, axis=-2)
-        mask[(i,) + (indices,)] = True
+        if len(i):
+            indices = i + (indices,)
+        mask[indices] = True
 
     mask = mask[prefix_indices(mask.shape[:-1]) + (order_reverse,)]
     return mask
@@ -167,14 +138,19 @@ def index_diffraction_spots(
 
     assert is_broadcastable(array.shape[:-1], orientation_matrices.shape[:-2])
 
-    reciprocal_lattice_vectors = np.matmul(cell.reciprocal(), np.swapaxes(orientation_matrices, -2, -1))
+    reciprocal_lattice_vectors = np.matmul(
+        cell.reciprocal(), np.swapaxes(orientation_matrices, -2, -1)
+    )
     g_vec = hkl @ reciprocal_lattice_vectors
 
     nm = _find_projected_pixel_index(g_vec, array.shape[-2:], sampling)
     intensities = array[prefix_indices(array.shape[:-2]) + (nm[..., 0], nm[..., 1])]
 
     sg = excitation_errors(g_vec, energy)
-    intensities = intensities * overlapping_spots_mask(nm, sg)
+
+    mask = overlapping_spots_mask(nm, sg)
+    
+    intensities = intensities * mask
 
     return intensities
 

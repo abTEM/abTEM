@@ -79,7 +79,13 @@ def slider_from_axes_metadata(
         if default_value is None:
             default_value = 0
 
-        index = int(np.argmin(np.abs(values - default_value)))
+        # print(values, default_value)
+        # print(int(np.argmin(np.abs(values - default_value))))
+
+        try:
+            index = int(np.argmin(np.abs(values - default_value)))
+        except:
+            index = 0
 
         slider = widgets.SelectionSlider(
             description=label,

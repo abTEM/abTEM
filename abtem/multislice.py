@@ -678,7 +678,7 @@ def transition_potential_multislice_and_detect(
         for scatter_index, potential_slice in enumerate(
             potential_configuration.generate_slices()
         ):
-            waves = multislice_step(
+            waves = conventional_multislice_step(
                 waves,
                 potential_slice,
                 propagator,
@@ -726,7 +726,7 @@ def transition_potential_multislice_and_detect(
                             first_slice=scatter_index + 1
                         )
                     ):
-                        scattered_waves = multislice_step(
+                        scattered_waves = conventional_multislice_step(
                             scattered_waves,
                             inner_potential_slice,
                             propagator,

@@ -239,7 +239,7 @@ class EmptyEnsemble(Ensemble):
         return ()
 
 
-def concatenate_array_blocks(blocks):
+def concatenate_array_blocks(blocks) -> np.ndarray:
     for i in range(len(blocks.shape)):
         new_blocks = np.empty(blocks.shape[:-1], dtype=object)
 

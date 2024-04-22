@@ -27,7 +27,6 @@ from abtem.core.axes import (
     AxisMetadata,
     OrdinalAxis,
     AxesMetadataList,
-    NonLinearAxis,
     LinearAxis,
 )
 from abtem.core.backend import (
@@ -42,7 +41,6 @@ from abtem.core.ensemble import (
     Ensemble,
     _wrap_with_array,
     unpack_blockwise_args,
-    concatenate_array_blocks,
 )
 from abtem.core.utils import (
     normalize_axes,
@@ -328,7 +326,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def ensemble_dims(self):
         """Number of ensemble dimensions."""
         return len(self.shape) - self.base_dims
-
+    
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
         return [UnknownAxis() for _ in range(self._base_dims)]
@@ -1425,17 +1423,28 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         dims = []
         for n, axis in zip(self.shape, self.axes_metadata):
             x = np.array(axis.coordinates(n))
+            if isinstance(x, np.ndarray) and len(x.shape) == 2:
+                x = [f"{i}" for i in x]
+            elif len(x.shape) == 1:
+                pass
+            else:
+                raise ValueError("The shape of the coordinates is not supported.")
+
             dims.append(axis.label)
+            
             coords[axis.label] = xr.DataArray(
                 x, name=axis.label, dims=(axis.label,), attrs={"units": axis.units}
             )
+        
+        attrs = self.metadata
+        attrs["long_name"] = self.metadata["label"]
 
-        return xr.DataArray(self.array, dims=dims, coords=coords, attrs=self.metadata)
+        return xr.DataArray(self.array, dims=dims, coords=coords, attrs=attrs)
 
     def _stack(self, arrays, axis_metadata, axis):
         xp = get_array_module(arrays[0].array)
 
-        if arrays[0].is_lazy:
+        if any(array.is_lazy for array in arrays):
             array = da.stack([measurement.array for measurement in arrays], axis=axis)
         else:
             array = xp.stack([measurement.array for measurement in arrays], axis=axis)
@@ -1669,6 +1678,10 @@ def stack(
         if not all(isinstance(element, str) for element in axis_metadata):
             raise ValueError()
         axis_metadata = OrdinalAxis(values=axis_metadata)
+    
+    elif isinstance(axis_metadata, dict):
+        axis_metadata = OrdinalAxis(**axis_metadata)
+    
     elif not isinstance(axis_metadata, AxisMetadata):
         raise ValueError()
 
@@ -1762,14 +1775,6 @@ def moveaxis(array_object, source, destination):
         array=array, axes_metadata=axes_metadata, metadata=array_object.metadata
     )
 
-
-def _unpack_array_object_blocks(blocks):
-    new_blocks = np.empty(blocks.shape, dtype=object)
-    for indices in np.ndindex(blocks.shape):
-        new_blocks[indices] = blocks[indices].array
-    return new_blocks
-
-
 def _concatenate_axes_metadata(axes_metadata):
     if len(axes_metadata) == 0:
         raise RuntimeError()
@@ -1782,33 +1787,43 @@ def _concatenate_axes_metadata(axes_metadata):
     return axes_metadata[0]
 
 
-def _axes_metadata_from_array_object_blocks(blocks):
-    if blocks.ravel()[0].ensemble_dims == 0:
-        return []
+# def _unpack_array_object_blocks(blocks):
+#     new_blocks = np.empty(blocks.shape, dtype=object)
+#     for indices in np.ndindex(blocks.shape):
+#         new_blocks[indices] = blocks[indices].array
+#     return new_blocks
 
-    axes_metadata = []
-    for i, n in enumerate(blocks.shape):
-        index = tuple(slice(None) if j == i else 0 for j in range(len(blocks.shape)))
+# def _axes_metadata_from_array_object_blocks(blocks):
+#     if blocks.ravel()[0].ensemble_dims == 0:
+#         return []
 
-        axes_metadata.append(
-            _concatenate_axes_metadata(
-                [
-                    block.ensemble_axes_metadata[i]
-                    for block in blocks[index]
-                    if len(block.ensemble_axes_metadata)
-                ]
-            )
-        )
-    return axes_metadata
+#     axes_metadata = []
+#     for i, n in enumerate(blocks.shape):
+#         index = tuple(slice(None) if j == i else 0 for j in range(len(blocks.shape)))
+
+#         axes_metadata.append(
+#             _concatenate_axes_metadata(
+#                 [
+#                     block.ensemble_axes_metadata[i]
+#                     for block in blocks[index]
+#                     if len(block.ensemble_axes_metadata)
+#                 ]
+#             )
+#         )
+#     return axes_metadata
+
+# def _concat_array_object_ensemble_blocks(blocks) -> ArrayObject:
+#     array_blocks = _unpack_array_object_blocks(blocks)
+#     concat_array = concatenate_array_blocks(array_blocks)
+#     #concat_axes_metadata = _axes_metadata_from_array_object_blocks(blocks)
+    
+#     concat_array_object = ArrayObject(array=concat_array)
+#     #concat_array_object = ArrayObject(array=concat_array, ensemble_axes_metadata=concat_axes_metadata)
+#     return concat_array_object
 
 
-def _concat_array_object_ensemble_blocks(blocks):
-    array_blocks = _unpack_array_object_blocks(blocks)
-    concat_array = concatenate_array_blocks(array_blocks)
-    concat_axes_metadata = _axes_metadata_from_array_object_blocks(blocks)
-
-    concat_array_object = ArrayObject(
-        array=concat_array,
-        ensemble_axes_metadata=concat_axes_metadata,
-    )
-    return concat_array_object
+# def _concat_array_object_ensemble_blocks2(blocks) -> ArrayObject:
+#     array_blocks = _unpack_array_object_blocks(blocks)
+#     concat_array = concatenate_array_blocks(array_blocks)
+#     concat_array_object = ArrayObject(array=concat_array)
+#     return concat_array_object

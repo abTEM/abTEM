@@ -193,10 +193,13 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
 
     measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
     assume(all(n > 1 for n in measurement.base_shape))
-    filtered = measurement.gaussian_filter(sigma)
-    filtered.compute()
-    measurement.compute()
-
+    try:
+        filtered = measurement.gaussian_filter(sigma)
+        filtered.compute()
+        measurement.compute()
+    except OSError:
+        pytest.skip("Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218")
+    
     if np.any(np.array(sigma)) > 1:
         assert not np.allclose(filtered.array, measurement.array)
 

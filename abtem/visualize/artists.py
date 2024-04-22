@@ -1,20 +1,14 @@
 from __future__ import annotations
 
 import itertools
-from abc import abstractmethod, ABCMeta
-from typing import Literal, TYPE_CHECKING
+from abc import ABCMeta, abstractmethod
+from typing import TYPE_CHECKING, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import colors, artist
+from matplotlib import artist, colors
 from matplotlib.axes import Axes
-from matplotlib.collections import (
-    CircleCollection,
-    Collection,
-    mpath,
-    transforms,
-)
-from matplotlib.transforms import Affine2D
+from matplotlib.collections import Collection, mpath, transforms
 from matplotlib.colors import Colormap
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import ScalarFormatter
@@ -27,10 +21,11 @@ from abtem.core.units import _get_conversion_factor
 
 if TYPE_CHECKING:
     from matplotlib.text import Annotation
+
     from abtem.measurements import (
+        DiffractionPatterns,
         Images,
         IndexedDiffractionPatterns,
-        DiffractionPatterns,
         MeasurementsEnsemble,
     )
 
@@ -183,7 +178,7 @@ class Artist(metaclass=ABCMeta):
         self._ax.set_xlim(xlim)
 
 
-class Artist1D(Artist):
+class Artist1D(Artist, metaclass=ABCMeta):
     pass
 
 
@@ -200,10 +195,12 @@ class LinesArtist(Artist1D):
         legend: bool = False,
         **kwargs,
     ):
+
         super().__init__(ax=ax, measurement=measurement)
 
         y = self._reshape_data(measurement.array)
-        x = measurement.base_axes_metadata[-1].coordinates(measurement.shape[-1])
+
+        x = measurement.axes_metadata[-1].coordinates(measurement.shape[-1])
 
         if label is None and measurement.ensemble_shape:
             labels = []
@@ -221,7 +218,7 @@ class LinesArtist(Artist1D):
 
         self._lines = ax.plot(x, y, label=label, **kwargs)
 
-        xlabel = measurement.base_axes_metadata[-1].format_label(units)
+        xlabel = measurement.axes_metadata[-1].format_label(units)
         ylabel = measurement._scale_axis_from_metadata().format_label()
 
         self.set_xlabel(xlabel)
@@ -277,9 +274,9 @@ class LinesArtist(Artist1D):
     def get_value_limits(self):
         return self.get_ylim()
 
-    def set_data(self, measurement):
-        y = self._reshape_data(measurement.array)
-        x = measurement.base_axes_metadata[-1].coordinates(measurement.shape[-1])
+    def set_data(self, data):
+        y = self._reshape_data(data.array)
+        x = data.base_axes_metadata[-1].coordinates(data.shape[-1])
 
         if len(y.shape) == 1:
             y = y[..., None]
@@ -397,11 +394,12 @@ class Artist2D(Artist):
         self._scale_bar = ScaleBar(ax=self._ax, **kwargs)
 
     def add_area_indicator(self, area_indicator, panel="first", **kwargs):
-        for i, ax in enumerate(np.array(self.axes).ravel()):
-            if panel == "first" and i == 0:
-                area_indicator._add_to_visualization(ax, **kwargs)
-            elif panel == "all":
-                area_indicator._add_to_visualization(ax, **kwargs)
+        raise NotImplementedError
+        # for i, ax in enumerate(np.array(self.axes).ravel()):
+        #     if panel == "first" and i == 0:
+        #         area_indicator._add_to_visualization(ax, **kwargs)
+        #     elif panel == "all":
+        #         area_indicator._add_to_visualization(ax, **kwargs)
 
 
 def default_cbar_scalar_formatter():
@@ -544,7 +542,7 @@ class ImageArtist(Artist2D):
         self.axes_image.set_cmap(cmap)
 
     def set_data(self, data):
-        self.axes_image.set_data(data._array.T)
+        self.axes_image.set_data(data.array.T)
 
     def set_extent(self, extent):
         self.axes_image.set_extent(extent)
@@ -559,6 +557,7 @@ class ImageArtist(Artist2D):
 class ScaledCircleCollection(Collection):
 
     def __init__(self, array, offsets, scale=1.0, threshold: float = 0.0, **kwargs):
+        """ """
         self._scale = scale
         self._threshold = threshold
         self._mask = array > threshold
@@ -762,6 +761,7 @@ class ScatterArtist(Artist2D):
         logscale: bool = False,
         units: str = None,
         scale: float = 0.5,
+        annotations: bool = True,
         annotation_kwargs: dict = None,
         **kwargs,
     ):
@@ -802,19 +802,22 @@ class ScatterArtist(Artist2D):
         self.set_xlabel(x_axis.format_label(units))
         self.set_ylabel(y_axis.format_label(units))
 
-        annotations = []
-        for hkl in measurement.miller_indices:
-            if config.get("visualize.use_tex"):
-                annotation = " \ ".join(
-                    [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
-                )
-                annotations.append(f"${annotation}$")
-            else:
-                annotations.append("{} {} {}".format(*hkl))
+        if annotations:
+            annotations = []
+            for hkl in measurement.miller_indices:
+                if config.get("visualize.use_tex"):
+                    annotation = " \ ".join(
+                        [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
+                    )
+                    annotations.append(f"${annotation}$")
+                else:
+                    annotations.append("{} {} {}".format(*hkl))
 
-        self._annotations = CircleAnnotations(
-            self._circles, annotations, **annotation_kwargs
-        )
+            self._annotations = CircleAnnotations(
+                self._circles, annotations, **annotation_kwargs
+            )
+        else:
+            self._annotations = None
 
         if caxes:
             cbar_label = measurement._scale_axis_from_metadata().format_label()
@@ -834,10 +837,6 @@ class ScatterArtist(Artist2D):
     @property
     def circle_collection(self) -> ScaledCircleCollection:
         return self._circles
-
-    @property
-    def annotations(self):
-        return self._annotations
 
     @property
     def annotations(self) -> list[Annotation]:
@@ -874,6 +873,9 @@ class ScatterArtist(Artist2D):
         self._circles.set_data(intensities, positions)
 
     def set_annotation_kwargs(self, **kwargs):
+        if self._annotations is None:
+            raise ValueError("Annotations are not enabled.")
+
         for k, v in kwargs.items():
             getattr(self._annotations, f"set_{k}")(**{k: v})
 
@@ -920,7 +922,7 @@ class DomainColoringArtist(Artist2D):
         abs_array = np.abs(measurement.array)
         alpha = np.clip(norm(abs_array), a_min=0.0, a_max=1.0)
 
-        extent = get_extent(measurement, units=None)
+        extent = get_extent(measurement, units=units)
 
         cmap = validate_cmap(cmap, measurement)
 
@@ -1004,11 +1006,11 @@ class DomainColoringArtist(Artist2D):
         self._phase_cbar.set_ticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi])
         self._phase_cbar.set_ticklabels(
             [
-                "$-\pi$",
-                "$-\dfrac{\pi}{2}$",
-                "$0$",
-                "$\dfrac{\pi}{2}$",
-                "$\pi$",
+                r"$-\pi$",
+                r"$-\dfrac{\pi}{2}$",
+                r"$0$",
+                r"$\dfrac{\pi}{2}$",
+                r"$\pi$",
             ]
         )
 
@@ -1029,7 +1031,7 @@ class DomainColoringArtist(Artist2D):
         self.phase_axes_image.set_data(np.angle(data._array).T)
         self.amplitude_axes_image.set_data(abs_array.T)
 
-    def set_cbars(self, caxes, label=None, **kwargs):
+    def set_cbars(self, caxes, label: str = None, **kwargs):
         if caxes is None:
             caxes = [None, None]
 
@@ -1048,11 +1050,11 @@ class DomainColoringArtist(Artist2D):
         self._phase_cbar.set_ticks([-np.pi, -np.pi / 2, 0, +np.pi / 2, np.pi])
         self._phase_cbar.set_ticklabels(
             [
-                "$-\pi$",
-                "$-\dfrac{\pi}{2}$",
-                "$0$",
-                "$\dfrac{\pi}{2}$",
-                "$\pi$",
+                r"$-\pi$",
+                r"$-\dfrac{\pi}{2}$",
+                r"$0$",
+                r"$\dfrac{\pi}{2}$",
+                r"$\pi$",
             ]
         )
 

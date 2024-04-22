@@ -49,8 +49,16 @@ _tex_units = {
 
 
 def _format_units(units):
-    if config.get("visualize.use_tex", False):
-        units = _tex_units.get(units, f"\mathrm{{{units}}}")
+    if config.get("visualize.use_tex", False) is True:
+        try:
+            units = _tex_units[units]
+        except KeyError:
+            if units == "%":
+                units = "\mathrm{\%}"
+                # TODO: temporary fix for the percent sign
+            else:
+                units = f"\mathrm{{{units}}}"
+        
         return f"${units}$"
     else:
         return units

@@ -2,24 +2,18 @@
 
 from __future__ import annotations
 
-
 import itertools
 from typing import TYPE_CHECKING
 
-
 import matplotlib
-import matplotlib as mpl
 import matplotlib.colorbar as cbar
 import matplotlib.pyplot as plt
 import numpy as np
-
-
 from ase import Atoms
-from ase.data import covalent_radii, chemical_symbols
+from ase.data import chemical_symbols, covalent_radii
 from ase.data.colors import jmol_colors
 from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
-from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 
@@ -27,36 +21,18 @@ from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
 from abtem.core.utils import label_to_index
 from abtem.visualize.artists import (
-    ImageArtist,
     DomainColoringArtist,
+    ImageArtist,
     LinesArtist,
     ScatterArtist,
-    validate_cmap,
     _get_value_limits,
+    validate_cmap,
 )
-from abtem.visualize.axes_grid import (
-    AxesGrid,
-)
+from abtem.visualize.axes_grid import AxesGrid
 from abtem.visualize.widgets import slider_from_axes_metadata
 
 if TYPE_CHECKING:
     from abtem.measurements import BaseMeasurements
-
-
-def _format_options(options):
-
-    formatted_options = []
-    for option in options:
-        if isinstance(option, float):
-            formatted_options.append(f"{option:.3f}")
-        elif isinstance(option, tuple):
-            formatted_options.append(
-                ", ".join(tuple(f"{value:.3f}" for value in option))
-            )
-        else:
-            formatted_options.append(option)
-
-    return formatted_options
 
 
 def discrete_cmap(num_colors, base_cmap):
@@ -106,7 +82,7 @@ def _make_cax(ax, use_gridspec=True, **kwargs):
         use_gridspec = False
     if (
         use_gridspec
-        and isinstance(ax, mpl.axes._base._AxesBase)
+        and isinstance(ax, matplotlib.axes._base._AxesBase)
         and ax.get_subplotspec()
     ):
         cax, kwargs = cbar.make_axes_gridspec(ax, **kwargs)
@@ -119,6 +95,7 @@ def _make_cax(ax, use_gridspec=True, **kwargs):
 
 
 def _validate_axes_types(overlay, explode, ensemble_dims):
+
     if explode is True:
         explode = tuple(range(ensemble_dims))
     elif explode is False:
@@ -128,6 +105,12 @@ def _validate_axes_types(overlay, explode, ensemble_dims):
         overlay = tuple(range(ensemble_dims))
     elif overlay is False:
         overlay = ()
+
+    if isinstance(explode, int):
+        explode = (explode,)
+
+    if isinstance(overlay, int):
+        overlay = (overlay,)
 
     if len(overlay + explode) > ensemble_dims:
         raise ValueError
@@ -161,7 +144,11 @@ def convert_complex(measurement: BaseMeasurements, method: str) -> BaseMeasureme
     return measurement
 
 
-def _get_artist_type(measurement, complex_conversion):
+def _validate_artist_type(measurement, complex_conversion, artist_type=None):
+
+    if artist_type is not None:
+        return artist_type
+
     if len(measurement.base_shape) == 2:
         if measurement.is_complex and (
             complex_conversion in ("domain_coloring", "none", None)
@@ -173,6 +160,10 @@ def _get_artist_type(measurement, complex_conversion):
         return ScatterArtist
     elif len(measurement.base_shape) == 1:
         return LinesArtist
+    elif artist_type is None:
+        raise ValueError("artist type not recognized")
+    else:
+        return artist_type
 
 
 class Visualization:
@@ -180,6 +171,7 @@ class Visualization:
         self,
         measurement,
         ax: Axes = None,
+        artist_type=None,
         figsize: tuple[int, int] = None,
         aspect: bool = False,
         common_scale: bool = False,
@@ -195,7 +187,7 @@ class Visualization:
         ylim: tuple[float, float] = None,
         **kwargs,
     ):
-        self._measurement = measurement.to_cpu()
+        self._measurement = measurement.to_cpu().compute()
 
         overlay, explode = _validate_axes_types(
             overlay, explode, len(measurement.ensemble_shape)
@@ -213,7 +205,9 @@ class Visualization:
         else:
             fig = ax.get_figure()
 
-        artist_type = _get_artist_type(measurement, complex_conversion="none")
+        artist_type = _validate_artist_type(
+            measurement, complex_conversion="none", artist_type=artist_type
+        )
 
         if cbar:
             ncbars = artist_type.num_cbars
@@ -288,7 +282,7 @@ class Visualization:
 
             self.set_row_titles(row_titles)
 
-        self._make_new_artists(**kwargs)
+        self._make_new_artists(artist_type=artist_type, **kwargs)
 
         self.adjust_coordinate_limits_to_artists(xlim=xlim, ylim=ylim)
 
@@ -544,7 +538,7 @@ class Visualization:
         if mode == "none":
             indices = ()
         else:
-            indices = tuple(self.axes._axis_location_to_indices(mode))
+            indices = tuple(self.axes.axis_location_to_indices(mode))
 
         for index in np.ndindex(self.axes.shape):
             if index in indices:
@@ -575,11 +569,14 @@ class Visualization:
 
     def _make_new_artists(
         self,
+        artist_type=None,
         **kwargs,
     ):
         self.remove_artists()
-        artist_type = _get_artist_type(
-            self.measurement, complex_conversion=self._complex_conversion
+        artist_type = _validate_artist_type(
+            self.measurement,
+            complex_conversion=self._complex_conversion,
+            artist_type=artist_type,
         )
 
         artists = np.zeros(self.axes.shape, dtype=object)
@@ -608,7 +605,7 @@ class Visualization:
         self._artists = artists
 
     def set_artists(self, name, locs: str | tuple[int, ...] = "all", **kwargs):
-        artist_type = _get_artist_type(self._measurement, self._complex_conversion)
+        artist_type = _validate_artist_type(self._measurement, self._complex_conversion)
 
         if not hasattr(artist_type, f"set_{name}"):
             raise RuntimeError(
@@ -619,7 +616,7 @@ class Visualization:
             locs = tuple(i for i in np.ndindex(self.axes.shape))
 
         if isinstance(locs, str):
-            locs = self.axes._axis_location_to_indices(locs)
+            locs = self.axes.axis_location_to_indices(locs)
 
         for i in locs:
             getattr(self.artists[i], f"set_{name}")(**kwargs)
@@ -631,12 +628,13 @@ class Visualization:
         self.set_artists("cbars", locs="all", **kwargs)
 
     def set_complex_conversion(self, complex_conversion: str):
-        self._complex_conversion = complex_conversion
-        artist_type = _get_artist_type(
-            self._measurement, complex_conversion=self._complex_conversion
-        )
-        self.axes.set_cbar_layout(ncbars=artist_type.num_cbars)
-        self.set_artists()
+        raise NotImplementedError()
+        # self._complex_conversion = complex_conversion
+        # artist_type = _validate_artist_type(
+        #     self._measurement, complex_conversion=self._complex_conversion
+        # )
+        # self.axes.set_cbar_layout(ncbars=artist_type.num_cbars)
+        # self.set_artists()
 
     def set_cmap(self, cmap):
         cmap = validate_cmap(cmap, self.measurement, self._complex_conversion)

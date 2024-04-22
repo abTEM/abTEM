@@ -431,12 +431,17 @@ def spatial_frequencies(
 
 
 def polar_spatial_frequencies(
-    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np
+    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np, dtype=None
 ) -> tuple[np.ndarray, np.ndarray]:
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
     phi = xp.arctan2(ky[None], kx[:, None])
+
+    if dtype is not None:
+        k = k.astype(dtype)
+        phi = phi.astype(dtype)
+
     return k, phi
 
 
