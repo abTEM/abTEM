@@ -1050,6 +1050,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = copy_to_device(self.array, device)
+        
         return self.__class__(**kwargs)
 
     def to_cpu(self) -> T:

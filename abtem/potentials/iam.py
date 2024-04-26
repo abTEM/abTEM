@@ -1,4 +1,5 @@
 """Module for describing electrostatic potentials using the independent atom model."""
+
 from __future__ import annotations
 
 import warnings
@@ -303,8 +304,9 @@ class _FieldBuilder(BaseField):
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
         box: tuple[float, float, float] = None,
-        plane: str
-        | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+        plane: (
+            str | tuple[tuple[float, float, float], tuple[float, float, float]]
+        ) = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         periodic: bool = True,
         device: str = None,
@@ -480,8 +482,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         sampling: float | tuple[float, float] = None,
         slice_thickness: float | tuple[float, ...] = 1,
         exit_planes: int | tuple[int, ...] = None,
-        plane: str
-        | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+        plane: (
+            str | tuple[tuple[float, float, float], tuple[float, float, float]]
+        ) = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: tuple[float, float, float] = None,
         periodic: bool = True,
@@ -825,8 +828,9 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
         exit_planes: int | tuple[int, ...] = None,
-        plane: str
-        | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
+        plane: (
+            str | tuple[tuple[float, float, float], tuple[float, float, float]]
+        ) = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: tuple[float, float, float] = None,
         periodic: bool = True,
@@ -1548,3 +1552,6 @@ class CrystalPotential(_PotentialBuilder):
                     yield cum_thickness[stop - 1], slic
                 else:
                     yield slic
+                
+                if i == last_slice:
+                    break

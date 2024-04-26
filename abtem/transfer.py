@@ -11,19 +11,17 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from abtem.core.axes import AxisMetadata, ParameterAxis
-from abtem.core.axes import OrdinalAxis
-from abtem.core.backend import cp
-from abtem.core.backend import get_array_module
+from abtem.core.axes import AxisMetadata, OrdinalAxis, ParameterAxis
+from abtem.core.backend import cp, get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import (
     Accelerator,
-    energy2wavelength,
     HasAcceleratorMixin,
+    energy2wavelength,
     reciprocal_space_sampling_to_angular_sampling,
 )
 from abtem.core.fft import fft_crop
-from abtem.core.grid import HasGridMixin, polar_spatial_frequencies, Grid
+from abtem.core.grid import Grid, HasGridMixin, polar_spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.distributions import (
     BaseDistribution,
@@ -32,7 +30,6 @@ from abtem.distributions import (
 )
 from abtem.measurements import ReciprocalSpaceLineProfiles
 from abtem.transform import ReciprocalSpaceMultiplication
-from abtem.visualize.visualizations import convert_complex
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves

@@ -68,7 +68,6 @@ def format_title(
     units: str = None,
     include_label: bool = True,
 ):
-
     if units:
         value = axes.values[0] * _get_conversion_factor(units, axes.units)
     else:
@@ -84,7 +83,7 @@ def format_title(
         label = f"{axes.label} = "
     else:
         label = ""
-    
+
     if use_tex and (units is not None):
         if axes.tex_units is not None:
             units = f" {axes.tex_units}"

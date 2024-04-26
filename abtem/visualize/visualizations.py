@@ -28,7 +28,7 @@ from abtem.visualize.artists import (
     _get_value_limits,
     validate_cmap,
 )
-from abtem.visualize.axes_grid import AxesGrid
+from abtem.visualize.axes_grid import AxesCollection, AxesGrid
 from abtem.visualize.widgets import slider_from_axes_metadata
 
 if TYPE_CHECKING:
@@ -40,58 +40,6 @@ def discrete_cmap(num_colors, base_cmap):
         base_cmap = plt.get_cmap(base_cmap)
     colors = base_cmap(range(0, num_colors))
     return matplotlib.colors.LinearSegmentedColormap.from_list("", colors, num_colors)
-
-
-def _get_axes_titles(axes_metadata, axes_types, axes_shape):
-    titles = []
-
-    for axis, axis_type, n in zip(axes_metadata, axes_types, axes_shape):
-        if axis_type == "explode":
-            axis_titles = []
-            if hasattr(axis, "__len__"):
-                assert len(axis) == n
-
-                for i, axis_element in enumerate(axis):
-                    title = axis_element.format_title(".3g", include_label=i == 0)
-                    axis_titles.append(title)
-
-            else:
-                axis_titles = [""] * n
-            titles.append(axis_titles)
-
-    titles_product = list(itertools.product(*titles))
-    return titles_product
-
-
-def _make_cax(ax, use_gridspec=True, **kwargs):
-    if ax is None:
-        raise ValueError(
-            "Unable to determine Axes to steal space for Colorbar. "
-            "Either provide the *cax* argument to use as the Axes for "
-            "the Colorbar, provide the *ax* argument to steal space "
-            "from it, or add *mappable* to an Axes."
-        )
-    fig = (  # Figure of first axes; logic copied from make_axes.
-        [*ax.flat] if isinstance(ax, np.ndarray) else [*ax] if np.iterable(ax) else [ax]
-    )[0].figure
-    current_ax = fig.gca()
-    if (
-        fig.get_layout_engine() is not None
-        and not fig.get_layout_engine().colorbar_gridspec
-    ):
-        use_gridspec = False
-    if (
-        use_gridspec
-        and isinstance(ax, matplotlib.axes._base._AxesBase)
-        and ax.get_subplotspec()
-    ):
-        cax, kwargs = cbar.make_axes_gridspec(ax, **kwargs)
-    else:
-        cax, kwargs = cbar.make_axes(ax, **kwargs)
-    # make_axes calls add_{axes,subplot} which changes gca; undo that.
-    fig.sca(current_ax)
-    cax.grid(visible=False, which="both", axis="both")
-    return cax
 
 
 def _validate_axes_types(overlay, explode, ensemble_dims):
@@ -166,6 +114,37 @@ def _validate_artist_type(measurement, complex_conversion, artist_type=None):
         return artist_type
 
 
+def _make_cax(ax, use_gridspec=True, **kwargs):
+    if ax is None:
+        raise ValueError(
+            "Unable to determine Axes to steal space for Colorbar. "
+            "Either provide the *cax* argument to use as the Axes for "
+            "the Colorbar, provide the *ax* argument to steal space "
+            "from it, or add *mappable* to an Axes."
+        )
+    fig = (  # Figure of first axes; logic copied from make_axes.
+        [*ax.flat] if isinstance(ax, np.ndarray) else [*ax] if np.iterable(ax) else [ax]
+    )[0].figure
+    current_ax = fig.gca()
+    if (
+        fig.get_layout_engine() is not None
+        and not fig.get_layout_engine().colorbar_gridspec
+    ):
+        use_gridspec = False
+    if (
+        use_gridspec
+        and isinstance(ax, matplotlib.axes._base._AxesBase)
+        and ax.get_subplotspec()
+    ):
+        cax, kwargs = cbar.make_axes_gridspec(ax, **kwargs)
+    else:
+        cax, kwargs = cbar.make_axes(ax, **kwargs)
+    # make_axes calls add_{axes,subplot} which changes gca; undo that.
+    fig.sca(current_ax)
+    cax.grid(visible=False, which="both", axis="both")
+    return cax
+
+
 class Visualization:
     def __init__(
         self,
@@ -214,6 +193,11 @@ class Visualization:
         else:
             ncbars = 0
 
+        if common_scale:
+            cbar_mode = "single"
+        else:
+            cbar_mode = "each"
+
         if ax is None:
             axes_shape = tuple(
                 n
@@ -222,11 +206,6 @@ class Visualization:
             )
             shape = axes_shape + (0,) * (2 - len(axes_shape))
             ncols, nrows = (max(shape[0], 1), max(shape[1], 1))
-
-            if common_scale:
-                cbar_mode = "single"
-            else:
-                cbar_mode = "each"
 
             axes = AxesGrid(
                 fig=fig,
@@ -240,7 +219,13 @@ class Visualization:
             )
 
         else:
-            axes = np.array([[ax]])
+            axes = np.array([[ax]], dtype=object)
+            caxes = np.zeros_like(axes, dtype=object)
+
+            for i in np.ndindex(axes.shape):
+               caxes[i] = [_make_cax(ax, **kwargs) for i in range(ncbars)] 
+
+            axes = AxesCollection(axes, caxes, cbar_mode=cbar_mode)
 
         self._axes = axes
 
@@ -583,13 +568,13 @@ class Visualization:
         for i in np.ndindex(self.axes.shape):
             ax = self.axes[i]
 
-            if hasattr(self.axes, "_caxes"):
-                caxes = self.axes._caxes[i]
+            # if hasattr(self.axes, "_caxes"):
+            caxes = self.axes._caxes[i]
 
-                if self.axes._cbar_mode == "single" and not i == (0, 0):
-                    caxes = None
-            else:
-                caxes = [_make_cax(ax) for _ in range(artist_type.num_cbars)]
+            if self.axes._cbar_mode == "single" and not i == (0, 0):
+                caxes = None
+            # else:
+            #     caxes = [_make_cax(ax) for _ in range(artist_type.num_cbars)]
 
             measurement = self._reduce_measurement(self._indices, i)
 

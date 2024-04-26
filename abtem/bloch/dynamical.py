@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial
-from typing import Sequence
+from typing import Iterable, Sequence
 
 import dask.array as da
 import numpy as np
@@ -14,6 +14,7 @@ from scipy.spatial.transform import Rotation
 
 from abtem.array import ArrayObject
 from abtem.atoms import is_cell_orthogonal
+from abtem.bloch.indexing import _find_projected_pixel_index
 from abtem.bloch.utils import (
     calculate_g_vec,
     excitation_errors,
@@ -205,7 +206,7 @@ class StructureFactor(BaseStructureFactor):
 
         self._k_max = k_max
 
-        if not cutoff in ("taper", "sharp"):
+        if cutoff not in ("taper", "sharp"):
             raise ValueError("cutoff must be 'taper', 'sharp'")
 
         self._cutoff = cutoff
@@ -868,46 +869,49 @@ class BlochWaves:
     def calculate_exit_wave(
         self,
         thicknesses: float | Sequence[float],
-        gpts: tuple[int, int] = None,
+        gpts: tuple[int, int],
+        extent: tuple[float, float],
         normalization: str = "values",
         lazy: bool = True,
     ):
 
-        hkl = self.hkl
         cell = self.cell
         g_vec = self.g_vec
 
-        if lazy:
-            array = self._calculate_array(thicknesses)
-        else:
-            array = self._calculate_array(thicknesses)
+        array = self._calculate_array(thicknesses)
 
         xp = get_array_module(array)
 
-        if not is_cell_orthogonal(cell):
-            raise NotImplementedError(
-                "Converting non-orthogonal or rotated cells to wave functions is not supported"
-            )
+        # if not is_cell_orthogonal(cell):
+        #     #atoms, transform = orthogonalize_cell(Atoms(cell=cell), return_transform=True)
 
-        if gpts is None:
-            gpts = tuple((hkl[:, :2].max(0) - hkl[:, :2].min(0)) * 2)
+        #     raise NotImplementedError(
+        #         "Converting non-orthogonal or rotated cells to wave functions is not supported"
+        #     )
+        
+        array = self._calculate_array(thicknesses)
+
+        sampling = (1/extent[0], 1/extent[1])
+
+        nm = _find_projected_pixel_index(self.g_vec, gpts, sampling)
+
+        xp = get_array_module(array)
 
         thicknesses1 = xp.asarray(thicknesses)
         array2 = xp.zeros(array.shape[:-1] + gpts, dtype=array.dtype)
-        for i, hkli in enumerate(hkl):
+        for i, nmi in enumerate(nm):
             phase = xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses1)
-            array2[..., hkli[0], hkli[1]] += array[..., i] * phase
+            array2[..., nmi[0], nmi[1]] += array[..., i] * phase
 
-        array = ifft2(array2)
+        array = ifft2(xp.fft.ifftshift(array2, axes=(-2, -1)))
+        # array = ifft2(array2)
 
         if normalization == "values":
             array *= np.prod(gpts)
 
-        sampling = (cell[0, 0] / gpts[0], cell[1, 1] / gpts[1])
-
         waves = Waves(
             array=array,
-            sampling=sampling,
+            extent=extent,
             energy=self.energy,
             ensemble_axes_metadata=[
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
@@ -917,35 +921,26 @@ class BlochWaves:
 
         return waves
 
-    # def calculate_exit_wave(self, thickness, n_steps, shape):
-    #     cell = self._cell
-    #     thicknesses = np.linspace(0, thickness, num=n_steps)
-
-    #     wave_bw = xp.zeros(
-    #         (len(psi_all),) + shape + (np.abs(hkl[:, 2]).max() + 1,), dtype=complex
-    #     )
-
-    #     g = xp.asarray(hkl @ cell.reciprocal())
-
-    #     for i in range(len(psi_all)):
-    #         phase = xp.exp(-2 * np.pi * 1.0j * g[:, 2] * thicknesses[i])
-    #         wave_bw[i, hkl[:, 0], hkl[:, 1], hkl[:, 2]] = psi_all[i] * phase
-
-    #     wave_bw = wave_bw.sum(-1)
-    #     wave_bw = xp.fft.ifft2(wave_bw)
-
-    #     waves = Waves(
-    #         array=wave_bw,
-    #         sampling=(cell[0, 0] / shape[0], cell[1, 1] / shape[1]),
-    #         energy=self.energy,
-    #         ensemble_axes_metadata=[
-    #             ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
-    #         ],
-    #     )
-
-    #     return waves
-
     def rotate(self, *args):
+        if not any(isinstance(arg, Iterable) for arg in args[1::2]):
+            orientation_matrix = np.eye(3)
+            for axes, rotation in zip(args[::2], args[1::2]):
+                R = Rotation.from_euler(axes, rotation).as_matrix()
+                orientation_matrix = orientation_matrix @ R
+
+            bloch = BlochWaves(
+                structure_factor=self.structure_factor,
+                energy=self.energy,
+                sg_max=self.sg_max,
+                k_max=self.k_max,
+                centering=self._centering,
+                orientation_matrix=orientation_matrix,
+                paraxial=self.paraxial,
+                device=self._device,
+            )
+
+            return bloch
+
         ensemble = BlochwaveEnsemble(
             *args,
             structure_factor=self.structure_factor,
@@ -953,6 +948,7 @@ class BlochWaves:
             sg_max=self.sg_max,
             k_max=self.k_max,
             centering=self._centering,
+            paraxial=self.paraxial,
             device=self._device,
         )
         return ensemble
@@ -967,6 +963,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         energy: float,
         sg_max: float,
         k_max: float,
+        paraxial: bool = False,
         centering: str = "P",
         device: str = None,
     ):
@@ -980,6 +977,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._centering = centering
         self._sg_max = sg_max
         self._k_max = k_max
+        self._paraxial = paraxial
         self._device = validate_device(device)
 
     def get_ensemble_hkl_mask(self):
@@ -1032,6 +1030,10 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
     @property
     def k_max(self):
         return self._k_max
+
+    @property
+    def paraxial(self):
+        return self._paraxial
 
     @property
     def sg_max(self):
@@ -1148,6 +1150,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 k_max=self.k_max,
                 orientation_matrix=orientation_matrices[i],
                 centering=self.centering,
+                paraxial=self._paraxial,
                 device=self.device,
             )
 

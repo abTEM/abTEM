@@ -37,7 +37,7 @@ _tex_units = {
     "um": "\mathrm{\mu m}",
     "mm": "\mathrm{mm}",
     "m": "\mathrm{mm}",
-    "1/Å": "\AA^{-1}",
+    "1/Å": "\mathrm{\AA}^{-1}",
     "1/nm": "\mathrm{nm}^{-1}",
     "1/um": "\mathrm{\mu m}^{-1}",
     "1/mm": "\mathrm{mm}^{-1}",
@@ -49,6 +49,7 @@ _tex_units = {
 
 
 def _format_units(units):
+    
     if config.get("visualize.use_tex", False) is True:
         try:
             units = _tex_units[units]

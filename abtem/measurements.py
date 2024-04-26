@@ -18,32 +18,40 @@ from numba import jit, prange
 
 from abtem.array import ArrayObject, stack
 from abtem.core import config
-from abtem.core.axes import (AxisMetadata, LinearAxis, NonLinearAxis,
-                             RealSpaceAxis, ReciprocalSpaceAxis, ScaleAxis,
-                             ScanAxis)
-from abtem.core.backend import (asnumpy, cp, get_array_module,
-                                get_ndimage_module)
+from abtem.core.axes import (
+    AxisMetadata,
+    LinearAxis,
+    NonLinearAxis,
+    RealSpaceAxis,
+    ReciprocalSpaceAxis,
+    ScaleAxis,
+    ScanAxis,
+)
+from abtem.core.backend import asnumpy, cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_crop, fft_interpolate
-from abtem.core.grid import (adjusted_gpts, polar_spatial_frequencies,
-                             spatial_frequencies)
+from abtem.core.grid import (
+    adjusted_gpts,
+    polar_spatial_frequencies,
+    spatial_frequencies,
+)
 from abtem.core.units import _get_conversion_factor, _validate_units
-from abtem.core.utils import (CopyMixin, EqualityMixin, is_broadcastable,
-                              label_to_index, normalize_axes)
+from abtem.core.utils import (
+    CopyMixin,
+    EqualityMixin,
+    is_broadcastable,
+    label_to_index,
+)
 from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
-from abtem.visualize.artists import (DomainColoringArtist, ImageArtist,
-                                     LinesArtist)
 from abtem.visualize.visualizations import Visualization
-from abtem.visualize.widgets import BaseGUI, ImageGUI, LinesGUI, ScatterGUI
+from abtem.visualize.widgets import ImageGUI, LinesGUI, ScatterGUI
 
 # Enables CuPy-accelerated functions if it is available.
 if cp is not None:
-    from abtem.core._cuda import \
-        interpolate_bilinear as interpolate_bilinear_cuda
-    from abtem.core._cuda import \
-        sum_run_length_encoded as sum_run_length_encoded_cuda
+    from abtem.core._cuda import interpolate_bilinear as interpolate_bilinear_cuda
+    from abtem.core._cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
 else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None
@@ -53,7 +61,7 @@ if TYPE_CHECKING:
     from abtem.waves import BaseWaves
 
 # Ensures that `Measurement` objects created by `Measurement` objects retain their type (e.g. `Images`).
-T = TypeVar("T", bound="BaseMeasurement")
+T = TypeVar("T", bound="BaseMeasurements")
 
 
 def _scanned_measurement_type(
@@ -284,7 +292,7 @@ def _polar_detector_bins(
 
 @jit(nopython=True, nogil=True, fastmath=True, parallel=True)
 def _sum_run_length_encoded(array, result, separators):
-    for x in prange(result.shape[1]): # noqa
+    for x in prange(result.shape[1]):  # pylint: disable=not-an-iterable
         for i in range(result.shape[0]):
             for j in range(separators[x], separators[x + 1]):
                 result[i, x] += array[i, j]
@@ -662,7 +670,7 @@ class MeasurementsEnsemble(BaseMeasurements):
         # array = self.array
 
         # # raise RuntimeError("Cannot infer pixel area from metadata.")
-        
+
         # #if display_axes != (-2, -1):
         # #    array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
 
@@ -1462,13 +1470,27 @@ class Images(_BaseMeasurement2D):
 
     def scan_noise(
         self,
-        dwell_time,
-        flyback_time,
-        rms_power,
-        max_frequency=500,
-        num_components=200,
-        seed=None,
+        dwell_time: float,
+        flyback_time: float,
+        rms_power: float,
+        max_frequency: float = 500.0,
+        num_components: int = 200,
+        seed: int = None,
     ):
+        """
+        Apply scan noise to images.
+
+        Parameters
+        ----------
+        dwell_time : float
+            Dwell time of the beam [s].
+        flyback_time : float
+            Flyback time of the beam [s].
+        rms_power : float
+            RMS power of the scan noise [V].
+        max_frequency : float
+            Maximum frequency of the scan noise [1/Å].
+        """
         transform = ScanNoiseTransform(
             dwell_time=dwell_time,
             flyback_time=flyback_time,
@@ -1478,8 +1500,6 @@ class Images(_BaseMeasurement2D):
             seeds=seed,
         )
         return self.apply_transform(transform)
-
-        # new_measurement = apply_scan_noise(  #     self,  #     rms_power=rms_power,  #     max_frequency=max_frequency,  #     dwell_time=dwell_time,  #     flyback_time=flyback_time,  #     num_components=num_components,  # )
 
     def diffractograms(self) -> DiffractionPatterns:
         """
@@ -2283,15 +2303,17 @@ class DiffractionPatterns(_BaseMeasurement2D):
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
         """
-        from abtem.bloch.indexing import (estimate_necessary_excitation_error,
-                                          index_diffraction_spots,
-                                          validate_cell)
-        from abtem.bloch.utils import (filter_reciprocal_space_vectors,
-                                       make_hkl_grid)
+        from abtem.bloch.indexing import (
+            estimate_necessary_excitation_error,
+            index_diffraction_spots,
+            validate_cell,
+        )
+        from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
 
         if orientation_matrices is not None and not is_broadcastable(
             self.ensemble_shape, orientation_matrices.shape[:-2]
         ):
+
             raise ValueError(
                 "The ensemble shape and the shape of the orientation matrices must be broadcastable."
             )
@@ -3758,10 +3780,10 @@ def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
     return np.sqrt(k_max)
 
 
-# @jit(nopython=True, nogil=True, fastmath=True, parallel=True)
+@jit(nopython=True, nogil=True, fastmath=True, parallel=True)
 def reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
 
-    for i in prange(len(hkl)):
+    for i in prange(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = (
             (
                 hkl[i, 0] * reciprocal_lattice_vectors[..., 0, :]
@@ -3815,7 +3837,12 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         metadata: dict = None,
     ):
 
-        # if not reciprocal_lattice_vectors.shape[:-2] == array.shape[:-1]:
+        if len(reciprocal_lattice_vectors.shape) <= len(array.shape):
+            reciprocal_lattice_vectors = reciprocal_lattice_vectors[
+                (None,) * (len(reciprocal_lattice_vectors.shape) - len(array.shape) + 1)
+            ]
+
+        # if not is_broadcastable(array.shape[:-1], reciprocal_lattice_vectors.shape[:-2]):
         #    raise ValueError()
 
         # if not len(miller_indices) == reciprocal_lattice_vectors.shape[-3]:

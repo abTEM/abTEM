@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run fast tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest -m 'not slow'"
+        },
+        {
+            "name": "Run slow tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["-m", "slow"]
+        },
+    ]
+}

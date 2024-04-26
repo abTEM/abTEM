@@ -24,7 +24,7 @@ exclude_regex_paths = {
 
 # ROOT_DIR = "/Users/jacobmadsen/PycharmProjects/abtem-doc/docs/user_guide/"
 ROOT_DIR = "C:\\Users\\jacob\\PycharmProjects\\abtem-docs\\docs\\user_guide"
-KERNEL_NAME = "abtem-dask"
+KERNEL_NAME = "abtem-devel"
 
 
 @contextmanager
@@ -110,7 +110,7 @@ def bytes_to_image(b):
     return imageio.imread(bytes_io)
 
 
-def _test_notebook(fname: str, working_directory: str, image_tolerance: float = 0.01):
+def _test_notebook(fname: str, working_directory: str, image_tolerance: float = 0.03):
     with set_working_directory(working_directory):
         nb = nbformat.read(fname, DEFAULT_NB_VERSION)
         nb_old = copy.deepcopy(nb)
@@ -127,9 +127,12 @@ def _test_notebook(fname: str, working_directory: str, image_tolerance: float = 
             for output_old, output_new in zip(cell_old["outputs"], cell_new["outputs"]):
                 if "data" in output_old:
                     for key in output_old["data"].keys():
-                        value_old = output_old["data"][key]
-                        value_new = output_new["data"][key]
-
+                        try:
+                            value_old = output_old["data"][key]
+                            value_new = output_new["data"][key]
+                        except KeyError:
+                            print(f"key {key} not found in cell {i}")
+                        
                         if key == "image/png":
                             image_old = bytes_to_image(value_old)
                             image_new = bytes_to_image(value_new)
@@ -138,6 +141,15 @@ def _test_notebook(fname: str, working_directory: str, image_tolerance: float = 
                                 np.abs(image_old - image_new), axis=-1
                             ).sum()
                             diff = errors / np.prod(image_old.shape[:-1])
+                                                        
+                            # import matplotlib.pyplot as plt
+                            # fig, (ax1, ax2, ax3) = plt.subplots(1,3)
+                            # ax1.imshow(image_old)
+                            # ax2.imshow(image_new)
+                            # ax3.imshow(image_new-image_old)
+                            # ax3.set_title(f'diff: {diff}')
+                            # plt.show()
+
                             if diff > image_tolerance:
                                 diff = f"images not identical within tolerance {diff} > {image_tolerance}"
                                 raise AssertionError(

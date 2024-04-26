@@ -147,7 +147,8 @@ class Grid(CopyMixin, EqualityMixin):
 
     @extent.setter
     def extent(self, extent: float | Sequence[float]):
-        if self._lock_extent:
+        
+        if self._lock_extent and not np.allclose(extent, self.extent):
             raise RuntimeError("Extent cannot be modified")
 
         extent = self._validate(extent, dtype=float)

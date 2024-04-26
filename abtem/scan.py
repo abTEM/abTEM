@@ -1,4 +1,5 @@
 """Module for describing different types of scans."""
+
 from __future__ import annotations
 
 import itertools

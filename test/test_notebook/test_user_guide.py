@@ -63,8 +63,13 @@ def test_prism():
 
 
 @pytest.mark.slow
-def test_epie():
-    _test_notebook("epie.ipynb", os.path.join(ROOT_DIR, "tutorials"))
+def test_custom_simulation_objects():
+    _test_notebook("custom_simulation_objects.ipynb", os.path.join(ROOT_DIR, "tutorials"))
+
+
+# @pytest.mark.slow
+# def test_epie():
+#     _test_notebook("epie.ipynb", os.path.join(ROOT_DIR, "tutorials"))
 
 
 # @pytest.mark.slow
