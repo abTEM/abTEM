@@ -16,7 +16,7 @@ from abtem.core.utils import label_to_index
 axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
 
 
-def euler_sequence(axes: str, convention: str):
+def euler_sequence(axes: str, convention: str) -> tuple[int, int, int, int]:
     """
     Parameters
     ----------
@@ -24,7 +24,6 @@ def euler_sequence(axes: str, convention: str):
         Specifies the order of rotation axes. It should be a string representing a valid combination of the letters 'x',
         'y', and 'z' in any order. For example, 'xyz' represents a sequence of rotations about the x-axis, y-axis,
         and z-axis in that order.
-
     convention : str
         Specifies the convention used for the Euler angles. It should be either 'intrinsic' or 'static' for rotations
         applied to a fixed frame or 'extrinsic' or 'rotating' for rotations applied to a rotating frame.
@@ -79,7 +78,7 @@ def euler_sequence(axes: str, convention: str):
     return sequences[axes]
 
 
-def plane_to_axes(plane: str) -> tuple:
+def plane_to_axes(plane: str) -> tuple[int, ...]:
     """
     Convert string representation of Cartesian axes to numerical.
 
@@ -260,7 +259,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
 
 def rotation_matrix_to_euler(
     R: np.ndarray, axes: str = "xyz", convention: str = "intrinsic", eps: float = 1e-6
-):
+) -> tuple[float, float, float]:
     """
     Convert a Cartesian rotation matrix to Euler angles.
 
@@ -317,7 +316,7 @@ def rotation_matrix_to_euler(
 
 def euler_to_rotation(
     ai: float, aj: float, ak: float, axes: str = "xyz", convention: str = "intrinsic"
-):
+) -> np.ndarray:
     """
     Convert sequence of Euler angles to Cartesian rotation matrix.
 
@@ -517,7 +516,9 @@ def wrap_with_tolerance(atoms: Atoms, tol: float = 1e-6) -> Atoms:
     return atoms
 
 
-def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
+def shrink_cell(
+    atoms: Atoms, repetitions: tuple[int, int] = (2, 3), tol: float = 1e-6
+) -> Atoms:
     """
     Find and return the smallest non-repeating cell for the given atoms.
 
@@ -560,7 +561,7 @@ def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
 
 def rotation_matrix_from_plane(
     plane: str | tuple[tuple[float, float, float] | tuple[float, float, float]] = "xy"
-):
+) -> np.ndarray:
     """
     Give the rotation matrix corresponding to a rotation from a given plane to the `xy` plane.
 
