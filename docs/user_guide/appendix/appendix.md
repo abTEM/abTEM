@@ -1,5 +1,0 @@
-# Appendix
-
-```{contents}
-:local:
-```
