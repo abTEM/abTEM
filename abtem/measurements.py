@@ -2301,7 +2301,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Orientation matrices used for indexing the diffraction spots. The shape of the orientation matrices must be
             broadcastable with the ensemble shape of the diffraction patterns.
         sg_max : float, optional
-            Maximum excitation error [Å] of the indexed diffraction spots The default is estimated from the energy and `k_max`.
+            Maximum excitation error [1/Å] of the indexed diffraction spots The default is estimated from the energy and `k_max`.
         k_max : float, optional
             Maximum scattering vector [1/Å] of the indexed diffraction spots. The default is the maximum frequency of the diffraction
             patterns.

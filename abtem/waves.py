@@ -286,7 +286,7 @@ class Waves(BaseWaves, ArrayObject):
     extent : one or two float
         Extent of wave functions in `x` and `y` [Å].
     sampling : one or two float
-        Sampling of wave functions in `x` and `y` [1 / Å].
+        Sampling of wave functions in `x` and `y` [Å].
     reciprocal_space : bool, optional
         If True, the wave functions are assumed to be represented in reciprocal space instead of real space (default is
         False).
@@ -1281,7 +1281,7 @@ class PlaneWave(_WavesBuilder):
     gpts : two int, optional
         Number of grid points describing the wave function.
     sampling : two float, optional
-        Lateral sampling of the wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of the wave functions [Å]. If 'gpts' is also given, will be ignored.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     normalize : bool, optional
@@ -1466,7 +1466,7 @@ class Probe(_WavesBuilder):
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be ignored.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     soft : float, optional

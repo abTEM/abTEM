@@ -764,7 +764,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     energy : float
         Electron energy [eV].
     sampling : one or two float, optional
-        Lateral sampling of wave functions [1 / Å]. Provide only if potential is not given. Will be ignored if 'gpts'
+        Lateral sampling of wave functions [Å]. Provide only if potential is not given. Will be ignored if 'gpts'
         is also provided.
     extent : one or two float, optional
         Lateral extent of wave functions [Å]. Provide only if potential is not given.
@@ -1348,7 +1348,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     gpts : one or two int, optional
         Number of grid points describing the scattering matrix. Provide only if potential is not given.
     sampling : one or two float, optional
-        Lateral sampling of scattering matrix [1 / Å]. Provide only if potential is not given. Will be ignored if 'gpts'
+        Lateral sampling of scattering matrix [Å]. Provide only if potential is not given. Will be ignored if 'gpts'
         is also provided.
     extent : one or two float, optional
         Lateral extent of scattering matrix [Å]. Provide only if potential is not given.
@@ -2048,7 +2048,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         lazy = _validate_lazy(lazy)
 
         if ctf is None:
-            ctf = CTF()
+            ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)
 
         if self.device == "gpu" and disable_s_matrix_chunks == "auto":
             disable_s_matrix_chunks = True
@@ -2067,10 +2067,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             scan = _validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
-
+            
             chunks = ()
             drop_axis = ()
-            if self.potential.ensemble_shape == ():
+            if not self.ensemble_shape:
                 drop_axis = (0,)
                 new_axis = tuple_range(offset=0, length=len(scan.shape) + len(ctf.ensemble_shape))
             else:

@@ -6,7 +6,7 @@ from abtem.waves import PlaneWave
 import pytest
 
 
-@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('lazy', [True, False], ids=['lazy', 'eager'])
 @pytest.mark.parametrize('projection', ['infinite', 'finite'])
 @pytest.mark.parametrize('integral_space', ['real', 'fourier'])
 def test_fig_5_12(projection, lazy, integral_space):

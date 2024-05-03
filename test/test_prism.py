@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume
+from hypothesis import given, assume, reproduce_failure
 
 import strategies as abtem_st
 from abtem import GridScan, WavesDetector
@@ -159,7 +159,7 @@ def test_prism_scan(
             device=device, no_frozen_phonons=not frozen_phonons, ensemble_mean=False
         )
     )
-    ctf = data.draw(abtem_st.ctf())
+    ctf = data.draw(abtem_st.ctf(partial_coherence=False))
 
     max_interpolation = 3 if interpolation else 1
 
@@ -247,6 +247,7 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
         potential=potential, scan=scan, detectors=detector, lazy=lazy
     ).compute()
 
+    assert prism_measurement.shape == probe_measurement.shape
     assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
 
 

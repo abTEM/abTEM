@@ -1163,7 +1163,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1/Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be ignored.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
     """
