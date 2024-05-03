@@ -40,6 +40,9 @@ from abtem.measurements import IndexedDiffractionPatterns
 from abtem.parametrizations import validate_parametrization
 from abtem.potentials.iam import PotentialArray
 from abtem.waves import Waves
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import pdist
+from abtem.core.utils import label_to_index
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
@@ -831,8 +834,10 @@ class BlochWaves:
         return array
 
     def calculate_diffraction_patterns(
-        self, thicknesses, return_complex: bool = False, lazy: bool = True
+        self, thicknesses, return_complex: bool = False, lazy: bool = True, tol=np.inf
     ):
+
+        thicknesses = np.array(thicknesses, dtype=float)
 
         if not hasattr(thicknesses, "__len__"):
             thicknesses = [thicknesses]
@@ -845,6 +850,29 @@ class BlochWaves:
         hkl = self.structure_factor.hkl[self.hkl_mask]
         array = self._calculate_array(thicknesses)
         reciprocal_lattice_vectors = self.cell.reciprocal()
+
+        xp = get_array_module(array)
+        
+        if not tol == np.inf:
+            g_vec = self.g_vec
+            clusters = fcluster(
+                linkage(pdist(g_vec[:, :2]), method="complete"), tol, criterion="distance"
+            )
+            
+            thicknesses = xp.asarray(thicknesses)
+            new_array = xp.zeros_like(array, shape=array.shape[:-1] + (clusters.max(),))
+            new_hkl = np.zeros_like(hkl, shape=(clusters.max(), 3))
+            for i, cluster in enumerate(label_to_index(clusters, min_label=1)):
+                
+                #new_array[:, i] = (array[:, cluster] * xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses)[:, None])[:, 0]
+                new_array[:, i] = array[:, cluster].sum(-1)
+                
+                j = np.argmin(np.abs(excitation_errors(g_vec[cluster], self.energy)))
+                
+                new_hkl[i] = hkl[cluster][j]
+            
+            array = new_array
+            hkl = new_hkl
 
         if len(ensemble_axes_metadata) == 0:
             array = array[0]
@@ -1137,7 +1165,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         )
 
         xp = get_array_module(self.device)
-        array = xp.zeros(shape, dtype=np.float32)
+        array = xp.zeros(shape, dtype=get_dtype(complex=return_complex))
 
         # lil_matrix((np.prod(shape[:-1]), shape[-1]))
 
@@ -1164,7 +1192,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses, return_complex=return_complex, lazy=False
             )
 
-            diffraction_patterns = diffraction_patterns.to_cpu()
+            #diffraction_patterns = diffraction_patterns.to_cpu()
 
             array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
 
@@ -1178,7 +1206,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             pbar.update_if_exists(1)
 
         pbar.close_if_exists()
-
+        
         return array
 
     def _lazy_calculate_diffraction_patterns(self, thicknesses, return_complex, pbar):
@@ -1207,6 +1235,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         out_ind = tuple(range(len(shape)))
 
+        xp = get_array_module(self.device)
+        
         out = da.blockwise(
             _run_calculate_diffraction_patterns,
             out_ind,
@@ -1219,7 +1249,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             new_axes={out_ind[-2]: shape[-2], out_ind[-1]: shape[-1]},
             pbar=pbar,
             concatenate=True,
-            dtype=config.get("precision"),
+            meta=xp.zeros(shape, dtype=get_dtype(complex=return_complex)),
         )
         return out, hkl_mask
 

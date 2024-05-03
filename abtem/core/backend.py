@@ -46,7 +46,7 @@ def xp_to_str(xp):
     if xp is cp:
         return "cupy"
 
-    raise ValueError(f"array module must be NumPy or CuPy")
+    raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
 
 
 def validate_device(device):
@@ -56,7 +56,21 @@ def validate_device(device):
     return device
 
 
-def get_array_module(x):
+def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
+    """
+    Get the array module (NumPy or CuPy) for a given array or string.
+
+    Parameters
+    ----------
+    x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
+        The array or string to get the array module for. If None, the default device is used.
+    
+    Returns
+    -------
+    numpy or cupy
+        The array module.
+    """
+
     if x is None:
         return get_array_module(config.get("device"))
 
@@ -134,7 +148,22 @@ def asnumpy(array):
     return cp.asnumpy(array)
 
 
-def copy_to_device(array, device:str):
+def copy_to_device(array: np.ndarray, device: str):
+    """
+    Copy an array to a different device (CPU or GPU) using CuPy.
+
+    Parameters
+    ----------
+    array : numpy.ndarray
+        The array to copy.
+    device : str
+        The device to copy to. Either 'cpu' or 'gpu'.
+
+    Returns
+    -------
+    numpy.ndarray or cupy.ndarray
+        The array copied to the specified device.
+    """
     old_xp = get_array_module(array)
     new_xp = get_array_module(device)
 
@@ -152,4 +181,4 @@ def copy_to_device(array, device:str):
     if new_xp is cp:
         return cp.asarray(array)
 
-    raise RuntimeError()
+    raise RuntimeError("Invalid device specified")

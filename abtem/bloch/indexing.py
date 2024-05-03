@@ -38,24 +38,22 @@ def estimate_necessary_excitation_error(energy, k_max):
     return sg
 
 
-def filter_by_threshold(arrays, values, threshold) -> tuple[np.ndarray, ...]:
-    mask = values < threshold
-    shape = None
-    out = ()
-    for array in arrays:
-        if shape is not None:
-            if shape[0] != array.shape[0]:
-                raise ValueError()
-
-        shape = array.shape
-        out += (array[mask],)
-
-    return out
-
-
 def validate_cell(
     cell: Atoms | Cell | float | tuple[float, float, float]
 ) -> np.ndarray:
+    """ 
+    Validate the cell input.
+    
+    Parameters:
+    ----------
+    cell : Atoms | Cell | float | tuple[float, float, float]
+        The unit cell of the crystal structure.
+    
+    Returns:
+    --------
+    np.ndarray
+        The validated cell.
+    """
     if isinstance(cell, Atoms):
         cell = cell.cell
 
@@ -77,7 +75,10 @@ def prefix_indices(shape):
     )
 
 
-def overlapping_spots_mask(nm, sg):
+def overlapping_spots_mask(nm: np.ndarray, sg: np.ndarray) -> np.ndarray:
+    """
+    Create a mask for overlapping diffraction spots. Spots with the same h and k indices are considered overlapping.
+    """
     mask = np.zeros(nm.shape[:-1], dtype=bool)
     order = np.argsort(np.abs(sg), axis=-1)
     order_reverse = np.argsort(order, axis=-1)
@@ -92,6 +93,67 @@ def overlapping_spots_mask(nm, sg):
     return mask
 
 
+def create_ellipse(a: int, b: int) -> np.ndarray:
+    """
+    Create an ellipse with semi-major and semi-minor axes.
+
+    Parameters:
+    ----------
+    a : int
+        The semi-major axis of the ellipse.
+    b : int
+        The semi-minor axis of the ellipse.
+
+    Returns:
+    --------
+    np.ndarray
+        The ellipse.
+    """
+    y, x = np.ogrid[-a : a + 1, -b : b + 1]
+    a, b = max(a, 1), max(b, 1)
+    return x**2 / b**2 + y**2 / a**2 <= 1
+
+
+def integrate_ellipse_around_pixels(
+    array: np.ndarray, nm: np.ndarray, a: int, b: int
+) -> np.npndarray:
+    """
+    Integrate an ellipse around pixels in an array.
+
+    Parameters:
+    ----------
+    array : np.ndarray
+        The input array containing diffraction spot intensities.
+    nm : np.ndarray
+        The pixel coordinates of the diffraction spots.
+    a : int
+        The semi-major axis of the ellipse.
+    b : int
+        The semi-minor axis of the ellipse.
+
+    Returns:
+    --------
+    np.ndarray
+        The integrated intensities around the pixels.
+    """
+    ellipse = create_ellipse(a, b)
+    structure = np.array(tuple(i - n for i, n in zip(np.where(ellipse), (a, b)))).T
+
+    intensities = np.zeros_like(array, shape=array.shape[:-2] + (nm.shape[-2],))
+    for i in range(nm.shape[-2]):
+        nms = nm[..., i, :] - structure[(None,) * len(nm.shape[:-2])]
+        nms = nms[
+            (nms >= 0).all(-1)
+            * (nms[..., 0] < array.shape[-2])
+            * (nms[..., 1] < array.shape[-1])
+        ]
+        intensities[..., i] = array[
+            prefix_indices(array.shape[:-2]) + (nms[:, 0], nms[:, 1])
+        ].sum((-1,))
+
+    return intensities
+
+
 def index_diffraction_spots(
     array: np.ndarray,
     hkl,
@@ -99,6 +161,7 @@ def index_diffraction_spots(
     cell: Atoms | Cell | float | tuple[float, float, float],
     energy: float,
     orientation_matrices: np.ndarray = None,
+    radius: float = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Indexes diffraction spots in an array.
@@ -146,10 +209,15 @@ def index_diffraction_spots(
     nm = _find_projected_pixel_index(g_vec, array.shape[-2:], sampling)
     intensities = array[prefix_indices(array.shape[:-2]) + (nm[..., 0], nm[..., 1])]
 
+    if radius is not None:
+
+        a, b = tuple(int(np.round(radius / d)) for d in sampling)
+        intensities = integrate_ellipse_around_pixels(array, nm, a, b)
+
     sg = excitation_errors(g_vec, energy)
 
     mask = overlapping_spots_mask(nm, sg)
-    
+
     intensities = intensities * mask
 
     return intensities
