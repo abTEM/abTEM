@@ -772,7 +772,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Number of grid points in `x` and `y` describing each slice of the potential. Provide either "sampling" (spacing
         between consecutive grid points) or "gpts" (total number of grid points).
     sampling : one or two float, optional
-        Sampling of the potential in `x` and `y` [1 / Å]. Provide either "sampling" or "gpts".
+        Sampling of the potential in `x` and `y` [Å]. Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
         Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
         If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
@@ -1058,6 +1058,8 @@ class FieldArray(BaseField, ArrayObject):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+
 
 
 class PotentialArray(BasePotential, FieldArray):
@@ -1552,6 +1554,6 @@ class CrystalPotential(_PotentialBuilder):
                     yield cum_thickness[stop - 1], slic
                 else:
                     yield slic
-                
+
                 if i == last_slice:
                     break
