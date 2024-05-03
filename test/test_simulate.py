@@ -108,9 +108,6 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
     assert exit_waves.gpts == potential.gpts
 
 
-# @reproduce_failure('6.80.0', b'AXicY2BAAkwwBqNFAwNhwEqacrhqQkwgAACZyAF9')
-# @reproduce_failure("6.96.4", b"AXicY2BAAoxwhkUDA2HASoJyRkIKiNKKnQkEAOBNAX0=")
-# @reproduce_failure("6.96.4", b"AXicY2BAAoxwhkUDA2HASoJyRkIKiNNLwBjsKlE1AQAgawF/")
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])

@@ -1,4 +1,5 @@
 """Module describing the scattering matrix used in the PRISM algorithm."""
+
 from __future__ import annotations
 import inspect
 import operator
@@ -30,13 +31,15 @@ from abtem.core.utils import (
     expand_dims_to_broadcast,
     ensure_list,
     CopyMixin,
-    EqualityMixin, tuple_range,
+    EqualityMixin,
+    tuple_range,
 )
 from abtem.detectors import (
     BaseDetector,
     _validate_detectors,
     WavesDetector,
-    FlexibleAnnularDetector, AnnularDetector,
+    FlexibleAnnularDetector,
+    AnnularDetector,
 )
 from abtem.measurements import BaseMeasurements
 from abtem.multislice import (
@@ -204,7 +207,7 @@ class BaseSMatrix(BaseWaves):
         -------
         dummy_probes : Probes
         """
-
+        
         if ctf is None:
             ctf = CTF(energy=self.energy, semiangle_cutoff=self.semiangle_cutoff)
         elif isinstance(ctf, dict):
@@ -224,9 +227,10 @@ class BaseSMatrix(BaseWaves):
                 defocus = self.metadata["accumulated_defocus"]
 
             ctf.defocus = ctf.defocus - defocus
-
-        ctf.semiangle_cutoff = min(ctf.semiangle_cutoff, self.semiangle_cutoff)
-
+        
+        if ctf.semiangle_cutoff is None:
+            ctf.semiangle_cutoff = self.semiangle_cutoff
+        
         default_kwargs = {"device": self.device, "metadata": {**self.metadata}}
         kwargs = {**default_kwargs, **kwargs}
 
@@ -332,7 +336,6 @@ def _lazy_reduce(
         scan, ctf, detectors, max_batch_reduction
     )
 
-
     arr = np.zeros((1,) * (len(array.shape) - 1), dtype=object)
     arr.itemset(measurements)
     return arr
@@ -421,7 +424,9 @@ def _multiple_rechunk_reduce(s_matrix_array, scan, detectors, ctf, max_batch_red
 
     scan, scan_chunks = scan._sort_into_extents(chunk_extents)
 
-    scans = [(indices, scan.item()) for indices, _, scan in scan.generate_blocks(scan_chunks)]
+    scans = [
+        (indices, scan.item()) for indices, _, scan in scan.generate_blocks(scan_chunks)
+    ]
 
     partitions = (pad_amounts[chunked_axis][0],) + partitions[chunked_axis]
     partitions = partitions + (
@@ -692,9 +697,6 @@ def _no_chunks_reduce(
     ctf: CTF,
     max_batch_reduction: int,
 ):
-    array = s_matrix_array._array.rechunk(
-        s_matrix_array.array.chunks[:-3] + (-1, -1, -1)
-    )
 
     kwargs = {
         "waves_partial": s_matrix_array.waves._from_partitioned_args(),
@@ -705,27 +707,33 @@ def _no_chunks_reduce(
         "max_batch_reduction": max_batch_reduction,
     }
 
+    array = s_matrix_array.array
+
     ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
 
     chunks = array.chunks[:-3] + ctf_chunks + scan.shape
 
-    if len(scan.shape) == 1:
-        drop_axis = (len(array.shape) - 3, len(array.shape) - 1)
-    elif len(scan.shape) == 2:
-        drop_axis = (len(array.shape) - 3,)
-    else:
-        raise NotImplementedError
+    drop_axis = (len(array.shape) - 3, len(array.shape) - 2, len(array.shape) - 1)
+
+    new_axis = tuple(
+        i
+        for i in range(
+            len(array.shape) - 3,
+            len(array.shape) - 3 + len(scan.shape) + len(ctf_chunks),
+        )
+    )
 
     array = da.map_blocks(
         _lazy_reduce,
         array,
         scan=scan,
         drop_axis=drop_axis,
+        new_axis=new_axis,
         chunks=chunks,
         **kwargs,
         meta=np.array((), dtype=np.complex64),
     )
-
+    
     dummy_probes = s_matrix_array.dummy_probes(scan=scan, ctf=ctf)
 
     measurements = _finalize_lazy_measurements(
@@ -1029,7 +1037,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     ) -> tuple[BaseMeasurements | Waves, ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
-        #print(self.waves.ensemble_axes_metadata[:-1])
 
         measurements = allocate_multislice_measurements(
             dummy_probes,
@@ -1037,7 +1044,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             extra_ensemble_axes_shape=self.waves.ensemble_shape[:-1],
             extra_ensemble_axes_metadata=self.waves.ensemble_axes_metadata[:-1],
         )
-
+        
         xp = get_array_module(self._device)
 
         if self._device == "gpu" and isinstance(self.waves.array, np.ndarray):
@@ -1192,7 +1199,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         max_batch_reduction: int | str = "auto",
         reduction_scheme: str = "auto",
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
-
         """
         Scan the probe across the potential and record a measurement for each detector.
 
@@ -1698,9 +1704,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             ]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
-            waves.metadata[
-                "adjusted_antialias_cutoff_gpts"
-            ] = waves.antialias_cutoff_gpts
+            waves.metadata["adjusted_antialias_cutoff_gpts"] = (
+                waves.antialias_cutoff_gpts
+            )
 
             waves = waves.downsample(
                 gpts=s_matrix.downsampled_gpts,
@@ -1844,7 +1850,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks: bool = "auto",
         lazy: bool = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
-
         """
         Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
         to obtain the exit wave functions at given initial probe positions and aberrations.
@@ -1995,7 +2000,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         disable_s_matrix_chunks: bool = "auto",
         lazy: bool = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
-
         """
         Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
         to obtain the exit wave functions at given initial probe positions and aberrations.
@@ -2043,6 +2047,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         lazy = _validate_lazy(lazy)
 
+        if ctf is None:
+            ctf = CTF()
+
         if self.device == "gpu" and disable_s_matrix_chunks == "auto":
             disable_s_matrix_chunks = True
         elif disable_s_matrix_chunks == "auto":
@@ -2060,14 +2067,17 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             scan = _validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
-            chunks = blocks.chunks + scan.shape
 
-            new_axis = tuple_range(offset=len(blocks.shape), length=len(scan.shape))
+            chunks = ()
             drop_axis = ()
-            if len(self.ensemble_shape) == 0:
+            if self.potential.ensemble_shape == ():
                 drop_axis = (0,)
-                chunks = chunks[1:]
-                new_axis = tuple_range(offset=len(blocks.shape) - 1, length=len(scan.shape))
+                new_axis = tuple_range(offset=0, length=len(scan.shape) + len(ctf.ensemble_shape))
+            else:
+                chunks += blocks.chunks
+                new_axis = tuple_range(offset=len(blocks.shape), length=len(scan.shape) + len(ctf.ensemble_shape))
+
+            chunks += ctf.ensemble_shape + scan.shape
 
             arrays = blocks.map_blocks(
                 self._lazy_build_s_matrix_detect,
@@ -2079,17 +2089,19 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 detectors=detectors,
                 meta=np.array((), dtype=object),
             )
-
+            
             waves = self.build(lazy=True).dummy_probes(scan=scan)
 
             extra_axes_metadata = []
             if self.potential is not None:
                 extra_axes_metadata = self.potential.ensemble_axes_metadata
 
+            extra_axes_metadata = extra_axes_metadata + ctf.ensemble_axes_metadata
+
             measurements = _finalize_lazy_measurements(
                 arrays, waves, detectors, extra_axes_metadata
             )
-
+            
             return _wrap_measurements(measurements)
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)

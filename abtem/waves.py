@@ -1574,6 +1574,9 @@ class Probe(_WavesBuilder):
 
     @classmethod
     def _from_ctf(cls, ctf, **kwargs):
+        if (ctf.angular_spread != 0.0) or (ctf.focal_spread != 0.0):
+            raise ValueError("The CTF should have a zero focal or angular spread.")
+
         return cls(
             semiangle_cutoff=ctf.semiangle_cutoff,
             soft=ctf.soft,

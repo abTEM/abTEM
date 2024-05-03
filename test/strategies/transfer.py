@@ -79,6 +79,6 @@ def ctf(draw, allow_distribution=True):
     return CTF(
         **draw(aberrations(allow_distribution=allow_distribution)).aberration_coefficients,
         semiangle_cutoff=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
-        angular_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
-        focal_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
+        angular_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=False)),
+        focal_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=False)),
         energy=draw(core_st.energy()))

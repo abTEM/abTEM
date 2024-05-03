@@ -1,7 +1,6 @@
 from __future__ import annotations
 import warnings
-from copy import copy
-from typing import Union, Sequence, Iterable, Any
+from typing import Sequence, Iterable, Any
 
 import numpy as np
 
@@ -53,7 +52,7 @@ class Grid(CopyMixin, EqualityMixin):
     gpts : two int
         Number of grid points in each dimension.
     sampling : two float
-        Grid sampling in each dimension [1 / Å].
+        Grid sampling in each dimension [Å].
     dimensions : int
         Number of dimensions represented by the grid.
     endpoint : bool
@@ -147,7 +146,7 @@ class Grid(CopyMixin, EqualityMixin):
 
     @extent.setter
     def extent(self, extent: float | Sequence[float]):
-        
+
         if self._lock_extent and not np.allclose(extent, self.extent):
             raise RuntimeError("Extent cannot be modified")
 

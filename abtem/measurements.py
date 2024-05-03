@@ -2281,11 +2281,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def index_diffraction_spots(
         self,
         cell: Cell | float | tuple[float, float, float],
-        orientation_matrices: np.ndarray = None,
         sg_max: float = None,
         k_max: float = None,
-        energy: float = None,
+        orientation_matrices: np.ndarray = None,
+        radius: float = None,
         centering: str = "P",
+        energy: float = None,
+        
     ) -> IndexedDiffractionPatterns:
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
@@ -2295,8 +2297,20 @@ class DiffractionPatterns(_BaseMeasurement2D):
         cell : ase.cell.Cell or float or tuple of float
             The assumed unit cell with respect to the diffraction pattern should be indexed. Must be one of ASE `Cell`
             object, float (for a cubic unit cell) or three floats (for orthorhombic unit cells).
+        orientation_matrices : np.ndarray, optional
+            Orientation matrices used for indexing the diffraction spots. The shape of the orientation matrices must be
+            broadcastable with the ensemble shape of the diffraction patterns.
+        sg_max : float, optional
+            Maximum excitation error [Å] of the indexed diffraction spots The default is estimated from the energy and `k_max`.
+        k_max : float, optional
+            Maximum scattering vector [1/Å] of the indexed diffraction spots. The default is the maximum frequency of the diffraction
+            patterns.
+        radius : float, optional
+            Integration Radius of the diffraction spots [1/Å]. The default is the reciprocal-space sampling of the diffraction patterns.
         centering : {'P', 'F', 'I', 'A', 'B', 'C'}
             Assumed lattice centering used for determining the reflection conditions.
+        energy : float, optional
+            The energy of the electrons [keV]. The default is the energy stored in the metadata.
 
         Returns
         -------
@@ -2351,6 +2365,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 cell=cell,
                 energy=energy,
                 orientation_matrices=orientation_matrices,
+                radius=radius,
                 drop_axis=len(self.array.shape) - 1,
                 chunks=self.array.chunks[:-2] + (hkl.shape[0],),
                 meta=np.array((), dtype=self.dtype),
@@ -2362,6 +2377,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sampling=self.sampling,
                 cell=cell,
                 energy=energy,
+                radius=radius,
                 orientation_matrices=orientation_matrices,
             )
 
@@ -3971,6 +3987,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         kwargs["reciprocal_lattice_vectors"] = self.reciprocal_lattice_vectors[
             new_items
         ]
+        
         return self.__class__(**kwargs)
 
     def remove_low_intensity(self, threshold: float = 1e-3):
