@@ -420,14 +420,17 @@ class ScatterGUI(BaseGUI):
             "value",
         )
 
-        annotation_threshold = visualization.artists[0, 0].annotations.threshold
-        self.annotations_slider.value = annotation_threshold
-        self.annotations_slider.observe(
-            lambda change: visualization.set_artists(
-                "annotation_kwargs", threshold=change["new"]
-            ),
-            "value",
-        )
+        if visualization.artists[0, 0].annotations is not None:
+            annotation_threshold = visualization.artists[0, 0].annotations.threshold
+            self.annotations_slider.value = annotation_threshold
+            self.annotations_slider.observe(
+                lambda change: visualization.set_artists(
+                    "annotation_kwargs", threshold=change["new"]
+                ),
+                "value",
+            )
+        else:
+            self.annotations_slider.disabled = True
 
         def dropdown_changed(change):
             cmap = None if change["new"] == "default" else change["new"]
