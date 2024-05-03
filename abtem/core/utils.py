@@ -1,4 +1,5 @@
 """Module for various convenient utilities."""
+
 from __future__ import annotations
 
 import copy
@@ -132,16 +133,23 @@ def insert_empty_axis(match_axis1, match_axis2):
             break
 
 
-def normalize_axes(axes, shape):
+def normalize_axes(
+    axes: tuple[int, ...] | int, shape: tuple[int, ...]
+) -> tuple[int, ...]:
     """
     Normalize the axes tuple so that all axes are non-negative.
 
-    Parameters:
-    - shape: The shape of the numpy array (as returned by np.shape())
-    - axes: A tuple or integer representing the axes. Can contain negative indices.
+    Parameters
+    ----------
+    axes : tuple
+        The axes to normalize.
+    shape : tuple
+        The shape of the array.
 
-    Returns:
-    - A tuple with normalized axes.
+    Returns
+    -------
+    tuple
+        The normalized axes tuple.
     """
     ndim = len(shape)
 
@@ -169,11 +177,11 @@ def _get_dims_to_broadcast(
     match_dims[0] = normalize_axes(match_dims[0], arr1.shape)
     match_dims[1] = normalize_axes(match_dims[1], arr2.shape)
 
-    match_axis1 = [not i in match_dims[0] for i in range(len(arr1.shape))]
-    match_axis2 = [not i in match_dims[1] for i in range(len(arr2.shape))]
+    match_axis1 = [i not in match_dims[0] for i in range(len(arr1.shape))]
+    match_axis2 = [i not in match_dims[1] for i in range(len(arr2.shape))]
 
     last_length = len(match_axis1) + len(match_axis2)
-    for i in range(last_length):
+    for _ in range(last_length):
         insert_empty_axis(match_axis1, match_axis2)
 
         if len(match_axis1) + len(match_axis2) == last_length:
@@ -197,7 +205,26 @@ def expand_dims_to_broadcast(
     arr2: np.ndarray,
     match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
     broadcast: bool = False,
-):
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Expand the dimensions of two arrays to make them broadcastable.
+
+    Parameters
+    ----------
+    arr1 : np.ndarray
+        The first array.
+    arr2 : np.ndarray
+        The second array.
+    match_dims : list, optional
+        A list of two tuples, each containing the dimensions that should match (i.e. not be broadcasted) between the two arrays.
+    broadcast : bool, optional
+        If True, broadcast the arrays to the same shape, otherwise only expand the dimensions. Defaults to False.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the expanded arrays.
+    """
     xp = get_array_module(arr1)
 
     axis1, axis2 = _get_dims_to_broadcast(arr1, arr2, match_dims)
@@ -217,15 +244,29 @@ def tuple_range(length: int, offset: int = 0) -> tuple[int, ...]:
     return tuple(range(offset, offset + length))
 
 
-def interleave(l1: list | tuple, l2: list | tuple):
+def interleave(l1: list | tuple, l2: list | tuple) -> list | tuple:
+    """Interleave two lists or tuples."""
     return tuple(val for pair in zip(l1, l2) for val in pair)
 
 
-def flatten_list_of_lists(l):
-    return list(itertools.chain(*l))
+def flatten_list_of_lists(lst) -> list:
+    """Flatten a list of lists into a single list."""
+    return list(itertools.chain(*lst))
 
 
-def label_to_index(labels, max_label=None):
+def label_to_index(labels, max_label=None, min_label=0):
+    """
+    Returns a generator that yields indices for each label in the labels array.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        An array of integers.
+    max_label : int, optional
+        The assumed maximum label in the array. If None, the maximum the array is used.
+    min_label : int, optional
+        The assumed minimum label in the array. Defaults to 0.
+    """
     if max_label is None:
         max_label = np.max(labels)
 
@@ -234,7 +275,7 @@ def label_to_index(labels, max_label=None):
     labels_order = labels.argsort()
     sorted_labels = labels[labels_order]
     indices = xp.arange(0, len(labels) + 1)[labels_order]
-    index = xp.arange(0, max_label + 1)
+    index = xp.arange(min_label, max_label + 1)
     lo = xp.searchsorted(sorted_labels, index, side="left")
     hi = xp.searchsorted(sorted_labels, index, side="right")
     for i, (l, h) in enumerate(zip(lo, hi)):
@@ -246,16 +287,26 @@ def get_data_path(file):
     return os.path.join(this_file, "data")
 
 
-def get_dtype(complex):
+def get_dtype(complex: bool = False) -> np.dtype:
+    """
+    Get the numpy dtype from the config precision setting.
+
+    Parameters
+    ----------
+    complex : bool, optional
+        If True, return a complex dtype. Defaults to False.
+    """
     dtype = config.get("precision")
 
     if dtype == "float32" and complex:
-        return np.complex64
+        dtype = np.complex64
     elif dtype == "float32":
-        return np.float32
+        dtype = np.float32
     elif dtype == "float64" and complex:
-        return np.complex128
+        dtype = np.complex128
     elif dtype == "float64":
-        return np.float64
+        dtype = np.float64
     else:
-        raise RuntimeError("")
+        raise RuntimeError(f"Invalid dtype: {dtype}")
+
+    return dtype
