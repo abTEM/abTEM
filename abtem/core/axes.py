@@ -133,7 +133,7 @@ class AxisMetadata:
     def format_title(self, *args, **kwargs):
         return f"{self.label}"
 
-    def item_metadata(self, item):
+    def item_metadata(self, item, metadata=None):
         return {}
 
     def to_ordinal_axis(self, n):
@@ -314,7 +314,7 @@ class OrdinalAxis(AxisMetadata):
             except TypeError:
                 raise ValueError()
 
-    def item_metadata(self, item):
+    def item_metadata(self, item, metadata=None):
         return {self.label: self.values[item]}
 
     def __getitem__(self, item):
@@ -374,9 +374,17 @@ class AxisAlignedTiltAxis(NonLinearAxis):
         elif self.direction == "y":
             values = tuple((0.0, value) for value in self.values)
         else:
-            raise RuntimeError()
-
+            raise RuntimeError(f"Invalid tilt direction {self.direction}")
+        
         return values
+
+    def item_metadata(self, item, metadata=None):
+        key = f"base_tilt_{self.direction}"
+        new_metadata = {key: self.values[item]}
+        if metadata is not None and key in metadata:
+            new_metadata[key] += metadata[key]
+
+        return new_metadata
 
     _ensemble_mean: bool = False
 
@@ -399,6 +407,9 @@ class TiltAxis(OrdinalAxis):
 
     def format_title(self, formatting, include_label: bool = True, **kwargs):
         return format_title(self, formatting, units=None, include_label=include_label)
+
+    def item_metadata(self, item, metadata=None):
+        return {f"base_tilt_x": self.values[0][item], f"base_tilt_y": self.values[1][item]}
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

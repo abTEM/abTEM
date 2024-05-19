@@ -72,9 +72,10 @@ def _apply_tilt_to_fresnel_propagator_array(
     xp = get_array_module(array)
     tilt = xp.array(tilt)
 
-    remove_first_dim = False
+    squeeze = False
     if tilt.shape == (2,):
-        remove_first_dim = True
+        squeeze = True
+        tilt = tilt[None]
 
     kx, ky = spatial_frequencies(array.shape[-2:], sampling, xp=xp)
     kx, ky = kx[None, :, None], ky[None, None]
@@ -89,7 +90,7 @@ def _apply_tilt_to_fresnel_propagator_array(
 
     array = tilt * array
 
-    if remove_first_dim:
+    if squeeze:
         array = array[0]
 
     return array
@@ -156,13 +157,12 @@ class FresnelPropagator:
         xp = get_array_module(waves.device)
 
         tilt_axes = _get_tilt_axes(waves)
-
         if not tilt_axes:
             return array
 
-        for axis in waves.ensemble_axes_metadata:
+        for axis in reversed(waves.ensemble_axes_metadata):
             if hasattr(axis, "tilt"):
-                tilt = xp.array(axis.tilt)
+                tilt = xp.asarray(axis.tilt)
                 array = _apply_tilt_to_fresnel_propagator_array(
                     array, sampling=waves.sampling, tilt=tilt, thickness=thickness
                 )

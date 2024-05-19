@@ -838,7 +838,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for item, expanded_axes_metadata in zip(items, expanded_axes_metadatas):
             last_indexed += 1
             if isinstance(item, Number):
-                metadata = {**metadata, **expanded_axes_metadata.item_metadata(item)}
+                metadata = {**metadata, **expanded_axes_metadata.item_metadata(item, self.metadata)}
             else:
                 try:
                     axes_metadata += [expanded_axes_metadata[item].copy()]
