@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 
 def _validate_detectors(
-    detectors: BaseDetector | list[BaseDetector],
+    detectors: BaseDetector | list[BaseDetector], waves=None
 ) -> list[BaseDetector]:
     if hasattr(detectors, "detect"):
         detectors = [detectors]
@@ -50,7 +50,12 @@ def _validate_detectors(
         raise RuntimeError(
             "Detectors must be AbstractDetector or list of AbstractDetector."
         )
-
+    
+    if waves is not None:
+        for detector in detectors:
+            if hasattr(detector, "_match_waves"):
+                detector._match_waves(waves)
+    
     return detectors
 
 

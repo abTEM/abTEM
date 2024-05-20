@@ -191,9 +191,13 @@ class BaseSMatrix(BaseWaves):
         ]
 
     def dummy_probes(
-        self, scan: BaseScan = None, ctf: CTF = None, plane: str = "entrance", **kwargs
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        plane: str = "entrance",
+        downsample: bool = True,
+        **kwargs,
     ) -> Probe:
-        # TODO
         """
         A probe or an ensemble of probes equivalent reducing the SMatrix at a single position.
 
@@ -207,7 +211,7 @@ class BaseSMatrix(BaseWaves):
         -------
         dummy_probes : Probes
         """
-        
+
         if ctf is None:
             ctf = CTF(energy=self.energy, semiangle_cutoff=self.semiangle_cutoff)
         elif isinstance(ctf, dict):
@@ -227,16 +231,24 @@ class BaseSMatrix(BaseWaves):
                 defocus = self.metadata["accumulated_defocus"]
 
             ctf.defocus = ctf.defocus - defocus
-        
+
         if ctf.semiangle_cutoff is None:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-        
+
         default_kwargs = {"device": self.device, "metadata": {**self.metadata}}
         kwargs = {**default_kwargs, **kwargs}
 
+        if downsample:
+            window_gpts = self.window_gpts
+        else:
+            window_gpts = (
+                safe_ceiling_int(self.gpts[0] / self.interpolation[0]),
+                safe_ceiling_int(self.gpts[1] / self.interpolation[1]),
+            )
+
         probes = Probe._from_ctf(
             extent=self.window_extent,
-            gpts=self.window_gpts,
+            gpts=window_gpts,
             ctf=ctf,
             energy=self.energy,
             **kwargs,
@@ -733,7 +745,7 @@ def _no_chunks_reduce(
         **kwargs,
         meta=np.array((), dtype=np.complex64),
     )
-    
+
     dummy_probes = s_matrix_array.dummy_probes(scan=scan, ctf=ctf)
 
     measurements = _finalize_lazy_measurements(
@@ -1044,7 +1056,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             extra_ensemble_axes_shape=self.waves.ensemble_shape[:-1],
             extra_ensemble_axes_metadata=self.waves.ensemble_axes_metadata[:-1],
         )
-        
+
         xp = get_array_module(self._device)
 
         if self._device == "gpu" and isinstance(self.waves.array, np.ndarray):
@@ -1244,7 +1256,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             scan, Probe._from_ctf(extent=self.extent, ctf=ctf, energy=self.energy)
         )
 
-        detectors = _validate_detectors(detectors)
+        detectors = detectors = _validate_detectors(
+            detectors, self.dummy_probes(downsample=False)
+        )
 
         max_batch_reduction = self._validate_max_batch_reduction(
             scan, max_batch_reduction
@@ -2040,7 +2054,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             The detected measurement (if detector(s) given).
         """
 
-        detectors = _validate_detectors(detectors)
+        detectors = _validate_detectors(detectors, self.dummy_probes(downsample=False))
 
         if scan is None:
             scan = (self.extent[0] / 2, self.extent[1] / 2)
@@ -2067,15 +2081,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             scan = _validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
-            
+
             chunks = ()
             drop_axis = ()
             if not self.ensemble_shape:
                 drop_axis = (0,)
-                new_axis = tuple_range(offset=0, length=len(scan.shape) + len(ctf.ensemble_shape))
+                new_axis = tuple_range(
+                    offset=0, length=len(scan.shape) + len(ctf.ensemble_shape)
+                )
             else:
                 chunks += blocks.chunks
-                new_axis = tuple_range(offset=len(blocks.shape), length=len(scan.shape) + len(ctf.ensemble_shape))
+                new_axis = tuple_range(
+                    offset=len(blocks.shape),
+                    length=len(scan.shape) + len(ctf.ensemble_shape),
+                )
 
             chunks += ctf.ensemble_shape + scan.shape
 
@@ -2089,7 +2108,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 detectors=detectors,
                 meta=np.array((), dtype=object),
             )
-            
+
             waves = self.build(lazy=True).dummy_probes(scan=scan)
 
             extra_axes_metadata = []
@@ -2101,7 +2120,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             measurements = _finalize_lazy_measurements(
                 arrays, waves, detectors, extra_axes_metadata
             )
-            
+
             return _wrap_measurements(measurements)
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
