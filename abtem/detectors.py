@@ -1,4 +1,5 @@
 """Module for describing the detection of transmitted waves and different detector types."""
+
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -14,6 +15,7 @@ from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
+from abtem.core.units import units_type
 from abtem.measurements import (
     DiffractionPatterns,
     PolarMeasurements,
@@ -568,16 +570,22 @@ class _AbstractRadialDetector(BaseDetector):
         """
 
         if waves is not None:
-            if gpts is not None or sampling is not None or energy is not None:
+            if (gpts is not None) or (sampling is not None) or (energy is not None):
                 raise ValueError(
                     "provide either waves or 'gpts', 'sampling' and 'energy'"
                 )
             segmented_regions = self.get_detector_regions(waves)
             diffraction_patterns = segmented_regions.to_diffraction_patterns(waves.gpts)
 
-        elif energy is None:
-            raise ValueError("provide the waves or the energy of waves")
         else:
+            if units_type[kwargs["units"]] == "reciprocal_space":
+                if energy is None:
+                    raise ValueError(
+                        "energy or waves must be provided when using real space units"
+                    )
+            elif energy is None:
+                energy = 100e3
+
             if gpts is None:
                 gpts = 1024
 
@@ -617,7 +625,7 @@ class _AbstractRadialDetector(BaseDetector):
                 offset=(0.0, 0.0),
                 return_indices=False,
             )
-            
+
             regions = regions.astype(np.float32)
             regions[..., regions < 0] = np.nan
 
@@ -645,6 +653,8 @@ class _AbstractRadialDetector(BaseDetector):
 
         if "units" not in kwargs:
             kwargs["units"] = "mrad"
+
+        diffraction_patterns.metadata["energy"] = energy
 
         return diffraction_patterns.show(**kwargs)
 
