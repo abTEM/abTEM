@@ -1,5 +1,7 @@
 from abtem.waves import PlaneWave
 import numpy as np
+from abtem import Potential
+import ase
 
 
 def test_tilt():
@@ -8,6 +10,14 @@ def test_tilt():
     planewave3 = PlaneWave(energy=80e3, tilt=(100, 0), extent=10, gpts=64)
     tilt = np.array([[100.0, 0.0], [0.0, 0.0]])
     planewave4 = PlaneWave(energy=80e3, tilt=tilt, extent=10, gpts=64)
+
+    atoms = ase.build.bulk("Si", cubic=True)
+
+    potential = Potential(
+        atoms,
+        sampling=0.1,
+        slice_thickness=atoms.cell[2, 2] / 2,
+    )
 
     wave1 = planewave1.multislice(potential).compute()
     wave2 = planewave2.multislice(potential).compute()

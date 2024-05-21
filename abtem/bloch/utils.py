@@ -83,9 +83,9 @@ def get_reflection_condition(hkl: np.ndarray, centering: str):
     ----------
     hkl : np.ndarray
         Array of shape (N, 3) representing the Miller indices of reflections.
-    centering : str
-        The lattice centering type. Must be one of "P", "I", "F", "A", "B", or "C".
-
+    centering : {'P', 'I', 'A', 'B', 'C', 'F'}
+        Lattice centering.     
+    
     Returns
     -------
     np.ndarray
