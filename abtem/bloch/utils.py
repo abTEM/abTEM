@@ -35,7 +35,7 @@ def reciprocal_space_gpts(
     # assert len(k_max) == 3
 
     dk = np.linalg.norm(reciprocal_cell(cell), axis=1)
-
+    
     gpts = (
         int(np.ceil(k_max / dk[0])) * 2 + 1,
         int(np.ceil(k_max / dk[1])) * 2 + 1,
@@ -64,10 +64,29 @@ def make_hkl_grid(
     return hkl
 
 
-def excitation_errors(g, energy, paraxial=False):
+def excitation_errors(
+    g: np.ndarray, energy: float, use_wave_eq: bool = False
+) -> np.ndarray:
+    """
+    Calculate excitation errors for a set of reciprocal space vectors.
+
+    Parameters
+    ----------
+    g : np.ndarray
+        Reciprocal space vectors [1/Å], as an array of shape (N, 3).
+    energy : float
+        Electron energy [eV].
+    use_wave_eq : bool, optional
+        Whether to use the excitation errors derived from the wave equation. Default is False.
+
+    Returns
+    -------
+    np.ndarray
+        Excitation errors [1/Å].  
+    """
     assert g.shape[-1] == 3
     wavelength = energy2wavelength(energy)
-    if paraxial:
+    if use_wave_eq:
         sg = (-2 * g[..., 2] - wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)) / 2.0
     else:
         sg = (-2 * g[..., 2] - wavelength * np.sum(g * g, axis=-1)) / 2.0
@@ -84,8 +103,8 @@ def get_reflection_condition(hkl: np.ndarray, centering: str):
     hkl : np.ndarray
         Array of shape (N, 3) representing the Miller indices of reflections.
     centering : {'P', 'I', 'A', 'B', 'C', 'F'}
-        Lattice centering.     
-    
+        Lattice centering.
+
     Returns
     -------
     np.ndarray
@@ -160,7 +179,7 @@ def filter_reciprocal_space_vectors(
     g_length = np.linalg.norm(g, axis=-1)
 
     if orientation_matrices is None:
-        mask = np.abs(excitation_errors(g, energy, paraxial=False)) < sg_max
+        mask = np.abs(excitation_errors(g, energy, use_wave_eq=False)) <= sg_max
 
     else:
         if len(orientation_matrices.shape) == 2:
@@ -179,6 +198,6 @@ def filter_reciprocal_space_vectors(
 
     mask *= get_reflection_condition(hkl, centering)
 
-    mask *= g_length < k_max
+    mask *= g_length <= k_max
 
     return mask

@@ -88,7 +88,7 @@ def calculate_scattering_factors(
         alpha = 1 - 0.05
         cutoff = 1 / (1 + np.exp((g_unique / k_max - alpha) / T))
     elif cutoff == "hard":
-        cutoff = g_unique > k_max
+        cutoff = g_unique <= k_max
     else:
         raise ValueError("cutoff must be 'taper' or 'hard'")
 
@@ -357,8 +357,8 @@ class StructureFactor(BaseStructureFactor):
 
         self._k_max = k_max
 
-        if cutoff not in ("taper", "sharp"):
-            raise ValueError("cutoff must be 'taper', 'sharp'")
+        if cutoff not in ("taper", "hard"):
+            raise ValueError("cutoff must be 'taper', 'hard'")
 
         self._cutoff = cutoff
         self._parametrization = validate_parametrization(parametrization)
@@ -699,11 +699,12 @@ def calculate_M_matrix(hkl: np.ndarray, cell: Cell, energy: float) -> np.ndarray
 
 
 def calculate_structure_matrix(
-    hkl: np.ndarray,
+    hkl_selected: np.ndarray,
     cell: Cell | np.ndarray,
     energy: float,
     structure_factor: np.ndarray,
-    paraxial: bool = False,
+    hkl: np.ndarray,
+    use_wave_eq: bool = False,
 ) -> np.ndarray:
     """
     Calculate the structure matrix for a given set of reciprocal space vectors.
@@ -716,10 +717,6 @@ def calculate_structure_matrix(
         The unit cell.
     energy : float
         The energy of the electrons [eV].
-    structure_factor : np.ndarray
-        The structure factors as a 1D array. The length of the array must be the same as the number of hkl vectors.
-    paraxial : bool
-        If True, the paraxial approximation is used.
 
     Returns
     -------
@@ -728,28 +725,61 @@ def calculate_structure_matrix(
     """
     xp = get_array_module(structure_factor)
 
-    g = xp.asarray(calculate_g_vec(hkl, cell))
+    g = xp.asarray(calculate_g_vec(hkl_selected, cell))
 
-    Mii = calculate_M_matrix(hkl, cell, energy)
-    hkl = xp.asarray(hkl)
+    Mii = calculate_M_matrix(hkl_selected, cell, energy)
+    hkl_selected = xp.asarray(hkl_selected)
 
-    gmh = hkl[None] - hkl[:, None]
+    gmh = hkl_selected[None] - hkl_selected[:, None]
 
-    potential_prefactor = energy2sigma(energy) / (
-        kappa * energy2wavelength(energy) * np.pi
-    )
+    structure_factor = {
+        (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
+    }
 
-    A = structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]] * potential_prefactor
+    A = np.array(
+        [structure_factor[(h, k, l)] for h, k, l in gmh.reshape(-1, 3)]
+    ).reshape((len(hkl_selected),) * 2)
+
+    assert np.allclose(A, A.conj().T)
+
+    prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
+
+    A = A * prefactor
+    # A = structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]] #* potential_prefactor
 
     Mii = xp.asarray(Mii)
-    A *= Mii[None] * Mii[:, None]
+    #A *= Mii[None] * Mii[:, None]
 
-    sg = xp.asarray(excitation_errors(g, energy, paraxial=paraxial))
+    sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
-    diag *= Mii
+    #diag *= Mii
 
     xp.fill_diagonal(A, diag)
     return A
+
+
+def calculate_dynamical_scattering(structure_matrix, hkl, cell, energy, thicknesses):
+    xp = get_array_module(structure_matrix)
+
+    Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
+
+    v, C = xp.linalg.eigh(A)
+    gamma = v * energy2wavelength(energy) / 2.0
+
+    np.fill_diagonal(C, np.diag(C) / Mii)
+
+    C_inv = xp.conjugate(C.T)
+
+    initial = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
+    initial = xp.asarray(initial)
+
+    array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
+
+    for i, thickness in enumerate(thicknesses):
+        alpha = C_inv @ initial
+        array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
+
+    return array
 
 
 def expm(A: np.ndarray) -> np.ndarray:
@@ -1121,11 +1151,12 @@ class BlochWaves:
         structure_factor = self.structure_factor.build(lazy=lazy)
 
         A = calculate_structure_matrix(
-            hkl=hkl,
+            hkl_selected=hkl,
             cell=self.cell,
             energy=self.energy,
-            structure_factor=structure_factor.to_3d_array(),
-            paraxial=self.paraxial,
+            structure_factor=structure_factor.array,
+            hkl=structure_factor.hkl,
+            use_wave_eq=self.use_wave_eq,
         )
         return A
 
@@ -1270,7 +1301,7 @@ class BlochWaves:
         extent: tuple[float, float],
         normalization: str = "values",
         lazy: bool = True,
-    ):
+    ) -> Waves:
         """
         Calculate the exit waves for a given set of thicknesses.
 
@@ -1339,7 +1370,7 @@ class BlochWaves:
 
         return waves
 
-    def rotate(self, *args, units: float = "rad"):
+    def rotate(self, *args, degrees: bool = False):
         """
         Rotate the unit cell by a given set of Euler angles.
 
@@ -1348,8 +1379,8 @@ class BlochWaves:
         args : sequence of (str, float)
             The rotation axes and angles. The axes must be given as a string of 'x', 'y' or 'z',
             representing a sequence of rotation axes.
-        units : {'rad', 'deg'}
-            The units of the angles. Default is 'rad'.
+        degrees : bool
+            If True, the angles are given in degrees. Default is False.
 
         Examples
         --------
@@ -1384,6 +1415,7 @@ class BlochWaves:
         BlochWavesEnsemble
             The rotated Bloch waves ensemble.
         """
+
         if not any(isinstance(arg, Iterable) for arg in args[1::2]):
             orientation_matrix = np.eye(3)
             for axes, rotation in zip(args[::2], args[1::2]):
@@ -1397,7 +1429,7 @@ class BlochWaves:
                 k_max=self.k_max,
                 centering=self._centering,
                 orientation_matrix=orientation_matrix,
-                paraxial=self.paraxial,
+                use_wave_eq=self.use_wave_eq,
                 device=self._device,
             )
 
@@ -1410,7 +1442,7 @@ class BlochWaves:
             sg_max=self.sg_max,
             k_max=self.k_max,
             centering=self._centering,
-            paraxial=self.paraxial,
+            use_wave_eq=self.use_wave_eq,
             device=self._device,
         )
         return ensemble
