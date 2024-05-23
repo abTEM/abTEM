@@ -323,11 +323,11 @@ def euler_to_rotation(
     Parameters
     ----------
     ai : float
-        First Euler angle.
+        First Euler angle [rad].
     aj : float
-        Second Euler angle.
+        Second Euler angle [rad].
     ak : float
-        Third Euler angle.
+        Third Euler angle [rad].
     axes : str, optional
         String representation of the axes of rotation. Default is "xyz".
     convention : str, optional
