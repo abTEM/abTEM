@@ -40,31 +40,14 @@ from abtem.potentials.iam import _PotentialBuilder, Potential, PotentialArray
 
 try:
     from gpaw import GPAW
-    from gpaw.lfc import LFC, BasisFunctions
-    from gpaw.transformers import Transformer
-    from gpaw.utilities import unpack2
-    from gpaw.atom.aeatom import AllElectronAtom
-    from gpaw.io import Reader
-    from gpaw.density import RealSpaceDensity
-    from gpaw.mpi import SerialCommunicator
-    from gpaw.grid_descriptor import GridDescriptor
-    from gpaw.utilities import unpack_atomic_matrices
-    from gpaw.atom.shapefunc import shape_functions
-
-    if TYPE_CHECKING:
-        from gpaw.setup import Setups
-except:
+except ImportError:
     GPAW = None
-    LFC = None
-    BasisFunctions = None
-    Transformer = None
-    unpack2 = None
-    Setups = None
-    AllElectronAtom = None
-    Reader = None
-    SerialCommunicator = None
-    GridDescriptor = None
-    unpack_atomic_matrices = None
+
+
+if GPAW is not None:
+    from gpaw.atom.aeatom import AllElectronAtom
+    from gpaw.mpi import SerialCommunicator
+    from gpaw.atom.shapefunc import shape_functions
 
 
 def _get_gpaw_setups(atoms, mode, xc):
