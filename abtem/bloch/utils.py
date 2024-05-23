@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import itertools
 from numbers import Number
+from typing import Sequence
 
 import numpy as np
 from numba import njit, prange
@@ -9,15 +11,18 @@ from abtem.core.energy import energy2wavelength
 from ase.cell import Cell
 
 
-def reciprocal_cell(cell):
+def reciprocal_cell(cell: np.ndarray | Cell) -> np.ndarray:
+    if isinstance(cell, Cell):
+        return cell.reciprocal()
+
     return np.linalg.pinv(cell).transpose()
 
 
-def calculate_g_vec(hkl: np.ndarray, cell):
-    return hkl @ cell.reciprocal()
+def calculate_g_vec(hkl: np.ndarray, cell: np.ndarray | Cell) -> np.ndarray:
+    return hkl @ reciprocal_cell(cell)
 
 
-def calculate_g_vec_length(hkl: np.ndarray, cell):
+def calculate_g_vec_length(hkl: np.ndarray, cell: np.ndarray | Cell) -> np.ndarray:
     return np.linalg.norm(calculate_g_vec(hkl, cell), axis=-1)
 
 
@@ -25,21 +30,68 @@ def hkl_strings_to_array(hkl):
     return np.array([tuple(map(int, hkli.split(" "))) for hkli in hkl])
 
 
+def generate_linear_combinations(
+    vectors: np.array, coefficients: Sequence[int], exclude_zero: bool = False
+):
+    """
+    Generate all possible linear combinations of the given vectors with the given coefficients.
+
+    Parameters
+    ----------
+    vectors : np.array
+        Array of vectors.
+    coefficients : sequence of int
+        Coefficients to use in the linear combinations.
+    exclude_zero : bool, optional
+        Whether to exclude the zero vector from the output.
+    
+    Returns
+    -------
+    np.array
+        Array of linear combinations.
+    """
+    combinations = [
+        sum(c * v for c, v in zip(coef_comb, vectors))
+        for coef_comb in itertools.product(coefficients, repeat=len(vectors))
+    ]
+    combinations = np.array(combinations)
+    if exclude_zero:
+        combinations = combinations[(combinations == 0).all(axis=1) == 0]
+    return combinations
+
+
+def get_shortest_g_vec_length(cell: Cell):
+    """
+    Get the length of the shortest reciprocal space vector in the given unit cell.
+
+    Parameters
+    ----------
+    cell : Cell
+        Unit cell.
+    
+    Returns
+    -------
+    float
+        Length of the shortest reciprocal space vector [1/Å].
+    """
+    coefficients = [-1, 0, 1]
+    combinations = generate_linear_combinations(
+        cell.reciprocal(), coefficients, exclude_zero=True
+    )
+    return np.min(np.linalg.norm(combinations, axis=1))
+
+
 def reciprocal_space_gpts(
     cell: np.ndarray,
     k_max: float,
 ) -> tuple[int, int, int]:
-    # if isinstance(k_max, Number):
-    #    k_max = (k_max,) * 3
 
-    # assert len(k_max) == 3
+    dk = get_shortest_g_vec_length(cell)
 
-    dk = np.linalg.norm(reciprocal_cell(cell), axis=1)
-    
     gpts = (
-        int(np.ceil(k_max / dk[0])) * 2 + 1,
-        int(np.ceil(k_max / dk[1])) * 2 + 1,
-        int(np.ceil(k_max / dk[2])) * 2 + 1,
+        int(np.ceil(k_max / dk)) * 2 + 1,
+        int(np.ceil(k_max / dk)) * 2 + 1,
+        int(np.ceil(k_max / dk)) * 2 + 1,
     )
     return gpts
 
@@ -51,7 +103,7 @@ def make_hkl_grid(
 ) -> np.ndarray:
     gpts = reciprocal_space_gpts(cell, k_max)
 
-    freqs = tuple(np.fft.fftfreq(n, d=1 / n).astype(int) for n in gpts)
+    freqs = tuple(np.fft.fftshift(np.fft.fftfreq(n, d=1 / n).astype(int)) for n in gpts)
 
     freqs = tuple(freqs[axis] for axis in axes)
 
@@ -61,6 +113,7 @@ def make_hkl_grid(
     hkl = hkl.reshape((-1, len(axes)))
     g_vec = calculate_g_vec(hkl, cell)
     hkl = hkl[(g_vec**2).sum(-1) <= k_max**2]
+    
     return hkl
 
 
@@ -82,7 +135,7 @@ def excitation_errors(
     Returns
     -------
     np.ndarray
-        Excitation errors [1/Å].  
+        Excitation errors [1/Å].
     """
     assert g.shape[-1] == 3
     wavelength = energy2wavelength(energy)

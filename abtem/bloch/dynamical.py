@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from ast import Not
 import warnings
 from abc import ABCMeta, abstractmethod
+from ast import Not
 from functools import partial
 from typing import Iterable, Sequence
 
@@ -10,7 +10,9 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.linalg import expm as expm_scipy
+from scipy.spatial.distance import pdist
 from scipy.spatial.transform import Rotation
 
 from abtem.array import ArrayObject
@@ -35,15 +37,12 @@ from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_interpolate, ifft2
 from abtem.core.grid import Grid
-from abtem.core.utils import CopyMixin, flatten_list_of_lists, get_dtype
+from abtem.core.utils import CopyMixin, flatten_list_of_lists, get_dtype, label_to_index
 from abtem.distributions import validate_distribution
 from abtem.measurements import IndexedDiffractionPatterns
 from abtem.parametrizations import validate_parametrization
 from abtem.potentials.iam import PotentialArray
 from abtem.waves import Waves
-from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.spatial.distance import pdist
-from abtem.core.utils import label_to_index
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
@@ -155,7 +154,7 @@ def calculate_structure_factors(
     hkl = xp.asarray(hkl.T, get_dtype(complex=False))
 
     struct_factors = xp.sum(
-        f_e * xp.exp(-2.0j * np.pi * positions[:] @ hkl),
+        f_e * xp.exp(2.0j * np.pi * positions[:] @ hkl),
         axis=0,
     )
 
@@ -548,6 +547,9 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         """Number of reciprocal space grid points for 3D structure factors."""
         return reciprocal_space_gpts(self.cell, self.k_max)
 
+    def to_dict(self) -> dict:
+        return {(h, k, l): value for (h, k, l), value in zip(self.hkl, self.array)}
+
     def to_3d_array(self) -> np.ndarray:
         """
         Convert the 1D structure factors to 3D structure factors.
@@ -699,11 +701,11 @@ def calculate_M_matrix(hkl: np.ndarray, cell: Cell, energy: float) -> np.ndarray
 
 
 def calculate_structure_matrix(
+    structure_factor: np.ndarray,
+    hkl: np.ndarray,
     hkl_selected: np.ndarray,
     cell: Cell | np.ndarray,
     energy: float,
-    structure_factor: np.ndarray,
-    hkl: np.ndarray,
     use_wave_eq: bool = False,
 ) -> np.ndarray:
     """
@@ -711,12 +713,18 @@ def calculate_structure_matrix(
 
     Parameters
     ----------
+    structure_factor : np.ndarray
+        The structure factors as a 1D array.
     hkl : np.ndarray
-        The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
+        The reciprocal space vectors as Miller indices corresponding to the structure factors. Given as a (N, 3) array.
+    hkl_selected : np.ndarray
+        The reciprocal space vectors as Miller indices for which the structure matrix is calculated. Given as a (N, 3) array.
     cell : Cell
         The unit cell.
     energy : float
         The energy of the electrons [eV].
+    use_wave_eq : bool
+        If True, the Bloch wave equation derived from the wave equation is used. Otherwise standard Bloch wave is used.
 
     Returns
     -------
@@ -737,7 +745,7 @@ def calculate_structure_matrix(
     }
 
     A = np.array(
-        [structure_factor[(h, k, l)] for h, k, l in gmh.reshape(-1, 3)]
+        [structure_factor.get((h, k, l), 0.0) for h, k, l in gmh.reshape(-1, 3)]
     ).reshape((len(hkl_selected),) * 2)
 
     assert np.allclose(A, A.conj().T)
@@ -748,22 +756,50 @@ def calculate_structure_matrix(
     # A = structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]] #* potential_prefactor
 
     Mii = xp.asarray(Mii)
-    #A *= Mii[None] * Mii[:, None]
+    # A *= Mii[None] * Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
-    #diag *= Mii
+    # diag *= Mii
 
     xp.fill_diagonal(A, diag)
     return A
 
 
-def calculate_dynamical_scattering(structure_matrix, hkl, cell, energy, thicknesses):
+def calculate_dynamical_scattering(
+    structure_matrix: np.ndarray,
+    hkl: np.ndarray,
+    cell: Cell,
+    energy: float,
+    thicknesses: Sequence[float],
+) -> np.ndarray:
+    """
+    Calculate the dynamical scattering given a structure matrix.
+
+    Parameters
+    ----------
+    structure_matrix : np.ndarray
+        The structure matrix as a (N, N) array.
+    hkl : np.ndarray
+        The reciprocal space vectors as Miller indices. Given as a (N, 3) array.
+    cell : Cell
+        The unit cell.
+    energy : float
+        The energy of the electrons [eV].
+    thicknesses : sequence of floats
+        The thicknesses of the sample [Å].
+
+    Returns
+    -------
+    np.ndarray
+        The dynamical scattering as a complex array with shape (len(thicknesses), len(hkl)).
+    """
+
     xp = get_array_module(structure_matrix)
 
     Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
 
-    v, C = xp.linalg.eigh(A)
+    v, C = xp.linalg.eigh(structure_matrix)
     gamma = v * energy2wavelength(energy) / 2.0
 
     np.fill_diagonal(C, np.diag(C) / Mii)
@@ -780,6 +816,30 @@ def calculate_dynamical_scattering(structure_matrix, hkl, cell, energy, thicknes
         array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
 
     return array
+
+
+# def merge_spots():
+#     g_vec = self.g_vec
+#     clusters = fcluster(
+#         linkage(pdist(g_vec[:, :2]), method="complete"),
+#         merge_tol,
+#         criterion="distance",
+#     )
+
+#     thicknesses = xp.asarray(thicknesses)
+#     new_array = xp.zeros_like(array, shape=array.shape[:-1] + (clusters.max(),))
+#     new_hkl = np.zeros_like(hkl, shape=(clusters.max(), 3))
+#     for i, cluster in enumerate(label_to_index(clusters, min_label=1)):
+
+#         # new_array[:, i] = (array[:, cluster] * xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses)[:, None])[:, 0]
+#         new_array[:, i] = array[:, cluster].sum(-1)
+
+#         j = np.argmin(np.abs(excitation_errors(g_vec[cluster], self.energy)))
+
+#         new_hkl[i] = hkl[cluster][j]
+
+#     array = new_array
+#     hkl = new_hkl
 
 
 def expm(A: np.ndarray) -> np.ndarray:
@@ -961,8 +1021,7 @@ class BlochWaves:
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
     use_wave_eq : bool
-        If True, the Bloch wave equation derived from the wave equation is used.
-        Otherwise standard Bloch wave is used.
+        If True, the Bloch wave equation derived from the wave equation is used. Otherwise standard Bloch wave is used.
     """
 
     def __init__(
@@ -993,9 +1052,6 @@ class BlochWaves:
         self._use_wave_eq = use_wave_eq
         self._device = validate_device(device)
 
-        # g_vec = structure_factor.g_vec
-        # sg = excitation_errors(g_vec, energy)
-
         self._hkl_mask = filter_reciprocal_space_vectors(
             hkl=structure_factor.hkl,
             cell=self._cell,
@@ -1004,37 +1060,6 @@ class BlochWaves:
             k_max=self._k_max,
             centering=centering,
         )
-
-        # self.set_hkl_mask(
-        #     max_beams,
-        #     sg_max=sg_max,
-        #     wg_max=wg_max,
-        #     criterion=selection_criterion,
-        #     ignore=None,
-        # )
-
-    # def set_hkl_mask(
-    #     self,
-    #     max_beams: int = None,
-    #     sg_max: float = None,
-    #     wg_max: float = None,
-    #     ignore: float = None,
-    #     criterion: str = "wg",
-    # ):
-    #     if hasattr(self.structure_factor, "build"):
-    #         structure_factor = self.structure_factor.build(lazy=False).to_cpu()
-
-    #     self._hkl_mask = select_beams(
-    #         structure_factor=structure_factor,
-    #         energy=self.energy,
-    #         cell=self.cell,
-    #         max_beams=max_beams,
-    #         k_max=self.k_max,
-    #         wg_max=wg_max,
-    #         sg_max=sg_max,
-    #         ignore=ignore,
-    #         criterion=criterion,
-    #     )
 
     def __len__(self):
         return int(np.sum(self.hkl_mask))
@@ -1150,6 +1175,9 @@ class BlochWaves:
         hkl = self.hkl
         structure_factor = self.structure_factor.build(lazy=lazy)
 
+        if lazy:
+            A = structure_factor
+
         A = calculate_structure_matrix(
             hkl_selected=hkl,
             cell=self.cell,
@@ -1186,32 +1214,32 @@ class BlochWaves:
         )
         return S
 
-    def _calculate_array(self, thicknesses: np.ndarray):
-        hkl = self.structure_factor.hkl[self.hkl_mask]
-        cell = self.cell
-        A = self.calculate_structure_matrix(lazy=False)
+    # def _calculate_array(self, thicknesses: np.ndarray):
+    #     hkl = self.structure_factor.hkl[self.hkl_mask]
+    #     cell = self.cell
+    #     A = self.calculate_structure_matrix(lazy=False)
 
-        xp = get_array_module(A)
+    #     xp = get_array_module(A)
 
-        Mii = xp.asarray(calculate_M_matrix(hkl, cell, self.energy))
+    #     Mii = xp.asarray(calculate_M_matrix(hkl, cell, self.energy))
 
-        v, C = xp.linalg.eigh(A)
-        gamma = v * self.wavelength / 2.0
+    #     v, C = xp.linalg.eigh(A)
+    #     gamma = v * self.wavelength / 2.0
 
-        np.fill_diagonal(C, np.diag(C) / Mii)
+    #     np.fill_diagonal(C, np.diag(C) / Mii)
 
-        C_inv = xp.conjugate(C.T)
+    #     C_inv = xp.conjugate(C.T)
 
-        initial = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
-        initial = xp.asarray(initial)
+    #     initial = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
+    #     initial = xp.asarray(initial)
 
-        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
+    #     array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
 
-        for i, thickness in enumerate(thicknesses):
-            alpha = C_inv @ initial
-            array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
+    #     for i, thickness in enumerate(thicknesses):
+    #         alpha = C_inv @ initial
+    #         array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
 
-        return array
+    #     return array
 
     def calculate_diffraction_patterns(
         self,
@@ -1233,6 +1261,11 @@ class BlochWaves:
             If True, the calculation is done lazily using dask. If False, the calculation is done eagerly.
         merge_tol : float
             The merge tolerance for merging overlapping diffraction spots. Default is None, which means no merging is done.
+
+        Returns
+        -------
+        IndexedDiffractionPatterns
+            The dynamical diffraction patterns.
         """
 
         thicknesses = np.array(thicknesses, dtype=float)
@@ -1246,33 +1279,16 @@ class BlochWaves:
             ]
 
         hkl = self.structure_factor.hkl[self.hkl_mask]
-        array = self._calculate_array(thicknesses)
+
+        array = calculate_dynamical_scattering(
+            structure_matrix=self.calculate_structure_matrix(lazy=lazy),
+            hkl=hkl,
+            cell=self.cell,
+            energy=self.energy,
+            thicknesses=thicknesses,
+        )
+
         reciprocal_lattice_vectors = self.cell.reciprocal()
-
-        xp = get_array_module(array)
-
-        if merge_tol is not None:
-            g_vec = self.g_vec
-            clusters = fcluster(
-                linkage(pdist(g_vec[:, :2]), method="complete"),
-                merge_tol,
-                criterion="distance",
-            )
-
-            thicknesses = xp.asarray(thicknesses)
-            new_array = xp.zeros_like(array, shape=array.shape[:-1] + (clusters.max(),))
-            new_hkl = np.zeros_like(hkl, shape=(clusters.max(), 3))
-            for i, cluster in enumerate(label_to_index(clusters, min_label=1)):
-
-                # new_array[:, i] = (array[:, cluster] * xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses)[:, None])[:, 0]
-                new_array[:, i] = array[:, cluster].sum(-1)
-
-                j = np.argmin(np.abs(excitation_errors(g_vec[cluster], self.energy)))
-
-                new_hkl[i] = hkl[cluster][j]
-
-            array = new_array
-            hkl = new_hkl
 
         if len(ensemble_axes_metadata) == 0:
             array = array[0]
@@ -1353,7 +1369,6 @@ class BlochWaves:
             array2[..., nmi[0], nmi[1]] += array[..., i] * phase
 
         array = ifft2(xp.fft.ifftshift(array2, axes=(-2, -1)))
-        # array = ifft2(array2)
 
         if normalization == "values":
             array *= np.prod(gpts)
@@ -1419,7 +1434,7 @@ class BlochWaves:
         if not any(isinstance(arg, Iterable) for arg in args[1::2]):
             orientation_matrix = np.eye(3)
             for axes, rotation in zip(args[::2], args[1::2]):
-                R = Rotation.from_euler(axes, rotation).as_matrix()
+                R = Rotation.from_euler(axes, rotation, degrees=degrees).as_matrix()
                 orientation_matrix = orientation_matrix @ R
 
             bloch = BlochWaves(
@@ -1449,6 +1464,7 @@ class BlochWaves:
 
 
 class BlochwaveEnsemble(Ensemble, CopyMixin):
+    """ """
 
     def __init__(
         self,
@@ -1475,6 +1491,14 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self._device = validate_device(device)
 
     def get_ensemble_hkl_mask(self):
+        """
+        Get the mask selecting all the reciprocal space vectors included in the ensemble.
+
+        Returns
+        -------
+        np.ndarray
+            The mask selecting the reciprocal space vectors.
+        """
         hkl = self._structure_factor.hkl
         mask = filter_reciprocal_space_vectors(
             hkl=hkl,
@@ -1488,6 +1512,14 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return mask
 
     def get_orientation_matrices(self):
+        """
+        Get the orientation matrices for the ensemble.
+
+        Returns
+        -------
+        np.ndarray
+            The orientation matrices. The shape is the ensemble shape + (3, 3).
+        """
         orientation_matrices = np.eye(3)
         for axes, rotation in zip(self.axes[::-1], self.rotations[::-1]):
 
@@ -1715,10 +1747,29 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
     def calculate_diffraction_patterns(
         self,
         thicknesses: float | Sequence[float],
-        lazy: bool = True,
         return_complex: bool = False,
+        lazy: bool = True,
         pbar: bool = None,
-    ):
+    ) -> IndexedDiffractionPatterns:
+        """
+        Calculate the dynamical diffraction patterns of the ensemble for a given set of thicknesses.
+
+        Parameters
+        ----------
+        thicknesses : float or sequence of floats
+            The thicknesses of the sample [Å].
+        return_complex : bool
+            If True, the complex diffraction patterns are returned. If False, the intensity is returned. Default is False.
+        lazy : bool
+            If True, the calculation is done lazily using dask. If False, the calculation is done eagerly.
+        pbar : bool
+            If True, a progress bar is shown. Default is None, which means the value is taken from the configuration.
+
+        Returns
+        -------
+        IndexedDiffractionPatterns
+            The diffraction patterns.
+        """
 
         if pbar is None:
             pbar = config.get("local_diagnostics.task_level_progress", False)
