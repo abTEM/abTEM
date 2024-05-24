@@ -100,11 +100,11 @@ def get_fftw_object(
     array: np.ndarray,
     name: str,
     allow_new_wisdom: bool = True,
-    overwrite_x=False,
-    axes=(-2, -1),
+    overwrite_x: bool = False,
+    axes: tuple[int, ...] = (-2, -1),
 ):
     direction = _fft_name_to_fftw_direction(name)
-
+    
     flags = (config.get("fftw.planning_effort"),)
     if overwrite_x:
         flags += ("FFTW_DESTROY_INPUT",)
@@ -118,6 +118,7 @@ def get_fftw_object(
             threads=config.get("fftw.threads"),  # noqa
             flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
         )
+        
     except RuntimeError as e:
         if not str(e) == "No FFTW wisdom is known for this plan.":
             raise

@@ -23,11 +23,23 @@ except ImportError:
         )
     cp = None
 
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
+except ImportError:
+    if config.get("device") == "metal":
+        warnings.warn(
+            "The PyTorch library could not be imported. Please check your installation, or change your configuration "
+            "to use CPU."
+        )
+    torch = None
 
 try:
     import cupyx
 except:
     cupyx = None
+
 
 ArrayModule = Union[types.ModuleType, str]
 
@@ -35,6 +47,11 @@ ArrayModule = Union[types.ModuleType, str]
 def check_cupy_is_installed():
     if cp is None:
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
+
+
+def check_pytorch_is_installed():
+    if cp is None:
+        raise RuntimeError("PyTorch is not installed, GPU calculations disabled")
 
 
 def xp_to_str(xp):
@@ -64,7 +81,7 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
     ----------
     x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
         The array or string to get the array module for. If None, the default device is used.
-    
+
     Returns
     -------
     numpy or cupy
@@ -81,9 +98,13 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
         if x.lower() in ("numpy", "cpu"):
             return np
 
-        if x.lower() in ("cupy", "gpu"):
+        elif x.lower() in ("cupy", "gpu"):
             check_cupy_is_installed()
             return cp
+
+        elif x.lower() in ("torch", "metal"):
+            check_pytorch_is_installed()
+            return torch
 
     if isinstance(x, np.ndarray):
         return np
@@ -100,18 +121,39 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
 
         if x is cp:
             return cp
+    
+    if torch is not None:
+        if isinstance(x, torch.Tensor):
+            return torch
+
+        if x is torch:
+            return torch
 
     raise ValueError(f"array module specification {x} not recognized")
 
 
 def device_name_from_array_module(xp):
+    """
+    Get the device name "cpu", "gpu" or "metal" from an array module.
+
+    Parameters
+    ----------
+    xp : numpy or cupy or metal
+        The array module.
+    
+    Returns
+    -------
+    str
+        The device name.
+    """
     if xp is np:
         return "cpu"
-
-    if xp is cp:
+    elif xp is cp:
         return "gpu"
-
-    assert False
+    elif xp is torch:
+        return "metal"
+    else:
+        raise ValueError(f"array module {xp} not recognized")
 
 
 def get_scipy_module(x):
@@ -154,14 +196,14 @@ def copy_to_device(array: np.ndarray, device: str):
 
     Parameters
     ----------
-    array : numpy.ndarray
+    array : numpy.ndarray or cupy.ndarray or torch.Tensor or dask.array.Array
         The array to copy.
     device : str
         The device to copy to. Either 'cpu' or 'gpu'.
 
     Returns
     -------
-    numpy.ndarray or cupy.ndarray
+    numpy.ndarray or cupy.ndarray or torch.Tensor
         The array copied to the specified device.
     """
     old_xp = get_array_module(array)
@@ -170,15 +212,19 @@ def copy_to_device(array: np.ndarray, device: str):
     if old_xp is new_xp:
         return array
 
-    if isinstance(array, da.core.Array):
+    elif isinstance(array, da.core.Array):
         return array.map_blocks(
             copy_to_device, meta=new_xp.array((), dtype=array.dtype), device=device
         )
 
-    if new_xp is np:
+    elif new_xp is np:
         return cp.asnumpy(array)
 
-    if new_xp is cp:
+    elif new_xp is cp:
         return cp.asarray(array)
 
-    raise RuntimeError("Invalid device specified")
+    elif new_xp is torch:
+        return torch.as_tensor(array)
+
+    else:
+        raise RuntimeError(f"Invalid device {device} specified") 

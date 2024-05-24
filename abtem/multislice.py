@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from ase import Atoms
 
-from abtem.antialias import AntialiasAperture
-from abtem.antialias import antialias_aperture
+from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
@@ -20,23 +19,21 @@ from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
-from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
+from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast
-from abtem.detectors import BaseDetector, _validate_detectors, WavesDetector
-from abtem.inelastic.core_loss import (
-    BaseTransitionPotential,
-)
+from abtem.detectors import BaseDetector, WavesDetector, _validate_detectors
+from abtem.finite_difference import LaplaceOperator
+from abtem.finite_difference import multislice_step as realspace_multislice_step
+from abtem.inelastic.core_loss import BaseTransitionPotential
 from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
     BasePotential,
-    TransmissionFunction,
     PotentialArray,
+    TransmissionFunction,
     _validate_potential,
 )
-from abtem.finite_difference import LaplaceOperator
-from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
