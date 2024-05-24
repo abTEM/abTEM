@@ -232,9 +232,9 @@ class BaseSMatrix(BaseWaves):
 
             ctf.defocus = ctf.defocus - defocus
 
-        if ctf.semiangle_cutoff is None:
+        if ctf.semiangle_cutoff is None or ctf.semiangle_cutoff == np.inf:
             ctf.semiangle_cutoff = self.semiangle_cutoff
-
+        
         default_kwargs = {"device": self.device, "metadata": {**self.metadata}}
         kwargs = {**default_kwargs, **kwargs}
 
