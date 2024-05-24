@@ -479,7 +479,7 @@ class _AbstractRadialDetector(BaseDetector):
         """
         inner, outer = self.angular_limits(waves)
 
-        measurement = waves.diffraction_patterns(max_angle="cutoff", parity="same")
+        measurement = waves.diffraction_patterns(max_angle=outer, parity="same")
 
         measurement = measurement.polar_binning(
             nbins_radial=self.nbins_radial,
