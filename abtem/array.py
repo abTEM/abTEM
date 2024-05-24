@@ -66,32 +66,6 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
         shape = (shape,)
 
     for metadata, n in zip(axes_metadata, shape):
-
-        # if isinstance(metadata, OrdinalAxis):
-        #     # TODO : when hyperspy supports arbitrary (non-uniform) DataAxis this should be updated
-        #     warnings.warn("One or more axes are not supported by hyperspy, some axes metadata will be lost.")
-
-        #     try:
-        #         sampling = metadata.values[1] - metadata.values[0]
-        #     except TypeError:
-        #         sampling = np.nan
-        #         offset = np.nan
-        #     except IndexError:
-        #         sampling = None
-        #         offset = metadata.values[0]
-
-        #     if metadata.units is None:
-        #         units = ""
-        #     else:
-        #         units = metadata.units
-
-        #     metadata = LinearAxis(
-        #         label=metadata.label,
-        #         units=units,
-        #         sampling=sampling,
-        #         offset=offset,
-        #     )
-
         hyperspy_axis = {"size": n, "name": metadata.label}
 
         if isinstance(metadata, LinearAxis):
@@ -177,7 +151,7 @@ class ComputableList(list):
 
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
-        ) as (_, profiler, resource_profiler, _):
+        ) as (_, profiler, resource_profiler):
             output = dask.compute(computables, **kwargs)[0]
 
         profilers = ()
@@ -235,17 +209,12 @@ def _compute_context(
     else:
         resource_profiler = nullcontext()
 
-    dask_configuration = {
-        "optimization.fuse.active": config.get("dask.fuse"),
-    }
-
     with (
         progress_bar as progress_bar,
         profiler as profiler,
         resource_profiler as resource_profiler,
-        dask.config.set(dask_configuration) as dask_configuration,
     ):
-        yield progress_bar, profiler, resource_profiler, dask_configuration
+        yield progress_bar, profiler, resource_profiler
 
 
 def _compute(
@@ -266,7 +235,7 @@ def _compute(
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
-    ) as (_, profiler, resource_profiler, _):
+    ) as (_, profiler, resource_profiler):
         arrays = dask.compute(
             [wrapper.array for wrapper in dask_array_wrappers], **kwargs
         )[0]
@@ -444,20 +413,17 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        array : array
-            Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the wave
-            function `y`- and `x`-axis, respectively.
+        array : ndarray
+            Array defining the array object.
         axes_metadata : list of AxesMetadata
-            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
-            axes must be RealSpaceAxis.
+            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array.
         metadata :
-            A dictionary defining wave function metadata. All items will be added to the metadata of measurements
-            derived from the waves. The metadata must contain the electron energy [eV].
-
+            A dictionary defining the metadata of the array object.
+        
         Returns
         -------
-        wave_functions : Waves
-            The created wave functions.
+        array_object : ArrayObject or subclass of ArrayObject
+            The array object.
         """
         raise NotImplementedError
 
@@ -1321,12 +1287,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             num_ensemble_dims = len(transform._out_ensemble_shape(self))
 
-            # if transform._num_outputs > 4:
-            #     chunks = chunks[:num_ensemble_dims]
-            #     symbols = tuple_range(num_ensemble_dims)
-            #     meta = np.array((), dtype=object)
-            # else:
-
             base_shape = transform._out_base_shape(self)
             symbols = tuple_range(num_ensemble_dims + len(base_shape))
             chunks = chunks[: -len(base_shape)] + base_shape
@@ -1464,8 +1424,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             return s
 
     def to_data_array(self):
-        """Convert ArrayObject to a xarray DataArray."""
-
+        """
+        Convert ArrayObject to a xarray DataArray. Requires xarray to be installed.
+        
+        Returns
+        -------
+        xarray.DataArray
+            The converted xarray DataArray.
+        
+        Raises
+        ------
+        ImportError
+            If xarray is not installed.
+        """
         try:
             import xarray as xr
         except ImportError:
@@ -1604,12 +1575,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             for block_indices, chunk_range in iterate_chunk_ranges(chunks):
                 if len(block_indices) == 0:
                     block_indices = 0
-                # blocks.itemset(
-                #     block_indices,
-                #     _wrap_with_array(
-                #         (array[chunk_range], ensemble_axes_metadata[block_indices]), 1
-                #     ),
-                # )
 
                 blocks.itemset(
                     block_indices,
@@ -1716,6 +1681,7 @@ def stack(
         The axis metadata describing the new axis.
     axis : int
         The ensemble axis in the resulting array object along which the input arrays are stacked.
+    
     Returns
     -------
     array_object : ArrayObject

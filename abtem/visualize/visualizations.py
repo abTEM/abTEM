@@ -450,6 +450,7 @@ class Visualization:
 
         row_titles = []
         for i, ax in enumerate(self.axes[0, :]):
+            
             annotation = ax.annotate(
                 titles[i],
                 xy=(0, 0.5),
@@ -462,6 +463,19 @@ class Visualization:
                 fontsize=fontsize,
                 **kwargs,
             )
+
+            # annotation = ax.annotate(
+            #     titles[i],
+            #     xy=(1, 0.5),
+            #     xytext=(pad, 0),
+            #     xycoords="axes fraction",
+            #     textcoords="offset points",
+            #     ha="right",
+            #     va="center",
+            #     rotation=270,
+            #     fontsize=fontsize,
+            #     **kwargs,
+            # )
             row_titles.append(annotation)
 
         self._row_titles = row_titles
