@@ -498,7 +498,7 @@ def multislice_and_detect(
 
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
-    pbar = TqdmWrapper(enabled=pbar, total=int(n_slices), leave=False)
+    pbar = TqdmWrapper(enabled=pbar, total=int(n_slices), leave=False, desc="multislice")
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
@@ -660,7 +660,7 @@ def transition_potential_multislice_and_detect(
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
 
-    pbar = TqdmWrapper(enabled=pbar, total=n_slices, leave=False)
+    pbar = TqdmWrapper(enabled=pbar, total=n_slices, leave=False, desc="multislice")
 
     for (
         potential_index,
