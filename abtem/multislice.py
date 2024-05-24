@@ -902,7 +902,7 @@ class MultisliceTransform(ArrayObjectTransform):
 
         if not "pbar" in multislice_func_kwargs.keys():
             multislice_func_kwargs["pbar"] = config.get(
-                "local_diagnostics.task_level_progress", False
+                "diagnostics.task_progress", False
             )
 
         self._detectors = detectors

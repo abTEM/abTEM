@@ -213,7 +213,7 @@ def _compute_context(
     progress_bar: bool = None, profiler=False, resource_profiler=False
 ):
     if progress_bar is None:
-        progress_bar = config.get("local_diagnostics.progress_bar")
+        progress_bar = config.get("diagnostics.progress_bar")
 
     if progress_bar:
         if progress_bar == "tqdm":
