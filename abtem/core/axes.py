@@ -409,7 +409,7 @@ class TiltAxis(OrdinalAxis):
         return format_title(self, formatting, units=None, include_label=include_label)
 
     def item_metadata(self, item, metadata=None):
-        return {f"base_tilt_x": self.values[0][item], f"base_tilt_y": self.values[1][item]}
+        return {f"base_tilt_x": self.values[item][0], f"base_tilt_y": self.values[item][1]}
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
