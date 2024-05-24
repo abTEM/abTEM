@@ -234,11 +234,7 @@ def _compute_context(
         resource_profiler = ResourceProfiler()
     else:
         resource_profiler = nullcontext()
-
-    dask_configuration = {
-        "optimization.fuse.active": config.get("dask.fuse"),
-    }
-
+    
     with (
         progress_bar as progress_bar,
         profiler as profiler,
