@@ -234,14 +234,13 @@ def _compute_context(
         resource_profiler = ResourceProfiler()
     else:
         resource_profiler = nullcontext()
-    
+
     with (
         progress_bar as progress_bar,
         profiler as profiler,
         resource_profiler as resource_profiler,
-        dask.config.set(dask_configuration) as dask_configuration,
     ):
-        yield progress_bar, profiler, resource_profiler, dask_configuration
+        yield progress_bar, profiler, resource_profiler
 
 
 def _compute(
@@ -262,7 +261,7 @@ def _compute(
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
-    ) as (_, profiler, resource_profiler, _):
+    ) as (_, profiler, resource_profiler):
         arrays = dask.compute(
             [wrapper.array for wrapper in dask_array_wrappers], **kwargs
         )[0]
