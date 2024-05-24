@@ -555,14 +555,38 @@ class ImageArtist(Artist2D):
 
 
 class ScaledCircleCollection(Collection):
+    """
+    Create a collection of circles with radii scaled by the data.
 
-    def __init__(self, array, offsets, scale=1.0, threshold: float = 0.0, **kwargs):
-        """ """
+    Parameters
+    ----------
+    array : np.ndarray
+        Array of data values. Used to calculate the radii of the circles. The shape should be (n,).
+    offsets : np.ndarray
+        Array of offsets for the circles. The shape should be (n, 2) where n is the number of circles.
+    scale : float, optional
+        Scaling factor for the radii, by default 1.0.
+    threshold : float, optional
+        Threshold for showing the circles, by default 1e-6.
+    kwargs : dict
+        Additional keyword arguments passed to the matplotlib.collections.Collection constructor.
+    """
+
+    def __init__(
+        self,
+        array: np.ndarray,
+        offsets: np.ndarray,
+        scale: float = 1.0,
+        threshold: float = 1e-6,
+        **kwargs,
+    ):
+
         self._scale = scale
         self._threshold = threshold
         self._mask = array > threshold
         self._unmasked_offsets = offsets
         self._unmasked_array = array
+        self._base_scale = None
 
         super().__init__(array=array[self._mask], offsets=offsets[self._mask], **kwargs)
         self._radii = self._calculate_radii()
@@ -623,10 +647,34 @@ class ScaledCircleCollection(Collection):
         self._mask = array > self._threshold
         self._update()
 
+    def _auto_scale_radii(
+        self,
+        radii,
+    ):
+        if len(radii) == 0:
+            return 1.0
+
+        x, y = self.get_offsets().T
+        dx = x[:, None] - x
+        dy = y[:, None] - y
+        distance = np.sqrt(dx**2 + dy**2)
+        scale = distance / (radii[:, None] + radii)
+        np.fill_diagonal(scale, np.inf)
+        return max(np.min(scale) / 2.0, 1e-4)
+
     def _calculate_radii(self):
         norm = self.norm
         data = self._unmasked_array
-        radii = np.sqrt(np.clip(norm(data) * self._scale, a_min=1e-5, a_max=np.inf))
+        base_radii = norm(data)
+        if self._base_scale is None:
+            self._base_scale = self._auto_scale_radii(base_radii[self._mask])
+        radii = np.sqrt(
+            np.clip(
+                base_radii * self._base_scale**2 * self._scale**2,
+                a_min=1e-5,
+                a_max=np.inf,
+            )
+        )
         return radii
 
     def _update_radii(self):

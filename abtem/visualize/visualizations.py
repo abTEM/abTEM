@@ -538,6 +538,9 @@ class Visualization:
                 ax.spines["right"].set_visible(False)
                 ax.spines["bottom"].set_visible(False)
                 ax.spines["left"].set_visible(False)
+    
+    def axis_off(self):
+        self.axis("none", spines=False)
 
     def remove_artists(self):
         if self.artists is None:
