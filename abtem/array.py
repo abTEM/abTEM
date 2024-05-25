@@ -6,48 +6,44 @@ import copy
 import json
 import warnings
 from abc import ABCMeta
-from contextlib import nullcontext, contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from numbers import Number
-from typing import TypeVar, Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence, TypeVar
 
 import dask
 import dask.array as da
 import numpy as np
 import zarr
 from dask.array.utils import validate_axis
-from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
+from dask.diagnostics import Profiler, ProgressBar, ResourceProfiler
 
 from abtem._version import __version__
 from abtem.core import config
 from abtem.core.axes import (
-    UnknownAxis,
-    axis_to_dict,
-    axis_from_dict,
-    AxisMetadata,
-    OrdinalAxis,
     AxesMetadataList,
+    AxisMetadata,
     LinearAxis,
+    OrdinalAxis,
+    UnknownAxis,
+    axis_from_dict,
+    axis_to_dict,
 )
 from abtem.core.backend import (
-    get_array_module,
+    check_cupy_is_installed,
     copy_to_device,
     cp,
     device_name_from_array_module,
-    check_cupy_is_installed,
+    get_array_module,
 )
-from abtem.core.chunks import Chunks, validate_chunks, chunk_shape, iterate_chunk_ranges
-from abtem.core.ensemble import (
-    Ensemble,
-    _wrap_with_array,
-    unpack_blockwise_args,
-)
+from abtem.core.chunks import Chunks, chunk_shape, iterate_chunk_ranges, validate_chunks
+from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import (
-    normalize_axes,
     CopyMixin,
-    tuple_range,
     EqualityMixin,
     interleave,
+    normalize_axes,
+    tuple_range,
 )
 
 if TYPE_CHECKING:
@@ -419,7 +415,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             Axis metadata for each axis. The axis metadata must be compatible with the shape of the array.
         metadata :
             A dictionary defining the metadata of the array object.
-        
+
         Returns
         -------
         array_object : ArrayObject or subclass of ArrayObject
@@ -1346,92 +1342,92 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self
 
     def to_hyperspy(self, transpose: bool = True):
-            """
-            Convert ArrayObject to a Hyperspy signal.
+        """
+        Convert ArrayObject to a Hyperspy signal.
 
-            Parameters
-            ----------
-            transpose : bool, optional
-                If True, transpose the base axes of the array before converting to a Hyperspy signal.
-                Default is True.
+        Parameters
+        ----------
+        transpose : bool, optional
+            If True, transpose the base axes of the array before converting to a Hyperspy signal.
+            Default is True.
 
-            Returns
-            -------
-            signal : Hyperspy signal
-                The converted Hyperspy signal.
+        Returns
+        -------
+        signal : Hyperspy signal
+            The converted Hyperspy signal.
 
-            Raises
-            ------
-            ImportError
-                If Hyperspy is not installed.
+        Raises
+        ------
+        ImportError
+            If Hyperspy is not installed.
 
-            RuntimeError
-                If the number of base dimensions is not 1 or 2.
+        RuntimeError
+            If the number of base dimensions is not 1 or 2.
 
-            Notes
-            -----
-            This method requires Hyperspy to be installed. You can find more information
-            about Hyperspy at https://hyperspy.org.
-            """
+        Notes
+        -----
+        This method requires Hyperspy to be installed. You can find more information
+        about Hyperspy at https://hyperspy.org.
+        """
 
-            try:
-                import hyperspy.api as hs
-            except ImportError:
-                raise ImportError(
-                    "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
-                )
-
-            if self._base_dims == 1:
-                signal_type = hs.signals.Signal1D
-            elif self._base_dims == 2:
-                signal_type = hs.signals.Signal2D
-            else:
-                raise RuntimeError()
-
-            axes_base = _to_hyperspy_axes_metadata(
-                self.base_axes_metadata,
-                self.base_shape,
-            )
-            ensemble_axes_metadata = _to_hyperspy_axes_metadata(
-                self.ensemble_axes_metadata,
-                self.ensemble_shape,
+        try:
+            import hyperspy.api as hs
+        except ImportError:
+            raise ImportError(
+                "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
             )
 
-            xp = get_array_module(self.device)
+        if self._base_dims == 1:
+            signal_type = hs.signals.Signal1D
+        elif self._base_dims == 2:
+            signal_type = hs.signals.Signal2D
+        else:
+            raise RuntimeError()
 
-            axes_base_indices = tuple_range(
-                offset=len(self.ensemble_shape), length=len(self.base_shape)
-            )
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_shape,
+        )
+        ensemble_axes_metadata = _to_hyperspy_axes_metadata(
+            self.ensemble_axes_metadata,
+            self.ensemble_shape,
+        )
 
-            ensemble_axes = tuple_range(
-                offset=0,
-                length=len(self.ensemble_shape),
-            )
+        xp = get_array_module(self.device)
 
-            source = ensemble_axes + axes_base_indices
-            destination = ensemble_axes + axes_base_indices[::-1]
+        axes_base_indices = tuple_range(
+            offset=len(self.ensemble_shape), length=len(self.base_shape)
+        )
 
-            if transpose:
-                array = xp.moveaxis(self.array, source=source, destination=destination)
-            else:
-                array = self.array
+        ensemble_axes = tuple_range(
+            offset=0,
+            length=len(self.ensemble_shape),
+        )
 
-            s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
+        source = ensemble_axes + axes_base_indices
+        destination = ensemble_axes + axes_base_indices[::-1]
 
-            if self.is_lazy:
-                s = s.as_lazy()
+        if transpose:
+            array = xp.moveaxis(self.array, source=source, destination=destination)
+        else:
+            array = self.array
 
-            return s
+        s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
+
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def to_data_array(self):
         """
         Convert ArrayObject to a xarray DataArray. Requires xarray to be installed.
-        
+
         Returns
         -------
         xarray.DataArray
             The converted xarray DataArray.
-        
+
         Raises
         ------
         ImportError
@@ -1681,7 +1677,7 @@ def stack(
         The axis metadata describing the new axis.
     axis : int
         The ensemble axis in the resulting array object along which the input arrays are stacked.
-    
+
     Returns
     -------
     array_object : ArrayObject

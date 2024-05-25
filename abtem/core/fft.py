@@ -1,15 +1,14 @@
+import warnings
 from typing import Tuple
 
 import dask.array as da
 import numpy as np
+from threadpoolctl import threadpool_limits
 
 from abtem.core import config
-from abtem.core.backend import get_array_module, check_cupy_is_installed
+from abtem.core.backend import check_cupy_is_installed, get_array_module, cp, tp
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
-from threadpoolctl import threadpool_limits
-import warnings
-
 from abtem.core.utils import get_dtype
 
 try:
@@ -19,20 +18,8 @@ except (ModuleNotFoundError, ImportError):
 
 try:
     import mkl_fft
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     mkl_fft = None
-
-try:
-    import cupy as cp
-except ModuleNotFoundError:
-    cp = None
-except ImportError:
-    if config.get("device") == "gpu":
-        warnings.warn(
-            "The CuPy library could not be imported. Please check your installation, or change your configuration to "
-            "use CPU."
-        )
-    cp = None
 
 
 def raise_fft_lib_not_present(lib_name):
@@ -104,7 +91,7 @@ def get_fftw_object(
     axes: tuple[int, ...] = (-2, -1),
 ):
     direction = _fft_name_to_fftw_direction(name)
-    
+
     flags = (config.get("fftw.planning_effort"),)
     if overwrite_x:
         flags += ("FFTW_DESTROY_INPUT",)
@@ -118,7 +105,7 @@ def get_fftw_object(
             threads=config.get("fftw.threads"),  # noqa
             flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
         )
-        
+
     except RuntimeError as e:
         if not str(e) == "No FFTW wisdom is known for this plan.":
             raise
@@ -157,7 +144,6 @@ def _fftw_dispatch(x: np.ndarray, func_name: str, overwrite_x: bool, **kwargs):
 
 
 def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
-    xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
         if config.get("fft") == "mkl":
@@ -165,23 +151,32 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
         elif config.get("fft") == "fftw":
             return _fftw_dispatch(x, func_name, overwrite_x, **kwargs)
         elif config.get("fft") == "numpy":
+            if config.get("precision") == "float32":
+                raise RuntimeError(
+                    "NumPy FFTs does not support float32 (complex64) precision. Configure float64 precision `config.set('float64')`."
+                )
             return getattr(np.fft, func_name)(x, **kwargs)
         else:
             raise RuntimeError()
 
-    if isinstance(x, da.core.Array):
+    elif isinstance(x, da.core.Array):
+        xp = get_array_module(x)
         return x.map_blocks(
             _fft_dispatch,
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
-            meta=xp.array((), dtype=np.complex64),
+            meta=xp.array((), dtype=x.dtype),
         )
 
-    check_cupy_is_installed()
-
-    if isinstance(x, cp.ndarray):
+    elif cp is not None and isinstance(x, cp.ndarray):
         return getattr(cp.fft, func_name)(x, **kwargs)
+
+    elif tp is not None and isinstance(x, tp.ndarray):
+        return getattr(tp.fft, func_name)(x, **kwargs)
+
+    else:
+        raise RuntimeError(f"Invalid array type {type(x)}")
 
 
 def fft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
@@ -210,23 +205,18 @@ def _fft2_convolve(x, kernel, overwrite_x: bool = False):
 
 
 def fft2_convolve(x, kernel, overwrite_x: bool = False):
-    xp = get_array_module(x)
-
-    if isinstance(x, np.ndarray):
-        return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
+        xp = get_array_module(x)
+
         return x.map_blocks(
             _fft2_convolve,
             kernel=kernel,
             overwrite_x=overwrite_x,
-            meta=xp.array((), dtype=np.complex64),
+            meta=xp.array((), dtype=x.dtype),
         )
 
-    check_cupy_is_installed()
-
-    if isinstance(x, cp.ndarray):
-        return _fft2_convolve(x, kernel, overwrite_x)
+    return _fft2_convolve(x, kernel, overwrite_x)
 
 
 def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:

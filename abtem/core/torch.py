@@ -29,6 +29,8 @@ dtype_map = {
     np.complex128: torch.complex128,
 }
 
+reversed_dtype_map = {v: k for k, v in dtype_map.items()}
+
 
 def _get_tensor(torch_ndarray):
     if isinstance(torch_ndarray, TorchNDArray):
@@ -59,6 +61,10 @@ class TorchNDArray:
     @property
     def tensor(self):
         return self._tensor
+
+    @property
+    def dtype(self):
+        return reversed_dtype_map[self._tensor.dtype]
 
     def __setitem__(self, key, value):
         value = _get_tensor(value)
@@ -97,9 +103,7 @@ class TorchNDArray:
         return getattr(self._tensor, name)
 
 
-def torch_ndarray_func(name, namespace=None):
-    if namespace is None:
-        namespace = torch
+def ndarray_func(name, namespace):
 
     def func(*args, **kwargs):
         args = (args[0].tensor,) + args[1:]
@@ -111,38 +115,48 @@ def torch_ndarray_func(name, namespace=None):
     return func
 
 
-torch__fft = SimpleNamespace()
-torch__fft.fft2 = torch_ndarray_func("fft2", torch.fft)
-torch__fft.ifft2 = torch_ndarray_func("ifft2", torch.fft)
-torch__fft.fftfreq = lambda *args, **kwargs: TorchNDArray(
-    torch.fft.fftfreq(*args, **kwargs).to("mps")
-)
+def ndarray_initialize(name, namespace):
+
+    def func(*args, **kwargs):
+        tensor = getattr(namespace, name)(*args, **kwargs).to("mps")
+
+        return TorchNDArray(tensor)
+
+    return func
 
 
-class TorchPy:
+def asarray(data, dtype=None):
+    if dtype is None:
+        dtype = data.dtype
 
-    @property
-    def fft(self):
-        return torch__fft
+    return TorchNDArray(torch.tensor(data, dtype=dtype_map[dtype]).to("mps"))
 
-    @property
-    def ndarray(self):
-        return TorchNDArray
 
-    def asarray(self, data, dtype=None):
-        if dtype is None:
-            dtype = data.dtype
+def where(condition, x, y):
+    condition = _get_tensor(condition)
+    x = _get_tensor(x)
+    y = _get_tensor(y)
+    return TorchNDArray(torch.where(condition, x, y))
 
-        return TorchNDArray(torch.tensor(data, dtype=dtype_map[dtype]).to("mps"))
 
-    def where(self, condition, x, y):
-        condition = _get_tensor(condition)
-        x = _get_tensor(x)
-        y = _get_tensor(y)
-        return TorchNDArray(torch.where(condition, x, y))
+def asnumpy(torch_ndarray):
+    return torch_ndarray.tensor.cpu().numpy()
 
-    def asnumpy(self, torch_ndarray):
-        return torch_ndarray.tensor.cpu().numpy()
 
-    def __getattr__(self, name):
-        return torch_ndarray_func(name)
+torch_numpy_fft = SimpleNamespace()
+torch_numpy_fft.fft2 = ndarray_func("fft2", torch.fft)
+torch_numpy_fft.ifft2 = ndarray_func("ifft2", torch.fft)
+torch_numpy_fft.fftfreq = ndarray_initialize("fftfreq", torch.fft)
+
+
+torch_numpy = SimpleNamespace()
+torch_numpy.fft = torch_numpy_fft
+torch_numpy.asarray = asarray
+torch_numpy.where = where
+torch_numpy.asnumpy = asnumpy
+torch_numpy.exp = ndarray_func("exp", torch)
+torch_numpy.sqrt = ndarray_func("sqrt", torch)
+torch_numpy.cos = ndarray_func("cos", torch)
+torch_numpy.ndarray = TorchNDArray
+torch_numpy.Tensor = torch.Tensor
+torch_numpy.array = np.array

@@ -13,7 +13,7 @@ from ase import Atoms
 from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, tp
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -37,6 +37,7 @@ from abtem.potentials.iam import (
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
+
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -105,6 +106,7 @@ class FresnelPropagator:
         self._cached_fftw_convolution = CachedFFTWConvolution()
 
     def get_array(self, waves: Waves, thickness: float) -> np.ndarray:
+
         key = (
             waves.gpts,
             waves.sampling,
@@ -330,6 +332,9 @@ def conventional_multislice_step(
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
 
+    if config.get("enable_mps"):
+        potential_slice = potential_slice.copy_to_device("mps")
+
     if isinstance(potential_slice, TransmissionFunction):
         transmission_function = potential_slice
 
@@ -369,8 +374,9 @@ def _update_measurements(
     assert len(detectors) == len(measurements)
 
     for i, detector in enumerate(detectors):
-        new_measurement = detector.detect(waves)
 
+        new_measurement = detector.detect(waves)
+        
         if additive:
             measurements[i].array[measurement_index] += new_measurement.array
         else:
@@ -447,6 +453,9 @@ def multislice_and_detect(
     waves = waves.ensure_real_space()
     detectors = _validate_detectors(detectors)
     waves = waves.copy()
+    
+    if config.get("enable_mps"):
+        waves = waves.copy_to_device("mps")
 
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
@@ -495,7 +504,9 @@ def multislice_and_detect(
 
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
-    pbar = TqdmWrapper(enabled=pbar, total=int(n_slices), leave=False, desc="multislice")
+    pbar = TqdmWrapper(
+        enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
+    )
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
@@ -518,8 +529,6 @@ def multislice_and_detect(
             waves = multislice_step(
                 waves,
                 potential_slice,
-                # conjugate=conjugate,
-                # transpose=transpose,
             )
 
             pbar.update_if_exists(int(n_waves))
@@ -529,6 +538,7 @@ def multislice_and_detect(
             _update_plasmon_axes(waves, depth)
 
             if potential_slice.exit_planes:
+
                 measurement_index = _validate_potential_ensemble_indices(
                     potential_index, exit_plane_index, potential
                 )
@@ -544,7 +554,9 @@ def multislice_and_detect(
             for detector in detectors
         ]
 
-    # measurements[0] += potential.num_slices
+    if config.get("enable_mps"):
+        for i, measurement in enumerate(measurements):
+            measurements[i] = measurement.copy_to_device("cpu")
 
     pbar.close_if_exists()
 

@@ -11,6 +11,7 @@ import scipy
 
 from abtem.core.config import config
 
+
 try:
     import cupy as cp
 except ModuleNotFoundError:
@@ -24,21 +25,17 @@ except ImportError:
     cp = None
 
 try:
-    import torch
-except ModuleNotFoundError:
-    torch = None
-except ImportError:
-    if config.get("device") == "metal":
-        warnings.warn(
-            "The PyTorch library could not be imported. Please check your installation, or change your configuration "
-            "to use CPU."
-        )
-    torch = None
-
-try:
     import cupyx
 except:
     cupyx = None
+
+
+if config.get("enable_mps"):
+    from abtem.core.torch import torch_numpy as tp
+    from abtem.core.torch import TorchNDArray
+else:
+    tp = None
+    TorchNDArray = None
 
 
 ArrayModule = Union[types.ModuleType, str]
@@ -47,11 +44,6 @@ ArrayModule = Union[types.ModuleType, str]
 def check_cupy_is_installed():
     if cp is None:
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
-
-
-def check_pytorch_is_installed():
-    if cp is None:
-        raise RuntimeError("PyTorch is not installed, GPU calculations disabled")
 
 
 def xp_to_str(xp):
@@ -87,7 +79,6 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
     numpy or cupy
         The array module.
     """
-
     if x is None:
         return get_array_module(config.get("device"))
 
@@ -102,9 +93,8 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
             check_cupy_is_installed()
             return cp
 
-        elif x.lower() in ("torch", "metal"):
-            check_pytorch_is_installed()
-            return torch
+        elif x.lower() in ("torch", "mps", "metal"):
+            return tp
 
     if isinstance(x, np.ndarray):
         return np
@@ -122,12 +112,12 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
         if x is cp:
             return cp
     
-    if torch is not None:
-        if isinstance(x, torch.Tensor):
-            return torch
-
-        if x is torch:
-            return torch
+    if tp is not None:
+        if isinstance(x, (tp.ndarray, tp.Tensor)):
+            return tp
+        
+        if x is tp:
+            return tp
 
     raise ValueError(f"array module specification {x} not recognized")
 
@@ -150,8 +140,8 @@ def device_name_from_array_module(xp):
         return "cpu"
     elif xp is cp:
         return "gpu"
-    elif xp is torch:
-        return "metal"
+    elif xp is tp:
+        return "mps"
     else:
         raise ValueError(f"array module {xp} not recognized")
 
@@ -217,14 +207,17 @@ def copy_to_device(array: np.ndarray, device: str):
             copy_to_device, meta=new_xp.array((), dtype=array.dtype), device=device
         )
 
-    elif new_xp is np:
+    elif new_xp is np and old_xp is cp:
         return cp.asnumpy(array)
 
-    elif new_xp is cp:
+    elif cp is not None and new_xp is cp and old_xp is np:
         return cp.asarray(array)
 
-    elif new_xp is torch:
-        return torch.as_tensor(array)
+    elif new_xp is tp and old_xp is np:
+        return tp.asarray(array)
+
+    elif new_xp is np and old_xp is tp:
+        return tp.asnumpy(array)
 
     else:
-        raise RuntimeError(f"Invalid device {device} specified") 
+        raise RuntimeError(f"Conversion from {old_xp} to {new_xp} not implemented specified") 

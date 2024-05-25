@@ -1250,9 +1250,8 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
 
-        xp = get_array_module(self.array[0])
-
         if conjugate:
+            xp = get_array_module(self.array)
             waves._array *= xp.conjugate(self.array[0])
         else:
             waves._array *= self.array[0]

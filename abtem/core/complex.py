@@ -2,7 +2,7 @@ import dask.array as da
 import numba as nb
 import numpy as np
 
-from abtem.core.backend import check_cupy_is_installed, cp
+from abtem.core.backend import check_cupy_is_installed, cp, get_array_module, tp
 from abtem.core.config import config
 
 
@@ -36,7 +36,8 @@ if cp is not None:
         name="abs_squared",
     )
 else:
-    _abs2_cupy = None
+    _abs2_cupy_float32 = None
+    _abs2_cupy_float64 = None
 
 
 def abs2(x, **kwargs):
@@ -63,12 +64,9 @@ def complex_exponential(x):
     if isinstance(x, np.ndarray):
         return _complex_exponential(x)
 
-    if isinstance(x, da.core.Array):
+    elif isinstance(x, da.core.Array):
         return x.map_blocks(complex_exponential)
 
-    check_cupy_is_installed()
-
-    if isinstance(x, cp.ndarray):
-        return cp.exp(1.0j * x)
-
-    raise ValueError()
+    xp = get_array_module(x)
+    
+    return xp.exp(1.0j * x)
