@@ -1,11 +1,15 @@
 # Configuration file for abtem
 
 # The device can be either 'cpu' or 'gpu'
+# GPU support requires CuPy to be installed
 device: cpu
 # The fft library to use. Options are 'numpy', 'fftw' or 'mkl'
 fft: fftw
 # The float precision to use. Options are 'float32' or 'float64'
 precision: float32
+# Use Metal Performance Shaders on Apple Silicon devices
+# This requires PyTorch to be installed with Metal support
+enable_mps: true
 diagnostics:
   # Show the progress bar. Options are 'true', 'false' or 'tqdm'
   progress_bar: true
