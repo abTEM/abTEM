@@ -222,14 +222,13 @@ def _allocate_measurement(
     axes_metadata = detector._out_axes_metadata(waves)
 
     shape = detector._out_shape(waves)
-
+    
     if extra_ensemble_axes_shape is not None:
         assert len(extra_ensemble_axes_shape) == len(extra_ensemble_axes_shape)
         shape = extra_ensemble_axes_shape + shape
         axes_metadata = extra_ensemble_axes_metadata + axes_metadata
 
     metadata = detector._out_metadata(waves)
-
     array = xp.zeros(shape, dtype=detector._out_dtype(waves))
 
     return measurement_type.from_array_and_metadata(
@@ -332,8 +331,8 @@ def conventional_multislice_step(
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
 
-    if config.get("enable_mps"):
-        potential_slice = potential_slice.copy_to_device("mps")
+    #if config.get("enable_mps"):
+    #    potential_slice = potential_slice.copy_to_device("mps")
 
     if isinstance(potential_slice, TransmissionFunction):
         transmission_function = potential_slice
@@ -376,7 +375,10 @@ def _update_measurements(
     for i, detector in enumerate(detectors):
 
         new_measurement = detector.detect(waves)
-        
+
+        if config.get("enable_mps"):
+            new_measurement = new_measurement.copy_to_device("cpu")
+
         if additive:
             measurements[i].array[measurement_index] += new_measurement.array
         else:
@@ -452,10 +454,11 @@ def multislice_and_detect(
     """
     waves = waves.ensure_real_space()
     detectors = _validate_detectors(detectors)
-    waves = waves.copy()
     
     if config.get("enable_mps"):
         waves = waves.copy_to_device("mps")
+    else:
+        waves = waves.copy()
 
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
@@ -492,7 +495,7 @@ def multislice_and_detect(
         extra_ensemble_axes_metadata,
     ) = _potential_ensemble_shape_and_metadata(potential)
 
-    if sum(extra_ensemble_axes_shape) == 1:
+    if sum(extra_ensemble_axes_shape) <= 1:
         measurements = None
     else:
         measurements = allocate_multislice_measurements(
@@ -501,7 +504,7 @@ def multislice_and_detect(
             extra_ensemble_axes_shape,
             extra_ensemble_axes_metadata,
         )
-
+    
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
     pbar = TqdmWrapper(

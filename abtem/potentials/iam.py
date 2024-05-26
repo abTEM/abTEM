@@ -26,6 +26,7 @@ from abtem.atoms import (
     plane_to_axes,
     rotate_atoms_to_plane,
 )
+from abtem.core import config
 from abtem.core.axes import (
     AxisMetadata,
     FrozenPhononsAxis,
@@ -33,7 +34,7 @@ from abtem.core.axes import (
     ThicknessAxis,
     _find_axes_type,
 )
-from abtem.core.backend import get_array_module, validate_device
+from abtem.core.backend import get_array_module, validate_device, tp
 from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
@@ -377,14 +378,13 @@ class _FieldBuilder(BaseField):
     @staticmethod
     def _wrap_build_potential(potential, first_slice, last_slice):
         potential = potential.item()
-        array = potential.build(first_slice, last_slice, lazy=False).array
+        array = potential.build(first_slice, last_slice, lazy=False).copy_to_device(potential.device).array
         return array
 
     def build(
         self,
         first_slice: int = 0,
         last_slice: int = None,
-        max_batch: int | str = 1,
         lazy: bool = None,
     ) -> FieldArray:
         """
@@ -396,8 +396,6 @@ class _FieldBuilder(BaseField):
             Index of the first slice of the generated potential.
         last_slice : int, optional
             Index of the last slice of the generated potential
-        max_batch : int or str, optional
-            Maximum number of slices to calculate in task. Default is 1.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             value set in the configuration file.
@@ -414,7 +412,7 @@ class _FieldBuilder(BaseField):
 
         if last_slice is None:
             last_slice = len(self)
-
+        
         if lazy:
             blocks = self.ensemble_blocks(self._default_ensemble_chunks)
 
@@ -443,11 +441,8 @@ class _FieldBuilder(BaseField):
 
         else:
             xp = get_array_module(self.device)
-
-            array = xp.zeros(
-                self.ensemble_shape + (last_slice - first_slice,) + self.base_shape[1:],
-                dtype=get_dtype(complex=False),
-            )
+            shape = self.ensemble_shape + (last_slice - first_slice,) + self.base_shape[1:]
+            array = None
 
             if self.ensemble_shape:
                 for i, _, potential in self.generate_blocks(1):
@@ -457,11 +452,22 @@ class _FieldBuilder(BaseField):
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
                     ):
+                        if array is None:
+                            xp = get_array_module(slic.array)
+                            array = xp.zeros(shape, dtype=get_dtype(complex=False))
+                        
                         array[i + (j,)] = slic.array[0]
 
             else:
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
+                    if array is None:
+                        xp = get_array_module(slic.array)
+                        array = xp.zeros(shape, dtype=get_dtype(complex=False))
+                    
                     array[j] = slic.array[0]
+            
+            if array is None:
+                raise RuntimeError("No slices generated.")
 
         potential = self._array_object(
             array,
@@ -694,7 +700,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 exit_planes=exit_planes,
                 extent=self.extent,
             )
-
             if return_depth:
                 depth = cumulative_thickness[stop - 1]
                 yield depth, potential_array

@@ -1417,6 +1417,7 @@ class PlaneWave(_WavesBuilder):
         detectors: BaseDetector = None,
         max_batch: int | str = "auto",
         lazy: bool = None,
+        **kwargs,
     ) -> Waves:
         """
         Run the multislice algorithm, after building the plane-wave wave function as needed. The grid of the wave
@@ -1455,7 +1456,7 @@ class PlaneWave(_WavesBuilder):
         else:
             probes = self._lazy_build_waves(self, max_batch)
 
-        multislice = MultisliceTransform(potential, detectors)
+        multislice = MultisliceTransform(potential, detectors, multislice_func_kwargs=kwargs)
 
         measurements = probes.apply_transform(multislice)
 
@@ -1730,6 +1731,7 @@ class Probe(_WavesBuilder):
         detectors: BaseDetector = None,
         max_batch: int | str = "auto",
         lazy: bool = None,
+        **kwargs
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Run the multislice algorithm for probe wave functions at the provided positions.
@@ -1761,7 +1763,7 @@ class Probe(_WavesBuilder):
             scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
         )
 
-        multislice = MultisliceTransform(potential, detectors)
+        multislice = MultisliceTransform(potential, detectors, multislice_func_kwargs=kwargs)
 
         measurements = probes.apply_transform(multislice)
         return _reduce_ensemble(measurements)

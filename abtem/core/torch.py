@@ -82,10 +82,13 @@ class TorchNDArray:
     __radd__ = _binary_operation("__radd__")
     __sub__ = _binary_operation("__sub__")
     __rsub__ = _binary_operation("__rsub__")
+    __imul__ = _binary_operation("__imul__")
     __mul__ = _binary_operation("__mul__")
     __rmul__ = _binary_operation("__rmul__")
     __truediv__ = _binary_operation("__truediv__")
     __rtruediv__ = _binary_operation("__rtruediv__")
+    __mod__ = _binary_operation("__mod__")
+    __rmod__ = _binary_operation("__rmod__")
 
     __eq__ = _binary_operation("__eq__")
     __ne__ = _binary_operation("__ne__")
@@ -126,6 +129,9 @@ def ndarray_initialize(name, namespace):
 
 
 def asarray(data, dtype=None):
+    if not isinstance(data, np.ndarray):
+        data = np.array(data)
+
     if dtype is None:
         dtype = data.dtype
 
@@ -143,6 +149,17 @@ def asnumpy(torch_ndarray):
     return torch_ndarray.tensor.cpu().numpy()
 
 
+def zeros(shape, dtype):
+    return TorchNDArray(torch.zeros(*shape, dtype=dtype_map[dtype], device="mps"))
+
+
+def scatter_add(array, i, j, v):
+    shape = array.shape
+    index = j + shape[1] * i
+    tensor = array.flatten().scatter_add_(0, index, v).reshape(shape)
+    return TorchNDArray(tensor)
+
+
 torch_numpy_fft = SimpleNamespace()
 torch_numpy_fft.fft2 = ndarray_func("fft2", torch.fft)
 torch_numpy_fft.ifft2 = ndarray_func("ifft2", torch.fft)
@@ -157,6 +174,12 @@ torch_numpy.asnumpy = asnumpy
 torch_numpy.exp = ndarray_func("exp", torch)
 torch_numpy.sqrt = ndarray_func("sqrt", torch)
 torch_numpy.cos = ndarray_func("cos", torch)
+torch_numpy.sin = ndarray_func("sin", torch)
+torch_numpy.floor = ndarray_func("floor", torch)
 torch_numpy.ndarray = TorchNDArray
 torch_numpy.Tensor = torch.Tensor
 torch_numpy.array = np.array
+torch_numpy.zeros = zeros
+torch_numpy.scatter_add = scatter_add
+torch_numpy.int32 = np.int32
+torch_numpy.int64 = np.int64

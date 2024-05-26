@@ -14,18 +14,20 @@ from scipy.interpolate import interp1d
 from scipy.optimize import brentq, fsolve
 from scipy.special import erf
 
+from abtem.core import config
 from abtem.core.backend import (
     cp,
     get_array_module,
     get_scipy_module,
     get_ndimage_module,
 )
-from abtem.core.backend import cupyx
+from abtem.core.backend import cupyx, tp
 from abtem.core.backend import device_name_from_array_module
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import disk_meshgrid
 from abtem.core.grid import polar_spatial_frequencies
 from abtem.core.grid import spatial_frequencies
+from abtem.core.torch import TorchNDArray
 from abtem.core.utils import EqualityMixin, CopyMixin, get_dtype
 from abtem.parametrizations import validate_parametrization
 
@@ -374,24 +376,28 @@ def superpose_deltas(
     xp = get_array_module(array)
     shape = array.shape
 
-    positions = xp.array(positions)
+    positions = np.asarray(positions)
 
     if round_positions:
         rounded = xp.round(positions).astype(xp.int32)
         i, j = rounded[:, 0][None] % shape[0], rounded[:, 1][None] % shape[1]
         v = xp.array([1.0], dtype=get_dtype(complex=False))[:, None]
     else:
-        rounded = xp.floor(positions).astype(xp.int32)
+        rounded =  np.floor(positions).astype(np.int32)
         rows, cols = rounded[:, 0], rounded[:, 1]
         x = positions[:, 0] - rows
         y = positions[:, 1] - cols
         xy = x * y
-        i = xp.array([rows % shape[0], (rows + 1) % shape[0]] * 2)
-        j = xp.array([cols % shape[1]] * 2 + [(cols + 1) % shape[1]] * 2)
-        v = xp.array(
+        i = np.asarray([rows % shape[0], (rows + 1) % shape[0]] * 2)
+        j = np.asarray([cols % shape[1]] * 2 + [(cols + 1) % shape[1]] * 2)
+        v = np.asarray(
             [1 + xy - y - x, x - xy, y - xy, xy], dtype=get_dtype(complex=False)
         )
-
+    
+    i = xp.asarray(i, dtype=xp.int64).ravel()
+    j = xp.asarray(j, dtype=xp.int64).ravel()
+    v = xp.asarray(v).ravel()
+    
     if weights is not None:
         v = v * weights[None]
 
@@ -399,6 +405,8 @@ def superpose_deltas(
         xp.add.at(array, (i, j), v)
     elif device_name_from_array_module(xp) == "gpu":
         cupyx.scatter_add(array, (i, j), v)
+    elif device_name_from_array_module(xp) == "mps":
+        array = xp.scatter_add(array, i, j, v)
     else:
         raise RuntimeError()
 
@@ -452,6 +460,9 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
                 -xp.asarray(k2, dtype=get_dtype(complex=False))
                 * (xp.pi * sigma / xp.sqrt(3 / 2)) ** 2
             )
+        
+        if config.get("enable_mps"):
+            f = tp.asarray(f)
 
         return f
 
@@ -482,6 +493,10 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         fourier_space: bool = False,
     ):
         xp = get_array_module(device)
+
+        if config.get("enable_mps"):
+            xp = tp
+
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
@@ -492,7 +507,7 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
             )
 
             positions = atoms.positions[atoms.numbers == number]
-
+            
             positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
 
             temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
@@ -502,11 +517,12 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
             )
 
             temp_array = fft2(temp_array, overwrite_x=True)
-
-            temp_array *= scattering_factor / sinc(gpts, sampling, device)
-
+            
+            temp_array = temp_array * scattering_factor #/ sinc(gpts, sampling, device)
+            
             if not fourier_space:
-                temp_array = ifft2(temp_array, overwrite_x=True).real
+               
+               temp_array = ifft2(temp_array, overwrite_x=True).real
 
             array += temp_array
 
