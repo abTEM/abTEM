@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from numbers import Number
 
 import numpy as np
 from numba import njit, prange
@@ -10,10 +9,26 @@ from ase.cell import Cell
 
 
 def reciprocal_cell(cell):
+    """
+    Calculate the reciprocal cell of a unit cell.
+
+    Parameters
+    ----------
+    cell : 3x3 np.ndarray
+        The unit cell.
+
+    Returns
+    -------
+    3x3 np.ndarray
+        The reciprocal cell.
+    """
     return np.linalg.pinv(cell).transpose()
 
 
-def calculate_g_vec(hkl: np.ndarray, cell):
+def calculate_g_vec(hkl: np.ndarray, cell: Cell):
+    """
+    
+    """
     return hkl @ cell.reciprocal()
 
 
@@ -166,19 +181,20 @@ def filter_reciprocal_space_vectors(
         if len(orientation_matrices.shape) == 2:
             orientation_matrices = orientation_matrices[None]
 
-        if not len(orientation_matrices.shape) == 3:
-            raise ValueError(
-                "'orientation_matrices' must have shape (3, 3) or (n, 3, 3)"
-            )
+        orientation_matrices = orientation_matrices.reshape(-1, 3, 3)
 
-        mask = np.zeros(len(g), dtype=bool)
+        # if not len(orientation_matrices.shape) == 3:
+        #     raise ValueError(
+        #         "'orientation_matrices' must have shape (3, 3) or (n, 3, 3)"
+        #     )
+
+        mask = np.zeros(len(hkl), dtype=bool)
 
         fast_filter_excitation_errors(
             mask, g, orientation_matrices, energy2wavelength(energy), sg_max
         )
 
     mask *= get_reflection_condition(hkl, centering)
-
     mask *= g_length < k_max
 
     return mask

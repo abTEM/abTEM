@@ -138,8 +138,9 @@ def integrate_ellipse_around_pixels(
     """
     ellipse = create_ellipse(a, b)
     structure = np.array(tuple(i - n for i, n in zip(np.where(ellipse), (a, b)))).T
-
+    
     intensities = np.zeros_like(array, shape=array.shape[:-2] + (nm.shape[-2],))
+    
     for i in range(nm.shape[-2]):
         nms = nm[..., i, :] - structure[(None,) * len(nm.shape[:-2])]
         nms = nms[
@@ -147,6 +148,8 @@ def integrate_ellipse_around_pixels(
             * (nms[..., 0] < array.shape[-2])
             * (nms[..., 1] < array.shape[-1])
         ]
+
+
         intensities[..., i] = array[
             prefix_indices(array.shape[:-2]) + (nms[:, 0], nms[:, 1])
         ].sum((-1,))
@@ -166,31 +169,33 @@ def index_diffraction_spots(
     """
     Indexes diffraction spots in an array.
 
-    Parameters:
-        array : np.ndarray
-            The input array containing diffraction spot intensities.
-        sampling : tuple[float, float]
-            The sampling rate of the array in the x and y directions [Å].
-        cell : Atoms | Cell | float | tuple[float, float, float]
-            The unit cell of the crystal structure.
-        energy : float
-            The energy of the incident electrons [eV].
-        k_max : float
-            The maximum value of the wavevector transfer [1/Å].
-        sg_max : float
-            The maximum value of the excitation error [1/Å].
-        rotation : tuple[float, float, float], optional
-            The Euler rotation angles of the crystal structure [rad.]. Defaults to (0.0, 0.0, 0.0).
-        rotation_axes : str, optional
-            The intrinsic Euler rotation axes convention. Defaults to "zxz".
-        intensity_min : float, optional
-            The minimum intensity threshold. Defaults to 1e-12.
-        centering : str, optional
-            The centering of the crystal structure. Defaults to "P".
+    Parameters
+    ----------
+    array : np.ndarray
+        The input array containing diffraction spot intensities.
+    sampling : tuple[float, float]
+        The sampling rate of the array in the x and y directions [Å].
+    cell : Atoms | Cell | float | tuple[float, float, float]
+        The unit cell of the crystal structure.
+    energy : float
+        The energy of the incident electrons [eV].
+    k_max : float
+        The maximum value of the wavevector transfer [1/Å].
+    sg_max : float
+        The maximum value of the excitation error [1/Å].
+    rotation : tuple[float, float, float], optional
+        The Euler rotation angles of the crystal structure [rad.]. Defaults to (0.0, 0.0, 0.0).
+    rotation_axes : str, optional
+        The intrinsic Euler rotation axes convention. Defaults to "zxz".
+    intensity_min : float, optional
+        The minimum intensity threshold. Defaults to 1e-12.
+    centering : str, optional
+        The centering of the crystal structure. Defaults to "P".
 
-    Returns:
-        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-            A tuple containing the indexed hkl values, wavevector transfer values, pixel coordinates, and intensities.
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        A tuple containing the indexed hkl values, wavevector transfer values, pixel coordinates, and intensities.
     """
 
     assert len(hkl.shape) == 2
@@ -198,8 +203,8 @@ def index_diffraction_spots(
 
     if orientation_matrices is None:
         orientation_matrices = np.eye(3)[(None,) * len(array.shape[:-2])]
-
-    assert is_broadcastable(array.shape[:-1], orientation_matrices.shape[:-2])
+    
+    assert is_broadcastable(array.shape[:-2], orientation_matrices.shape[:-2])
 
     reciprocal_lattice_vectors = np.matmul(
         cell.reciprocal(), np.swapaxes(orientation_matrices, -2, -1)
@@ -210,7 +215,7 @@ def index_diffraction_spots(
     intensities = array[prefix_indices(array.shape[:-2]) + (nm[..., 0], nm[..., 1])]
 
     if radius is not None:
-
+        
         a, b = tuple(int(np.round(radius / d)) for d in sampling)
         intensities = integrate_ellipse_around_pixels(array, nm, a, b)
 
@@ -219,7 +224,7 @@ def index_diffraction_spots(
     mask = overlapping_spots_mask(nm, sg)
 
     intensities = intensities * mask
-
+    
     return intensities
 
 

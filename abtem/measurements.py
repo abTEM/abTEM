@@ -2287,7 +2287,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         radius: float = None,
         centering: str = "P",
         energy: float = None,
-        
     ) -> IndexedDiffractionPatterns:
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
@@ -2357,14 +2356,36 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         hkl = hkl[mask]
 
+        def _index_diffraction_spots(
+            array, orientation_matrices, hkl, sampling, cell, energy, radius
+        ):
+            return index_diffraction_spots(
+                array=array,
+                hkl=hkl,
+                sampling=sampling,
+                cell=cell,
+                energy=energy,
+                radius=radius,
+                orientation_matrices=orientation_matrices,
+            )
+
         if self.is_lazy:
-            intensities = self.array.map_blocks(
-                index_diffraction_spots,
+            chunks = tuple(
+                c if n == sum(c) else 1
+                for n, c in zip(orientation_matrices.shape, self.array.chunks[:-2])
+            )
+            lazy_orientation_matrices = da.from_array(
+                orientation_matrices, chunks=chunks + (3, 3)
+            )
+
+            intensities = da.map_blocks(
+                _index_diffraction_spots,
+                self.array,
+                lazy_orientation_matrices,
                 hkl=hkl,
                 sampling=self.sampling,
                 cell=cell,
                 energy=energy,
-                orientation_matrices=orientation_matrices,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
                 chunks=self.array.chunks[:-2] + (hkl.shape[0],),
@@ -3987,7 +4008,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         kwargs["reciprocal_lattice_vectors"] = self.reciprocal_lattice_vectors[
             new_items
         ]
-        
+
         return self.__class__(**kwargs)
 
     def remove_low_intensity(self, threshold: float = 1e-3):
