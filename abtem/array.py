@@ -66,38 +66,30 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
         shape = (shape,)
 
     for metadata, n in zip(axes_metadata, shape):
-        hyperspy_axes.append({"size": n})
+        hyperspy_axis = {"size": n, "name": metadata.label}
 
-        axes_mapping = {
-            "sampling": "scale",
-            "units": "units",
-            "label": "name",
-            "offset": "offset",
-        }
+        if isinstance(metadata, LinearAxis):
+            hyperspy_axis["scale"] = metadata.sampling
+            hyperspy_axis["offset"] = metadata.offset
+            hyperspy_axis["units"] = metadata.units
+        elif isinstance(metadata, OrdinalAxis):
 
-        if isinstance(metadata, OrdinalAxis):
-            # TODO : when hyperspy supports arbitrary (non-uniform) DataAxis this should be updated
-
-            if len(metadata.values) > 1:
-                sampling = metadata.values[1] - metadata.values[0]
+            if all(isinstance(value, Number) for value in metadata.values) and (
+                all(
+                    metadata.values[i] <= metadata.values[i + 1]
+                    for i in range(len(metadata.values) - 1)
+                )
+            ):
+                hyperspy_axis["axis"] = metadata.values
+                hyperspy_axis["units"] = metadata.units
             else:
-                sampling = 1.0
+                warnings.warn(
+                    f"Axis ({metadata.label}) not supported by hyperspy, some metadata will be lost."
+                )
+        else:
+            raise RuntimeError()
 
-            if metadata.units is None:
-                units = ""
-            else:
-                units = metadata.units
-
-            metadata = LinearAxis(
-                label=metadata.label,
-                units=units,
-                sampling=sampling,
-                offset=metadata.values[0],
-            )
-
-        for attr, mapped_attr in axes_mapping.items():
-            if hasattr(metadata, attr):
-                hyperspy_axes[-1][mapped_attr] = getattr(metadata, attr)
+        hyperspy_axes.append(hyperspy_axis)
 
     return hyperspy_axes
 
@@ -159,7 +151,7 @@ class ComputableList(list):
 
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
-        ) as (_, profiler, resource_profiler, _):
+        ) as (_, profiler, resource_profiler):
             output = dask.compute(computables, **kwargs)[0]
 
         profilers = ()
@@ -195,7 +187,7 @@ def _compute_context(
     progress_bar: bool = None, profiler=False, resource_profiler=False
 ):
     if progress_bar is None:
-        progress_bar = config.get("local_diagnostics.progress_bar")
+        progress_bar = config.get("diagnostics.progress_bar")
 
     if progress_bar:
         if progress_bar == "tqdm":
@@ -217,17 +209,12 @@ def _compute_context(
     else:
         resource_profiler = nullcontext()
 
-    dask_configuration = {
-        "optimization.fuse.active": config.get("dask.fuse"),
-    }
-
     with (
         progress_bar as progress_bar,
         profiler as profiler,
         resource_profiler as resource_profiler,
-        dask.config.set(dask_configuration) as dask_configuration,
     ):
-        yield progress_bar, profiler, resource_profiler, dask_configuration
+        yield progress_bar, profiler, resource_profiler
 
 
 def _compute(
@@ -248,7 +235,7 @@ def _compute(
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
-    ) as (_, profiler, resource_profiler, _):
+    ) as (_, profiler, resource_profiler):
         arrays = dask.compute(
             [wrapper.array for wrapper in dask_array_wrappers], **kwargs
         )[0]
@@ -326,7 +313,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def ensemble_dims(self):
         """Number of ensemble dimensions."""
         return len(self.shape) - self.base_dims
-    
+
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
         return [UnknownAxis() for _ in range(self._base_dims)]
@@ -426,20 +413,17 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        array : array
-            Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the wave
-            function `y`- and `x`-axis, respectively.
+        array : ndarray
+            Array defining the array object.
         axes_metadata : list of AxesMetadata
-            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
-            axes must be RealSpaceAxis.
+            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array.
         metadata :
-            A dictionary defining wave function metadata. All items will be added to the metadata of measurements
-            derived from the waves. The metadata must contain the electron energy [eV].
-
+            A dictionary defining the metadata of the array object.
+        
         Returns
         -------
-        wave_functions : Waves
-            The created wave functions.
+        array_object : ArrayObject or subclass of ArrayObject
+            The array object.
         """
         raise NotImplementedError
 
@@ -838,7 +822,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         for item, expanded_axes_metadata in zip(items, expanded_axes_metadatas):
             last_indexed += 1
             if isinstance(item, Number):
-                metadata = {**metadata, **expanded_axes_metadata.item_metadata(item)}
+                metadata = {
+                    **metadata,
+                    **expanded_axes_metadata.item_metadata(item, self.metadata),
+                }
             else:
                 try:
                     axes_metadata += [expanded_axes_metadata[item].copy()]
@@ -1050,7 +1037,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = copy_to_device(self.array, device)
-        
+
         return self.__class__(**kwargs)
 
     def to_cpu(self) -> T:
@@ -1300,12 +1287,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             num_ensemble_dims = len(transform._out_ensemble_shape(self))
 
-            # if transform._num_outputs > 4:
-            #     chunks = chunks[:num_ensemble_dims]
-            #     symbols = tuple_range(num_ensemble_dims)
-            #     meta = np.array((), dtype=object)
-            # else:
-
             base_shape = transform._out_base_shape(self)
             symbols = tuple_range(num_ensemble_dims + len(base_shape))
             chunks = chunks[: -len(base_shape)] + base_shape
@@ -1364,55 +1345,98 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self
 
-    def to_hyperspy(self):
-        """Convert ArrayObject to a Hyperspy signal."""
+    def to_hyperspy(self, transpose: bool = True):
+            """
+            Convert ArrayObject to a Hyperspy signal.
 
-        try:
-            import hyperspy.api as hs
-        except ImportError:
-            raise ImportError(
-                "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
+            Parameters
+            ----------
+            transpose : bool, optional
+                If True, transpose the base axes of the array before converting to a Hyperspy signal.
+                Default is True.
+
+            Returns
+            -------
+            signal : Hyperspy signal
+                The converted Hyperspy signal.
+
+            Raises
+            ------
+            ImportError
+                If Hyperspy is not installed.
+
+            RuntimeError
+                If the number of base dimensions is not 1 or 2.
+
+            Notes
+            -----
+            This method requires Hyperspy to be installed. You can find more information
+            about Hyperspy at https://hyperspy.org.
+            """
+
+            try:
+                import hyperspy.api as hs
+            except ImportError:
+                raise ImportError(
+                    "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
+                )
+
+            if self._base_dims == 1:
+                signal_type = hs.signals.Signal1D
+            elif self._base_dims == 2:
+                signal_type = hs.signals.Signal2D
+            else:
+                raise RuntimeError()
+
+            axes_base = _to_hyperspy_axes_metadata(
+                self.base_axes_metadata,
+                self.base_shape,
+            )
+            ensemble_axes_metadata = _to_hyperspy_axes_metadata(
+                self.ensemble_axes_metadata,
+                self.ensemble_shape,
             )
 
-        if self._base_dims == 1:
-            signal_type = hs.signals.Signal1D
-        elif self._base_dims == 2:
-            signal_type = hs.signals.Signal2D
-        else:
-            raise RuntimeError()
+            xp = get_array_module(self.device)
 
-        axes_base = _to_hyperspy_axes_metadata(
-            self.base_axes_metadata,
-            self.base_shape,
-        )
-        ensemble_axes_metadata = _to_hyperspy_axes_metadata(
-            self.ensemble_axes_metadata,
-            self.ensemble_shape,
-        )
+            axes_base_indices = tuple_range(
+                offset=len(self.ensemble_shape), length=len(self.base_shape)
+            )
 
-        xp = get_array_module(self.device)
+            ensemble_axes = tuple_range(
+                offset=0,
+                length=len(self.ensemble_shape),
+            )
 
-        axes_base_indices = tuple_range(
-            offset=len(self.ensemble_shape), length=len(self.base_shape)
-        )
+            source = ensemble_axes + axes_base_indices
+            destination = ensemble_axes + axes_base_indices[::-1]
 
-        ensemble_axes = tuple_range(
-            offset=0,
-            length=len(self.ensemble_shape),
-        )
+            if transpose:
+                array = xp.moveaxis(self.array, source=source, destination=destination)
+            else:
+                array = self.array
 
-        array = xp.transpose(self.array, ensemble_axes + axes_base_indices[::-1])
+            s = signal_type(array, axes=ensemble_axes_metadata[::-1] + axes_base[::-1])
 
-        s = signal_type(array, axes=ensemble_axes_metadata + axes_base[::-1])
+            if self.is_lazy:
+                s = s.as_lazy()
 
-        if self.is_lazy:
-            s = s.as_lazy()
-
-        return s
+            return s
 
     def to_data_array(self):
-        """Convert ArrayObject to a xarray DataArray."""
-
+        """
+        Convert ArrayObject to a xarray DataArray. Requires xarray to be installed.
+        
+        Returns
+        -------
+        xarray.DataArray
+            The converted xarray DataArray.
+        
+        Raises
+        ------
+        ImportError
+            If xarray is not installed.
+        """
         try:
             import xarray as xr
         except ImportError:
@@ -1432,11 +1456,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 raise ValueError("The shape of the coordinates is not supported.")
 
             dims.append(axis.label)
-            
+
             coords[axis.label] = xr.DataArray(
                 x, name=axis.label, dims=(axis.label,), attrs={"units": axis.units}
             )
-        
+
         attrs = self.metadata
         attrs["long_name"] = self.metadata["label"]
 
@@ -1551,12 +1575,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             for block_indices, chunk_range in iterate_chunk_ranges(chunks):
                 if len(block_indices) == 0:
                     block_indices = 0
-                # blocks.itemset(
-                #     block_indices,
-                #     _wrap_with_array(
-                #         (array[chunk_range], ensemble_axes_metadata[block_indices]), 1
-                #     ),
-                # )
 
                 blocks.itemset(
                     block_indices,
@@ -1663,6 +1681,7 @@ def stack(
         The axis metadata describing the new axis.
     axis : int
         The ensemble axis in the resulting array object along which the input arrays are stacked.
+    
     Returns
     -------
     array_object : ArrayObject
@@ -1679,10 +1698,10 @@ def stack(
         if not all(isinstance(element, str) for element in axis_metadata):
             raise ValueError()
         axis_metadata = OrdinalAxis(values=axis_metadata)
-    
+
     elif isinstance(axis_metadata, dict):
         axis_metadata = OrdinalAxis(**axis_metadata)
-    
+
     elif not isinstance(axis_metadata, AxisMetadata):
         raise ValueError()
 
@@ -1776,6 +1795,7 @@ def moveaxis(array_object, source, destination):
         array=array, axes_metadata=axes_metadata, metadata=array_object.metadata
     )
 
+
 def _concatenate_axes_metadata(axes_metadata):
     if len(axes_metadata) == 0:
         raise RuntimeError()
@@ -1817,7 +1837,7 @@ def _concatenate_axes_metadata(axes_metadata):
 #     array_blocks = _unpack_array_object_blocks(blocks)
 #     concat_array = concatenate_array_blocks(array_blocks)
 #     #concat_axes_metadata = _axes_metadata_from_array_object_blocks(blocks)
-    
+
 #     concat_array_object = ArrayObject(array=concat_array)
 #     #concat_array_object = ArrayObject(array=concat_array, ensemble_axes_metadata=concat_axes_metadata)
 #     return concat_array_object
