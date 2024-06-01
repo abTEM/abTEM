@@ -77,6 +77,10 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         xp = get_array_module(array_object.device)
         return xp.array((), dtype=self._out_dtype(array_object))
 
+    @property
+    def metadata(self):
+        return {}
+
     def _out_metadata(self, array_object: T, index: int = 0) -> dict:
         """
         Metadata added to the measurements created when detecting the given waves.
@@ -90,7 +94,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         -------
         metadata : dict
         """
-        return array_object.metadata
+        return {**array_object.metadata, **self.metadata}
 
     def _out_dtype(
         self, array_object: ArrayObject | T, index: int = 0
@@ -474,15 +478,22 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def __iter__(self) -> Iterator[ArrayObjectTransform]:
         return iter(self.transforms)
 
-    def _out_metadata(self, array_object, index=0):
+    @property
+    def metadata(self):
+        metadata = [transform.metadata for transform in self.transforms]
+        return reduce(lambda a, b: {**a, **b}, metadata)
+
+    def _out_metadata(self, array_object, index: int = 0):
         if self._metadata is not None:
             return self._metadata[index]
-
+        
         metadata = [
             transform._out_metadata(array_object, index)
             for transform in self.transforms
         ]
-        return reduce(lambda a, b: {**a, **b}, metadata)
+
+        out_metadata = reduce(lambda a, b: {**a, **b}, metadata)
+        return out_metadata
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -491,6 +502,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
             for i, transform in enumerate(self.transforms)
         ]
         ensemble_axes_metadata = list(itertools.chain(*ensemble_axes_metadata))
+        
         return ensemble_axes_metadata
 
     def _out_ensemble_axes_metadata(self, array_object, index=0) -> list[AxisMetadata]:

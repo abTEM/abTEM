@@ -94,6 +94,18 @@ def precession_tilts(
 
 
 class BaseBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
+
+    def _out_metadata(self, waves, index=None):
+        metadata = super()._out_metadata(waves, index=index)
+
+        if "base_tilt_x" in waves.metadata:
+            metadata["base_tilt_x"] += waves.metadata["base_tilt_x"]
+        
+        if "base_tilt_y" in waves.metadata:
+            metadata["base_tilt_y"] += waves.metadata["base_tilt_y"]
+
+        return metadata
+
     def apply(self, waves: Waves, in_place: bool = False) -> Waves:
         """
         Apply tilt(s) to (an ensemble of) wave function(s).
@@ -117,13 +129,16 @@ class BaseBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
             array = da.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
         else:
             array = xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
+        
+        
 
         kwargs = waves._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
-        kwargs["metadata"] = {**kwargs["metadata"], **self.metadata}
+        kwargs["metadata"] = self._out_metadata(waves)
         kwargs["ensemble_axes_metadata"] = (
             self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
         )
+        
         return waves.__class__(**kwargs)
 
 
@@ -185,7 +200,7 @@ class AxisAlignedBeamTilt(BaseBeamTilt):
     """
 
     def __init__(self, tilt: float | BaseDistribution = 0.0, direction: str = "x"):
-
+        
         if isinstance(tilt, (np.ndarray, list, tuple)):
             tilt = validate_distribution(tilt)
 

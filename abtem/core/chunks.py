@@ -36,8 +36,8 @@ def config_chunk_size(device):
     if device == "gpu":
         return parse_bytes(config.get("dask.chunk-size-gpu"))
 
-    if device != "cpu":
-        raise RuntimeError()
+    elif device != "cpu":
+        raise RuntimeError("Unknown device")
 
     return parse_bytes(config.get("dask.chunk-size"))
 

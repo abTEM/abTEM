@@ -261,7 +261,7 @@ class Visualization:
             )
 
             row_titles = [
-                l.format_title(".3g", include_label=i == 0)
+                l.format_title(".3g", include_label=i == len(axes_metadata) - 1)
                 for i, l in enumerate(axes_metadata)
             ]
 
@@ -441,7 +441,7 @@ class Visualization:
     def set_row_titles(
         self,
         titles: str | list[str],
-        shift: float = 0.0,
+        pad: float = 25.0,
         fontsize: float = 12,
         **kwargs,
     ):
@@ -449,16 +449,33 @@ class Visualization:
             row_title.remove()
 
         row_titles = []
-        for i, ax in enumerate(self.axes[0, :]):
+        for i, ax in enumerate(self.axes[-1, :]):
+            #print(ax.yaxis.labelpad, ax.yaxis.label.get_position())
+            #annotation = ax.text(2.2,0.5,"row title", size=12,
+            #    verticalalignment='center', rotation=270)
+
+            # annotation = ax.annotate(
+            #     titles[i],
+            #     xy=(0, 0.5),
+            #     xytext=(-ax.yaxis.labelpad - shift, 0),
+            #     xycoords=ax.yaxis.label,
+            #     textcoords="offset points",
+            #     ha="right",
+            #     va="center",
+            #     rotation=90,
+            #     fontsize=fontsize,
+            #     **kwargs,
+            # )
+
             annotation = ax.annotate(
                 titles[i],
-                xy=(0, 0.5),
-                xytext=(-ax.yaxis.labelpad - shift, 0),
-                xycoords=ax.yaxis.label,
+                xy=(1, 0.5),
+                xytext=(pad, 0),
+                xycoords="axes fraction",
                 textcoords="offset points",
                 ha="right",
                 va="center",
-                rotation=90,
+                rotation=270,
                 fontsize=fontsize,
                 **kwargs,
             )
@@ -538,6 +555,9 @@ class Visualization:
                 ax.spines["right"].set_visible(False)
                 ax.spines["bottom"].set_visible(False)
                 ax.spines["left"].set_visible(False)
+    
+    def axis_off(self):
+        self.axis("none", spines=False)
 
     def remove_artists(self):
         if self.artists is None:

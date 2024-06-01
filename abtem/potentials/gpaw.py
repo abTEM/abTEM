@@ -1,4 +1,5 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
+
 from __future__ import annotations
 
 import contextlib
@@ -7,64 +8,43 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from numbers import Number
-from typing import Any
-from typing import TYPE_CHECKING
-from typing import Tuple, Union, List
+from typing import TYPE_CHECKING, Any, List, Tuple, Union
 
 import dask
 import dask.array as da
 import numpy as np
-from ase import Atoms
-from ase import units
-from ase.data import chemical_symbols, atomic_numbers
+from ase import Atoms, units
+from ase.data import atomic_numbers, chemical_symbols
 from scipy.interpolate import interp1d
 
 from abtem.core.axes import AxisMetadata
 from abtem.core.constants import eps0
 from abtem.core.electron_configurations import (
-    electron_configurations,
     config_str_to_config_tuples,
+    electron_configurations,
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
-from abtem.parametrizations import EwaldParametrization, LobatoParametrization
 from abtem.inelastic.phonons import (
+    BaseFrozenPhonons,
     DummyFrozenPhonons,
     FrozenPhonons,
-    BaseFrozenPhonons,
     _safe_read_atoms,
 )
-from abtem.potentials.charge_density import _generate_slices
-from abtem.potentials.charge_density import _interpolate_slice
-from abtem.potentials.iam import _PotentialBuilder, Potential, PotentialArray
+from abtem.parametrizations import EwaldParametrization, LobatoParametrization
+from abtem.potentials.charge_density import _generate_slices, _interpolate_slice
+from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
 try:
     from gpaw import GPAW
-    from gpaw.lfc import LFC, BasisFunctions
-    from gpaw.transformers import Transformer
-    from gpaw.utilities import unpack2
-    from gpaw.atom.aeatom import AllElectronAtom
-    from gpaw.io import Reader
-    from gpaw.density import RealSpaceDensity
-    from gpaw.mpi import SerialCommunicator
-    from gpaw.grid_descriptor import GridDescriptor
-    from gpaw.utilities import unpack_atomic_matrices
-    from gpaw.atom.shapefunc import shape_functions
-
-    if TYPE_CHECKING:
-        from gpaw.setup import Setups
+    sss
 except:
     GPAW = None
-    LFC = None
-    BasisFunctions = None
-    Transformer = None
-    unpack2 = None
-    Setups = None
-    AllElectronAtom = None
-    Reader = None
-    SerialCommunicator = None
-    GridDescriptor = None
-    unpack_atomic_matrices = None
+
+
+if GPAW is not None:
+    from gpaw.atom.shapefunc import shape_functions
+    from gpaw.mpi import SerialCommunicator
 
 
 def _get_gpaw_setups(atoms, mode, xc):
@@ -724,6 +704,7 @@ class GPAWParametrization:
         return electrons
 
     def _get_all_electron_atom(self, symbol, charge=0.0):
+        from gpaw.atom.aeatom import AllElectronAtom
 
         if isinstance(symbol, Number):
             symbol = chemical_symbols[symbol]
@@ -731,7 +712,7 @@ class GPAWParametrization:
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
             ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
             ae.run()
-            ae.scalar_relativistic=True
+            ae.scalar_relativistic = True
             ae.refine()
 
         # added_electrons = self._get_added_electrons(symbol, charge)
@@ -741,7 +722,7 @@ class GPAWParametrization:
 
         # # ae.run()
         # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-         #maxiter=5000, mix=0.005, dnmax=1e-5)
+        # maxiter=5000, mix=0.005, dnmax=1e-5)
 
         return ae
 
@@ -783,7 +764,9 @@ class GPAWParametrization:
         # instead it is replaced by the exact value fx(0)=Z
         fx = np.concatenate([[atomic_numbers[symbol]], fx])
 
-        fx = interp1d(k, fx, fill_value=(atomic_numbers[symbol], 0.), bounds_error=False)
+        fx = interp1d(
+            k, fx, fill_value=(atomic_numbers[symbol], 0.0), bounds_error=False
+        )
         return fx
 
     def _to_lobato(self, symbol, charge):
@@ -792,12 +775,12 @@ class GPAWParametrization:
 
         r = np.linspace(0, 20, 10000)
 
-        Z = np.trapz(4 * np.pi * r ** 2 * n(r), dx=np.diff(r))
-        fe0 = np.trapz(4 * np.pi * r ** 4 * n(r), dx=np.diff(r)) / units.Bohr / 3
+        Z = np.trapz(4 * np.pi * r**2 * n(r), dx=np.diff(r))
+        fe0 = np.trapz(4 * np.pi * r**4 * n(r), dx=np.diff(r)) / units.Bohr / 3
 
         k = np.linspace(0.0, 12, 100)
         fe = np.zeros(len(k))
-        fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi ** 2 * units.Bohr)
+        fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
         fe[k == 0] = fe0
 
         if isinstance(symbol, str):

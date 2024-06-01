@@ -140,147 +140,85 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         pass
 
 
-# class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
-#     """
-#     The ProjectionIntegratorPlan facilitates the creation of :class:`.ProjectionIntegrator` objects using the ``.build``
-#     method given a grid and a chemical symbol.
-#
-#     Parameters
-#     ----------
-#
-#     """
-#
-#     def __init__(self, periodic: bool, finite: bool):
-#         self._periodic = periodic
-#         self._finite = finite
+def correction_projected_scattering_factors(
+    symbol, gpts, sampling, short_range="lobato", long_range="peng"
+):
+    short_range = validate_parametrization(short_range)
+    long_range = validate_parametrization(long_range)
+
+    k, _ = polar_spatial_frequencies(gpts, sampling)
+
+    short_range = short_range.projected_scattering_factor(symbol)
+    long_range = long_range.projected_scattering_factor(symbol)
+
+    correction = short_range(k**2) - long_range(k**2)
+    # correction /= sinc()
+    return correction
 
 
-class GaussianScatteringFactors(FieldIntegrator):
-    def __init__(
-        self,
-        gaussian_scattering_factors,
-        error_function_scales,
-        correction_scattering_factors,
-    ):
-        self._gaussian_scattering_factors = gaussian_scattering_factors
-        self._error_function_scales = error_function_scales
-        self._correction_scattering_factors = correction_scattering_factors
+def gaussian_projected_scattering_factors(
+    symbol, gpts, sampling, parametrization="peng"
+):
+    parametrization = validate_parametrization(parametrization)
 
-    def _integrate_gaussian_scattering_factors(self, positions, a, b, sampling, device):
-        xp = get_array_module(device)
+    parameters = parametrization.scaled_parameters(
+        symbol, "projected_scattering_factor"
+    )
 
-        a = a - positions[:, 2]
-        b = b - positions[:, 2]
+    k, _ = polar_spatial_frequencies(gpts, sampling)
 
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
+    a = parameters[0, :, None, None]
+    b = parameters[1, :, None, None]
 
-        weights = (
-            np.abs(
-                erf(self._error_function_scales[:, None] * b[None])
-                - erf(self._error_function_scales[:, None] * a[None])
-            )
-            / 2
-        )
+    projected_gaussians = a * np.exp(-b * k[None] ** 2.0)
+    return projected_gaussians
 
-        array = xp.zeros(
-            self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
-        )
 
-        for i in range(5):
-            temp = xp.zeros_like(array, dtype=xp.complex64)
+def gaussian_projection_weights(symbol, a, b, parametrization="peng"):
+    parametrization = validate_parametrization(parametrization)
 
-            superpose_deltas(positions, temp, weights=weights[i])
+    parameters = parametrization.scaled_parameters(
+        symbol, "projected_scattering_factor"
+    )
 
-            array += fft2(temp, overwrite_x=False) * self._gaussian_scattering_factors[
-                i
-            ].astype(xp.complex64)
+    scales = np.pi / np.sqrt(parameters[1])[:, None]
 
-        return array
-
-    def _integrate_correction_factors(self, positions, a, b, sampling, device):
-        xp = get_array_module(device)
-
-        temp = xp.zeros(
-            self._gaussian_scattering_factors.shape[-2:], dtype=xp.complex64
-        )
-
-        positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
-
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
-
-        superpose_deltas(positions, temp)
-
-        return fft2(
-            temp, overwrite_x=False
-        ) * self._correction_scattering_factors.astype(xp.complex64)
-
-    def integrate_on_grid(
-        self,
-        positions: np.ndarray,
-        a: np.ndarray,
-        b: np.ndarray,
-        gpts: tuple[int, int],
-        sampling: tuple[float, float],
-        device: str = "cpu",
-        fourier_space: bool = False,
-    ) -> np.ndarray:
-        shape = self._gaussian_scattering_factors.shape[-2:]
-
-        assert gpts == shape
-
-        array = self._integrate_gaussian_scattering_factors(
-            positions, a, b, sampling, device
-        )
-
-        if self._correction_scattering_factors is not None:
-            array += self._integrate_correction_factors(
-                positions, a, b, sampling, device
-            )
-
-        if fourier_space:
-            return array
-        else:
-            return ifft2(array / sinc(shape, sampling, device)).real
+    weights = np.abs(erf(scales * b[None]) - erf(scales * a[None])) / 2
+    return weights
 
 
 class GaussianProjectionIntegrals(FieldIntegrator):
     """
     Parameters
     ----------
+    parametrization : str or Parametrization, optional
+        The correction radial potential parametrization to integrate. Used for correcting the dependence of the
+        potential close to the nuclear core. Default is the Lobato parametrization.
     gaussian_parametrization : str or Parametrization, optional
         The Gaussian radial potential parametrization to integrate. Must be parametrization described by a superposition
         of Gaussians. Default is the Peng parametrization.
-    correction_parametrization : str or Parametrization, optional
-        The correction radial potential parametrization to integrate. Used for correcting the dependence of the
-        potential close to the nuclear core. Default is the Lobato parametrization.
     cutoff_tolerance : float, optional
         The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. Default is 1e-3.
     """
 
     def __init__(
         self,
+        parametrization: str | Parametrization = "lobato",
         gaussian_parametrization: str | Parametrization = "peng",
-        correction_parametrization: str | Parametrization = "lobato",
         cutoff_tolerance: float = 1e-3,
     ):
         self._gaussian_parametrization = validate_parametrization(
             gaussian_parametrization
         )
 
-        if correction_parametrization is not None:
-            self._correction_parametrization = validate_parametrization(
-                correction_parametrization
-            )
-        else:
-            self._correction_parametrization = correction_parametrization
+        self._correction_parametrization = validate_parametrization(parametrization)
 
         self._cutoff_tolerance = cutoff_tolerance
 
         super().__init__(periodic=True, finite=True)
 
-        self._gaussian_scattering_factors = None
-        self._error_function_scales = None
-        self._correction_scattering_factors = None
+        self._gaussians = {}
+        self._corrections = {}
 
     @property
     def cutoff_tolerance(self):
@@ -304,46 +242,75 @@ class GaussianProjectionIntegrals(FieldIntegrator):
             b=1e3,
         )  # noqa
 
-    def build(
+    def get_gaussians(self, symbol, gpts, sampling):
+        if symbol in self._gaussians:
+            return self._gaussian[(symbol, gpts, sampling)]
+
+        return gaussian_projected_scattering_factors(symbol, gpts, sampling)
+
+    def get_corrections(self, symbol, gpts, sampling):
+        if symbol in self._corrections:
+            return self._corrections[(symbol, gpts, sampling)]
+
+        return correction_projected_scattering_factors(symbol, gpts, sampling)
+
+    def _integrate_gaussians(self, positions, symbol, a, b, gpts, sampling, device):
+        gaussians = self.get_gaussians(symbol, gpts, sampling)
+
+        shifted_a = a - positions[:, 2]
+        shifted_b = b - positions[:, 2]
+
+        weights = gaussian_projection_weights(symbol, shifted_a, shifted_b)
+
+        xp = get_array_module(device)
+        positions = (positions[:, :2] / sampling).astype(xp.float32)
+
+        array = xp.zeros(gpts, dtype=xp.complex64)
+        for i in range(5):
+            temp = xp.zeros_like(array, dtype=xp.complex64)
+            superpose_deltas(positions, temp, weights=weights[i])
+            array += fft2(temp, overwrite_x=False) * gaussians[i].astype(xp.complex64)
+
+        return array
+
+    def _integrate_corrections(self, positions, symbol, a, b, gpts, sampling, device):
+        corrections = self.get_corrections(symbol, gpts, sampling)
+
+        xp = get_array_module(device)
+
+        positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
+        positions = (positions[:, :2] / sampling).astype(xp.float32)
+
+        array = xp.zeros(gpts, dtype=xp.complex64)
+
+        superpose_deltas(positions, array)
+
+        corrections = fft2(array, overwrite_x=False) * corrections
+
+        return corrections
+
+    def integrate_on_grid(
         self,
-        symbol: str,
+        atoms: Atoms,
+        a: np.ndarray,
+        b: np.ndarray,
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-    ):
+        fourier_space: bool = False,
+    ) -> np.ndarray:
+
         xp = get_array_module(device)
-        k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
 
-        parameters = xp.array(
-            self.gaussian_parametrization.scaled_parameters(
-                symbol, "projected_scattering_factor"
-            )
-        )
+        array = xp.zeros(gpts, dtype=get_dtype(complex=True))
+        for number in np.unique(atoms.numbers):
+            positions = atoms.positions[atoms.numbers == number]
+            symbol = chemical_symbols[number]
 
-        gaussian_scattering_factors = parameters[0, :, None, None] * np.exp(
-            -parameters[1, :, None, None] * k[None] ** 2.0
-        )
+            array += self._integrate_gaussians(positions, symbol, a, b, gpts, sampling, device)
+            array += self._integrate_corrections(positions, symbol, a, b, gpts, sampling, device)
 
-        if self.correction_parametrization:
-            infinite_gaussian = (
-                self.gaussian_parametrization.projected_scattering_factor(symbol)
-            )
-            infinite_correction = (
-                self.correction_parametrization.projected_scattering_factor(symbol)
-            )
-            correction_scattering_factors = infinite_correction(
-                k**2
-            ) - infinite_gaussian(k**2)
-        else:
-            correction_scattering_factors = None
-
-        error_function_scales = np.pi / np.sqrt(parameters[1])
-
-        return GaussianScatteringFactors(
-            gaussian_scattering_factors,
-            error_function_scales,
-            correction_scattering_factors,
-        )
+        return ifft2(array / sinc(gpts, sampling, device)).real
 
 
 def sinc(
@@ -361,6 +328,11 @@ def sinc(
         Size of the pixels of the grid determining the scale of the sinc.
     device : str
         The array is created on this device ('cpu' or 'gpu').
+
+    Returns
+    -------
+    sinc : np.ndarray
+        2D sinc function.
     """
     xp = get_array_module(device)
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp)
@@ -392,6 +364,11 @@ def superpose_deltas(
     round_positions : bool, optional
         If True, the delta function positions are rounded to the center of the nearest pixel, otherwise subpixel
         precision is used.
+
+    Returns
+    -------
+    array : np.ndarray
+        The array with the delta functions added.
     """
 
     xp = get_array_module(array)
@@ -672,6 +649,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self,
         parametrization: str | Parametrization = "lobato",
         cutoff_tolerance: float = 1e-4,
+        inner_cutoff_factor: float = 2.0,
         taper: float = 0.85,
         integration_step: float = 0.02,
         quad_order: int = 8,
@@ -680,6 +658,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self._taper = taper
         self._quad_order = quad_order
         self._cutoff_tolerance = cutoff_tolerance
+        self._inner_cutoff_factor = inner_cutoff_factor
         self._integration_step = integration_step
         self._tables = {}
 
@@ -742,7 +721,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         potential = self.parametrization.potential(symbol)
         cutoff = self.cutoff(symbol)
 
-        inner_limit = min(sampling) / 2
+        inner_limit = min(sampling) / self._inner_cutoff_factor
         radial_gpts = self._radial_gpts(inner_limit, cutoff)
         limits = self._integral_limits(cutoff)
 

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import warnings
-from abc import abstractmethod, ABCMeta
-from functools import partial
-from functools import reduce
+from abc import ABCMeta, abstractmethod
+from functools import partial, reduce
 from numbers import Number
 from operator import mul
-from typing import Sequence, TYPE_CHECKING, Type
+from typing import TYPE_CHECKING, Sequence, Type
 
 import dask
 import dask.array as da
@@ -19,49 +18,50 @@ from ase.data import chemical_symbols
 
 from abtem.array import ArrayObject, _validate_lazy
 from abtem.atoms import (
-    is_cell_orthogonal,
-    orthogonalize_cell,
     best_orthogonal_cell,
     cut_cell,
+    is_cell_orthogonal,
+    orthogonalize_cell,
     pad_atoms,
     plane_to_axes,
     rotate_atoms_to_plane,
 )
 from abtem.core.axes import (
+    AxisMetadata,
+    FrozenPhononsAxis,
     RealSpaceAxis,
+    ThicknessAxis,
     _find_axes_type,
 )
-from abtem.core.axes import ThicknessAxis, FrozenPhononsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
-from abtem.core.chunks import generate_chunks, Chunks, chunk_ranges
-from abtem.core.chunks import validate_chunks
+from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
-from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
+from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import EqualityMixin, CopyMixin, get_dtype
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 from abtem.inelastic.phonons import (
+    AtomsEnsemble,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
     _validate_seeds,
-    AtomsEnsemble,
 )
 from abtem.integrals import (
-    ScatteringFactorProjectionIntegrals,
     QuadratureProjectionIntegrals,
+    ScatteringFactorProjectionIntegrals,
 )
 from abtem.measurements import Images
 from abtem.slicing import (
-    _validate_slice_thickness,
-    SliceIndexedAtoms,
-    SlicedAtoms,
     BaseSlicedAtoms,
+    SlicedAtoms,
+    SliceIndexedAtoms,
+    _validate_slice_thickness,
 )
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves, BaseWaves
-    from abtem.parametrizations import Parametrization
     from abtem.integrals import FieldIntegrator
+    from abtem.parametrizations import Parametrization
+    from abtem.waves import BaseWaves, Waves
 
 
 class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -1058,8 +1058,6 @@ class FieldArray(BaseField, ArrayObject):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
-
-
 
 
 class PotentialArray(BasePotential, FieldArray):

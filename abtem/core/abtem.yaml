@@ -1,38 +1,63 @@
+# Configuration file for abtem
+
+# The device can be either 'cpu' or 'gpu'
 device: cpu
+# The fft library to use. Options are 'numpy', 'fftw' or 'mkl'
 fft: fftw
+# The float precision to use. Options are 'float32' or 'float64'
 precision: float32
-local_diagnostics:
+diagnostics:
+  # Show the progress bar. Options are 'true', 'false' or 'tqdm'
   progress_bar: true
-  task_level_progress: false
+  # Show the progress of each task. Options are 'true' or 'false'
+  task_progress: false
 dask:
-  fuse: true
-  worker-saturation: 1.0
+  # Use lazy evaluation by default. Options are 'true' or 'false'
   lazy: true
-  scheduler: threads
+  # The target chunk size to use for dask arrays on the cpu
   chunk-size: 128 MB
+  # The target chunk size to use for dask arrays on the gpu
   chunk-size-gpu: 512 MB
 cupy:
+  # The size of the fft cache in MB used by cupy
+  # https://docs.cupy.dev/en/stable/user_guide/fft.html#fft-plan-cache
   fft-cache-size: 0 MB
 mkl:
+  # The number of threads to use for mkl
   threads: 2
 fftw:
+  # The number of threads to use for fftw
+  # https://www.fftw.org/fftw3_doc/Threading-and-MPI.html
   threads: 1
+  # The planning effort to use for fftw. Options are 'FFTW_ESTIMATE', 'FFTW_MEASURE' or 'FFTW_PATIENT'
+  # https://www.fftw.org/fftw3_doc/Planner-Flags.html
   planning_effort: FFTW_MEASURE
+  # The time limit in seconds for the fftw planner
   planning_timelimit: 60
+  # Whether to allow falling back to not using wisdom if the cache fails
   allow_fallback: true
 warnings:
-  prism-interpolation-gpts: true
+  # Show the dask warning about the blockwise performance when the number are increased dramatically
   dask-blockwise-performance: false
+  # Show a warning when the grid is overspecified
   overspecified-grid: true
-extended_repr: false
 antialias:
-  taper: 0.01
+  # The antialias cutoff in reciprocal space
   cutoff: 0.6666666
+  # The antialias taper width in reciprocal space
+  taper: 0.01
 visualize:
+  # The default units to use in real space
   real_space_units: "Angstrom"
+  # The default units to use in reciprocal space
   reciprocal_space_units: "Angstrom"
+  # The default colormap to use for plotting
   cmap: "viridis"
-  continuous_update: false
-  autoscale: false
+  # The default colormap to use for plotting the phase
   phase_cmap: "hsluv"
+  # Update interactive plots continuously
+  continuous_update: false
+  # Scale the values of interactive plots automatically
+  autoscale: false
+  # Use tex rendering in plots
   use_tex: true

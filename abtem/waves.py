@@ -1093,10 +1093,20 @@ def _reduce_ensemble(ensemble):
 
 
 class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
-    def __init__(self, ensemble_names: tuple[str, ...], device: str):
+    def __init__(self, ensemble_names: tuple[str, ...], device: str, tilt=(0,0)):
         self._ensemble_names = ensemble_names
         self._device = device
+        self.tilt = tilt
         super().__init__()
+
+    @property
+    def tilt(self):
+        """The small-angle tilt of applied to the Fresnel propagator [mrad]."""
+        return self._tilt
+
+    @tilt.setter
+    def tilt(self, value):
+        self._tilt = _validate_tilt(value)
 
     def apply_transform(
         self, transform, max_batch: int | str = "auto", lazy: bool = True
@@ -1306,11 +1316,11 @@ class PlaneWave(_WavesBuilder):
     ):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
-        self._tilt = _validate_tilt(tilt=tilt)
+
         self._normalize = normalize
         device = validate_device(device)
 
-        super().__init__(ensemble_names=("tilt",), device=device)
+        super().__init__(ensemble_names=("tilt",), device=device, tilt=tilt)
 
     @property
     def tilt(self):
@@ -1533,7 +1543,6 @@ class Probe(_WavesBuilder):
 
         self._aperture = aperture
         self._aberrations = aberrations
-        self.tilt = tilt
 
         self._metadata = {} if metadata is None else metadata
 
@@ -1551,16 +1560,7 @@ class Probe(_WavesBuilder):
             "positions",
         )
 
-        super().__init__(ensemble_names=ensemble_names, device=device)
-
-    @property
-    def tilt(self):
-        """The small-angle tilt of applied to the Fresnel propagator [mrad]."""
-        return self._tilt
-
-    @tilt.setter
-    def tilt(self, value):
-        self._tilt = _validate_tilt(value)
+        super().__init__(ensemble_names=ensemble_names, device=device, tilt=tilt)
 
     @property
     def positions(self) -> BaseScan:
@@ -1627,7 +1627,7 @@ class Probe(_WavesBuilder):
             **self._metadata,
             "energy": self.energy,
             **self.aperture.metadata,
-            # **self._tilt.metadata,
+            **self._tilt.metadata,
         }
 
     @staticmethod

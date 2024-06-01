@@ -119,28 +119,6 @@ class set:
         in ``arg`` will be applied before those in ``kwargs``.
         Double-underscores (``__``) in keyword arguments will be replaced with
         ``.``, allowing nested values to be easily set.
-
-    Examples
-    --------
-    >>> import dask
-
-    Set ``'foo.bar'`` in a context, by providing a mapping.
-
-    >>> with dask.config.set({'foo.bar': 123}):
-    ...     pass
-
-    Set ``'foo.bar'`` in a context, by providing a keyword argument.
-
-    >>> with dask.config.set(foo__bar=123):
-    ...     pass
-
-    Set ``'foo.bar'`` globally.
-
-    >>> dask.config.set(foo__bar=123)  # doctest: +SKIP
-
-    See Also
-    --------
-    dask.config.get
     """
 
     config: dict
@@ -148,11 +126,11 @@ class set:
     _record: list[tuple[Literal["insert", "replace"], tuple[str, ...], Any]]
 
     def __init__(
-            self,
-            arg: Union[Mapping, None] = None,
-            config: dict = config,
-            lock: threading.Lock = config_lock,
-            **kwargs,
+        self,
+        arg: Union[Mapping, None] = None,
+        config: dict = config,
+        lock: threading.Lock = config_lock,
+        **kwargs,
     ):
         with lock:
             self.config = config
@@ -188,12 +166,12 @@ class set:
                     d.pop(path[-1], None)
 
     def _assign(
-            self,
-            keys: Sequence[str],
-            value: Any,
-            d: dict,
-            path: tuple[str, ...] = (),
-            record: bool = True,
+        self,
+        keys: Sequence[str],
+        value: Any,
+        d: dict,
+        path: tuple[str, ...] = (),
+        record: bool = True,
     ) -> None:
         """Assign value into a nested configuration dictionary
 
@@ -232,12 +210,12 @@ class set:
 
 
 def refresh(
-        config: dict = config, defaults: list[Mapping] = defaults, **kwargs
+    config: dict = config, defaults: list[Mapping] = defaults, **kwargs
 ) -> None:
     """
     Update configuration by re-reading yaml files and env variables
 
-    This mutates the global dask.config.config, or the config parameter if
+    This mutates the global abtem.config.config, or the config parameter if
     passed in.
 
     This goes through the following stages:
@@ -254,8 +232,8 @@ def refresh(
 
     See Also
     --------
-    dask.config.collect: for parameters
-    dask.config.update_defaults
+    abtem.config.collect: for parameters
+    abtem.config.update_defaults
     """
     config.clear()
 
@@ -266,40 +244,18 @@ def refresh(
 
 
 def get(
-        key: str,
-        default: Any = no_default,
-        config: dict = config,
-        override_with: Any = None,
+    key: str,
+    default: Any = no_default,
+    config: dict = config,
+    override_with: Any = None,
 ) -> Any:
     """
     Get elements from global config
 
     If ``override_with`` is not None this value will be passed straight back.
-    Useful for getting kwarg defaults from Dask config.
+    Useful for getting kwarg defaults from abtek config.
 
     Use '.' for nested access
-
-    Examples
-    --------
-    >>> from dask import config
-    >>> config.get('foo')  # doctest: +SKIP
-    {'x': 1, 'y': 2}
-
-    >>> config.get('foo.x')  # doctest: +SKIP
-    1
-
-    >>> config.get('foo.x.y', default=123)  # doctest: +SKIP
-    123
-
-    >>> config.get('foo.y', override_with=None)  # doctest: +SKIP
-    2
-
-    >>> config.get('foo.y', override_with=3)  # doctest: +SKIP
-    3
-
-    See Also
-    --------
-    dask.config.set
     """
     if override_with is not None:
         return override_with
@@ -337,7 +293,7 @@ def rename(aliases: Mapping, config: dict = config) -> None:
 
 
 def update_defaults(
-        new: Mapping, config: dict = config, defaults: list[Mapping] = defaults
+    new: Mapping, config: dict = config, defaults: list[Mapping] = defaults
 ) -> None:
     """Add a new set of defaults to the configuration
 

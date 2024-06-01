@@ -1,4 +1,5 @@
 """Module for describing the detection of transmitted waves and different detector types."""
+
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -14,6 +15,7 @@ from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
+from abtem.core.units import units_type
 from abtem.measurements import (
     DiffractionPatterns,
     PolarMeasurements,
@@ -578,6 +580,14 @@ class _AbstractRadialDetector(BaseDetector):
         elif energy is None:
             raise ValueError("provide the waves or the energy of waves")
         else:
+            if units_type[kwargs["units"]] == "reciprocal_space":
+                if energy is None:
+                    raise ValueError(
+                        "energy or waves must be provided when using real space units"
+                    )
+            elif energy is None:
+                energy = 100e3
+
             if gpts is None:
                 gpts = 1024
 
@@ -645,6 +655,8 @@ class _AbstractRadialDetector(BaseDetector):
 
         if "units" not in kwargs:
             kwargs["units"] = "mrad"
+
+        diffraction_patterns.metadata["energy"] = energy
 
         return diffraction_patterns.show(**kwargs)
 
