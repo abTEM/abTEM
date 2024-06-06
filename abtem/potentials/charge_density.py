@@ -11,9 +11,10 @@ from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
 from abtem.core.backend import copy_to_device
+from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.parametrizations import EwaldParametrization
-from abtem.potentials.iam import Potential, _PotentialBuilder
+from abtem.potentials.iam import Potential, _PotentialBuilder, PotentialArray
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.atoms import plane_to_axes
 from abtem.core.constants import eps0
@@ -171,10 +172,16 @@ def add_point_charges_fourier(
     else:
         broadening = 1.0
 
+    if hasattr(atoms, "atoms"):
+        atoms = atoms.atoms
+    
+    if hasattr(atoms, "atoms"):
+        atoms = atoms.atoms
+
     for atom in atoms:
         scale = atom.number / pixel_volume
         array += scale * broadening * _fourier_space_delta(kx, ky, kz, *atom.position)
-
+    
     return array
 
 
@@ -337,12 +344,15 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         if hasattr(atoms, "randomize"):
             self._frozen_phonons = atoms
-        else:
+        elif isinstance(atoms, Atoms):
             self._frozen_phonons = DummyFrozenPhonons(atoms)
-
+        else:
+            raise RuntimeError()
+        
         self._charge_density = charge_density.astype(np.float32)
-
+        
         super().__init__(
+            array_object=PotentialArray,
             gpts=gpts,
             sampling=sampling,
             cell=atoms.cell,
@@ -354,6 +364,8 @@ class ChargeDensityPotential(_PotentialBuilder):
             box=box,
             periodic=periodic,
         )
+        print(type(self._frozen_phonons))
+        print(self._frozen_phonons.atoms)
 
     @property
     def frozen_phonons(self):
@@ -400,7 +412,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             blocks = np.zeros((1,), dtype=object)
         else:
             blocks = np.zeros((len(chunks[0]),), dtype=object)
-
+        
         if lazy:
             if not isinstance(charge_densities, da.core.Array):
                 charge_densities = da.from_array(
@@ -420,7 +432,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         frozen_phonon_blocks = self._ewald_potential().frozen_phonons._partition_args(
             lazy=lazy
         )[0]
-
+        
         for i, (charge_density, frozen_phonon) in enumerate(
             zip(charge_densities, frozen_phonon_blocks)
         ):
@@ -435,7 +447,7 @@ class ChargeDensityPotential(_PotentialBuilder):
                 blocks.itemset(
                     i, self._wrap_charge_density(charge_density, frozen_phonon)
                 )
-
+        
         if lazy:
             blocks = da.concatenate(list(blocks))
 
@@ -449,8 +461,13 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         args["atoms"] = frozen_phonons_partial(args["atoms"])
 
+        if isinstance(args["atoms"], np.ndarray):
+            args["atoms"] = AtomsEnsemble(args["atoms"])
+        
         kwargs.update(args)
         potential = ChargeDensityPotential(**kwargs)
+
+        potential = _wrap_with_array(potential)
         return potential
 
     def _from_partitioned_args(self):
@@ -460,12 +477,12 @@ class ChargeDensityPotential(_PotentialBuilder):
         frozen_phonons_partial = (
             self._ewald_potential().frozen_phonons._from_partitioned_args()
         )
-
-        return partial(
+        new_potential = partial(
             self._charge_density_potential,
             frozen_phonons_partial=frozen_phonons_partial,
             **kwargs
         )
+        return new_potential
 
     def _interpolate_slice(self, array, cell, a, b):
         slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)

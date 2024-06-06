@@ -165,6 +165,10 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         return atoms
 
     @property
+    def numbers(self):
+        self.atoms.numbers  
+
+    @property
     def atoms(self):
         return self._atoms
 
@@ -534,6 +538,10 @@ class AtomsEnsemble(BaseFrozenPhonons):
     def trajectory(self) -> np.ndarray | da.core.Array:
         """Array of atoms representing an ensemble of atomic configurations."""
         return self._trajectory
+
+    @property
+    def numbers(self):
+        return self.trajectory[0].numbers
 
     def __getitem__(self, item):
         new_trajectory = self._trajectory[item]
