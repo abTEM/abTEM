@@ -1281,16 +1281,31 @@ class BlochWaves:
             ]
 
         hkl = self.structure_factor.hkl[self.hkl_mask]
-
-        array = calculate_dynamical_scattering(
-            structure_matrix=self.calculate_structure_matrix(lazy=lazy),
-            hkl=hkl,
-            cell=self.cell,
-            energy=self.energy,
-            thicknesses=thicknesses,
-        )
-
+        array = self._calculate_array(thicknesses)
         reciprocal_lattice_vectors = self.cell.reciprocal()
+
+        xp = get_array_module(array)
+        
+        if not tol == np.inf:
+            g_vec = self.g_vec
+            clusters = fcluster(
+                linkage(pdist(g_vec[:, :2]), method="complete"), tol, criterion="distance"
+            )
+            
+            thicknesses = xp.asarray(thicknesses)
+            new_array = xp.zeros_like(array, shape=array.shape[:-1] + (clusters.max(),))
+            new_hkl = np.zeros_like(hkl, shape=(clusters.max(), 3))
+            for i, cluster in enumerate(label_to_index(clusters, min_label=1)):
+                
+                #new_array[:, i] = (array[:, cluster] * xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses)[:, None])[:, 0]
+                new_array[:, i] = array[:, cluster].sum(-1)
+                
+                j = np.argmin(np.abs(excitation_errors(g_vec[cluster], self.energy)))
+                
+                new_hkl[i] = hkl[cluster][j]
+            
+            array = new_array
+            hkl = new_hkl
 
         if len(ensemble_axes_metadata) == 0:
             array = array[0]
@@ -1577,7 +1592,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         for axes, rotations in zip(self._axes, self.rotations):
             ensemble_axes_metadata += [
                 NonLinearAxis(
-                    label=f"{axes}-rotation", units="rad", values=rotations.values
+                    label=f"{axes}_rotation", units="rad", values=rotations.values
                 )
             ]
         return ensemble_axes_metadata
@@ -1645,6 +1660,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: float | Sequence[float],
         return_complex: bool,
         pbar: bool,
+        tol: float = np.inf,
         hkl_mask: np.ndarray = None,
     ):
 
@@ -1689,8 +1705,10 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             # )
 
             diffraction_patterns = bw.calculate_diffraction_patterns(
-                thicknesses, return_complex=return_complex, lazy=False
+                thicknesses, return_complex=return_complex, tol=tol, lazy=False
             )
+
+            #diffraction_patterns = diffraction_patterns.to_cpu()
 
             array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
 
@@ -1700,9 +1718,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         return array
 
-    def _lazy_calculate_diffraction_patterns(
-        self, thicknesses: float | Sequence[float], return_complex: bool, pbar: bool
-    ):
+    def _lazy_calculate_diffraction_patterns(self, thicknesses, return_complex, pbar):
         blocks = self.ensemble_blocks(1)
 
         def _run_calculate_diffraction_patterns(
@@ -1713,6 +1729,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             array = block._calculate_diffraction_intensities(
                 thicknesses=thicknesses,
                 return_complex=return_complex,
+                tol=tol,
                 pbar=pbar,
                 hkl_mask=hkl_mask,
             )
@@ -1750,7 +1767,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self,
         thicknesses: float | Sequence[float],
         return_complex: bool = False,
-        lazy: bool = True,
         pbar: bool = None,
     ) -> IndexedDiffractionPatterns:
         """
@@ -1788,12 +1804,14 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             array, hkl_mask = self._lazy_calculate_diffraction_patterns(
                 thicknesses=thicknesses,
                 return_complex=return_complex,
+                tol=tol,
                 pbar=pbar,
             )
         else:
             array = self._calculate_diffraction_intensities(
                 thicknesses=thicknesses,
                 return_complex=return_complex,
+                tol=tol,
                 pbar=pbar,
             )
             hkl_mask = self.get_ensemble_hkl_mask()

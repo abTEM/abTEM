@@ -50,12 +50,12 @@ def _validate_detectors(
         raise RuntimeError(
             "Detectors must be AbstractDetector or list of AbstractDetector."
         )
-    
+
     if waves is not None:
         for detector in detectors:
             if hasattr(detector, "_match_waves"):
                 detector._match_waves(waves)
-    
+
     return detectors
 
 
@@ -575,13 +575,15 @@ class _AbstractRadialDetector(BaseDetector):
         """
 
         if waves is not None:
-            if (gpts is not None) or (sampling is not None) or (energy is not None):
+            if gpts is not None or sampling is not None or energy is not None:
                 raise ValueError(
                     "provide either waves or 'gpts', 'sampling' and 'energy'"
                 )
             segmented_regions = self.get_detector_regions(waves)
             diffraction_patterns = segmented_regions.to_diffraction_patterns(waves.gpts)
-
+            energy = waves.energy
+        elif energy is None:
+            raise ValueError("provide the waves or the energy of waves")
         else:
             if units_type[kwargs["units"]] == "reciprocal_space":
                 if energy is None:
@@ -630,14 +632,14 @@ class _AbstractRadialDetector(BaseDetector):
                 offset=(0.0, 0.0),
                 return_indices=False,
             )
-
+            
             regions = regions.astype(np.float32)
             regions[..., regions < 0] = np.nan
 
             diffraction_patterns = DiffractionPatterns(
                 regions, sampling=reciprocal_space_sampling, metadata={"energy": energy}
             )
-
+        
         n_bins_radial = self.nbins_radial
         n_bins_azimuthal = self.nbins_azimuthal
         num_colors = n_bins_radial * n_bins_azimuthal
@@ -660,7 +662,7 @@ class _AbstractRadialDetector(BaseDetector):
             kwargs["units"] = "mrad"
 
         diffraction_patterns.metadata["energy"] = energy
-
+        
         return diffraction_patterns.show(**kwargs)
 
 
