@@ -76,7 +76,7 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
 
             if all(isinstance(value, Number) for value in metadata.values) and (
                 all(
-                    metadata.values[i] <= metadata.values[i + 1]
+                    metadata.values[i] < metadata.values[i + 1]
                     for i in range(len(metadata.values) - 1)
                 )
             ):
@@ -1412,7 +1412,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             destination = ensemble_axes + axes_base_indices[::-1]
 
             if transpose:
-                array = xp.moveaxis(self.array, source=source, destination=destination)
+                if self.is_lazy:
+                    array = da.moveaxis(self.array, source=source, destination=destination)
+                else:
+                    array = xp.moveaxis(self.array, source=source, destination=destination)
             else:
                 array = self.array
 
