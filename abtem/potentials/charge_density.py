@@ -364,9 +364,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             box=box,
             periodic=periodic,
         )
-        print(type(self._frozen_phonons))
-        print(self._frozen_phonons.atoms)
-
+    
     @property
     def frozen_phonons(self):
         return self._frozen_phonons
