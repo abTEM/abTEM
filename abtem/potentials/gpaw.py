@@ -37,7 +37,6 @@ from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
 try:
     from gpaw import GPAW
-    sss
 except:
     GPAW = None
 
