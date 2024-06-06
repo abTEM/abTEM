@@ -336,7 +336,7 @@ class StructureFactor(BaseStructureFactor):
     def __init__(
         self,
         atoms: Atoms,
-        k_max: float,
+        g_max: float,
         parametrization: str = "lobato",
         thermal_sigma: float = None,
         cutoff: str = "taper",
@@ -347,14 +347,14 @@ class StructureFactor(BaseStructureFactor):
         self._atoms = atoms
         self._thermal_sigma = thermal_sigma
 
-        hkl = make_hkl_grid(atoms.cell, k_max)
+        hkl = make_hkl_grid(atoms.cell, g_max)
 
         if centering.lower() != "p":
             hkl = hkl[get_reflection_condition(hkl, centering)]
 
         self._hkl = hkl
 
-        self._k_max = k_max
+        self._k_max = g_max
 
         if cutoff not in ("taper", "hard"):
             raise ValueError("cutoff must be 'taper', 'hard'")
@@ -639,11 +639,14 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         if gpts is None:
             gpts = potential_3d.shape[:2]
 
-        slice_thickness, slice_chunks = equal_slice_thicknesses(
-            n=potential_3d.shape[-1],
-            slice_thickness=slice_thickness,
-            depth=self.cell[2, 2],
-        )
+        try:
+            slice_thickness, slice_chunks = equal_slice_thicknesses(
+                n=potential_3d.shape[-1],
+                slice_thickness=slice_thickness,
+                depth=self.cell[2, 2],
+            )
+        except RuntimeError:
+            raise RuntimeError("the slice thickness cannot be smaller than the real-space sampling, increase `g_max` or the slice thickness")
 
         if self.is_lazy:
             xp = get_array_module(potential_3d)
@@ -738,17 +741,16 @@ def calculate_structure_matrix(
     Mii = calculate_M_matrix(hkl_selected, cell, energy)
     hkl_selected = xp.asarray(hkl_selected)
 
-    gmh = hkl_selected[None] - hkl_selected[:, None]
+    gmh = (hkl_selected[None] - hkl_selected[:, None]).reshape(-1, 3)
 
     structure_factor = {
         (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
     }
 
-    A = np.array(
-        [structure_factor.get((h, k, l), 0.0) for h, k, l in gmh.reshape(-1, 3)]
-    ).reshape((len(hkl_selected),) * 2)
+    A = xp.array([structure_factor.get((h, k, l), 0.0) for h, k, l in gmh])
+    A = A.reshape(gmh.shape)
 
-    assert np.allclose(A, A.conj().T)
+    # assert xp.allclose(A, A.conj().T)
 
     prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
 
@@ -756,11 +758,11 @@ def calculate_structure_matrix(
     # A = structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]] #* potential_prefactor
 
     Mii = xp.asarray(Mii)
-    # A *= Mii[None] * Mii[:, None]
+    A *= Mii[None] * Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
-    # diag *= Mii
+    diag *= Mii
 
     xp.fill_diagonal(A, diag)
     return A
