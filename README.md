@@ -1,6 +1,4 @@
-:warning: **Major update** :warning: Warning: the recent update to the main branch marks a major change in *ab*TEM which may break some code. You can still install the old version by using this [repository](https://github.com/abTEM/abTEM-legacy).
-
-# *ab*TEM: transmission electron microscopy from first principles
+ *ab*TEM: transmission electron microscopy from first principles
 
 [![PyPI version](https://badge.fury.io/py/abtem.svg)](https://badge.fury.io/py/abtem)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
