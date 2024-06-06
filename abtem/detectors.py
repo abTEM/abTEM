@@ -264,7 +264,7 @@ class AnnularDetector(BaseDetector):
 
     def _out_type(
         self, waves: BaseWaves, index: int = 0
-    ) -> type(RealSpaceLineProfiles) | type(Images):
+    ) -> RealSpaceLineProfiles | Images:
         return _scanned_measurement_type(waves)
 
     def _calculate_new_array(self, waves: Waves):
