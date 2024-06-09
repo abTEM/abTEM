@@ -10,6 +10,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+import pandas as pd
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.linalg import expm as expm_scipy
 from scipy.spatial.distance import pdist
@@ -703,12 +704,47 @@ def calculate_M_matrix(hkl: np.ndarray, cell: Cell, energy: float) -> np.ndarray
     return Mii
 
 
+def raveled_hkl_to_hkl(array, hkl_source: np.ndarray, hkl_destination, gpts: tuple[int, int, int]) -> np.ndarray:
+    """
+    Convert a raveled array to a 3D array with the shape of the structure factor.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        The raveled array.
+    hkl_source : np.ndarray
+        The reciprocal space vectors as Miller indices for the source array.
+    hkl_destination : np.ndarray
+        The reciprocal space vectors as Miller indices for the destination array.
+    gpts : tuple of ints
+        The number of grid points in the 3D structure factor.
+
+    Returns
+    -------
+    np.ndarray
+        The 3D array.
+    """
+    hkl_source = np.asarray(hkl_source)
+    hkl_destination = np.asarray(hkl_destination)
+
+    hkl_source = hkl_source + (gpts[0] // 2, gpts[1] // 2, gpts[2] // 2)
+    hkl_source = np.ravel_multi_index(hkl_source.T, gpts)
+
+    hkl_destination = hkl_destination + (gpts[0] // 2, gpts[1] // 2, gpts[2] // 2)
+    hkl_destination = np.ravel_multi_index(hkl_destination.T, gpts)
+
+    df = pd.Series(array, index=hkl_source)
+    array = df.get(hkl_destination, default=0.).to_numpy()
+    return array
+
+
 def calculate_structure_matrix(
     structure_factor: np.ndarray,
     hkl: np.ndarray,
     hkl_selected: np.ndarray,
     cell: Cell | np.ndarray,
     energy: float,
+    gpts: tuple[int, int, int]=None,
     use_wave_eq: bool = False,
 ) -> np.ndarray:
     """
@@ -741,16 +777,19 @@ def calculate_structure_matrix(
     Mii = calculate_M_matrix(hkl_selected, cell, energy)
     hkl_selected = xp.asarray(hkl_selected)
 
-    gmh = (hkl_selected[None] - hkl_selected[:, None]).reshape(-1, 3)
+    gmh = hkl_selected[None] - hkl_selected[:, None]
+    gmh = gmh.reshape(-1, 3)
+
+    #A = raveled_hkl_to_hkl(structure_factor, hkl, gmh, gpts)
+    #A = A.reshape((len(hkl_selected),) * 2)
 
     structure_factor = {
         (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
     }
+    A = np.array([structure_factor.get((h, k, l), 0.0) for h, k, l in gmh])
+    A = A.reshape((len(hkl_selected),) * 2)
 
-    A = xp.array([structure_factor.get((h, k, l), 0.0) for h, k, l in gmh])
-    A = A.reshape(gmh.shape)
-
-    # assert xp.allclose(A, A.conj().T)
+    assert np.allclose(A, A.conj().T)
 
     prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
 
@@ -758,11 +797,11 @@ def calculate_structure_matrix(
     # A = structure_factor[gmh[..., 0], gmh[..., 1], gmh[..., 2]] #* potential_prefactor
 
     Mii = xp.asarray(Mii)
-    A *= Mii[None] * Mii[:, None]
+    # A *= Mii[None] * Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
-    diag *= Mii
+    # diag *= Mii
 
     xp.fill_diagonal(A, diag)
     return A
@@ -802,6 +841,7 @@ def calculate_dynamical_scattering(
     Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
 
     v, C = xp.linalg.eigh(structure_matrix)
+    
     gamma = v * energy2wavelength(energy) / 2.0
 
     np.fill_diagonal(C, np.diag(C) / Mii)
@@ -1187,6 +1227,7 @@ class BlochWaves:
             structure_factor=structure_factor.array,
             hkl=structure_factor.hkl,
             use_wave_eq=self.use_wave_eq,
+            gpts=structure_factor.gpts,
         )
         return A
 
@@ -1279,33 +1320,16 @@ class BlochWaves:
             ensemble_axes_metadata = [
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
-
-        hkl = self.structure_factor.hkl[self.hkl_mask]
-        array = self._calculate_array(thicknesses)
-        reciprocal_lattice_vectors = self.cell.reciprocal()
-
-        xp = get_array_module(array)
         
-        if not tol == np.inf:
-            g_vec = self.g_vec
-            clusters = fcluster(
-                linkage(pdist(g_vec[:, :2]), method="complete"), tol, criterion="distance"
-            )
-            
-            thicknesses = xp.asarray(thicknesses)
-            new_array = xp.zeros_like(array, shape=array.shape[:-1] + (clusters.max(),))
-            new_hkl = np.zeros_like(hkl, shape=(clusters.max(), 3))
-            for i, cluster in enumerate(label_to_index(clusters, min_label=1)):
-                
-                #new_array[:, i] = (array[:, cluster] * xp.exp(-2 * np.pi * 1.0j * g_vec[i, 2] * thicknesses)[:, None])[:, 0]
-                new_array[:, i] = array[:, cluster].sum(-1)
-                
-                j = np.argmin(np.abs(excitation_errors(g_vec[cluster], self.energy)))
-                
-                new_hkl[i] = hkl[cluster][j]
-            
-            array = new_array
-            hkl = new_hkl
+        array = calculate_dynamical_scattering(
+            structure_matrix=self.calculate_structure_matrix(lazy=lazy),
+            hkl=self.hkl,
+            cell=self.cell,
+            energy=self.energy,
+            thicknesses=thicknesses,
+        )
+
+        reciprocal_lattice_vectors = self.cell.reciprocal()
 
         if len(ensemble_axes_metadata) == 0:
             array = array[0]
@@ -1316,7 +1340,7 @@ class BlochWaves:
             array = abs2(array)
 
         return IndexedDiffractionPatterns(
-            miller_indices=hkl,
+            miller_indices=self.hkl,
             array=array,
             reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             ensemble_axes_metadata=ensemble_axes_metadata,
@@ -1708,8 +1732,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 thicknesses, return_complex=return_complex, tol=tol, lazy=False
             )
 
-            #diffraction_patterns = diffraction_patterns.to_cpu()
-
             array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
 
             pbar.update_if_exists(1)
@@ -1767,6 +1789,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self,
         thicknesses: float | Sequence[float],
         return_complex: bool = False,
+        lazy: bool = True,
         pbar: bool = None,
     ) -> IndexedDiffractionPatterns:
         """
