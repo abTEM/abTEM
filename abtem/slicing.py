@@ -195,18 +195,18 @@ class BaseSlicedAtoms(EqualityMixin):
         return self.get_atoms_in_slices(*_unpack_item(item, len(self)))
 
 
-def find_closest_indices(list1, list2):
-    # Convert lists to NumPy arrays
-    arr1 = np.array(list1)[:, np.newaxis]  # Convert to column vector
-    arr2 = np.array(list2)
+# def find_closest_indices(list1, list2):
+#     # Convert lists to NumPy arrays
+#     arr1 = np.array(list1)[:, np.newaxis]  # Convert to column vector
+#     arr2 = np.array(list2)
 
-    # Calculate the absolute differences using broadcasting
-    differences = np.abs(arr1 - arr2)
+#     # Calculate the absolute differences using broadcasting
+#     differences = np.abs(arr1 - arr2)
 
-    # Find the indices of the minimum differences
-    closest_indices = np.argmin(differences, axis=1)
+#     # Find the indices of the minimum differences
+#     closest_indices = np.argmin(differences, axis=1)
 
-    return closest_indices
+#     return closest_indices
 
 
 class SliceIndexedAtoms(BaseSlicedAtoms):
@@ -229,19 +229,13 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
     ):
         super().__init__(atoms, slice_thickness)
 
-        # labels = np.digitize(
-        #     self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
-        # )
-        #
-        #
-
-        # print(self.slice_thickness)
-
-        labels = find_closest_indices(
-            atoms.positions[:, 2], np.cumsum((0,) + self.slice_thickness[:-1])
+        labels = np.digitize(
+             self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
         )
-        # print(np.cumsum(self.slice_thickness))
-        # sss
+        
+        #labels = find_closest_indices(
+        #    atoms.positions[:, 2], np.cumsum((0,) + self.slice_thickness[:-1])
+        #)
 
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
