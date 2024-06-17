@@ -508,6 +508,27 @@ def test_diffraction_patterns_interpolate_uniform(gpts, extent):
     )
 
 
+@given(
+    gpts=st.tuples(
+        st.integers(min_value=50, max_value=100),
+        st.integers(min_value=50, max_value=100),
+    ),
+    radius=st.floats(min_value=5, max_value=20),
+    sampling=st.tuples(
+        st.floats(min_value=0.05, max_value=1), st.floats(min_value=0.05, max_value=1)
+    ),
+    position=st.tuples(
+        st.floats(min_value=0.0, max_value=0), st.floats(min_value=0.0, max_value=0.0)
+    ),
+)
+def test_integrate_disc(gpts, radius, sampling, position):
+    array = np.ones(gpts)
+    measurement = Images(array, sampling=sampling)
+    output = measurement.integrate_disc(position=position, radius=radius)
+    expected = (radius / sampling[0]) * (radius / sampling[1]) * np.pi
+    assert np.abs(output - expected) < 4 * np.pi * radius
+
+
 # @given(sigma=st.floats(min_value=.1, max_value=.5),
 #        outer=st.floats(min_value=10., max_value=100))
 # def test_gaussian_source_size_order(sigma, outer):
