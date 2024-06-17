@@ -573,6 +573,141 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         pass
 
 
+def periodic_crop(array, corners, new_shape: tuple[int, int]):
+    xp = get_array_module(array)
+
+    if (
+        (corners[0] > 0)
+        & (corners[1] > 0)
+        & (corners[0] + new_shape[0] < array.shape[-2])
+        & (corners[1] + new_shape[1] < array.shape[-1])
+    ):
+        array = array[
+            ...,
+            corners[0] : corners[0] + new_shape[0],
+            corners[1] : corners[1] + new_shape[1],
+        ]
+        return array
+
+    x = (
+        xp.arange(corners[0], corners[0] + new_shape[0], dtype=xp.int64)
+        % array.shape[-2]
+    )
+    y = (
+        xp.arange(corners[1], corners[1] + new_shape[1], dtype=xp.int64)
+        % array.shape[-1]
+    )
+
+    x, y = xp.meshgrid(x, y, indexing="ij")
+    array = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + new_shape)
+    return array
+
+
+def integrate_disc(
+    image: BaseMeasurements,
+    position: np.ndarray,
+    radius: float,
+    return_mean: bool = False,
+    border: str = "wrap",
+    interpolate: tuple[float, bool] = None,
+) -> float:
+    """
+    Integrate the values of a 2d measurement on a disc-shaped region.
+
+    Parameters
+    ----------
+    position : two floats
+        Center of disc-shaped integration region
+    measurement : 2d measurement
+        The measurement to integrate
+    radius : float
+        Radius of disc-shaped integration region
+    return_mean : bool
+        If true return the mean, otherwise return the sum.
+    border : str
+        Specify how to treat integration regions that cross the image border. The valid values and their behaviour is:
+        'wrap'
+            The measurement is extended by wrapping around to the opposite edge.
+        'raise'
+            Raise an error if the integration region crosses the measurement border.
+    interpolate : float or False
+        The image will be interpolated to this sampling. Units of Angstrom.
+
+    Returns
+    -------
+    float
+        Integral value
+    """
+
+    if interpolate is not None:
+        image = image.interpolate(interpolate)
+
+    metadata = image.base_axes_metadata
+
+    offset = [calibration.offset for calibration in metadata]
+
+    position = np.array(position) - offset
+
+    integration_shape = (
+        int(np.ceil(2 * radius / metadata[-2].sampling)),
+        int(np.ceil(2 * radius / metadata[-1].sampling)),
+    )
+
+    corner = (
+        int(np.floor(position[-2] / metadata[-2].sampling)) - integration_shape[0] // 2,
+        int(np.floor(position[-1] / metadata[-1].sampling)) - integration_shape[1] // 2,
+    )
+
+    if border == "wrap":
+        cropped = periodic_crop(image.array, corner, integration_shape)
+    elif border == "raise":
+        if (
+            (np.any(np.array(corner) < 0))
+            | (corner[0] + integration_shape[0] > image.array.shape[0])
+            | (corner[1] + integration_shape[1] > image.array.shape[1])
+        ):
+            raise RuntimeError("The integration region is outside the image.")
+
+        cropped = periodic_crop(image.array, corner, integration_shape)
+    else:
+        raise RuntimeError('border must be one of "wrap" or "raise"')
+
+    x = np.linspace(
+        0.0,
+        cropped.shape[-2] * metadata[-2].sampling,
+        cropped.shape[-2],
+        endpoint=metadata[-2].endpoint,
+    )
+    y = np.linspace(
+        0.0,
+        cropped.shape[-1] * metadata[-1].sampling,
+        cropped.shape[-1],
+        endpoint=metadata[-1].endpoint,
+    )
+    x, y = np.meshgrid(x, y, indexing="ij")
+
+    cropped_position = np.array(position)[:2] - (
+        corner[-2] * metadata[-2].sampling,
+        corner[-1] * metadata[-1].sampling,
+    )
+
+    r = np.sqrt((x - cropped_position[-2]) ** 2 + (y - cropped_position[-1]) ** 2)
+
+    mean_sampling = (metadata[-2].sampling + metadata[-1].sampling) / 2
+
+    mask = 1 - np.clip((r - radius) / mean_sampling, 0, 1)
+    
+    #import matplotlib.pyplot as plt
+    #plt.figure()
+    #plt.imshow(mask, interpolation="nearest", cmap="gray")
+    #plt.show()
+
+    if return_mean:
+        return (cropped * mask).sum((-2, -1)) / mask.sum((-2, -1))
+    else:
+        return (cropped * mask).sum((-2, -1))
+
+
 class MeasurementsEnsemble(BaseMeasurements):
     _base_dims = 0
 
@@ -1231,6 +1366,9 @@ class Images(_BaseMeasurement2D):
                 label="y", sampling=self.sampling[1], units="Å", tex_label="$y$"
             ),
         ]
+
+    def integrate_disc(self, position: np.ndarray, radius: float):
+        return integrate_disc(self, position=position, radius=radius)
 
     def integrate_gradient(self):
         """
@@ -2278,6 +2416,49 @@ class DiffractionPatterns(_BaseMeasurement2D):
         kwargs["array"] = array
         return self.__class__(**kwargs)
 
+    @staticmethod
+    def _index_diffraction_spots(
+        array,
+        orientation_matrices,
+        mask_all,
+        sampling,
+        cell,
+        sg_max,
+        k_max,
+        centering,
+        energy,
+        radius,
+    ):
+        from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
+        from abtem.bloch.indexing import index_diffraction_spots
+
+        hkl = make_hkl_grid(cell, k_max)
+
+        mask = filter_reciprocal_space_vectors(
+            hkl,
+            cell,
+            energy=energy,
+            sg_max=sg_max,
+            k_max=k_max,
+            centering=centering,
+            orientation_matrices=orientation_matrices,
+        )
+
+        array = index_diffraction_spots(
+            array=array,
+            hkl=hkl[mask],
+            sampling=sampling,
+            cell=cell,
+            energy=energy,
+            radius=radius,
+            orientation_matrices=orientation_matrices,
+        )
+
+        array_all = np.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
+        array_all[..., mask[mask_all]] = array
+
+        return array_all
+
     def index_diffraction_spots(
         self,
         cell: Cell | float | tuple[float, float, float],
@@ -2318,7 +2499,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         from abtem.bloch.indexing import (
             estimate_necessary_excitation_error,
-            index_diffraction_spots,
             validate_cell,
         )
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
@@ -2356,35 +2536,31 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         hkl = hkl[mask]
 
-        def _index_diffraction_spots(
-            array, orientation_matrices, hkl, sampling, cell, energy, radius
-        ):
-            return index_diffraction_spots(
-                array=array,
-                hkl=hkl,
-                sampling=sampling,
-                cell=cell,
-                energy=energy,
-                radius=radius,
-                orientation_matrices=orientation_matrices,
-            )
-
         if self.is_lazy:
+            orientation_matrices = orientation_matrices[
+                (None,)
+                * (len(self.array.shape[:-2]) - len(orientation_matrices.shape[:-2]))
+            ]
+
             chunks = tuple(
                 c if n == sum(c) else 1
                 for n, c in zip(orientation_matrices.shape, self.array.chunks[:-2])
             )
+
             lazy_orientation_matrices = da.from_array(
                 orientation_matrices, chunks=chunks + (3, 3)
             )
 
             intensities = da.map_blocks(
-                _index_diffraction_spots,
+                self._index_diffraction_spots,
                 self.array,
                 lazy_orientation_matrices,
-                hkl=hkl,
+                mask_all=mask,
                 sampling=self.sampling,
                 cell=cell,
+                sg_max=sg_max,
+                k_max=k_max,
+                centering=centering,
                 energy=energy,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
@@ -2392,7 +2568,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 meta=np.array((), dtype=self.dtype),
             )
         else:
-            intensities = index_diffraction_spots(
+            intensities = self._index_diffraction_spots(
                 array=self.array,
                 hkl=hkl,
                 sampling=self.sampling,
@@ -3818,6 +3994,27 @@ def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
 
 
 @jit(nopython=True, nogil=True, fastmath=True, parallel=True)
+def _reciprocal_lattice_vector_lengths(max_lengths, hkl, reciprocal_lattice_vectors):
+    
+    for i in prange(len(hkl)):  # pylint: disable=not-an-iterable
+        lengths = np.sqrt((
+            (
+                hkl[i, 0] * reciprocal_lattice_vectors[..., 0, :]
+                + hkl[i, 1] * reciprocal_lattice_vectors[..., 1, :]
+                + hkl[i, 2] * reciprocal_lattice_vectors[..., 2, :]
+            )
+            ** 2
+        ).sum(-1))
+        max_lengths[i] = lengths.max()
+    
+    return max_lengths
+
+def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
+    max_lengths = np.zeros(len(hkl))
+    return _reciprocal_lattice_vector_lengths(max_lengths, hkl, reciprocal_lattice_vectors)
+
+
+@jit(nopython=True, nogil=True, fastmath=True, parallel=True)
 def reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
 
     for i in prange(len(hkl)):  # pylint: disable=not-an-iterable
@@ -3974,17 +4171,27 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     @classmethod
     def _pack_kwargs(cls, kwargs):
-        kwargs["miller_indices"] = [tuple(hkl) for hkl in kwargs["miller_indices"]]
-        kwargs["positions"] = [
-            (float(position[0]), float(position[1]), float(position[2]))
-            for position in kwargs["positions"]
-        ]
-        return super()._pack_kwargs(kwargs)
+        kwargs["miller_indices"] = kwargs["miller_indices"].tolist()
+        # kwargs["reciprocal_lattice_vectors"] = [
+        #    (float(position[0]), float(position[1]), float(position[2]))
+        #    for position in kwargs["reciprocal_lattice_vectors"]
+        # ]
+
+        kwargs["reciprocal_lattice_vectors"] = kwargs[
+            "reciprocal_lattice_vectors"
+        ].tolist()
+
+        packed_kwargs = super()._pack_kwargs(kwargs)
+
+        return packed_kwargs
 
     @classmethod
     def _unpack_kwargs(cls, attrs):
         kwargs = super()._unpack_kwargs(attrs)
         kwargs["miller_indices"] = np.array(kwargs["miller_indices"], dtype=int)
+        kwargs["reciprocal_lattice_vectors"] = np.array(
+            kwargs["reciprocal_lattice_vectors"], dtype=float
+        )
         return kwargs
 
     def __getitem__(self, items):
@@ -4176,7 +4383,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         coords = []
         for axes_metadata, n in zip(self.ensemble_axes_metadata, self.ensemble_shape):
-            coords.append(list(axes_metadata.coordinates(n)))
+            new_coords = list(axes_metadata.coordinates(n))
+            new_coords = xarray.DataArray(new_coords, attrs={"units": axes_metadata.units})
+            coords.append(new_coords)
 
         coords.append(["{} {} {}".format(*hkl) for hkl in self.miller_indices])
 
@@ -4193,6 +4402,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
                 "units": self.metadata.get("units", "arb. unit"),
             },
         )
+
+        k = reciprocal_lattice_vector_lengths(self.miller_indices, self.reciprocal_lattice_vectors)
+        data = data.assign_coords(k=("hkl", k))
 
         return data
 
