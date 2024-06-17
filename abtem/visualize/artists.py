@@ -667,7 +667,9 @@ class ScaledCircleCollection(Collection):
         data = self._unmasked_array
         base_radii = norm(data)
         if self._base_scale is None:
-            self._base_scale = self._auto_scale_radii(base_radii[self._mask])
+            # self._base_scale = self._auto_scale_radii(base_radii[self._mask])
+            self._base_scale = 1.
+
         radii = np.sqrt(
             np.clip(
                 base_radii * self._base_scale**2 * self._scale**2,

@@ -1309,6 +1309,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                     self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
                 )
             elif reduction_scheme == "single-rechunk":
+                raise NotImplementedError
                 measurements = _single_rechunk_reduce(
                     self, scan, detectors, ctf, max_batch_reduction
                 )

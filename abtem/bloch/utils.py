@@ -9,6 +9,8 @@ from numba import njit, prange
 
 from abtem.core.energy import energy2wavelength
 from ase.cell import Cell
+from abtem.core.backend import cp
+import pandas as pd
 
 
 def reciprocal_cell(cell):
@@ -252,10 +254,12 @@ def filter_reciprocal_space_vectors(
         if len(orientation_matrices.shape) == 2:
             orientation_matrices = orientation_matrices[None]
 
-        if not len(orientation_matrices.shape) == 3:
-            raise ValueError(
-                "'orientation_matrices' must have shape (3, 3) or (n, 3, 3)"
-            )
+        orientation_matrices = orientation_matrices.reshape((-1, 3, 3))
+
+        #if not len(orientation_matrices.shape) == 3:
+        #    raise ValueError(
+        #        "'orientation_matrices' must have shape (3, 3) or (n, 3, 3)"
+        #    )
 
         mask = np.zeros(len(g), dtype=bool)
 
@@ -268,3 +272,51 @@ def filter_reciprocal_space_vectors(
     mask *= g_length <= k_max
 
     return mask
+
+
+def raveled_hkl_to_hkl(
+    array, hkl_source: np.ndarray, hkl_destination, gpts: tuple[int, int, int]
+) -> np.ndarray:
+    """
+    Convert a raveled array to a 3D array with the shape of the structure factor.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        The raveled array.
+    hkl_source : np.ndarray
+        The reciprocal space vectors as Miller indices for the source array.
+    hkl_destination : np.ndarray
+        The reciprocal space vectors as Miller indices for the destination array.
+    gpts : tuple of ints
+        The number of grid points in the 3D structure factor.
+
+    Returns
+    -------
+    np.ndarray
+        The 3D array.
+    """
+    hkl_source = np.asarray(hkl_source)
+    hkl_destination = np.asarray(hkl_destination)
+
+    hkl_source = hkl_source + (gpts[0] // 2, gpts[1] // 2, gpts[2] // 2)
+    hkl_source = np.ravel_multi_index(hkl_source.T, gpts)
+
+    hkl_destination = hkl_destination + (gpts[0] // 2, gpts[1] // 2, gpts[2] // 2)
+    hkl_destination = np.ravel_multi_index(hkl_destination.T, gpts)
+
+    if cp is not None and isinstance(array, cp.ndarray):
+        convert_to_numpy = True
+    else:
+        convert_to_numpy = False
+
+    if convert_to_numpy:
+        array = cp.asnumpy(array)
+
+    df = pd.Series(array, index=hkl_source)
+    array = df.get(hkl_destination, default=0.0).to_numpy()
+
+    if convert_to_numpy:
+        array = cp.asarray(array)
+
+    return array
