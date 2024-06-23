@@ -691,7 +691,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         )
 
     def _reduction(
-        self, reduction_func, axes, keepdims: bool = False, split_every: int = 2
+        self, reduction_func, axes, keepdims: bool = False, split_every: int = 2, **kwargs
     ) -> T:
         xp = get_array_module(self.array)
 
@@ -718,7 +718,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 if axis not in axes
             ]
 
-        kwargs = self._copy_kwargs(exclude=("array",))
+        default_kwargs = self._copy_kwargs(exclude=("array",))
+
+        kwargs = {**default_kwargs, **kwargs}
+        
         if self.is_lazy:
             kwargs["array"] = getattr(da, reduction_func)(
                 self.array, axes, split_every=split_every, keepdims=keepdims
