@@ -2261,6 +2261,36 @@ def _interpolate_bilinear(x, v, u, vw, uw):
     return y.reshape((B, out_H, out_W))
 
 
+def _diffraction_pattern_resampling_gpts(
+    sampling: float | tuple[float, float],
+    old_sampling: float | tuple[float, float],
+    gpts: tuple[int, int],
+    base_shape: tuple[int, int],
+    adjust_sampling: bool = True,
+):
+
+    if gpts is None:
+        if sampling == "uniform":
+            sampling = (max(old_sampling),) * 2
+
+        elif not isinstance(sampling, str) and np.isscalar(sampling):
+            sampling = (sampling,) * 2
+
+        adjusted_sampling, gpts = adjusted_gpts(sampling, old_sampling, base_shape)
+
+        if adjust_sampling:
+            sampling = adjusted_sampling
+    else:
+        if np.isscalar(gpts):
+            gpts = (gpts,) * 2
+
+        sampling = tuple(
+            d * old_n / new_n for d, old_n, new_n in zip(sampling, base_shape, gpts)
+        )
+
+    return gpts, sampling
+
+
 class DiffractionPatterns(_BaseMeasurement2D):
     """
     One or more diffraction patterns.
@@ -2570,12 +2600,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
         else:
             intensities = self._index_diffraction_spots(
                 array=self.array,
-                hkl=hkl,
+                orientation_matrices=orientation_matrices,
+                mask_all=mask,
                 sampling=self.sampling,
                 cell=cell,
+                sg_max=sg_max,
+                k_max=k_max,
+                centering=centering,
                 energy=energy,
                 radius=radius,
-                orientation_matrices=orientation_matrices,
             )
 
         if orientation_matrices is None:
@@ -2745,22 +2778,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         interpolated_diffraction_patterns : DiffractionPatterns
             The interpolated diffraction pattern(s).
         """
-        if gpts is None:
-            if sampling == "uniform":
-                sampling = (max(self.sampling),) * 2
 
-            elif not isinstance(sampling, str) and np.isscalar(sampling):
-                sampling = (sampling,) * 2
-
-            sampling, gpts = adjusted_gpts(sampling, self.sampling, self.base_shape)
-        else:
-            if np.isscalar(gpts):
-                gpts = (gpts,) * 2
-
-            sampling = tuple(
-                d * old_n / new_n
-                for d, old_n, new_n in zip(self.sampling, self.base_shape, gpts)
-            )
+        gpts, sampling = _diffraction_pattern_resampling_gpts(
+            sampling, self.sampling, gpts, self.base_shape, adjust_sampling=False
+        )
 
         if self.is_lazy:
             array = self.array.map_blocks(
@@ -3995,23 +4016,28 @@ def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
 
 @jit(nopython=True, nogil=True, fastmath=True, parallel=True)
 def _reciprocal_lattice_vector_lengths(max_lengths, hkl, reciprocal_lattice_vectors):
-    
+
     for i in prange(len(hkl)):  # pylint: disable=not-an-iterable
-        lengths = np.sqrt((
+        lengths = np.sqrt(
             (
-                hkl[i, 0] * reciprocal_lattice_vectors[..., 0, :]
-                + hkl[i, 1] * reciprocal_lattice_vectors[..., 1, :]
-                + hkl[i, 2] * reciprocal_lattice_vectors[..., 2, :]
-            )
-            ** 2
-        ).sum(-1))
+                (
+                    hkl[i, 0] * reciprocal_lattice_vectors[..., 0, :]
+                    + hkl[i, 1] * reciprocal_lattice_vectors[..., 1, :]
+                    + hkl[i, 2] * reciprocal_lattice_vectors[..., 2, :]
+                )
+                ** 2
+            ).sum(-1)
+        )
         max_lengths[i] = lengths.max()
-    
+
     return max_lengths
+
 
 def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
     max_lengths = np.zeros(len(hkl))
-    return _reciprocal_lattice_vector_lengths(max_lengths, hkl, reciprocal_lattice_vectors)
+    return _reciprocal_lattice_vector_lengths(
+        max_lengths, hkl, reciprocal_lattice_vectors
+    )
 
 
 @jit(nopython=True, nogil=True, fastmath=True, parallel=True)
@@ -4075,9 +4101,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             reciprocal_lattice_vectors = reciprocal_lattice_vectors[
                 (None,) * (len(reciprocal_lattice_vectors.shape) - len(array.shape) + 1)
             ]
-
-        # if not is_broadcastable(array.shape[:-1], reciprocal_lattice_vectors.shape[:-2]):
-        #    raise ValueError()
+        
+        if not is_broadcastable(
+            array.shape[:-1], reciprocal_lattice_vectors.shape[:-2]
+        ):
+            raise ValueError()
 
         # if not len(miller_indices) == reciprocal_lattice_vectors.shape[-3]:
         #     raise ValueError(
@@ -4217,6 +4245,23 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ]
 
         return self.__class__(**kwargs)
+
+    def _reduction(
+        self,
+        reduction_func,
+        axes,
+        keepdims: bool = False,
+        split_every: int = 2,
+        **kwargs,
+    ):
+
+        reciprocal_lattice_vectors = getattr(np, reduction_func)(
+            self.reciprocal_lattice_vectors, axis=axes, keepdims=keepdims
+        )
+
+        kwargs["reciprocal_lattice_vectors"] = reciprocal_lattice_vectors
+
+        return super()._reduction(reduction_func, axes, keepdims, split_every, **kwargs)
 
     def remove_low_intensity(self, threshold: float = 1e-3):
         """
@@ -4384,7 +4429,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         coords = []
         for axes_metadata, n in zip(self.ensemble_axes_metadata, self.ensemble_shape):
             new_coords = list(axes_metadata.coordinates(n))
-            new_coords = xarray.DataArray(new_coords, attrs={"units": axes_metadata.units})
+            new_coords = xarray.DataArray(
+                new_coords, attrs={"units": axes_metadata.units}
+            )
             coords.append(new_coords)
 
         coords.append(["{} {} {}".format(*hkl) for hkl in self.miller_indices])
@@ -4403,7 +4450,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             },
         )
 
-        k = reciprocal_lattice_vector_lengths(self.miller_indices, self.reciprocal_lattice_vectors)
+        k = reciprocal_lattice_vector_lengths(
+            self.miller_indices, self.reciprocal_lattice_vectors
+        )
         data = data.assign_coords(k=("hkl", k))
 
         return data
