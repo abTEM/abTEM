@@ -40,7 +40,7 @@ from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_arg
 from abtem.core.fft import fft_interpolate, ifft2
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, flatten_list_of_lists, get_dtype, label_to_index
-from abtem.distributions import validate_distribution
+from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.measurements import IndexedDiffractionPatterns
 from abtem.parametrizations import validate_parametrization
 from abtem.potentials.iam import PotentialArray
@@ -54,7 +54,7 @@ def calculate_scattering_factors(
     g: np.ndarray,
     atoms: Atoms,
     parametrization: str,
-    k_max: float,
+    g_max: float,
     thermal_sigma: float = 0.0,
     cutoff: str = "taper",
 ):
@@ -67,8 +67,8 @@ def calculate_scattering_factors(
         The scattering vector lengths [1/Å].
     atoms : Atoms
         Atoms object.
-    k_max : float
-        Maximum scattering vector length [1/Å]. The scattering factors are set to zero for g > k_max.
+    g_max : float
+        Maximum scattering vector length [1/Å]. The scattering factors are set to zero for g > g_max.
     parametrization : {'lobato', 'kirkland', 'peng'}
         Parametrization for the scattering factors.
     thermal_sigma : float
@@ -87,9 +87,9 @@ def calculate_scattering_factors(
     if cutoff == "taper":
         T = 0.005
         alpha = 1 - 0.05
-        cutoff = 1 / (1 + np.exp((g_unique / k_max - alpha) / T))
+        cutoff = 1 / (1 + np.exp((g_unique / g_max - alpha) / T))
     elif cutoff == "hard":
-        cutoff = g_unique <= k_max
+        cutoff = g_unique <= g_max
     else:
         raise ValueError("cutoff must be 'taper' or 'hard'")
 
@@ -112,7 +112,7 @@ def calculate_structure_factors(
     hkl: np.ndarray,
     atoms: Atoms,
     parametrization: str,
-    k_max: float,
+    g_max: float,
     thermal_sigma: float = None,
     cutoff: str = "taper",
     device: str = "cpu",
@@ -128,8 +128,8 @@ def calculate_structure_factors(
         The Atoms object.
     parametrization : {'lobato', 'kirkland', 'peng'}
         Parametrization for the scattering factors.
-    k_max : float
-        Maximum scattering vector length [1/Å]. The scattering factors are set to zero for g > k_max.
+    g_max : float
+        Maximum scattering vector length [1/Å]. The scattering factors are set to zero for g > g_max.
     thermal_sigma : float
         Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
     cutoff : {'taper', 'hard'}
@@ -143,7 +143,7 @@ def calculate_structure_factors(
     f_e = calculate_scattering_factors(
         g=g,
         atoms=atoms,
-        k_max=k_max,
+        g_max=g_max,
         parametrization=parametrization,
         cutoff=cutoff,
         thermal_sigma=thermal_sigma,
@@ -268,7 +268,7 @@ class BaseStructureFactor(metaclass=ABCMeta):
     @property
     def gpts(self) -> tuple[int, int, int]:
         """Number of reciprocal space grid points."""
-        return reciprocal_space_gpts(self.cell, self.k_max)
+        return reciprocal_space_gpts(self.cell, self.g_max)
 
     @property
     @abstractmethod
@@ -294,7 +294,7 @@ class BaseStructureFactor(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def k_max(self):
+    def g_max(self):
         """The maximum scattering vector length."""
         pass
 
@@ -321,7 +321,7 @@ class StructureFactor(BaseStructureFactor):
     ----------
     atoms : Atoms
         Atoms object.
-    k_max : float
+    g_max : float
         Maximum scattering vector length [1/Å].
     parametrization : str
         Parametrization for the scattering factors.
@@ -356,7 +356,7 @@ class StructureFactor(BaseStructureFactor):
 
         self._hkl = hkl
 
-        self._k_max = g_max
+        self._g_max = g_max
 
         if cutoff not in ("taper", "hard"):
             raise ValueError("cutoff must be 'taper', 'hard'")
@@ -370,8 +370,8 @@ class StructureFactor(BaseStructureFactor):
         return self._atoms
 
     @property
-    def k_max(self):
-        return self._k_max
+    def g_max(self):
+        return self._g_max
 
     @property
     def hkl(self):
@@ -393,7 +393,7 @@ class StructureFactor(BaseStructureFactor):
             self.g_vec_length,
             self.atoms,
             self._parametrization,
-            self.k_max,
+            self.g_max,
             self._thermal_sigma,
             self._cutoff,
         )
@@ -420,7 +420,7 @@ class StructureFactor(BaseStructureFactor):
                 atoms=self.atoms,
                 parametrization=self.parametrization,
                 thermal_sigma=self._thermal_sigma,
-                k_max=self.k_max,
+                g_max=self.g_max,
                 cutoff=self._cutoff,
                 device=self._device,
                 drop_axis=1,
@@ -432,12 +432,12 @@ class StructureFactor(BaseStructureFactor):
                 self.atoms,
                 parametrization=self._parametrization,
                 thermal_sigma=self._thermal_sigma,
-                k_max=self.k_max,
+                g_max=self.g_max,
                 cutoff=self._cutoff,
                 device=self._device,
             )
 
-        return StructureFactorArray(array, self.hkl, self.atoms.cell, self.k_max)
+        return StructureFactorArray(array, self.hkl, self.atoms.cell, self.g_max)
 
     def get_potential_3d(self, lazy: bool = True) -> np.ndarray:
         """
@@ -498,7 +498,7 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         The reciprocal space vectors as Miller indices as a (N, 3) array. N must be the same as the length of the structure factor.
     cell : Cell
         The unit cell.
-    k_max : float
+    g_max : float
         Maximum scattering vector length [1/Å].
     ensemble_axes_metadata : list of AxisMetadata
         Metadata for the ensemble axes.
@@ -513,7 +513,7 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         array: np.ndarray,
         hkl: np.ndarray,
         cell: np.ndarray | Cell,
-        k_max: float,
+        g_max: float,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
@@ -524,7 +524,7 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
 
         self._hkl = hkl
         self._cell = cell
-        self._k_max = k_max
+        self._g_max = g_max
 
         super().__init__(
             array=array,
@@ -541,13 +541,13 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         return self._cell
 
     @property
-    def k_max(self):
-        return self._k_max
+    def g_max(self):
+        return self._g_max
 
     @property
     def gpts(self) -> tuple[int, int, int]:
         """Number of reciprocal space grid points for 3D structure factors."""
-        return reciprocal_space_gpts(self.cell, self.k_max)
+        return reciprocal_space_gpts(self.cell, self.g_max)
 
     def to_dict(self) -> dict:
         return {(h, k, l): value for (h, k, l), value in zip(self.hkl, self.array)}
@@ -925,13 +925,13 @@ def calculate_scattering_matrix(
     return S
 
 
-def validate_k_max(k_max: float, structure_factor: BaseStructureFactor) -> float:
+def validate_g_max(g_max: float, structure_factor: BaseStructureFactor) -> float:
     """
-    Check if the provided k_max is valid. If k_max is None, it is set to half the k_max of the structure factor.
+    Check if the provided g_max is valid. If g_max is None, it is set to half the g_max of the structure factor.
 
     Parameters
     ----------
-    k_max : float
+    g_max : float
         The maximum scattering vector length [1/Å].
     structure_factor : BaseStructureFactor
         The structure factor.
@@ -939,15 +939,15 @@ def validate_k_max(k_max: float, structure_factor: BaseStructureFactor) -> float
     Returns
     -------
     float
-        The validated k_max.
+        The validated g_max.
     """
-    if k_max is None:
-        k_max = structure_factor.k_max / 2
-    elif k_max > structure_factor.k_max / 2:
+    if g_max is None:
+        g_max = structure_factor.g_max / 2
+    elif g_max > structure_factor.g_max / 2:
         warnings.warn(
-            "provided k_max exceed half the k_max of the scattering factors, some couplings are not included"
+            "provided g_max exceed half the g_max of the scattering factors, some couplings are not included"
         )
-    return k_max
+    return g_max
 
 
 def exctinction_distances(structure_factor, cell, energy):
@@ -961,7 +961,7 @@ def exctinction_distances(structure_factor, cell, energy):
 #     energy,
 #     cell,
 #     max_beams=None,
-#     k_max=None,
+#     g_max=None,
 #     sg_max=None,
 #     wg_max=None,
 #     ignore=None,
@@ -996,8 +996,8 @@ def exctinction_distances(structure_factor, cell, energy):
 #     if sg_max is not None:
 #         values[sg > sg_max] = np.inf
 
-#     if k_max is not None:
-#         values[g_vec_length > k_max] = np.inf
+#     if g_max is not None:
+#         values[g_vec_length > g_max] = np.inf
 
 #     if max_beams is not None:
 #         mask = np.zeros(len(values), dtype=bool)
@@ -1020,7 +1020,7 @@ class BlochWaves:
         The energy of the electrons [eV].
     sg_max : float
         The maximum excitation error [1/Å].
-    k_max : float
+    g_max : float
         The maximum scattering vector length [1/Å].
     orientation_matrix : np.ndarray
         An optional orientation matrix given as a (3, 3) array. If provided, the unit cell is rotated.
@@ -1038,7 +1038,7 @@ class BlochWaves:
         structure_factor: StructureFactor,
         energy: float,
         sg_max: float = None,
-        k_max: float = None,
+        g_max: float = None,
         orientation_matrix: np.ndarray = None,
         centering: str = "P",
         device: str = None,
@@ -1050,12 +1050,12 @@ class BlochWaves:
         if orientation_matrix is not None:
             cell = Cell(np.dot(cell, orientation_matrix.T))
 
-        k_max = validate_k_max(k_max, structure_factor)
+        g_max = validate_g_max(g_max, structure_factor)
 
         self._structure_factor = structure_factor
         self._energy = energy
         self._sg_max = sg_max
-        self._k_max = k_max
+        self._g_max = g_max
         self._cell = cell
         self._centering = centering
         self._use_wave_eq = use_wave_eq
@@ -1066,7 +1066,7 @@ class BlochWaves:
             cell=self._cell,
             energy=energy,
             sg_max=sg_max,
-            k_max=self._k_max,
+            g_max=self._g_max,
             centering=centering,
         )
 
@@ -1098,8 +1098,8 @@ class BlochWaves:
         return self._cell
 
     @property
-    def k_max(self):
-        return self._k_max
+    def g_max(self):
+        return self._g_max
 
     @property
     def sg_max(self):
@@ -1131,7 +1131,7 @@ class BlochWaves:
     def structure_matrix_nbytes(self):
         """The number of bytes used by the structure matrix."""
         bytes_per_element = 128 // 8
-        return self.num_beams**2 * bytes_per_element
+        return self.num_bloch_waves**2 * bytes_per_element
 
     def get_kinematical_diffraction_pattern(
         self, excitation_error_sigma: float = None
@@ -1151,7 +1151,7 @@ class BlochWaves:
         """
         hkl = self.hkl
 
-        S = self.structure_factor.calculate().flatten()[self.hkl_mask]
+        S = self.structure_factor.build(lazy=False).array[self.hkl_mask]
         sg = self.excitation_errors()
 
         S = abs2(S)
@@ -1161,9 +1161,9 @@ class BlochWaves:
 
         intensity = S * np.exp(-(sg**2) / (2.0 * excitation_error_sigma**2))
 
-        metadata = {"energy": self.energy, "sg_max": self._sg_max, "k_max": self.k_max}
+        metadata = {"energy": self.energy, "sg_max": self._sg_max, "g_max": self.g_max}
 
-        reciprocal_lattice_vectors = self.cell.reciprocal()
+        reciprocal_lattice_vectors = np.array(self.cell.reciprocal())
 
         return IndexedDiffractionPatterns(
             miller_indices=hkl,
@@ -1343,7 +1343,9 @@ class BlochWaves:
             metadata={
                 "energy": self.energy,
                 "sg_max": self.sg_max,
-                "k_max": self.k_max,
+                "g_max": self.g_max,
+                "label": "Intensity",
+                "units": "arb. unit",
             },
         )
 
@@ -1478,7 +1480,7 @@ class BlochWaves:
                 structure_factor=self.structure_factor,
                 energy=self.energy,
                 sg_max=self.sg_max,
-                k_max=self.k_max,
+                g_max=self.g_max,
                 centering=self._centering,
                 orientation_matrix=orientation_matrix,
                 use_wave_eq=self.use_wave_eq,
@@ -1492,10 +1494,11 @@ class BlochWaves:
             structure_factor=self.structure_factor,
             energy=self.energy,
             sg_max=self.sg_max,
-            k_max=self.k_max,
+            g_max=self.g_max,
             centering=self._centering,
             use_wave_eq=self.use_wave_eq,
             device=self._device,
+            use_degrees=degrees,
         )
         return ensemble
 
@@ -1509,21 +1512,23 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         structure_factor: StructureFactor,
         energy: float,
         sg_max: float,
-        k_max: float,
+        g_max: float,
         centering: str = "P",
         device: str = None,
         use_wave_eq: bool = False,
+        use_degrees: bool = False,
     ):
         self._axes = args[::2]
         self._rotations = tuple(
             validate_distribution(rotation) for rotation in args[1::2]
         )
 
+        self._use_degrees = use_degrees
         self._structure_factor = structure_factor
         self._energy = energy
         self._centering = centering
         self._sg_max = sg_max
-        self._k_max = k_max
+        self._g_max = g_max
         self._use_wave_eq = use_wave_eq
         self._device = validate_device(device)
 
@@ -1542,7 +1547,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             cell=self._structure_factor.atoms.cell,
             energy=self.energy,
             sg_max=self.sg_max,
-            k_max=self.k_max,
+            g_max=self.g_max,
             centering=self.centering,
             orientation_matrices=self.get_orientation_matrices().reshape(-1, 3, 3),
         )
@@ -1561,7 +1566,9 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         for axes, rotation in zip(self.axes[::-1], self.rotations[::-1]):
 
             if hasattr(rotation, "values"):
-                R = Rotation.from_euler(axes, rotation.values).as_matrix()
+                R = Rotation.from_euler(
+                    axes, rotation.values, degrees=self._use_degrees
+                ).as_matrix()
                 R = R[(slice(None),) + (None,) * (orientation_matrices.ndim - 2)]
             else:
                 R = Rotation.from_euler(axes, rotation).as_matrix()
@@ -1583,6 +1590,10 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return self._rotations
 
     @property
+    def use_degrees(self) -> bool:
+        return self._use_degrees
+
+    @property
     def energy(self) -> float:
         return self._energy
 
@@ -1591,8 +1602,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return self._centering
 
     @property
-    def k_max(self) -> float:
-        return self._k_max
+    def g_max(self) -> float:
+        return self._g_max
 
     @property
     def use_wave_eq(self) -> bool:
@@ -1608,13 +1619,33 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     @property
     def ensemble_axes_metadata(self) -> list[NonLinearAxis]:
+
+        if self.use_degrees:
+            units = "deg"
+        else:
+            units = "rad"
+
+        print(self._axes, self.rotations)
+
         ensemble_axes_metadata = []
         for axes, rotations in zip(self._axes, self.rotations):
-            ensemble_axes_metadata += [
-                NonLinearAxis(
-                    label=f"{axes}_rotation", units="rad", values=rotations.values
-                )
-            ]
+            if isinstance(rotations, BaseDistribution):
+                ensemble_axes_metadata += [
+                    NonLinearAxis(
+                        label=f"{axes}_rotation",
+                        units=units,
+                        values=rotations.values,
+                        tex_label=f"${axes}_{{rotation}}$",
+                    )
+                ]
+            # ensemble_axes_metadata += [
+            #     NonLinearAxis(
+            #         label=f"{axes}_rotation",
+            #         units=units,
+            #         values=rotations.values,
+            #         tex_label=f"${axes}_{{rotation}}$",
+            #     )
+            # ]
         return ensemble_axes_metadata
 
     @property
@@ -1711,7 +1742,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 structure_factor=self._structure_factor,
                 energy=self.energy,
                 sg_max=self.sg_max,
-                k_max=self.k_max,
+                g_max=self.g_max,
                 orientation_matrix=orientation_matrices[i],
                 centering=self.centering,
                 device=self.device,
@@ -1725,7 +1756,10 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             # )
 
             diffraction_patterns = bw.calculate_diffraction_patterns(
-                thicknesses, return_complex=return_complex, merge_tol=merge_tol, lazy=False
+                thicknesses,
+                return_complex=return_complex,
+                merge_tol=merge_tol,
+                lazy=False,
             )
 
             array[..., bw.hkl_mask[hkl_mask]] = diffraction_patterns.array
@@ -1736,7 +1770,9 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         return array
 
-    def _lazy_calculate_diffraction_patterns(self, thicknesses, return_complex, merge_tol, pbar):
+    def _lazy_calculate_diffraction_patterns(
+        self, thicknesses, return_complex, merge_tol, pbar
+    ):
         blocks = self.ensemble_blocks(1)
 
         def _run_calculate_diffraction_patterns(
@@ -1862,7 +1898,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                 "units": "arb. unit",
                 "energy": self.energy,
                 "sg_max": self.sg_max,
-                "k_max": self.k_max,
+                "g_max": self.g_max,
             },
         )
 
