@@ -16,6 +16,7 @@ from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.units import units_type
+from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
     PolarMeasurements,
@@ -28,10 +29,10 @@ from abtem.measurements import (
 )
 from abtem.transform import ArrayObjectTransform
 from abtem.visualize.visualizations import discrete_cmap
+from abtem.measurements import _diffraction_pattern_resampling_gpts
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
-    from abtem.measurements import BaseMeasurements
 
 
 def _validate_detectors(
@@ -632,14 +633,14 @@ class _AbstractRadialDetector(BaseDetector):
                 offset=(0.0, 0.0),
                 return_indices=False,
             )
-            
+
             regions = regions.astype(np.float32)
             regions[..., regions < 0] = np.nan
 
             diffraction_patterns = DiffractionPatterns(
                 regions, sampling=reciprocal_space_sampling, metadata={"energy": energy}
             )
-        
+
         n_bins_radial = self.nbins_radial
         n_bins_azimuthal = self.nbins_azimuthal
         num_colors = n_bins_radial * n_bins_azimuthal
@@ -662,7 +663,7 @@ class _AbstractRadialDetector(BaseDetector):
             kwargs["units"] = "mrad"
 
         diffraction_patterns.metadata["energy"] = energy
-        
+
         return diffraction_patterns.show(**kwargs)
 
 
@@ -892,21 +893,35 @@ class PixelatedDetector(BaseDetector):
 
         return 0.0, min(cutoff)
 
-    def _out_base_shape(self, waves: Waves, index: int = 0) -> tuple[int, int]:
-        if self.reciprocal_space:
-            shape = waves._gpts_within_angle(self.max_angle)
+    def _new_sampling_and_gpts(self, waves: Waves):
+        if self.resample:
+            sampling = waves.reciprocal_space_sampling
+            gpts = waves._gpts_within_angle(self.max_angle)
+
+            _, sampling = _diffraction_pattern_resampling_gpts(
+                self.resample, sampling, None, gpts, adjust_sampling=False
+            )
+
+            if self.max_angle and sampling[0] == sampling[1]:
+                gpts = (min(gpts), min(gpts))
+        elif self.max_angle and not self.resample:
+            gpts = waves._gpts_within_angle(self.max_angle)
+            sampling = waves.reciprocal_space_sampling
         else:
-            shape = waves.gpts
+            sampling = waves.reciprocal_space_sampling
+            gpts = waves.gpts
 
-        return shape
+        return sampling, gpts
 
-    def _out_dtype(self, array_object, index=0) -> np.dtype.base:
-        return np.float32
+    def _out_base_shape(self, waves: Waves, index: int = 0) -> tuple[int, int]:
+        return self._new_sampling_and_gpts(waves)[1]
+
+    def _out_dtype(self, array_object, index: int = 0) -> np.dtype.base:
+        return get_dtype(complex=False)
 
     def _out_base_axes_metadata(self, waves: Waves, index=0) -> list[AxisMetadata]:
         if self.reciprocal_space:
-            sampling = waves.reciprocal_space_sampling
-            gpts = waves._gpts_within_angle(self.max_angle)
+            sampling, gpts = self._new_sampling_and_gpts(waves)
 
             return [
                 ReciprocalSpaceAxis(
@@ -964,6 +979,9 @@ class PixelatedDetector(BaseDetector):
 
         else:
             measurements = waves.intensity()
+
+        if self._resample:
+            measurements = measurements.resample(self._resample)
 
         if self.to_cpu:
             measurements = measurements.to_cpu()
