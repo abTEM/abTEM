@@ -95,29 +95,29 @@ def get_shortest_g_vec_length(cell: Cell):
 
 def reciprocal_space_gpts(
     cell: np.ndarray,
-    k_max: float,
+    g_max: float,
 ) -> tuple[int, int, int]:
-    # if isinstance(k_max, Number):
-    #    k_max = (k_max,) * 3
+    # if isinstance(g_max, Number):
+    #    g_max = (g_max,) * 3
 
-    # assert len(k_max) == 3
+    # assert len(g_max) == 3
 
     dk = np.linalg.norm(reciprocal_cell(cell), axis=1)
 
     gpts = (
-        int(np.ceil(k_max / dk[0])) * 2 + 1,
-        int(np.ceil(k_max / dk[1])) * 2 + 1,
-        int(np.ceil(k_max / dk[2])) * 2 + 1,
+        int(np.ceil(g_max / dk[0])) * 2 + 1,
+        int(np.ceil(g_max / dk[1])) * 2 + 1,
+        int(np.ceil(g_max / dk[2])) * 2 + 1,
     )
     return gpts
 
 
 def make_hkl_grid(
     cell: np.ndarray,
-    k_max: float,
+    g_max: float,
     axes: tuple[int, ...] = (0, 1, 2),
 ) -> np.ndarray:
-    gpts = reciprocal_space_gpts(cell, k_max)
+    gpts = reciprocal_space_gpts(cell, g_max)
 
     freqs = tuple(np.fft.fftfreq(n, d=1 / n).astype(int) for n in gpts)
 
@@ -128,7 +128,7 @@ def make_hkl_grid(
 
     hkl = hkl.reshape((-1, len(axes)))
     g_vec = calculate_g_vec(hkl, cell)
-    hkl = hkl[(g_vec**2).sum(-1) <= k_max**2]
+    hkl = hkl[(g_vec**2).sum(-1) <= g_max**2]
     
     return hkl
 
@@ -215,7 +215,7 @@ def filter_reciprocal_space_vectors(
     cell: Cell,
     energy: float,
     sg_max: float,
-    k_max: float,
+    g_max: float,
     centering: str = "P",
     orientation_matrices: np.ndarray = None,
 ) -> np.ndarray:
@@ -232,7 +232,7 @@ def filter_reciprocal_space_vectors(
         Electron energy [eV].
     sg_max : float
         Maximum excitation error [1/Å].
-    k_max : float
+    g_max : float
         Maximum scattering vector length [1/Å].
     centering : str, optional
         Crystal centering must be one of 'P', 'I', 'A', 'B', 'C' or 'F'. Default is 'P'.
@@ -269,7 +269,7 @@ def filter_reciprocal_space_vectors(
 
     mask *= get_reflection_condition(hkl, centering)
 
-    mask *= g_length <= k_max
+    mask *= g_length <= g_max
 
     return mask
 
