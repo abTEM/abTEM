@@ -637,6 +637,9 @@ class ScaledCircleCollection(Collection):
         super().set_array(array)
         self.changed()
 
+    def get_all_offsets(self):
+        return self._unmasked_offsets
+
     def _update(self):
         self.set_offsets(self._unmasked_offsets[self._mask])
         self.set_array(self._unmasked_array[self._mask])
@@ -842,6 +845,9 @@ class ScatterArtist(Artist2D):
             **kwargs,
         )
 
+        if len(measurement.positions) == 0:
+            raise ValueError("No circles to plot.")
+
         ax.add_collection(self._circles)
 
         units = "1/Å" if units is None else units
@@ -851,7 +857,7 @@ class ScatterArtist(Artist2D):
 
         self.set_xlabel(x_axis.format_label(units))
         self.set_ylabel(y_axis.format_label(units))
-
+        
         if annotations:
             annotations = []
             for hkl in measurement.miller_indices:
@@ -872,7 +878,7 @@ class ScatterArtist(Artist2D):
         if caxes:
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes=caxes, label=cbar_label)
-
+        
     def __getattr__(self, name):
         if name in self.__dict__:
             return self.__dict__[name]
@@ -892,16 +898,19 @@ class ScatterArtist(Artist2D):
     def annotations(self) -> list[Annotation]:
         return self._annotations
 
+    def get_offsets(self):
+        return self._circles.get_offsets()
+        
     def get_ylim(self):
         return [
-            self.get_offsets()[:, 1].min() * 1.1,
-            self.get_offsets()[:, 1].max() * 1.1,
+            self.get_all_offsets()[:, 1].min() * 1.1,
+            self.get_all_offsets()[:, 1].max() * 1.1,
         ]
 
     def get_xlim(self):
         return [
-            self.get_offsets()[:, 0].min() * 1.1,
-            self.get_offsets()[:, 0].max() * 1.1,
+            self.get_all_offsets()[:, 0].min() * 1.1,
+            self.get_all_offsets()[:, 0].max() * 1.1,
         ]
 
     def get_value_limits(self):
