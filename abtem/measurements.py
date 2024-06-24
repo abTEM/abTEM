@@ -2454,7 +2454,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         sampling,
         cell,
         sg_max,
-        k_max,
+        g_max,
         centering,
         energy,
         radius,
@@ -2462,14 +2462,14 @@ class DiffractionPatterns(_BaseMeasurement2D):
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
         from abtem.bloch.indexing import index_diffraction_spots
 
-        hkl = make_hkl_grid(cell, k_max)
+        hkl = make_hkl_grid(cell, g_max)
 
         mask = filter_reciprocal_space_vectors(
             hkl,
             cell,
             energy=energy,
             sg_max=sg_max,
-            k_max=k_max,
+            g_max=g_max,
             centering=centering,
             orientation_matrices=orientation_matrices,
         )
@@ -2493,7 +2493,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         self,
         cell: Cell | float | tuple[float, float, float],
         sg_max: float = None,
-        k_max: float = None,
+        g_max: float = None,
         orientation_matrices: np.ndarray = None,
         radius: float = None,
         centering: str = "P",
@@ -2511,8 +2511,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Orientation matrices used for indexing the diffraction spots. The shape of the orientation matrices must be
             broadcastable with the ensemble shape of the diffraction patterns.
         sg_max : float, optional
-            Maximum excitation error [1/Å] of the indexed diffraction spots The default is estimated from the energy and `k_max`.
-        k_max : float, optional
+            Maximum excitation error [1/Å] of the indexed diffraction spots The default is estimated from the energy and `g_max`.
+        g_max : float, optional
             Maximum scattering vector [1/Å] of the indexed diffraction spots. The default is the maximum frequency of the diffraction
             patterns.
         radius : float, optional
@@ -2544,22 +2544,22 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if energy is None:
             energy = self._get_from_metadata("energy")
 
-        if k_max is None:
-            k_max = max(self.max_frequency)
+        if g_max is None:
+            g_max = max(self.max_frequency)
 
         if sg_max is None:
-            sg_max = estimate_necessary_excitation_error(energy, k_max)
+            sg_max = estimate_necessary_excitation_error(energy, g_max)
 
         cell = validate_cell(cell)
 
-        hkl = make_hkl_grid(cell, k_max)
+        hkl = make_hkl_grid(cell, g_max)
 
         mask = filter_reciprocal_space_vectors(
             hkl,
             cell,
             energy=energy,
             sg_max=sg_max,
-            k_max=k_max,
+            g_max=g_max,
             centering=centering,
             orientation_matrices=orientation_matrices,
         )
@@ -2589,7 +2589,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sampling=self.sampling,
                 cell=cell,
                 sg_max=sg_max,
-                k_max=k_max,
+                g_max=g_max,
                 centering=centering,
                 energy=energy,
                 radius=radius,
@@ -2605,7 +2605,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 sampling=self.sampling,
                 cell=cell,
                 sg_max=sg_max,
-                k_max=k_max,
+                g_max=g_max,
                 centering=centering,
                 energy=energy,
                 radius=radius,
