@@ -1625,8 +1625,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         else:
             units = "rad"
 
-        print(self._axes, self.rotations)
-
         ensemble_axes_metadata = []
         for axes, rotations in zip(self._axes, self.rotations):
             if isinstance(rotations, BaseDistribution):
@@ -1638,14 +1636,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                         tex_label=f"${axes}_{{rotation}}$",
                     )
                 ]
-            # ensemble_axes_metadata += [
-            #     NonLinearAxis(
-            #         label=f"{axes}_rotation",
-            #         units=units,
-            #         values=rotations.values,
-            #         tex_label=f"${axes}_{{rotation}}$",
-            #     )
-            # ]
         return ensemble_axes_metadata
 
     @property
