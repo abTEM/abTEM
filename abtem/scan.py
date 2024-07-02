@@ -23,6 +23,7 @@ from abtem.measurements import _scan_axes
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
+from abtem.visualize.visualizations import Visualization
 
 if TYPE_CHECKING:
     from abtem.waves import Waves, Probe
@@ -1017,6 +1018,14 @@ class GridScan(HasGridMixin, BaseScan):
         kwargs :
             Additional options for matplotlib.patches.Rectangle used for scan area visualization as keyword arguments.
         """
+
+        if isinstance(ax, Visualization):
+            axes = np.array(ax.axes).ravel()
+            for ax in axes:
+                self.add_to_plot(
+                    ax, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor, **kwargs
+                )
+
         rect = Rectangle(
             tuple(self.start),
             *self.extent,

@@ -68,7 +68,7 @@ from abtem.multislice import (
 )
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.scan import BaseScan, GridScan, _validate_scan, CustomScan
-from abtem.slicing import SliceIndexedAtoms
+from abtem.slicing import SliceIndexedAtoms, Test
 from abtem.tilt import _validate_tilt
 from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
@@ -1070,7 +1070,7 @@ class Waves(BaseWaves, ArrayObject):
             return self.intensity().show(**kwargs)
 
 
-def _reduce_ensemble(ensemble):
+def _reduce_ensemble(ensemble) -> ArrayObject | ComputableList[ArrayObject]:
     if isinstance(ensemble, (list, tuple)):
         outputs = [_reduce_ensemble(x) for x in ensemble]
 
@@ -1093,7 +1093,7 @@ def _reduce_ensemble(ensemble):
 
 
 class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
-    def __init__(self, ensemble_names: tuple[str, ...], device: str, tilt=(0,0)):
+    def __init__(self, ensemble_names: tuple[str, ...], device: str, tilt=(0, 0)):
         self._ensemble_names = ensemble_names
         self._device = device
         self.tilt = tilt
@@ -1417,7 +1417,7 @@ class PlaneWave(_WavesBuilder):
         detectors: BaseDetector = None,
         max_batch: int | str = "auto",
         lazy: bool = None,
-    ) -> Waves:
+    ) -> BaseMeasurements | Waves | ComputableList[BaseMeasurements | Waves]:
         """
         Run the multislice algorithm, after building the plane-wave wave function as needed. The grid of the wave
         functions will be set to the grid of the potential.
@@ -1439,7 +1439,7 @@ class PlaneWave(_WavesBuilder):
 
         Returns
         -------
-        detected_waves : BaseMeasurements or list of BaseMeasurement
+        measurements : BaseMeasurements or ComputableList of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
@@ -1954,6 +1954,7 @@ class Probe(_WavesBuilder):
             If true shows complex images using domain-coloring instead of the intensity.
         kwargs : Keyword arguments for the :func:`.Images.show` function.
         """
+        self.grid.check_is_defined()
         wave = self.build((self.extent[0] / 2, self.extent[1] / 2))
         if complex_images:
             images = wave.complex_images()
