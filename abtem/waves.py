@@ -68,7 +68,7 @@ from abtem.multislice import (
 )
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.scan import BaseScan, GridScan, _validate_scan, CustomScan
-from abtem.slicing import SliceIndexedAtoms, Test
+from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _validate_tilt
 from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
