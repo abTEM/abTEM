@@ -696,11 +696,11 @@ def integrate_disc(
     mean_sampling = (metadata[-2].sampling + metadata[-1].sampling) / 2
 
     mask = 1 - np.clip((r - radius) / mean_sampling, 0, 1)
-    
-    #import matplotlib.pyplot as plt
-    #plt.figure()
-    #plt.imshow(mask, interpolation="nearest", cmap="gray")
-    #plt.show()
+
+    # import matplotlib.pyplot as plt
+    # plt.figure()
+    # plt.imshow(mask, interpolation="nearest", cmap="gray")
+    # plt.show()
 
     if return_mean:
         return (cropped * mask).sum((-2, -1)) / mask.sum((-2, -1))
@@ -2450,6 +2450,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def _index_diffraction_spots(
         array,
         orientation_matrices,
+        hkl,
         mask_all,
         sampling,
         cell,
@@ -2462,7 +2463,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         from abtem.bloch.utils import filter_reciprocal_space_vectors, make_hkl_grid
         from abtem.bloch.indexing import index_diffraction_spots
 
-        hkl = make_hkl_grid(cell, g_max)
+        # hkl = make_hkl_grid(cell, g_max)
 
         mask = filter_reciprocal_space_vectors(
             hkl,
@@ -2483,6 +2484,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             radius=radius,
             orientation_matrices=orientation_matrices,
         )
+        # assert mask.shape == mask_all.shape
+
+        # print(mask.shape, mask_all.shape, array.shape, mask[mask_all].sum())
 
         array_all = np.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
         array_all[..., mask[mask_all]] = array
@@ -2536,7 +2540,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
         if orientation_matrices is not None and not is_broadcastable(
             self.ensemble_shape, orientation_matrices.shape[:-2]
         ):
-
             raise ValueError(
                 "The ensemble shape and the shape of the orientation matrices must be broadcastable."
             )
@@ -2564,8 +2567,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
             orientation_matrices=orientation_matrices,
         )
 
-        hkl = hkl[mask]
-
         if self.is_lazy:
             orientation_matrices = orientation_matrices[
                 (None,)
@@ -2585,6 +2586,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 self._index_diffraction_spots,
                 self.array,
                 lazy_orientation_matrices,
+                hkl=hkl,
                 mask_all=mask,
                 sampling=self.sampling,
                 cell=cell,
@@ -2594,7 +2596,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 energy=energy,
                 radius=radius,
                 drop_axis=len(self.array.shape) - 1,
-                chunks=self.array.chunks[:-2] + (hkl.shape[0],),
+                chunks=self.array.chunks[:-2] + (mask.sum(),),
                 meta=np.array((), dtype=self.dtype),
             )
         else:
@@ -2621,7 +2623,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return IndexedDiffractionPatterns(
             intensities,
-            hkl,
+            hkl[mask],
             reciprocal_lattice_vectors=reciprocal_lattice_vectors,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
@@ -4101,7 +4103,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             reciprocal_lattice_vectors = reciprocal_lattice_vectors[
                 (None,) * (len(reciprocal_lattice_vectors.shape) - len(array.shape) + 1)
             ]
-        
+
         if not is_broadcastable(
             array.shape[:-1], reciprocal_lattice_vectors.shape[:-2]
         ):
