@@ -1,4 +1,5 @@
 """Module to describe the effect of temperature on the atomic positions."""
+
 from __future__ import annotations
 
 from abc import abstractmethod, ABCMeta
@@ -166,7 +167,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
     @property
     def numbers(self):
-        self.atoms.numbers  
+        self.atoms.numbers
 
     @property
     def atoms(self):
@@ -222,6 +223,90 @@ def _validate_seeds(
             assert num_seeds == len(seeds)
 
     return seeds
+
+
+def validate_sigmas(
+    atoms: Atoms, sigmas: float | dict[str | int, float] | Sequence[float]
+):
+    """
+    Validate the standard deviations of displacement for atoms in an atomic structure.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The atomic structure which standard deviations of displacement are to be validated.
+    sigmas : float, dict[str, float] or Sequence[float]
+        It can be either:
+
+        - a single float value specifying the standard deviation for all atoms,
+        - a dictionary mapping each atom's symbol or atomic number to a corresponding standard deviation,
+        - a sequence of float values providing the standard deviation for each atom individually.
+
+        For anisotropic displacements, either three values for each atom or for each
+        element must be provided.
+
+    Returns
+    -------
+    sigmas : dict[str, float] or np.ndarray
+        The validated standard deviations
+    anisotropic : bool
+        A boolean value indicating whether the displacements are anisotropic.
+
+    Raises
+    ------
+    ValueError
+        If the type of `sigmas` is not float, dict, or list.
+    RuntimeError
+        If the length of `sigmas` does not match the length of `atoms`, or
+        three values for each atom or each element are not given for anisotropic displacements.
+    """
+
+    atomic_numbers = np.unique(atoms.numbers)
+    unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
+
+    if isinstance(sigmas, Number):
+        new_sigmas = {}
+        for symbol in unique_symbols:
+            new_sigmas[symbol] = sigmas
+
+        anisotropic = False
+        sigmas = new_sigmas
+
+    elif isinstance(sigmas, dict):
+        anisotropic = any(hasattr(value, "__len__") for value in sigmas.values())
+
+        if anisotropic and not all(len(value) == 3 for value in sigmas.values()):
+            raise RuntimeError(
+                "Three values for each element must be given for anisotropic displacements."
+            )
+
+        if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
+            raise RuntimeError(
+                "Displacement standard deviation must be provided for all atomic species."
+            )
+
+    elif isinstance(sigmas, Iterable):
+        sigmas = np.array(sigmas, dtype=np.float32)
+        if len(sigmas) != len(atoms):
+            raise RuntimeError(
+                "Displacement standard deviation must be provided for all atoms."
+            )
+
+        if len(sigmas.shape) == 2:
+            if sigmas.shape[1] == 3:
+                anisotropic = True
+            else:
+                raise RuntimeError(
+                    "Three values for each atom must be given for anisotropic displacements."
+                )
+        elif len(sigmas.shape) == 1:
+            anisotropic = False
+        else:
+            raise RuntimeError()
+    else:
+        raise ValueError()
+
+    return sigmas, anisotropic
 
 
 class FrozenPhonons(BaseFrozenPhonons):
@@ -282,52 +367,6 @@ class FrozenPhonons(BaseFrozenPhonons):
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
         )
 
-    def _validate_sigmas(self, atoms):
-        unique_symbols = [chemical_symbols[number] for number in self.atomic_numbers]
-        sigmas = self._sigmas
-
-        if isinstance(sigmas, Number):
-            new_sigmas = {}
-            for symbol in unique_symbols:
-                new_sigmas[symbol] = sigmas
-
-            anisotropic = False
-            sigmas = new_sigmas
-
-        elif isinstance(sigmas, dict):
-            anisotropic = any(hasattr(value, "__len__") for value in sigmas.values())
-
-            if anisotropic and not all(len(value) == 3 for value in sigmas.values()):
-                raise RuntimeError("Three values for each element must be given for anisotropic displacements.")
-
-            if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
-                raise RuntimeError(
-                    "Displacement standard deviation must be provided for all atomic species."
-                )
-
-        elif isinstance(sigmas, Iterable):
-            sigmas = np.array(sigmas, dtype=np.float32)
-            if len(sigmas) != len(atoms):
-                raise RuntimeError(
-                    "Displacement standard deviation must be provided for all atoms."
-                )
-
-            if len(sigmas.shape) == 2:
-                if sigmas.shape[1] == 3:
-                    anisotropic = True
-                else:
-                    raise RuntimeError(
-                        "Three values for each atom must be given for anisotropic displacements."
-                    )
-            elif len(sigmas.shape) == 1:
-                anisotropic = False
-            else:
-                raise RuntimeError()
-        else:
-            raise ValueError()
-
-        return sigmas, anisotropic
-
     @property
     def ensemble_shape(self):
         return (len(self),)
@@ -365,6 +404,9 @@ class FrozenPhonons(BaseFrozenPhonons):
 
     def __len__(self) -> int:
         return self.num_configs
+
+    def _validate_sigmas(self, atoms: Atoms):
+        return validate_sigmas(atoms, self._sigmas)
 
     @property
     def _axes(self) -> list[int]:
