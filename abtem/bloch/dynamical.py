@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import warnings
 from abc import ABCMeta, abstractmethod
-from ast import Not
 from functools import partial
 from typing import Iterable, Sequence
 
@@ -10,10 +9,8 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
-import pandas as pd
-from scipy.cluster.hierarchy import fcluster, linkage
+from ase.data import chemical_symbols
 from scipy.linalg import expm as expm_scipy
-from scipy.spatial.distance import pdist
 from scipy.spatial.transform import Rotation
 
 from abtem.array import ArrayObject
@@ -28,6 +25,7 @@ from abtem.bloch.utils import (
     raveled_hkl_to_hkl,
     reciprocal_space_gpts,
 )
+from abtem.inelastic.phonons import validate_sigmas
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis
 from abtem.core.backend import cp, get_array_module, validate_device
@@ -39,10 +37,10 @@ from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_interpolate, ifft2
 from abtem.core.grid import Grid
-from abtem.core.utils import CopyMixin, flatten_list_of_lists, get_dtype, label_to_index
+from abtem.core.utils import CopyMixin, flatten_list_of_lists, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.measurements import IndexedDiffractionPatterns
-from abtem.parametrizations import validate_parametrization
+from abtem.parametrizations import validate_parametrization, Parametrization
 from abtem.potentials.iam import PotentialArray
 from abtem.waves import Waves
 
@@ -53,7 +51,7 @@ if cp is not None:
 def calculate_scattering_factors(
     g: np.ndarray,
     atoms: Atoms,
-    parametrization: str,
+    parametrization: str | Parametrization,
     g_max: float,
     thermal_sigma: float = 0.0,
     cutoff: str = "taper",
@@ -71,11 +69,15 @@ def calculate_scattering_factors(
         Maximum scattering vector length [1/Å]. The scattering factors are set to zero for g > g_max.
     parametrization : {'lobato', 'kirkland', 'peng'}
         Parametrization for the scattering factors.
-    thermal_sigma : float
+    thermal_sigma : dict
         Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
     cutoff : {'taper', 'hard'}
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard' is a hard cutoff.
     """
+
+    if not thermal_sigma is dict:
+        pass
+        # TODO: use AI
 
     parametrization = validate_parametrization(parametrization)
 
@@ -95,7 +97,8 @@ def calculate_scattering_factors(
 
     for idx, Z in enumerate(Z_unique):
         if thermal_sigma is not None:
-            DWF = np.exp(-0.5 * thermal_sigma**2 * g_unique**2 * (2 * np.pi) ** 2)
+            s = thermal_sigma[chemical_symbols[Z]]
+            DWF = np.exp(-0.5 * s**2 * g_unique**2 * (2 * np.pi) ** 2)
         else:
             DWF = 1.0
 
@@ -347,6 +350,9 @@ class StructureFactor(BaseStructureFactor):
     ):
 
         self._atoms = atoms
+
+        thermal_sigma, _ = validate_sigmas(atoms, thermal_sigma)
+
         self._thermal_sigma = thermal_sigma
 
         hkl = make_hkl_grid(atoms.cell, g_max)
@@ -384,6 +390,10 @@ class StructureFactor(BaseStructureFactor):
     @property
     def parametrization(self):
         return self._parametrization
+
+    @property
+    def thermal_sigma(self):
+        return self._thermal_sigma
 
     def calculate_scattering_factors(self) -> np.ndarray:
         """
