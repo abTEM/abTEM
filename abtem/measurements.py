@@ -2603,6 +2603,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             intensities = self._index_diffraction_spots(
                 array=self.array,
                 orientation_matrices=orientation_matrices,
+                hkl=hkl,
                 mask_all=mask,
                 sampling=self.sampling,
                 cell=cell,
