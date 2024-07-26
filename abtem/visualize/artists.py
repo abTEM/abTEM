@@ -663,7 +663,7 @@ class ScaledCircleCollection(Collection):
         distance = np.sqrt(dx**2 + dy**2)
         scale = distance / (radii[:, None] + radii)
         np.fill_diagonal(scale, np.inf)
-        return max(np.min(scale) / 2.0, 1e-4)
+        return max(np.min(scale) / 2.0, 1e-8)
 
     def _calculate_radii(self):
         norm = self.norm
@@ -671,12 +671,12 @@ class ScaledCircleCollection(Collection):
         base_radii = norm(data)
         if self._base_scale is None:
             # self._base_scale = self._auto_scale_radii(base_radii[self._mask])
-            self._base_scale = 1.
+            self._base_scale = 1.0
 
         radii = np.sqrt(
             np.clip(
                 base_radii * self._base_scale**2 * self._scale**2,
-                a_min=1e-5,
+                a_min=1e-8,
                 a_max=np.inf,
             )
         )
@@ -857,7 +857,7 @@ class ScatterArtist(Artist2D):
 
         self.set_xlabel(x_axis.format_label(units))
         self.set_ylabel(y_axis.format_label(units))
-        
+
         if annotations:
             annotations = []
             for hkl in measurement.miller_indices:
@@ -878,7 +878,7 @@ class ScatterArtist(Artist2D):
         if caxes:
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes=caxes, label=cbar_label)
-        
+
     def __getattr__(self, name):
         if name in self.__dict__:
             return self.__dict__[name]
@@ -900,7 +900,7 @@ class ScatterArtist(Artist2D):
 
     def get_offsets(self):
         return self._circles.get_offsets()
-        
+
     def get_ylim(self):
         return [
             self.get_all_offsets()[:, 1].min() * 1.1,
