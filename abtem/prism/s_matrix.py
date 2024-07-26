@@ -1824,6 +1824,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if self.potential is None or not self.potential.ensemble_shape:
                 symbols = symbols[1:]
 
+            pbar = config.get("diagnostics.task_progress", False)
+
             array = da.blockwise(
                 self._build_s_matrix,
                 symbols,
@@ -1833,7 +1835,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 (0, 1, 2, 3),
                 concatenate=True,
                 adjust_chunks=adjust_chunks,
-                pbar=True,
+                pbar=pbar,
                 meta=xp.array((), dtype=np.complex64),
             )
 
