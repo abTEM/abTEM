@@ -24,5 +24,5 @@ def test_fig_5_12(projection, lazy, integral_space):
 
     intensity = exit_wave.intensity().compute().array
 
-    assert np.round(intensity.min(), 2) == np.float32(.72)
-    assert np.round(intensity.max(), 2) == np.float32(1.03)
+    assert np.round(float(intensity.min()), 2) == .72
+    assert np.round(float(intensity.max()), 2) == 1.03
