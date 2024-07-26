@@ -751,7 +751,10 @@ def _validate_frozen_phonons(atoms):
         elif isinstance(atoms, Atoms):
             frozen_phonons = DummyFrozenPhonons(atoms)
         else:
-            raise ValueError()
+            raise ValueError(
+                f"Frozen phonons should be of types `FrozenPhonons`, `Atoms` or `AtomsEnsemble`, "
+                f"not {atoms}"
+            )
     else:
         frozen_phonons = atoms
 
