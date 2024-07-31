@@ -343,7 +343,7 @@ class StructureFactor(BaseStructureFactor):
         atoms: Atoms,
         g_max: float,
         parametrization: str = "lobato",
-        thermal_sigma: float = None,
+        thermal_sigma: float = 0.,
         cutoff: str = "taper",
         device: str = None,
         centering: str = "P",
