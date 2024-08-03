@@ -4100,6 +4100,9 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         metadata: dict = None,
     ):
 
+        if isinstance(reciprocal_lattice_vectors, Cell):
+            reciprocal_lattice_vectors = np.array(reciprocal_lattice_vectors)
+
         if len(reciprocal_lattice_vectors.shape) <= len(array.shape):
             reciprocal_lattice_vectors = reciprocal_lattice_vectors[
                 (None,) * (len(reciprocal_lattice_vectors.shape) - len(array.shape) + 1)
@@ -4693,21 +4696,16 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         )
 
         new_intensities = {}
-        # new_positions = {}
         for hkl in miller_indices:
             new_intensities[hkl] = []
-            # new_positions[hkl] = []
 
             for intensities1 in intensities:
                 new_intensities[hkl].append(intensities1[hkl])
-                # new_positions[hkl].append(positions1[hkl])
 
             new_intensities[hkl] = np.stack(new_intensities[hkl], axis=axis)
-            # new_positions[hkl] = np.stack(new_positions[hkl], axis=axis)
 
         miller_indices = np.stack(list(new_intensities.keys()), axis=0)
 
-        # positions = np.stack(list(new_positions.values()), axis=-2)
         intensities = np.stack(list(new_intensities.values()), axis=-1)
 
         positions = np.stack(
