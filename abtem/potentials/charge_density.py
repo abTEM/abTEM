@@ -1,5 +1,7 @@
 """Module for describing the nuclear and electronic charge density used as the electrostatic potential in multislice simulations."""
+
 from __future__ import annotations
+
 from functools import partial
 from typing import Tuple, Union
 
@@ -10,14 +12,15 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
+from abtem.atoms import plane_to_axes
 from abtem.core.backend import copy_to_device
+from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop, fft_interpolate
+from abtem.core.utils import itemset
+from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, _PotentialBuilder, PotentialArray
-from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
-from abtem.atoms import plane_to_axes
-from abtem.core.constants import eps0
 
 
 def _spatial_frequencies_orthorhombic(shape, cell: Cell):
@@ -174,14 +177,14 @@ def add_point_charges_fourier(
 
     if hasattr(atoms, "atoms"):
         atoms = atoms.atoms
-    
+
     if hasattr(atoms, "atoms"):
         atoms = atoms.atoms
 
     for atom in atoms:
         scale = atom.number / pixel_volume
         array += scale * broadening * _fourier_space_delta(kx, ky, kz, *atom.position)
-    
+
     return array
 
 
@@ -215,8 +218,10 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     slice_shape = gpts + (int((b - a) / (min(sampling))),)
 
     if slice_shape[-1] <= 1:
-        raise RuntimeError("The slice thickness requested is not implmented for the provided charge density "
-                           "calculatation")
+        raise RuntimeError(
+            "The slice thickness requested is not implmented for the provided charge density "
+            "calculatation"
+        )
 
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
 
@@ -348,9 +353,9 @@ class ChargeDensityPotential(_PotentialBuilder):
             self._frozen_phonons = DummyFrozenPhonons(atoms)
         else:
             raise RuntimeError()
-        
+
         self._charge_density = charge_density.astype(np.float32)
-        
+
         super().__init__(
             array_object=PotentialArray,
             gpts=gpts,
@@ -364,7 +369,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             box=box,
             periodic=periodic,
         )
-    
+
     @property
     def frozen_phonons(self):
         return self._frozen_phonons
@@ -410,7 +415,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             blocks = np.zeros((1,), dtype=object)
         else:
             blocks = np.zeros((len(chunks[0]),), dtype=object)
-        
+
         if lazy:
             if not isinstance(charge_densities, da.core.Array):
                 charge_densities = da.from_array(
@@ -430,7 +435,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         frozen_phonon_blocks = self._ewald_potential().frozen_phonons._partition_args(
             lazy=lazy
         )[0]
-        
+
         for i, (charge_density, frozen_phonon) in enumerate(
             zip(charge_densities, frozen_phonon_blocks)
         ):
@@ -439,13 +444,13 @@ class ChargeDensityPotential(_PotentialBuilder):
                 block = dask.delayed(self._wrap_charge_density)(
                     charge_density.item(), frozen_phonon
                 )
-                blocks.itemset(i, da.from_delayed(block, shape=(1,), dtype=object))
+                itemset(blocks, i, da.from_delayed(block, shape=(1,), dtype=object))
 
             else:
-                blocks.itemset(
-                    i, self._wrap_charge_density(charge_density, frozen_phonon)
+                itemset(
+                    blocks, i, self._wrap_charge_density(charge_density, frozen_phonon)
                 )
-        
+
         if lazy:
             blocks = da.concatenate(list(blocks))
 
@@ -461,7 +466,7 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         if isinstance(args["atoms"], np.ndarray):
             args["atoms"] = AtomsEnsemble(args["atoms"])
-        
+
         kwargs.update(args)
         potential = ChargeDensityPotential(**kwargs)
 
@@ -478,7 +483,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         new_potential = partial(
             self._charge_density_potential,
             frozen_phonons_partial=frozen_phonons_partial,
-            **kwargs
+            **kwargs,
         )
         return new_potential
 
@@ -491,7 +496,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             array, slice_shape, cell, slice_box, (0, 0, a)
         )
 
-        pixel_thickness = (slice_shape[-1] - 1)
+        pixel_thickness = slice_shape[-1] - 1
 
         return np.trapz(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
 

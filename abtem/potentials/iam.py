@@ -39,7 +39,7 @@ from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
     BaseFrozenPhonons,
@@ -1455,8 +1455,7 @@ class CrystalPotential(_PotentialBuilder):
             array = da.concatenate(arrays)
         else:
             potential_unit = self.potential_unit
-            # if self.potential_unit.array:
-            #    atoms = atoms.compute()
+
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 if self.seeds is not None:
@@ -1464,39 +1463,9 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                array.itemset(i, (potential_unit, self.seeds))
+                itemset(array, i, (potential_unit, self.seeds))
 
         return (array,)
-
-        # chunks = validate_chunks(self.ensemble_shape, chunks)
-        #
-        # if not len(self.ensemble_shape):
-        #     chunks = ((1,),)
-        #
-        # if lazy:
-        #     arrays = []
-        #     for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-        #         if self.seeds is not None:
-        #             seeds = self.seeds[start:stop]
-        #         else:
-        #             seeds = self.seeds
-        #         lazy_potential = self.potential_unit.ensemble_blocks(-1)
-        #         lazy_args = dask.delayed(_wrap_with_array)((lazy_potential, seeds), ndims=1)
-        #         lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
-        #         arrays.append(lazy_array)
-        #
-        #     array = da.concatenate(arrays)
-        # else:
-        #
-        #     array = np.zeros((chunks[0],), dtype=object)
-        #     for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-        #         if self.seeds is not None:
-        #             seeds = self.seeds[start:stop]
-        #         else:
-        #             seeds = self.seeds
-        #
-        #         array.itemset(i, (self.potential_unit, seeds))
-        # return (array,)
 
     def generate_slices(
         self, first_slice: int = 0, last_slice: int = None, return_depth: bool = False

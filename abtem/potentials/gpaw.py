@@ -25,6 +25,7 @@ from abtem.core.electron_configurations import (
 )
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.fft import fft_crop
+from abtem.core.utils import itemset
 from abtem.inelastic.phonons import (
     BaseFrozenPhonons,
     DummyFrozenPhonons,
@@ -608,8 +609,8 @@ class GPAWPotential(_PotentialBuilder):
 
         def frozen_phonons(calculators, frozen_phonons):
             arr = np.zeros((1,), dtype=object)
-            arr.itemset(
-                0, {"calculators": calculators, "frozen_phonons": frozen_phonons}
+            itemset(
+                arr, 0, {"calculators": calculators, "frozen_phonons": frozen_phonons}
             )
             return arr
 
@@ -623,9 +624,9 @@ class GPAWPotential(_PotentialBuilder):
                 if lazy:
                     block = dask.delayed(frozen_phonons)(calculators, fp)
 
-                    array.itemset(i, da.from_delayed(block, shape=(1,), dtype=object))
+                    itemset(array, i, da.from_delayed(block, shape=(1,), dtype=object))
                 else:
-                    array.itemset(i, frozen_phonons(calculators, fp))
+                    itemset(array, i, frozen_phonons(calculators, fp))
 
             if lazy:
                 array = da.concatenate(list(array))
@@ -654,7 +655,7 @@ class GPAWPotential(_PotentialBuilder):
                 else:
                     block = frozen_phonons(calculator, None)
 
-                array.itemset(i, block)
+                itemset(array, i, block)
 
             if lazy:
                 return (da.concatenate(list(array)),)

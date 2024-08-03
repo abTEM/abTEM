@@ -21,7 +21,7 @@ from dask.delayed import Delayed
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata, UnknownAxis
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.utils import CopyMixin, EqualityMixin
+from abtem.core.utils import CopyMixin, EqualityMixin, itemset
 
 try:
     from gpaw.io import Reader  # noqa
@@ -69,11 +69,14 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._cell
 
     @staticmethod
-    def _validate_atomic_numbers_and_cell(atoms: Atoms, atomic_numbers, cell):
+    def _validate_atomic_numbers_and_cell(atoms: Atoms | np.ndarray, atomic_numbers, cell):
         if isinstance(atoms, da.core.Array) and (
             atomic_numbers is None or cell is None
         ):
             atoms = atoms.compute()
+
+        if isinstance(atoms, np.ndarray):
+            atoms = atoms.item()
 
         if cell is None:
             cell = atoms.cell.copy()
@@ -167,7 +170,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
     @property
     def numbers(self):
-        self.atoms.numbers
+        return self.atoms.numbers
 
     @property
     def atoms(self):
@@ -486,7 +489,7 @@ class FrozenPhonons(BaseFrozenPhonons):
             atoms = self.atoms
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                array.itemset(i, (atoms, self.seed[start:stop]))
+                itemset(array, i, (atoms, self.seed[start:stop]))
 
         return (array,)
 
@@ -550,7 +553,7 @@ class AtomsEnsemble(BaseFrozenPhonons):
             else:
                 stack = np.empty(len(trajectory), dtype=object)
                 for i, atoms in enumerate(trajectory):
-                    stack.itemset(i, atoms)
+                    itemset(stack, i, atoms)
 
                 trajectory = stack
 
@@ -603,7 +606,10 @@ class AtomsEnsemble(BaseFrozenPhonons):
 
     @property
     def atoms(self) -> Atoms:
-        return self._trajectory.ravel()[0]
+        atoms = self._trajectory.ravel()[0]
+        if isinstance(atoms, np.ndarray):
+            atoms = atoms.item()
+        return atoms
 
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
@@ -635,7 +641,7 @@ class AtomsEnsemble(BaseFrozenPhonons):
 
             array = np.zeros((len(chunks[0]),), dtype=object)
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                array.itemset(i, _wrap_with_array(trajectory[start:stop], 1))
+                itemset(array, i, _wrap_with_array(trajectory[start:stop], 1))
 
         return (array,)
 

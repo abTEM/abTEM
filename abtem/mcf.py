@@ -10,6 +10,7 @@ from abtem.core.backend import get_array_module
 from abtem.core.energy import HasAcceleratorMixin, Accelerator
 from abtem.core.fft import fft_crop
 from abtem.core.grid import spatial_frequencies, Grid
+from abtem.core.utils import itemset
 from abtem.transfer import ArrayWaveTransform
 
 if TYPE_CHECKING:
@@ -181,7 +182,7 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         def diagonal_mcf(*args, kwargs):
             kwargs['eigenvectors'] = tuple(args[0])
             arr = np.zeros((1,), dtype=object)
-            arr.itemset(DiagonalMCF(**kwargs))
+            itemset(arr, 0, DiagonalMCF(**kwargs))
             return arr
 
         kwargs = self._copy_as_dict()

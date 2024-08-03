@@ -34,7 +34,7 @@ from abtem.core.utils import (
     ensure_list,
     CopyMixin,
     EqualityMixin,
-    tuple_range,
+    tuple_range, itemset,
 )
 from abtem.detectors import (
     BaseDetector,
@@ -353,7 +353,7 @@ def _lazy_reduce(
 
     n = len(array.shape) - 3 + len(scan.shape) + len(ctf.ensemble_shape)
     arr = np.zeros((1,) * n, dtype=object)
-    arr.itemset(measurements)
+    itemset(arr, 0, measurements)
     return arr
 
 
@@ -521,7 +521,7 @@ def _multiple_rechunk_reduce(
     )
 
     for i, block in zip(scan_indices_1, new_blocks):
-        blocks.itemset(scans[i][0], block)
+        itemset(blocks, scans[i][0], block)
 
     if s_matrix_array.ensemble_shape:
         fp_arrays = []
@@ -551,7 +551,7 @@ def _multiple_rechunk_reduce(
     )
 
     for i, block in zip(scan_indices_2, new_blocks):
-        blocks.itemset(scans[i][0], block)
+        itemset(blocks, scans[i][0], block)
 
     if s_matrix_array.ensemble_shape:
         fp_arrays = []
@@ -581,7 +581,7 @@ def _multiple_rechunk_reduce(
     )
 
     for i, block in zip(scan_indices_3, new_blocks):
-        blocks.itemset(scans[i][0], block)
+        itemset(blocks, scans[i][0], block)
 
     array = da.block(blocks.tolist())
 
@@ -663,7 +663,7 @@ def _single_rechunk_reduce(
         sub_scan = sub_scan.item()
 
         if len(sub_scan) == 0:
-            blocks.itemset(
+            itemset(blocks,
                 (0,) * len(array.shape[:-3]) + indices,
                 da.zeros(
                     (0,) * len(blocks.shape),
@@ -709,7 +709,7 @@ def _single_rechunk_reduce(
             meta=np.array((), dtype=np.complex64),
         )
 
-        blocks.itemset((0,) * len(array.shape[:-3]) + indices, new_block)
+        itemset(blocks, (0,) * len(array.shape[:-3]) + indices, new_block)
 
     array = da.block(blocks.tolist())
 
@@ -1715,7 +1715,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         array = np.zeros(len(wave_vector_blocks), dtype=object)
         for i, wave_vector_block in enumerate(wave_vector_blocks):
-            array.itemset(i, wave_vector_block)
+            itemset(array, i, wave_vector_block)
 
         if lazy:
             array = da.from_array(array, chunks=1)
@@ -2039,7 +2039,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # measurements = ensure_list(measurements)
 
         array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
-        array.itemset(0, measurements)
+        itemset(array, 0, measurements)
 
         return array
 

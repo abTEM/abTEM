@@ -7,12 +7,32 @@ import inspect
 import itertools
 import os
 import warnings
+from typing import Sequence, Any
 
 import numpy as np
 
 from abtem.core.backend import cp
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
+
+
+def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> None:
+    #print(arr.shape, args, item)
+    #sss
+    try:
+        arr[args] = item
+        return
+    except (IndexError, ValueError):
+        pass
+
+    try:
+        arr[...] = item
+        return
+    except (IndexError, ValueError):
+        pass
+
+    args = (args,) + (0,) * (len(arr.shape) - 1)
+    arr[args] = item
 
 
 def is_array_like(x):
@@ -72,12 +92,12 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         from abtem.core.ensemble import EmptyEnsemble
 
         if isinstance(value, EmptyEnsemble) and isinstance(
-            b.__dict__[key], EmptyEnsemble
+                b.__dict__[key], EmptyEnsemble
         ):
             return True
 
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
+            # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
             try:
                 equal = np.allclose(value, b.__dict__[key])
@@ -86,7 +106,6 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
                 if isinstance(value, EqualityMixin):
                     equal = safe_equality(value, b.__dict__[key])
 
-        # print(equal, key, b.__dict__[key], a.__dict__[key])
         if equal is False:
             return False
 
@@ -134,7 +153,7 @@ def insert_empty_axis(match_axis1, match_axis2):
 
 
 def normalize_axes(
-    axes: tuple[int, ...] | int, shape: tuple[int, ...]
+        axes: tuple[int, ...] | int, shape: tuple[int, ...]
 ) -> tuple[int, ...]:
     """
     Normalize the axes tuple so that all axes are non-negative.
@@ -164,9 +183,9 @@ def normalize_axes(
 
 
 def _get_dims_to_broadcast(
-    arr1: np.ndarray,
-    arr2: np.ndarray,
-    match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
+        arr1: np.ndarray,
+        arr2: np.ndarray,
+        match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
     if match_dims is None:
         match_dims = [(), ()]
@@ -201,10 +220,10 @@ def _get_dims_to_broadcast(
 
 
 def expand_dims_to_broadcast(
-    arr1: np.ndarray,
-    arr2: np.ndarray,
-    match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
-    broadcast: bool = False,
+        arr1: np.ndarray,
+        arr2: np.ndarray,
+        match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
+        broadcast: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Expand the dimensions of two arrays to make them broadcastable.

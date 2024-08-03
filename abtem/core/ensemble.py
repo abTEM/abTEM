@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 import itertools
 import operator
 import warnings
-from abc import abstractmethod, ABCMeta
-from functools import reduce, partial
-from typing import Tuple, List, Union, TYPE_CHECKING
+from abc import abstractmethod
+from functools import reduce
+from typing import Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -16,7 +17,7 @@ from abtem.core.chunks import (
     validate_chunks,
     Chunks,
 )
-from abtem.core.utils import tuple_range, interleave
+from abtem.core.utils import tuple_range, interleave, itemset
 
 
 def _wrap_with_array(x, ndims: int = None):
@@ -24,7 +25,7 @@ def _wrap_with_array(x, ndims: int = None):
         ndims = len(x.ensemble_shape)
 
     wrapped = np.zeros((1,) * ndims, dtype=object)
-    wrapped.itemset(0, x)
+    itemset(wrapped, 0, x)
     return wrapped
 
 
@@ -175,8 +176,8 @@ class Ensemble:
                 raise NotImplementedError
 
         for block_indices, start_stop in zip(
-            itertools.product(*(range(block.shape[0]) for block in blocks)),
-            itertools.product(*chunk_ranges(chunks)),
+                itertools.product(*(range(block.shape[0]) for block in blocks)),
+                itertools.product(*chunk_ranges(chunks)),
         ):
             block = tuple(block[i] for i, block in zip(block_indices, blocks))
             slics = tuple(slice(start, stop) for start, stop in start_stop)
@@ -184,7 +185,7 @@ class Ensemble:
             yield block_indices, slics, self._from_partitioned_args()(*block)
 
     def _validate_ensemble_chunks(
-        self, chunks: Chunks, limit: Union[str, int] = "auto"
+            self, chunks: Chunks, limit: Union[str, int] = "auto"
     ):
         if chunks is None:
             chunks = self._default_ensemble_chunks
@@ -193,10 +194,10 @@ class Ensemble:
         return chunks
 
     def _ensemble_chunks(
-        self,
-        max_batch: Union[str, int] = None,
-        base_shape: Tuple[int, ...] = (),
-        dtype=np.dtype("complex64"),
+            self,
+            max_batch: Union[str, int] = None,
+            base_shape: Tuple[int, ...] = (),
+            dtype=np.dtype("complex64"),
     ):
         shape = self.ensemble_shape
         chunks = self._default_ensemble_chunks

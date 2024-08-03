@@ -19,7 +19,7 @@ from matplotlib.patches import Circle
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
-from abtem.core.utils import label_to_index
+from abtem.core.utils import label_to_index, itemset
 from abtem.visualize.artists import (
     DomainColoringArtist,
     ImageArtist,
@@ -602,7 +602,7 @@ class Visualization:
                 **kwargs,
             )
 
-            artists.itemset(i, artist)
+            itemset(artists, i, artist)
 
         self._artists = artists
 

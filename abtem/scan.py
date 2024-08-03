@@ -19,6 +19,7 @@ from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
+from abtem.core.utils import itemset
 from abtem.measurements import _scan_axes
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
@@ -270,9 +271,7 @@ class CustomScan(BaseScan):
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            positions.itemset(
-                i, {"positions": self._positions[start_chunk : start_chunk + chunk]}
-            )
+            itemset(positions, i, {"positions": self._positions[start_chunk : start_chunk + chunk]})
 
         if lazy:
             positions = da.from_array(positions, chunks=1)

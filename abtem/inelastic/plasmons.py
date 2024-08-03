@@ -17,6 +17,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import validate_chunks, chunk_ranges
+from abtem.core.utils import itemset
 from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
@@ -411,7 +412,8 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
     @staticmethod
     def _plasmon_scattering_events(depths, radial_angles, azimuthal_angles, weights):
         arr = np.zeros((1,), dtype=object)
-        arr.itemset(
+        itemset(
+            arr,
             0,
             {
                 "depths": depths,
@@ -439,11 +441,14 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
                     azimuthal_angles=azimuthal_angles,
                     weights=weights,
                 )
-                array.itemset(
-                    i, da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object)
+                itemset(
+                    array,
+                    i,
+                    da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object),
                 )
             else:
-                array.itemset(
+                itemset(
+                    array,
                     i,
                     self._plasmon_scattering_events(
                         depths=depths,
