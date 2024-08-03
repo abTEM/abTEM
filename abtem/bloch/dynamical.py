@@ -27,7 +27,7 @@ from abtem.bloch.utils import (
 )
 from abtem.inelastic.phonons import validate_sigmas
 from abtem.core import config
-from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis
+from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis, TiltAxis
 from abtem.core.backend import cp, get_array_module, validate_device
 from abtem.core.chunks import equal_sized_chunks
 from abtem.core.complex import abs2
@@ -1301,8 +1301,6 @@ class BlochWaves:
             The dynamical diffraction patterns.
         """
 
-        thicknesses = np.array(thicknesses, dtype=float)
-
         if not hasattr(thicknesses, "__len__"):
             thicknesses = [thicknesses]
             ensemble_axes_metadata = []
@@ -1638,14 +1636,25 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         ensemble_axes_metadata = []
         for axes, rotations in zip(self._axes, self.rotations):
             if isinstance(rotations, BaseDistribution):
-                ensemble_axes_metadata += [
-                    NonLinearAxis(
-                        label=f"{axes}_rotation",
-                        units=units,
-                        values=rotations.values,
-                        tex_label=f"${axes}_{{rotation}}$",
-                    )
-                ]
+                if len(axes) == 1:
+                    ensemble_axes_metadata += [
+                        NonLinearAxis(
+                            label=f"{axes}_rotation",
+                            units=units,
+                            values=rotations.values,
+                            tex_label=f"${axes}_{{rotation}}$",
+                        )
+                    ]
+                else:
+                    ensemble_axes_metadata += [
+                        TiltAxis(
+                            label=f"{axes}_rotation",
+                            values=tuple(tuple(value) for value in rotations.values),
+                            units=units,
+                            tex_label=f"${axes}_{{rotation}}$",
+                        )
+                    ]
+
         return ensemble_axes_metadata
 
     @property
