@@ -29,3 +29,4 @@ from abtem.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope
 from abtem.visualize.visualizations import show_atoms
 from abtem.waves import Waves, Probe, PlaneWave
 from abtem import transfer
+from abtem.bloch import BlochWaves, StructureFactor
