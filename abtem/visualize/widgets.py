@@ -54,7 +54,7 @@ def slider_from_axes_metadata(
     if continuous_update is None:
         continuous_update = config.get("visualize.continuous_update", False)
 
-    values = np.array(axis_metadata.coordinates(length))
+    values = axis_metadata.coordinates(length)
     options = _format_options(values)
 
     with config.set({"visualize.use_tex": False}):
