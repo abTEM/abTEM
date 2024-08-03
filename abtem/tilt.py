@@ -68,7 +68,7 @@ def precession_tilts(
     Parameters
     ----------
     precession_angle : float
-        Precession angle [mrad].
+        Precession angle [rad].
     num_samples : int
         Number of tilt samples.
     min_azimuth : float, optional
