@@ -32,34 +32,33 @@ _conversion_factors = {
 }
 
 _tex_units = {
-    "Å": "\mathrm{\AA}",
-    "nm": "\mathrm{nm}",
-    "um": "\mathrm{\mu m}",
-    "mm": "\mathrm{mm}",
-    "m": "\mathrm{mm}",
-    "1/Å": "\mathrm{\AA}^{-1}",
-    "1/nm": "\mathrm{nm}^{-1}",
-    "1/um": "\mathrm{\mu m}^{-1}",
-    "1/mm": "\mathrm{mm}^{-1}",
-    "1/m": "\mathrm{m}^{-1}",
-    "mrad": "\mathrm{mrad}",
-    "deg": "\mathrm{deg}",
-    "e/Å^2": "\mathrm{e}^-/\mathrm{\AA}^2",
+    "Å": r"\mathrm{\AA}",
+    "nm": r"\mathrm{nm}",
+    "um": r"\mathrm{\mu m}",
+    "mm": r"\mathrm{mm}",
+    "m": r"\mathrm{mm}",
+    "1/Å": r"\mathrm{\AA}^{-1}",
+    "1/nm": r"\mathrm{nm}^{-1}",
+    "1/um": r"\mathrm{\mu m}^{-1}",
+    "1/mm": r"\mathrm{mm}^{-1}",
+    "1/m": r"\mathrm{m}^{-1}",
+    "mrad": r"\mathrm{mrad}",
+    "deg": r"\mathrm{deg}",
+    "e/Å^2": r"\mathrm{e}^-/\mathrm{\AA}^2",
 }
 
 
 def _format_units(units):
-    
     if config.get("visualize.use_tex", False) is True:
         try:
             units = _tex_units[units]
         except KeyError:
             if units == "%":
-                units = "\mathrm{\%}"
+                units = r"\mathrm{\%}"
                 # TODO: temporary fix for the percent sign
             else:
-                units = f"\mathrm{{{units}}}"
-        
+                units = r"\mathrm{" + f"{units}" + r"}"
+
         return f"${units}$"
     else:
         return units
@@ -74,7 +73,7 @@ def _validate_units(units, old_units=None):
         if units_type[units] != units_type[old_units]:
             raise RuntimeError(f"cannot convert units {old_units} to {units}")
 
-    if not units in units_type:
+    if units not in units_type:
         return units
 
     if units_type[units] == "real_space":
@@ -109,7 +108,7 @@ def _get_conversion_factor(units: str, old_units: str, energy: float = None):
 
         wavelength = energy2wavelength(energy)
         conversion = (
-            wavelength * 1e3 * _conversion_factors[_validate_units(units, "mrad")]
+                wavelength * 1e3 * _conversion_factors[_validate_units(units, "mrad")]
         )
         return conversion
 
