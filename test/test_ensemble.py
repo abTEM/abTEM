@@ -4,7 +4,7 @@ from operator import mul
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, reproduce_failure
+from hypothesis import given
 
 import strategies as abtem_st
 from abtem.core.ensemble import concatenate_array_blocks
@@ -32,7 +32,6 @@ from abtem.core.ensemble import concatenate_array_blocks
 )
 def test_ensemble_shape(data, ensemble):
     ensemble = data.draw(ensemble())
-    #print(ensemble.ensemble_shape, ensemble.ensemble_axes_metadata)
     assert len(ensemble.ensemble_shape) == len(ensemble.ensemble_axes_metadata)
     assert len(ensemble.ensemble_shape) == len(ensemble._default_ensemble_chunks)
 

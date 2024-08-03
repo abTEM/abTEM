@@ -18,12 +18,9 @@ from abtem.core.config import config
 
 def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> None:
 
-    if args == 0:
-        assert arr.shape == () or all(n == 1 for n in arr.shape)
-
     if arr.shape == ():
-        assert args == 0
         arr[...] = item
+        return
 
     if isinstance(args, tuple):
         assert len(args) == len(arr.shape)
