@@ -17,22 +17,49 @@ from abtem.core.config import config
 
 
 def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> None:
-    #print(arr.shape, args, item)
-    #sss
-    try:
+
+    if args == 0:
+        assert arr.shape == () or all(n == 1 for n in arr.shape)
+
+    if arr.shape == ():
+        assert args == 0
+        arr[...] = item
+
+    if isinstance(args, tuple):
+        assert len(args) == len(arr.shape)
         arr[args] = item
         return
-    except (IndexError, ValueError):
-        pass
 
-    try:
-        arr[...] = item
+    if isinstance(args, int) and len(arr.shape) == 1:
+        arr[args] = item
         return
-    except (IndexError, ValueError):
-        pass
 
-    args = (args,) + (0,) * (len(arr.shape) - 1)
-    arr[args] = item
+    if isinstance(args, int):
+        assert all(n == 1 for n in arr.shape[1:])
+        args = (args,) + (0,) * (len(arr.shape) - 1)
+        arr[args] = item
+        return
+
+    raise RuntimeError()
+
+    #
+    # try:
+    #     print("a", item.shape, arr.shape, args)
+    #     arr[(0,0)] = item
+    #     print("b", arr.item().shape)
+    #
+    #     return
+    # except (IndexError, ValueError):
+    #     pass
+    #
+    # try:
+    #     arr[...] = item
+    #     return
+    # except (IndexError, ValueError):
+    #     pass
+    #
+    # args = (args,) + (0,) * (len(arr.shape) - 1)
+    # arr[args] = item
 
 
 def is_array_like(x):
