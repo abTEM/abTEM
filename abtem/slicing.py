@@ -1,6 +1,8 @@
 """Module for slicing atoms for the multislice algorithm."""
+
 from __future__ import annotations
 
+import itertools
 from abc import abstractmethod
 from typing import Sequence
 
@@ -38,20 +40,22 @@ def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarra
 
 
 def _validate_slice_thickness(
-    slice_thickness: float | tuple[float, ...],
+    slice_thickness: float | Sequence[float],
     thickness: float = None,
     num_slices: int = None,
 ) -> tuple[float, ...]:
+
     if np.isscalar(slice_thickness):
         if thickness is not None:
-            n = np.ceil(thickness / slice_thickness)
+            thickness = float(thickness)
+            n = float(np.ceil(thickness / slice_thickness))
             slice_thickness = (thickness / n,) * int(n)
         elif num_slices is not None:
             slice_thickness = (slice_thickness,) * num_slices
         else:
             raise RuntimeError()
-
-    slice_thickness = tuple(slice_thickness)
+    else:
+        slice_thickness = tuple(float(d) for d in slice_thickness)
 
     if thickness is not None:
         if not np.isclose(np.sum(slice_thickness), thickness):
@@ -64,12 +68,14 @@ def _validate_slice_thickness(
     return slice_thickness
 
 
-def _slice_limits(slice_thickness: tuple[float, ...]) -> list[tuple[float, float]]:
-    cumulative_thickness = np.cumsum(np.concatenate(((0,), slice_thickness)))
-    return [
-        (cumulative_thickness[i], cumulative_thickness[i + 1])
-        for i in range(len(cumulative_thickness) - 1)
+def slice_limits(slice_thickness) -> list[tuple[float, float]]:
+    """The entrance and exit thicknesses of each slice [Å]."""
+
+    cum_thickness = list(itertools.accumulate((0,) + slice_thickness))
+    slice_limits = [
+        (cum_thickness[i], cum_thickness[i + 1]) for i in range(len(cum_thickness) - 1)
     ]
+    return slice_limits
 
 
 def _unpack_item(item: int | slice, num_items):
@@ -148,7 +154,7 @@ class BaseSlicedAtoms(EqualityMixin):
     @property
     def slice_limits(self) -> list[tuple[float, float]]:
         """The entrance and exit thicknesses of each slice [Å]."""
-        return _slice_limits(self.slice_thickness)
+        return slice_limits(self.slice_thickness)
 
     def check_slice_idx(self, index: int):
         """Raises an error if index is greater than the number of slices."""
@@ -230,12 +236,12 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         super().__init__(atoms, slice_thickness)
 
         labels = np.digitize(
-             self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
+            self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
         )
-        
-        #labels = find_closest_indices(
+
+        # labels = find_closest_indices(
         #    atoms.positions[:, 2], np.cumsum((0,) + self.slice_thickness[:-1])
-        #)
+        # )
 
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)

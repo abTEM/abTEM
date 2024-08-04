@@ -12,6 +12,7 @@ from ase import Atoms
 
 from abtem.antialias import AntialiasAperture
 from abtem.antialias import antialias_aperture
+from abtem.array import ArrayObjectSubclass, ArrayObjectSubclassAlt
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
@@ -1044,6 +1045,11 @@ class MultisliceTransform(ArrayObjectTransform):
             arrays = arrays[0]
 
         return arrays
+
+    def apply(
+        self, waves: Waves
+    ) -> Waves | BaseMeasurements | tuple[Waves, BaseMeasurements, ...]:
+        return self._apply(waves)
 
     # def apply(self, waves: Waves):
     #     if "transition_potentials" in self._multislice_func_kwargs.keys():

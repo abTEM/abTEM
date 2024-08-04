@@ -55,7 +55,7 @@ from abtem.slicing import (
     BaseSlicedAtoms,
     SlicedAtoms,
     SliceIndexedAtoms,
-    _validate_slice_thickness,
+    _validate_slice_thickness, slice_limits,
 )
 
 if TYPE_CHECKING:
@@ -65,10 +65,16 @@ if TYPE_CHECKING:
 
 
 class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
+
     @property
     @abstractmethod
-    def base_shape(self) -> tuple[int, ...]:
+    def device(self) -> str:
         pass
+
+    @property
+    def base_shape(self):
+        """Shape of the base axes of the potential."""
+        return (self.num_slices,) + self.gpts
 
     @property
     @abstractmethod
@@ -107,18 +113,15 @@ class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCM
         return is_exit_plane
 
     @property
-    def exit_thicknesses(self) -> tuple[float]:
+    def exit_thicknesses(self) -> tuple[float, ...]:
         """The "exit thicknesses" of the potential. The thicknesses in the potential where a measurement is returned."""
         thicknesses = np.cumsum(self.slice_thickness)
-
+        exit_indices = np.array(self.exit_planes, dtype=int)
+        exit_thicknesses = tuple(thicknesses[i] for i in exit_indices)
         if self.exit_planes[0] == -1:
-            return tuple(
-                np.insert(
-                    thicknesses[np.array(self.exit_planes[1:], dtype=int)], 0, 0.0
-                )
-            )
+            return (0.0,) + exit_thicknesses[1:]
         else:
-            return tuple(thicknesses[np.array(self.exit_planes, dtype=int)])
+            return exit_thicknesses
 
     @property
     def num_exit_planes(self) -> int:
@@ -149,18 +152,14 @@ class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCM
 
     @property
     @abstractmethod
-    def slice_thickness(self) -> np.ndarray:
+    def slice_thickness(self) -> tuple[float, ...]:
         """Slice thicknesses for each slice."""
         pass
 
     @property
     def slice_limits(self) -> list[tuple[float, float]]:
         """The entrance and exit thicknesses of each slice [Å]."""
-        cumulative_thickness = np.cumsum(np.concatenate(((0,), self.slice_thickness)))
-        return [
-            (cumulative_thickness[i], cumulative_thickness[i + 1])
-            for i in range(len(cumulative_thickness) - 1)
-        ]
+        return slice_limits(self.slice_thickness)
 
     @property
     def thickness(self) -> float:
@@ -218,13 +217,8 @@ class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCM
             return self.to_images().show(**kwargs)
 
 
-class BasePotential(BaseField):
+class BasePotential(BaseField, metaclass=ABCMeta):
     """Base class of all potentials. Documented in the subclasses."""
-
-    @property
-    def base_shape(self):
-        """Shape of the base axes of the potential."""
-        return (self.num_slices,) + self.gpts
 
     @property
     def base_axes_metadata(self):
@@ -939,7 +933,7 @@ class FieldArray(BaseField, ArrayObject):
             last_slice = len(self)
 
         exit_plane_after = self._exit_plane_after
-        cum_thickness = np.cumsum(self.slice_thickness)
+        # cum_thickness = np.cumsum(self.slice_thickness)
         start = first_slice
         stop = first_slice + 1
 
@@ -1024,8 +1018,8 @@ class FieldArray(BaseField, ArrayObject):
             ensemble_axes_metadata=self.ensemble_axes_metadata,
         )
 
-    def to_hyperspy(self):
-        return self.to_images().to_hyperspy()
+    def to_hyperspy(self, transpose: bool = True):
+        return self.to_images().to_hyperspy(transpose=transpose)
 
     def to_images(self):
         """Convert slices of the potential to a stack of images."""
@@ -1114,6 +1108,12 @@ class PotentialArray(BasePotential, FieldArray):
             metadata=metadata,
         )
 
+    @staticmethod
+    def _transmission_function(array, energy):
+        sigma = np.array(energy2sigma(energy), dtype=get_dtype())
+        array = complex_exponential(sigma * array)
+        return array
+
     def transmission_function(self, energy: float) -> TransmissionFunction:
         """
         Calculate the transmission functions for each slice for a specific energy.
@@ -1130,20 +1130,14 @@ class PotentialArray(BasePotential, FieldArray):
         """
         xp = get_array_module(self.array)
 
-        def _transmission_function(array, energy):
-            dtype = get_dtype(complex=False)
-            sigma = dtype(energy2sigma(energy))
-            array = complex_exponential(sigma * array)
-            return array
-
         if self.is_lazy:
             array = self._array.map_blocks(
-                _transmission_function,
+                self._transmission_function,
                 energy=energy,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
-            array = _transmission_function(self._array, energy=energy)
+            array = self._transmission_function(self._array, energy=energy)
 
         t = TransmissionFunction(
             array,
@@ -1269,8 +1263,8 @@ class CrystalPotential(_PotentialBuilder):
     calculations to be performed with lower computational cost by calculating the potential unit once and repeating it.
 
     If the repeating unit is a potential with frozen phonons it is treated as an ensemble from which each repeating
-    unit along the `z`-direction is randomly drawn. If `num_frozen_phonons` an ensemble of crystal potentials are created
-    each with a random seed for choosing potential units.
+    unit along the `z`-direction is randomly drawn. If `num_frozen_phonons` an ensemble of crystal potentials are
+    created each with a random seed for choosing potential units.
 
     Parameters
     ----------
@@ -1463,7 +1457,7 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     seeds = None
 
-                itemset(array, i, (potential_unit, self.seeds))
+                itemset(array, i, (potential_unit, seeds))
 
         return (array,)
 
@@ -1510,7 +1504,7 @@ class CrystalPotential(_PotentialBuilder):
                 rng.integers(0, potentials.shape[0])
             ].generate_slices()
 
-            for i in range(len(self.potential_unit)):
+            for j in range(len(self.potential_unit)):
                 slic = next(generator).tile(self.repetitions[:2])
 
                 exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
@@ -1525,5 +1519,5 @@ class CrystalPotential(_PotentialBuilder):
                 else:
                     yield slic
 
-                if i == last_slice:
+                if j == last_slice:
                     break
