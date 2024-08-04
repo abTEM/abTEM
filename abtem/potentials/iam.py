@@ -66,10 +66,10 @@ if TYPE_CHECKING:
 
 class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
-    @property
-    @abstractmethod
-    def device(self) -> str:
-        pass
+    # @property
+    # @abstractmethod
+    # def device(self) -> str:
+    #     pass
 
     @property
     def base_shape(self):

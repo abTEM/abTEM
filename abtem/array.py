@@ -1004,7 +1004,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         **kwargs,
     ):
         """
-        Turn a lazy *ab*\TEM object into its in-memory equivalent.
+        Turn a lazy *ab*TEM object into its in-memory equivalent.
 
         Parameters
         ----------
