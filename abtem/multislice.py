@@ -86,7 +86,7 @@ def _apply_tilt_to_fresnel_propagator_array(
         -ky * xp.tan(tilt[:, 1, None, None] / 1e3) * thickness * 2 * np.pi
     )
 
-    tilt, array = expand_dims_to_broadcast(tilt, array, match_dims=[(-2, -1), (-2, -1)])
+    tilt, array = expand_dims_to_broadcast(tilt, array, match_dims=((-2, -1), (-2, -1)))
 
     array = tilt * array
 

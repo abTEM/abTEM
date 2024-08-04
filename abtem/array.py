@@ -261,7 +261,8 @@ def _validate_lazy(lazy):
     return lazy
 
 
-T = TypeVar("T", bound="ArrayObject")
+ArrayObjectSubclass = TypeVar("ArrayObjectSubclass", bound="ArrayObject")
+ArrayObjectSubclassAlt = TypeVar("ArrayObjectSubclassAlt", bound="ArrayObject")
 
 
 class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -367,7 +368,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         base_axes = tuple(range(len(self.ensemble_shape), len(self.shape)))
         return len(set(axis).intersection(base_axes)) > 0
 
-    def apply_func(self, func, **kwargs) -> T:
+    def apply_func(self, func, **kwargs) -> ArrayObjectSubclass:
         from abtem.transform import TransformFromFunc
 
         transform = TransformFromFunc(func, func_kwargs=kwargs)
@@ -376,10 +377,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def get_from_metadata(self, name: str, broadcastable: bool = False):
 
         axes_metadata_index = None
+        data = None
         for i, (n, axis) in enumerate(zip(self.shape, self.ensemble_axes_metadata)):
             if axis.label == name:
                 data = axis.coordinates(n)
                 axes_metadata_index = i
+
+        if data is None:
+            raise RuntimeError()
 
         if axes_metadata_index is not None and broadcastable:
             return np.array(data)[
@@ -408,7 +413,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
         metadata: dict,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Creates array object from a given array and metadata.
 
@@ -551,7 +556,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axis: int | tuple[int, ...] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Mean of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -580,7 +585,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axis: int | tuple[int, ...] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Sum of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -609,7 +614,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axis: int | tuple[int, ...] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Standard deviation of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -638,7 +643,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axis: int | tuple[int, ...] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Minmimum of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -667,7 +672,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         axis: int | tuple[int, ...] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Maximum of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -698,7 +703,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         keepdims: bool = False,
         split_every: int = 2,
         **kwargs,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         xp = get_array_module(self.array)
 
         if axes is None:
@@ -740,7 +745,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
-    def _arithmetic(self, other, func) -> T:
+    def _arithmetic(self, other, func) -> ArrayObjectSubclass:
         if hasattr(other, "array"):
             self._check_is_compatible(other)
             other = other.array
@@ -749,7 +754,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["array"] = getattr(self.array, func)(other)
         return self.__class__(**kwargs)
 
-    def _in_place_arithmetic(self, other, func) -> T:
+    def _in_place_arithmetic(self, other, func) -> ArrayObjectSubclass:
         # if hasattr(other, 'array'):
         #    self.check_is_compatible(other)
         #    other = other.array
@@ -760,31 +765,31 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
         return self._arithmetic(other, func)
 
-    def __mul__(self, other) -> T:
+    def __mul__(self, other) -> ArrayObjectSubclass:
         return self._arithmetic(other, "__mul__")
 
-    def __imul__(self, other) -> T:
+    def __imul__(self, other) -> ArrayObjectSubclass:
         return self._in_place_arithmetic(other, "__imul__")
 
-    def __truediv__(self, other) -> T:
+    def __truediv__(self, other) -> ArrayObjectSubclass:
         return self._arithmetic(other, "__truediv__")
 
-    def __itruediv__(self, other) -> T:
+    def __itruediv__(self, other) -> ArrayObjectSubclass:
         return self._arithmetic(other, "__itruediv__")
 
-    def __sub__(self, other) -> T:
+    def __sub__(self, other) -> ArrayObjectSubclass:
         return self._arithmetic(other, "__sub__")
 
-    def __isub__(self, other) -> T:
+    def __isub__(self, other) -> ArrayObjectSubclass:
         return self._in_place_arithmetic(other, "__isub__")
 
-    def __add__(self, other) -> T:
+    def __add__(self, other) -> ArrayObjectSubclass:
         return self._arithmetic(other, "__add__")
 
-    def __iadd__(self, other) -> T:
+    def __iadd__(self, other) -> ArrayObjectSubclass:
         return self._in_place_arithmetic(other, "__iadd__")
 
-    def __pow__(self, other) -> T:
+    def __pow__(self, other) -> ArrayObjectSubclass:
         return self._arithmetic(other, "__pow__")
 
     __rmul__ = __mul__
@@ -848,7 +853,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         self,
         items: int | tuple[int, ...] | slice,
         keepdims: bool = False,
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Index the array and the corresponding axes metadata. Only ensemble axes can be indexed.
 
@@ -876,12 +881,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["metadata"] = {**self.metadata, **metadata}
         return kwargs
 
-    def __getitem__(self, items) -> T:
+    def __getitem__(self, items) -> ArrayObjectSubclass:
         return self.__class__(**self.get_items(items))
 
     def expand_dims(
         self, axis: tuple[int, ...] = None, axis_metadata: list[AxisMetadata] = None
-    ) -> T:
+    ) -> ArrayObjectSubclass:
         """
         Expand the shape of the array object.
 
@@ -921,7 +926,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
-    def squeeze(self, axis: tuple[int, ...] = None) -> T:
+    def squeeze(self, axis: tuple[int, ...] = None) -> ArrayObjectSubclass:
         """
         Remove axes of length one from array object.
 
@@ -963,7 +968,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self.__class__(**kwargs)
 
-    def ensure_lazy(self, chunks: str = "auto") -> T:
+    def ensure_lazy(self, chunks: str = "auto") -> ArrayObjectSubclass:
         """
         Creates an equivalent lazy version of the array object.
 
@@ -988,7 +993,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
 
-    def lazy(self, chunks: str = "auto") -> T:
+    def lazy(self, chunks: str = "auto") -> ArrayObjectSubclass:
         return self.ensure_lazy(chunks)
 
     def compute(
@@ -1032,7 +1037,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return output
 
-    def copy_to_device(self, device: str) -> T:
+    def copy_to_device(self, device: str) -> ArrayObjectSubclass:
         """
         Copy array to specified device.
 
@@ -1049,13 +1054,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self.__class__(**kwargs)
 
-    def to_cpu(self) -> T:
+    def to_cpu(self) -> ArrayObjectSubclass:
         """
         Move the array to the host memory from an arbitrary source array.
         """
         return self.copy_to_device("cpu")
 
-    def to_gpu(self, device: str = "gpu") -> T:
+    def to_gpu(self, device: str = "gpu") -> ArrayObjectSubclass:
         """
         Move the array from the host memory to a gpu.
         """
@@ -1171,7 +1176,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         )
 
     @classmethod
-    def from_zarr(cls, url, chunks: int = "auto") -> T:
+    def from_zarr(cls, url, chunks: int = "auto") -> ArrayObjectSubclass:
         """
         Read wave functions from a hdf5 file.
 
@@ -1233,7 +1238,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def apply_transform(
         self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
-    ) -> T | ComputableList[T, ...]:
+    ) -> ArrayObjectSubclass | ComputableList[ArrayObjectSubclass, ...]:
         """
         Transform the wave functions by a given transformation.
 
@@ -1248,7 +1253,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Returns
         -------
-        transformed_array_object : ArrayObjectTransform
+        transformed_array_object : ArrayObjectSubclass
             The transformed array object.
         """
 
@@ -1509,13 +1514,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             for index, slic in iterate_chunk_ranges(chunks):
                 new_ensemble_axes_metadata = []
 
-                # ensemble_axes_metadata.itemset(
-                #     index,
-                #     [
-                #         self.ensemble_axes_metadata[i][slic[i]]
-                #         for i, axis in enumerate(self.ensemble_axes_metadata)
-                #     ],
-                # )
                 for i, axis in enumerate(self.ensemble_axes_metadata):
                     try:
                         axis = axis[slic[i]]
@@ -1679,10 +1677,10 @@ def from_zarr(url: str, chunks: Chunks = None):
 
 
 def stack(
-    arrays: Sequence[ArrayObject],
+    arrays: Sequence[ArrayObjectSubclass],
     axis_metadata: AxisMetadata | Sequence[str] = None,
     axis: int = 0,
-) -> T:
+) -> ArrayObjectSubclass:
     """
     Join multiple array objects (e.g. Waves and BaseMeasurement) along a new ensemble axis.
 
@@ -1721,7 +1719,7 @@ def stack(
     return arrays[0]._stack(arrays, axis_metadata, axis)
 
 
-def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> T:
+def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObjectSubclass:
     """
     Join a sequence of abTEM array classes along an existing axis.
 

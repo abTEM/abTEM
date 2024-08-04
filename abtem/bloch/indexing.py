@@ -38,20 +38,18 @@ def estimate_necessary_excitation_error(energy, k_max):
     return sg
 
 
-def validate_cell(
-    cell: Atoms | Cell | float | tuple[float, float, float]
-) -> np.ndarray:
-    """ 
+def validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> Cell:
+    """
     Validate the cell input.
-    
+
     Parameters:
     ----------
     cell : Atoms | Cell | float | tuple[float, float, float]
         The unit cell of the crystal structure.
-    
+
     Returns:
     --------
-    np.ndarray
+    Cell
         The validated cell.
     """
     if isinstance(cell, Atoms):
@@ -116,7 +114,7 @@ def create_ellipse(a: int, b: int) -> np.ndarray:
 
 def integrate_ellipse_around_pixels(
     array: np.ndarray, nm: np.ndarray, a: int, b: int
-) -> np.npndarray:
+) -> np.ndarray:
     """
     Integrate an ellipse around pixels in an array.
 
@@ -138,9 +136,9 @@ def integrate_ellipse_around_pixels(
     """
     ellipse = create_ellipse(a, b)
     structure = np.array(tuple(i - n for i, n in zip(np.where(ellipse), (a, b)))).T
-    
+
     intensities = np.zeros_like(array, shape=array.shape[:-2] + (nm.shape[-2],))
-    
+
     for i in range(nm.shape[-2]):
         nms = nm[..., i, :] - structure[(None,) * len(nm.shape[:-2])]
         nms = nms[
@@ -148,7 +146,6 @@ def integrate_ellipse_around_pixels(
             * (nms[..., 0] < array.shape[-2])
             * (nms[..., 1] < array.shape[-1])
         ]
-
 
         intensities[..., i] = array[
             prefix_indices(array.shape[:-2]) + (nms[:, 0], nms[:, 1])
@@ -165,7 +162,7 @@ def index_diffraction_spots(
     energy: float,
     orientation_matrices: np.ndarray = None,
     radius: float = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> np.ndarray:
     """
     Indexes diffraction spots in an array.
 
@@ -173,24 +170,18 @@ def index_diffraction_spots(
     ----------
     array : np.ndarray
         The input array containing diffraction spot intensities.
+    hkl : np.ndarray
+        The Miller indices to index.
     sampling : tuple[float, float]
         The sampling rate of the array in the x and y directions [Å].
     cell : Atoms | Cell | float | tuple[float, float, float]
         The unit cell of the crystal structure.
     energy : float
         The energy of the incident electrons [eV].
-    k_max : float
-        The maximum value of the wavevector transfer [1/Å].
-    sg_max : float
-        The maximum value of the excitation error [1/Å].
-    rotation : tuple[float, float, float], optional
-        The Euler rotation angles of the crystal structure [rad.]. Defaults to (0.0, 0.0, 0.0).
-    rotation_axes : str, optional
-        The intrinsic Euler rotation axes convention. Defaults to "zxz".
-    intensity_min : float, optional
-        The minimum intensity threshold. Defaults to 1e-12.
-    centering : str, optional
-        The centering of the crystal structure. Defaults to "P".
+    orientation_matrices : np.ndarray, optional
+        The orientation matrices of the crystal structure. Defaults to None.
+    radius : float, optional
+        The radius of the diffraction spots to integrate. Defaults to None.
 
     Returns
     -------
@@ -203,7 +194,7 @@ def index_diffraction_spots(
 
     if orientation_matrices is None:
         orientation_matrices = np.eye(3)[(None,) * len(array.shape[:-2])]
-    
+
     assert is_broadcastable(array.shape[:-2], orientation_matrices.shape[:-2])
 
     reciprocal_lattice_vectors = np.matmul(
@@ -211,11 +202,11 @@ def index_diffraction_spots(
     )
     g_vec = hkl @ reciprocal_lattice_vectors
 
-    nm = _find_projected_pixel_index(g_vec, array.shape[-2:], sampling)
+    shape = (array.shape[-2], array.shape[-1])
+    nm = _find_projected_pixel_index(g_vec, shape, sampling)
     intensities = array[prefix_indices(array.shape[:-2]) + (nm[..., 0], nm[..., 1])]
 
     if radius is not None:
-        
         a, b = tuple(int(np.round(radius / d)) for d in sampling)
         intensities = integrate_ellipse_around_pixels(array, nm, a, b)
 
@@ -224,7 +215,7 @@ def index_diffraction_spots(
     mask = overlapping_spots_mask(nm, sg)
 
     intensities = intensities * mask
-    
+
     return intensities
 
 

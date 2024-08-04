@@ -7,14 +7,20 @@ from abc import abstractmethod
 from copy import copy
 from functools import partial
 from numbers import Number
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 
 import dask.array as da
 import numpy as np
 from ase import Atoms
 
 import abtem
-from abtem.array import ArrayObject, ComputableList, _expand_dims, _validate_lazy
+from abtem.array import (
+    ArrayObject,
+    ComputableList,
+    _expand_dims,
+    _validate_lazy,
+    ArrayObjectSubclass,
+)
 from abtem.core.axes import (
     RealSpaceAxis,
     ReciprocalSpaceAxis,
@@ -74,6 +80,9 @@ from abtem.transfer import Aberrations, CTF, Aperture, BaseAperture
 from abtem.transform import (
     ArrayObjectTransform,
 )
+
+if TYPE_CHECKING:
+    from abtem.visualize import Visualization
 
 
 def _ensure_parity(n, even, v=1):
@@ -138,6 +147,7 @@ class BaseWaves(HasGridMixin, HasAcceleratorMixin):
     def base_axes_metadata(self) -> list[AxisMetadata]:
         """List of AxisMetadata for the base axes in real space."""
         self.grid.check_is_defined()
+
         return [
             RealSpaceAxis(
                 label="x", sampling=self.sampling[0], units="Å", endpoint=False
@@ -761,6 +771,26 @@ class Waves(BaseWaves, ArrayObject):
         ] = self.antialias_cutoff_gpts
         return self.__class__(**kwargs)
 
+    @staticmethod
+    def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
+        xp = get_array_module(array)
+
+        if normalize:
+            array = array / float(np.prod(array.shape[-2:]))
+
+        array = fft2(array, overwrite_x=False)
+
+        if array.shape[-2:] != new_gpts:
+            array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
+
+        if not return_complex:
+            array = abs2(array)
+
+        if fftshift:
+            return xp.fft.fftshift(array, axes=(-1, -2))
+
+        return array
+
     def diffraction_patterns(
         self,
         max_angle: str | float = "cutoff",
@@ -812,26 +842,6 @@ class Waves(BaseWaves, ArrayObject):
         diffraction_patterns : DiffractionPatterns
             The diffraction pattern(s).
         """
-
-        def _diffraction_pattern(array, new_gpts, return_complex, fftshift, normalize):
-            xp = get_array_module(array)
-
-            if normalize:
-                array = array / float(np.prod(array.shape[-2:]))
-
-            array = fft2(array, overwrite_x=False)
-
-            if array.shape[-2:] != new_gpts:
-                array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
-
-            if not return_complex:
-                array = abs2(array)
-
-            if fftshift:
-                return xp.fft.fftshift(array, axes=(-1, -2))
-
-            return array
-
         xp = get_array_module(self.array)
 
         if max_angle is None:
@@ -858,7 +868,7 @@ class Waves(BaseWaves, ArrayObject):
             dtype = get_dtype(complex=return_complex)
 
             pattern = self.array.map_blocks(
-                _diffraction_pattern,
+                self._diffraction_pattern,
                 new_gpts=new_gpts,
                 fftshift=fftshift,
                 return_complex=return_complex,
@@ -867,7 +877,7 @@ class Waves(BaseWaves, ArrayObject):
                 meta=xp.array((), dtype=dtype),
             )
         else:
-            pattern = _diffraction_pattern(
+            pattern = self._diffraction_pattern(
                 self.array,
                 new_gpts=new_gpts,
                 return_complex=return_complex,
@@ -962,7 +972,7 @@ class Waves(BaseWaves, ArrayObject):
                     )
                     for transition_potential in transition_potentials
                 ],
-                tex_label="$Z, n, \ell$",
+                tex_label=r"$Z, n, \ell$",
             )
 
             measurements = abtem.stack(
@@ -1056,21 +1066,19 @@ class Waves(BaseWaves, ArrayObject):
 
         return measurements
 
-    def show(self, complex_images: bool = False, **kwargs):
+    def show(self, convert_complex: str = "intensity", **kwargs):
         """
         Show the wave-function intensities.
 
         kwargs :
             Keyword arguments for `abtem.measurements.Images.show`.
         """
-
-        if complex_images:
-            return self.complex_images().show(**kwargs)
-        else:
-            return self.intensity().show(**kwargs)
+        return self.to_images(convert_complex=convert_complex).show(**kwargs)
 
 
-def _reduce_ensemble(ensemble) -> ArrayObject | ComputableList[ArrayObject]:
+def _reduce_ensemble(
+    ensemble,
+) -> ArrayObjectSubclass | ComputableList[ArrayObjectSubclass]:
     if isinstance(ensemble, (list, tuple)):
         outputs = [_reduce_ensemble(x) for x in ensemble]
 
@@ -1107,6 +1115,10 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     @tilt.setter
     def tilt(self, value):
         self._tilt = _validate_tilt(value)
+
+    @abstractmethod
+    def build(self, lazy) -> Waves:
+        pass
 
     def apply_transform(
         self, transform, max_batch: int | str = "auto", lazy: bool = True
@@ -1190,8 +1202,8 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         **kwargs,
     ):
         args = unpack_blockwise_args(args)
-        for arg_split, (name, partial) in zip(arg_splits, partials.items()):
-            kwargs[name] = partial(*args[slice(*arg_split)]).item()
+        for arg_split, (name, partial_item) in zip(arg_splits, partials.items()):
+            kwargs[name] = partial_item(*args[slice(*arg_split)]).item()
 
         new_probe = cls(
             **kwargs,
@@ -1898,6 +1910,31 @@ class Probe(_WavesBuilder):
 
         return measurements
 
+    @staticmethod
+    def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
+        if point0[0] == point1[0]:
+            return (point0[0], lower_corner[1]), (point0[0], upper_corner[1])
+
+        m = (point1[1] - point0[1]) / (point1[0] - point0[0])
+
+        def _y(x):
+            return m * (x - point0[0]) + point0[1]
+
+        def _x(y):
+            return (y - point0[1]) / m + point0[0]
+
+        if _y(0) < lower_corner[1]:
+            intersect0 = (_x(lower_corner[1]), _y(_x(lower_corner[1])))
+        else:
+            intersect0 = (0, _y(lower_corner[0]))
+
+        if _y(upper_corner[0]) > upper_corner[1]:
+            intersect1 = (_x(upper_corner[1]), _y(_x(upper_corner[1])))
+        else:
+            intersect1 = (upper_corner[0], _y(upper_corner[0]))
+
+        return intersect0, intersect1
+
     def profiles(self, angle: float = 0.0) -> RealSpaceLineProfiles:
         """
         Create a line profile through the center of the probe.
@@ -1908,30 +1945,6 @@ class Probe(_WavesBuilder):
             Angle with respect to the `x`-axis of the line profile [degree].
         """
 
-        def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
-            if point0[0] == point1[0]:
-                return (point0[0], lower_corner[1]), (point0[0], upper_corner[1])
-
-            m = (point1[1] - point0[1]) / (point1[0] - point0[0])
-
-            def _y(x):
-                return m * (x - point0[0]) + point0[1]
-
-            def _x(y):
-                return (y - point0[1]) / m + point0[0]
-
-            if _y(0) < lower_corner[1]:
-                intersect0 = (_x(lower_corner[1]), _y(_x(lower_corner[1])))
-            else:
-                intersect0 = (0, _y(lower_corner[0]))
-
-            if _y(upper_corner[0]) > upper_corner[1]:
-                intersect1 = (_x(upper_corner[1]), _y(_x(upper_corner[1])))
-            else:
-                intersect1 = (upper_corner[0], _y(upper_corner[0]))
-
-            return intersect0, intersect1
-
         point1 = (self.extent[0] / 2, self.extent[1] / 2)
 
         measurement = self.build(point1).intensity()
@@ -1939,12 +1952,12 @@ class Probe(_WavesBuilder):
         point2 = point1 + np.array(
             [np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)]
         )
-        point1, point2 = _line_intersect_rectangle(
+        point1, point2 = self._line_intersect_rectangle(
             point1, point2, (0.0, 0.0), self.extent
         )
         return measurement.interpolate_line(point1, point2)
 
-    def show(self, complex_images: bool = False, **kwargs):
+    def show(self, convert_complex: str = "intensity", **kwargs) -> Visualization:
         """
         Show the intensity of the probe wave function.
 
@@ -1956,8 +1969,4 @@ class Probe(_WavesBuilder):
         """
         self.grid.check_is_defined()
         wave = self.build((self.extent[0] / 2, self.extent[1] / 2))
-        if complex_images:
-            images = wave.complex_images()
-        else:
-            images = wave.intensity()
-        return images.show(**kwargs)
+        return wave.to_images(convert_complex=convert_complex).show(**kwargs)

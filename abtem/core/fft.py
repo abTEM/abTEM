@@ -18,7 +18,7 @@ except (ModuleNotFoundError, ImportError):
     pyfftw = None
 
 try:
-    import mkl_fft
+    import mkl_fft # noqa
 except ModuleNotFoundError:
     mkl_fft = None
 

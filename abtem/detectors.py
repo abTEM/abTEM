@@ -5,11 +5,11 @@ from __future__ import annotations
 from abc import abstractmethod
 from copy import copy
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Type
 
 import numpy as np
 
-from abtem.array import T
+from abtem.array import ArrayObjectSubclass
 from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
@@ -27,9 +27,9 @@ from abtem.measurements import (
     _scan_shape,
     _scan_axes,
 )
+from abtem.measurements import _diffraction_pattern_resampling_gpts
 from abtem.transform import ArrayObjectTransform
 from abtem.visualize.visualizations import discrete_cmap
-from abtem.measurements import _diffraction_pattern_resampling_gpts
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
@@ -97,7 +97,7 @@ class BaseDetector(ArrayObjectTransform):
         return ()
 
     @classmethod
-    def _from_partition_args_func(cls, *args, **kwargs):
+    def _from_partition_args_func(cls, **kwargs):
         detector = cls(**kwargs)
         return _wrap_with_array(detector)
 
@@ -127,7 +127,7 @@ class BaseDetector(ArrayObjectTransform):
 
             return xp.array((), dtype=self._out_dtype(waves))
 
-    def detect(self, waves: T) -> T:
+    def detect(self, waves: Waves) -> ArrayObjectSubclass:
         """
         Detect the given waves producing a measurement.
 
@@ -140,7 +140,7 @@ class BaseDetector(ArrayObjectTransform):
         -------
         measurement : BaseMeasurements
         """
-        return self.apply(waves)
+        return self._apply(waves)
 
     @abstractmethod
     def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
@@ -249,8 +249,6 @@ class AnnularDetector(BaseDetector):
     def _out_base_axes_metadata(
         self, waves: BaseWaves, index: int = 0
     ) -> list[AxisMetadata]:
-        # source = _scan_axes(waves)
-        # scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
         return []
 
     def _out_ensemble_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
@@ -265,7 +263,7 @@ class AnnularDetector(BaseDetector):
 
     def _out_type(
         self, waves: BaseWaves, index: int = 0
-    ) -> RealSpaceLineProfiles | Images:
+    ) -> Type[RealSpaceLineProfiles] | Type[Images]:
         return _scanned_measurement_type(waves)
 
     def _calculate_new_array(self, waves: Waves):
@@ -311,7 +309,7 @@ class AnnularDetector(BaseDetector):
         -------
         measurement : Images
         """
-        return self.apply(waves)  # noqa
+        return self._apply(waves)  # noqa
 
     def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
@@ -513,7 +511,7 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         measurement : PolarMeasurements
         """
-        return self.apply(waves)  # noqa
+        return self._apply(waves)
 
     def get_detector_regions(self, waves: BaseWaves = None):
         """
@@ -899,7 +897,7 @@ class PixelatedDetector(BaseDetector):
             gpts = waves._gpts_within_angle(self.max_angle)
 
             _, sampling = _diffraction_pattern_resampling_gpts(
-                self.resample, sampling, None, gpts, adjust_sampling=False
+                sampling, gpts, self.resample, gpts=None, adjust_sampling=False
             )
 
             if self.max_angle and sampling[0] == sampling[1]:
@@ -959,7 +957,7 @@ class PixelatedDetector(BaseDetector):
         metadata["units"] = "arb. unit"
         return metadata
 
-    def _calculate_new_array(self, waves: Waves):
+    def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         """
         Detect the given waves producing diffraction patterns.
 
@@ -981,7 +979,7 @@ class PixelatedDetector(BaseDetector):
             measurements = waves.intensity()
 
         if self._resample:
-            measurements = measurements.resample(self._resample)
+            measurements = measurements.interpolate(self._resample)
 
         if self.to_cpu:
             measurements = measurements.to_cpu()
@@ -1001,7 +999,7 @@ class PixelatedDetector(BaseDetector):
         -------
         measurement : DiffractionPatterns
         """
-        return self.apply(waves)  # noqa
+        return self._apply(waves)
 
 
 class WavesDetector(BaseDetector):
@@ -1032,7 +1030,7 @@ class WavesDetector(BaseDetector):
         metadata["reciprocal_space"] = False
         return metadata
 
-    def _calculate_new_array(self, waves):
+    def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         waves = waves.ensure_real_space()
 
         if self.to_cpu:
@@ -1053,7 +1051,8 @@ class WavesDetector(BaseDetector):
         -------
         measurement : Waves
         """
-        return self.apply(waves)
+        waves = self._apply(waves)
+        return waves
 
     def angular_limits(self, waves: Waves) -> tuple[float, float]:
         return 0.0, min(waves.full_cutoff_angles)

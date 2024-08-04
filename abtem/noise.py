@@ -1,14 +1,17 @@
 """Module for applying noise to measurements."""
+
 from __future__ import annotations
 
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
+from abtem.array import ArrayObjectSubclass
 from abtem.core.axes import (
     NonLinearAxis,
     SampleAxis,
 )
 from abtem.core.backend import get_array_module
+from abtem.core.utils import get_dtype
 from abtem.distributions import validate_distribution, BaseDistribution
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.transform import EnsembleTransform
@@ -80,12 +83,12 @@ class NoiseTransform(EnsembleTransform):
             array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
 
         if isinstance(self.dose, BaseDistribution):
-            dose = xp.array(self.dose.values, dtype=xp.float32)
+            dose = xp.array(self.dose.values, dtype=get_dtype())
             array = array[None] * xp.expand_dims(
                 dose, tuple(range(1, len(array.shape) + 1))
             )
         else:
-            array = array * xp.array(self.dose, dtype=xp.float32)
+            array = array * xp.array(self.dose, dtype=get_dtype())
 
         if isinstance(self.seeds, BaseDistribution):
             seed = sum(self.seeds.values)
@@ -94,20 +97,22 @@ class NoiseTransform(EnsembleTransform):
 
         rng = xp.random.default_rng(seed=seed)
 
-        randomized_seed = int(
-            rng.integers(np.iinfo(np.int32).max)
-        )  # fixes strange cupy bug
-
+        randomized_seed = int(rng.integers(np.iinfo(np.int32).max))
         rng = xp.random.RandomState(seed=randomized_seed)
 
         array = xp.clip(array, a_min=0.0, a_max=None)
 
-        array = rng.poisson(array).astype(xp.float32)
+        array = rng.poisson(array).astype(get_dtype())
 
         return array
 
+    def apply(self, array_object: ArrayObjectSubclass) -> ArrayObjectSubclass:
+        return self._apply(array_object)
 
-def _pixel_times(dwell_time, flyback_time, shape):
+
+def _pixel_times(
+    dwell_time: float, flyback_time: float, shape: tuple[int, int]
+) -> np.ndarray:
     """
     Pixel times internal function
 
@@ -137,7 +142,9 @@ def _pixel_times(dwell_time, flyback_time, shape):
     return slow_time + fast_time
 
 
-def _single_axis_distortion(time, max_frequency, num_components, seed: int = None):
+def _single_axis_distortion(
+    time: np.ndarray, max_frequency: float, num_components: int, seed: int = None
+):
     """
     Single axis distortion internal function
 
@@ -145,7 +152,7 @@ def _single_axis_distortion(time, max_frequency, num_components, seed: int = Non
 
     Parameters
     ----------
-    time : float
+    time : np.ndarray
         Time constant for the distortion in s.
     max_frequency : float
         Maximum noise frequency in 1 / s.
@@ -162,7 +169,13 @@ def _single_axis_distortion(time, max_frequency, num_components, seed: int = Non
     )
 
 
-def _make_displacement_field(time, max_frequency, num_components, rms_power, seed=None):
+def _make_displacement_field(
+    time: np.ndarray,
+    max_frequency: float,
+    num_components: int,
+    rms_power: float,
+    seed: int = None,
+):
     """
     Displacement field creation internal function
 
@@ -170,7 +183,7 @@ def _make_displacement_field(time, max_frequency, num_components, rms_power, see
 
     Parameters
     ----------
-    time : float
+    time : np.ndarray
        Time constant for the distortion in s.
     max_frequency : float
        Maximum noise frequency in 1 / s.
@@ -208,9 +221,9 @@ def _apply_displacement_field(image, distortion_x, distortion_y):
     image : ndarray
         Image array.
     distortion_x : ndarray
-        Displacement field along the x axis.
+        Displacement field along the x-axis.
     distortion_y : ndarray
-        Displacement field along the y axis.
+        Displacement field along the y-axis.
     """
 
     x = np.arange(0, image.shape[0])
@@ -351,7 +364,7 @@ class ScanNoiseTransform(EnsembleTransform):
                 NonLinearAxis(
                     label="RMS power",
                     values=tuple(self.rms_power.values),
-                    units="\%",
+                    units=r"\%",
                 )
             ]
 
@@ -374,9 +387,9 @@ class ScanNoiseTransform(EnsembleTransform):
         time = _pixel_times(self.dwell_time, self.flyback_time, array.shape[-2:])
 
         if isinstance(self.rms_power, BaseDistribution):
-            rms_powers = xp.array(self.rms_power.values, dtype=xp.float32)
+            rms_powers = xp.array(self.rms_power.values, dtype=get_dtype())
         else:
-            rms_powers = xp.array([self.rms_power], dtype=xp.float32)
+            rms_powers = xp.array([self.rms_power], dtype=get_dtype())
 
         arrays = []
         for rms_power in rms_powers:

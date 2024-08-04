@@ -240,9 +240,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
 
-    for i, diagonal_component in enumerate(np.diag(atoms.cell)):
-        if diagonal_component < 0:
-            atoms.positions[:, i] = -atoms.positions[:, i]
+    atoms.positions[np.diag(cell) < 0., :] *= -1
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
 
@@ -269,6 +267,8 @@ def rotation_matrix_to_euler(
         Rotation array of dimension 3x3.
     axes : str
         String representation of Cartesian axes.
+    convention : str, optional
+        Convention for rotation order. Default is "intrinsic".
     eps : float
         Components of the rotation matrix whose magnitude is below this value are ignored.
 

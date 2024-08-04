@@ -12,7 +12,7 @@ from ase import Atom, Atoms
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
-from abtem.array import ArrayObject, T
+from abtem.array import ArrayObject, ArrayObjectSubclass
 from abtem.core.axes import ScanAxis, PositionsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
@@ -626,7 +626,7 @@ class LineScan(BaseScan):
         return self.ensemble_shape + array_object.ensemble_shape
 
     def _out_ensemble_axes_metadata(
-        self, array_object: ArrayObject | T, index: int = 0
+        self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
     ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
         ensemble_axes_metadata = self.ensemble_axes_metadata
 
@@ -937,7 +937,7 @@ class GridScan(HasGridMixin, BaseScan):
         return axes_metadata
 
     def _out_ensemble_axes_metadata(
-        self, array_object: ArrayObject | T, index: int = 0
+        self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
     ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
         ensemble_axes_metadata = self.ensemble_axes_metadata
 

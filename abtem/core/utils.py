@@ -39,25 +39,6 @@ def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> No
 
     raise RuntimeError()
 
-    #
-    # try:
-    #     print("a", item.shape, arr.shape, args)
-    #     arr[(0,0)] = item
-    #     print("b", arr.item().shape)
-    #
-    #     return
-    # except (IndexError, ValueError):
-    #     pass
-    #
-    # try:
-    #     arr[...] = item
-    #     return
-    # except (IndexError, ValueError):
-    #     pass
-    #
-    # args = (args,) + (0,) * (len(arr.shape) - 1)
-    # arr[args] = item
-
 
 def is_array_like(x):
     if isinstance(x, np.ndarray) or (cp is not None and isinstance(x, cp.ndarray)):
@@ -78,7 +59,8 @@ def is_broadcastable(shape1, shape2):
 class CopyMixin:
     _exclude_from_copy: tuple = ()
 
-    def _arg_keys(self, cls):
+    @staticmethod
+    def _arg_keys(cls):
         parameters = inspect.signature(cls).parameters
         return tuple(
             key
@@ -116,7 +98,7 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         from abtem.core.ensemble import EmptyEnsemble
 
         if isinstance(value, EmptyEnsemble) and isinstance(
-                b.__dict__[key], EmptyEnsemble
+            b.__dict__[key], EmptyEnsemble
         ):
             return True
 
@@ -136,7 +118,47 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
     return True
 
 
+def _get_dims_to_broadcast(
+    arr1: np.ndarray,
+    arr2: np.ndarray,
+    match_dims: tuple[tuple[int, ...], tuple[int, ...]] = None,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    if match_dims is None:
+        match_dims = [(), ()]
+
+    assert len(match_dims) == 2
+    assert len(match_dims[0]) == len(match_dims[1])
+
+    match_dims = (
+        normalize_axes(match_dims[0], arr1.shape),
+        normalize_axes(match_dims[1], arr2.shape),
+    )
+
+    match_axis1 = [i not in match_dims[0] for i in range(len(arr1.shape))]
+    match_axis2 = [i not in match_dims[1] for i in range(len(arr2.shape))]
+
+    last_length = len(match_axis1) + len(match_axis2)
+    for _ in range(last_length):
+        insert_empty_axis(match_axis1, match_axis2)
+
+        if len(match_axis1) + len(match_axis2) == last_length:
+            break
+
+        last_length = len(match_axis1) + len(match_axis2)
+
+    if len(match_axis1) < len(match_axis2):
+        match_axis1 = [None] * (len(match_axis2) - len(match_axis1)) + match_axis1
+    elif len(match_axis1) > len(match_axis2):
+        match_axis2 = [None] * (len(match_axis1) - len(match_axis2)) + match_axis2
+
+    axis1 = tuple(i for i, a in enumerate(match_axis1) if a is None)
+    axis2 = tuple(i for i, a in enumerate(match_axis2) if a is None)
+
+    return axis1, axis2
+
+
 class EqualityMixin:
+
     def __eq__(self, other):
         return safe_equality(self, other)
 
@@ -149,11 +171,11 @@ def array_row_intersection(a, b):
     return np.sum(np.cumsum(tmp, axis=0) * tmp == 1, axis=1).astype(bool)
 
 
-def safe_floor_int(n: float, tol: int = 7):
+def safe_floor_int(n: float, tol: int = 7) -> int:
     return int(np.floor(np.round(n, decimals=tol)))
 
 
-def safe_ceiling_int(n: float, tol: int = 7):
+def safe_ceiling_int(n: float, tol: int = 7) -> int:
     return int(np.ceil(np.round(n, decimals=tol)))
 
 
@@ -177,7 +199,7 @@ def insert_empty_axis(match_axis1, match_axis2):
 
 
 def normalize_axes(
-        axes: tuple[int, ...] | int, shape: tuple[int, ...]
+    axes: tuple[int, ...] | int, shape: tuple[int, ...]
 ) -> tuple[int, ...]:
     """
     Normalize the axes tuple so that all axes are non-negative.
@@ -206,48 +228,11 @@ def normalize_axes(
     return normalized_axes
 
 
-def _get_dims_to_broadcast(
-        arr1: np.ndarray,
-        arr2: np.ndarray,
-        match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
-) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    if match_dims is None:
-        match_dims = [(), ()]
-
-    assert len(match_dims) == 2
-    assert len(match_dims[0]) == len(match_dims[1])
-
-    match_dims[0] = normalize_axes(match_dims[0], arr1.shape)
-    match_dims[1] = normalize_axes(match_dims[1], arr2.shape)
-
-    match_axis1 = [i not in match_dims[0] for i in range(len(arr1.shape))]
-    match_axis2 = [i not in match_dims[1] for i in range(len(arr2.shape))]
-
-    last_length = len(match_axis1) + len(match_axis2)
-    for _ in range(last_length):
-        insert_empty_axis(match_axis1, match_axis2)
-
-        if len(match_axis1) + len(match_axis2) == last_length:
-            break
-
-        last_length = len(match_axis1) + len(match_axis2)
-
-    if len(match_axis1) < len(match_axis2):
-        match_axis1 = [None] * (len(match_axis2) - len(match_axis1)) + match_axis1
-    elif len(match_axis1) > len(match_axis2):
-        match_axis2 = [None] * (len(match_axis1) - len(match_axis2)) + match_axis2
-
-    axis1 = tuple(i for i, a in enumerate(match_axis1) if a is None)
-    axis2 = tuple(i for i, a in enumerate(match_axis2) if a is None)
-
-    return axis1, axis2
-
-
 def expand_dims_to_broadcast(
-        arr1: np.ndarray,
-        arr2: np.ndarray,
-        match_dims: list[tuple[int, ...], tuple[int, ...]] = None,
-        broadcast: bool = False,
+    arr1: np.ndarray,
+    arr2: np.ndarray,
+    match_dims: tuple[tuple[int, ...], tuple[int, ...]] = None,
+    broadcast: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Expand the dimensions of two arrays to make them broadcastable.
@@ -259,7 +244,8 @@ def expand_dims_to_broadcast(
     arr2 : np.ndarray
         The second array.
     match_dims : list, optional
-        A list of two tuples, each containing the dimensions that should match (i.e. not be broadcasted) between the two arrays.
+        A list of two tuples, each containing the dimensions that should match (i.e. not be broadcasted) between the two
+         arrays.
     broadcast : bool, optional
         If True, broadcast the arrays to the same shape, otherwise only expand the dimensions. Defaults to False.
 
@@ -325,7 +311,7 @@ def label_to_index(labels, max_label=None, min_label=0):
         yield indices[l:h]
 
 
-def get_data_path(file):
+def get_data_path(file:str) -> str:
     this_file = os.path.abspath(os.path.dirname(file))
     return os.path.join(this_file, "data")
 

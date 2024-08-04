@@ -113,7 +113,7 @@ def reciprocal_space_gpts(
 
 
 def make_hkl_grid(
-    cell: np.ndarray,
+    cell: np.ndarray | Cell,
     g_max: float,
     axes: tuple[int, ...] = (0, 1, 2),
 ) -> np.ndarray:

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Iterator
 import dask.array as da
 import numpy as np
 
-from abtem.array import T
+from abtem.array import ArrayObjectSubclass, ArrayObjectSubclassAlt
 from abtem.core.axes import AxisMetadata, ParameterAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks, validate_chunks
@@ -60,7 +60,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         """Axes metadata describing the ensemble axes added to the waves when applying the transform."""
         return []
 
-    def _out_meta(self, array_object: T, index: int = 0) -> np.ndarray:
+    def _out_meta(
+        self, array_object: ArrayObjectSubclass, index: int = 0
+    ) -> np.ndarray:
         """
         The meta describing the measurement array created when detecting the given waves.
 
@@ -81,7 +83,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
     def metadata(self):
         return {}
 
-    def _out_metadata(self, array_object: T, index: int = 0) -> dict:
+    def _out_metadata(self, array_object: ArrayObjectSubclass, index: int = 0) -> dict:
         """
         Metadata added to the measurements created when detecting the given waves.
 
@@ -97,12 +99,14 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         return {**array_object.metadata, **self.metadata}
 
     def _out_dtype(
-        self, array_object: ArrayObject | T, index: int = 0
+        self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
     ) -> type[np.dtype]:
         """Datatype of the output array."""
         return array_object.dtype
 
-    def _out_type(self, array_object: T, index: int = 0) -> type[T]:
+    def _out_type(
+        self, array_object: ArrayObjectSubclass, index: int = 0
+    ) -> type[ArrayObjectSubclass]:
         """
         The subtype of the created array object after applying the transform.
 
@@ -117,7 +121,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         """
         return array_object.__class__
 
-    def _out_ensemble_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
+    def _out_ensemble_shape(
+        self, array_object: ArrayObjectSubclass, index: int = 0
+    ) -> tuple[int, ...]:
         """
         Shape of the measurements created when detecting the given waves.
 
@@ -132,7 +138,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         """
         return self.ensemble_shape + array_object.ensemble_shape
 
-    def _out_base_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
+    def _out_base_shape(
+        self, array_object: ArrayObjectSubclass, index: int = 0
+    ) -> tuple[int, ...]:
         """
         Shape of the array object created by the transformation.
 
@@ -147,13 +155,15 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         """
         return array_object.base_shape
 
-    def _out_shape(self, array_object: T, index: int = 0) -> tuple[int, ...]:
+    def _out_shape(
+        self, array_object: ArrayObjectSubclass, index: int = 0
+    ) -> tuple[int, ...]:
         ensemble_shape = self._out_ensemble_shape(array_object)
         base_shape = self._out_base_shape(array_object, index)
         return ensemble_shape + base_shape
 
     def _out_base_axes_metadata(
-        self, array_object: T, index: int = 0
+        self, array_object: ArrayObjectSubclass, index: int = 0
     ) -> list[AxisMetadata]:
         """
         Axes metadata of the created measurements when detecting the given waves.
@@ -170,7 +180,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         return array_object.base_axes_metadata
 
     def _out_ensemble_axes_metadata(
-        self, array_object: ArrayObject | T, index: int = 0
+        self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
     ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
         return [*self.ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
@@ -185,7 +195,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
 
         return CompositeArrayObjectTransform(transforms)
 
-    def _out_axes_metadata(self, array_object: T):
+    def _out_axes_metadata(self, array_object: ArrayObjectSubclass):
         return [
             *self._out_ensemble_axes_metadata(array_object),
             *self._out_base_axes_metadata(array_object),
@@ -218,7 +228,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         return array
 
     def _pack_multiple_outputs(
-        self, array_object: T, new_arrays: np.ndarray | da.core.Array
+        self, array_object: ArrayObjectSubclass, new_arrays: np.ndarray | da.core.Array
     ):
         is_lazy = isinstance(new_arrays, da.core.Array)
         # if is_lazy:
@@ -274,7 +284,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
 
     def _pack_single_output(
         self,
-        array_object: T,
+        array_object: ArrayObjectSubclass,
         new_array: np.ndarray,
     ):
         ensemble_axes_metadata = self._out_ensemble_axes_metadata(array_object)
@@ -294,27 +304,15 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         return array_object
 
     def _calculate_new_array(
-        self, array_object: T
+        self, array_object: ArrayObjectSubclass
     ) -> np.ndarray | tuple[np.ndarray, ...]:
         raise NotImplementedError
 
-    def apply(self, array_object: T) -> T | tuple[T, ...]:
-        """
-        Apply the transform to the given waves.
-
-        Parameters
-        ----------
-        array_object : ArrayObject
-            The array object to transform.
-
-        Returns
-        -------
-        transformed_array_object : ArrayObject
-        """
-        # if not isinstance(array_object, ArrayObject):
-        # raise ValueError("Input must be an ArrayObject.")
-
+    def _apply(
+        self, array_object: ArrayObjectSubclass
+    ) -> ArrayObjectSubclassAlt | tuple[ArrayObjectSubclassAlt, ...]:
         new_array = self._calculate_new_array(array_object)
+
         if self._num_outputs > 1:
             return self._pack_multiple_outputs(array_object, new_array)
         else:
@@ -322,7 +320,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
 
 
 class EmptyTransform(EmptyEnsemble, ArrayObjectTransform):
-    def apply(self, array_object):
+    def apply(
+        self, array_object: ArrayObjectSubclass
+    ) -> ArrayObjectSubclass | tuple[ArrayObjectSubclass, ...]:
         return array_object
 
 
@@ -368,7 +368,7 @@ class WavesTransform(EnsembleTransform):
         return self._distributions
 
     def apply(self, waves: Waves) -> Waves:
-        waves = super().apply(waves)
+        waves = self._apply(waves)
         return waves
 
 
@@ -486,7 +486,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def _out_metadata(self, array_object, index: int = 0):
         if self._metadata is not None:
             return self._metadata[index]
-        
+
         metadata = [
             transform._out_metadata(array_object, index)
             for transform in self.transforms
@@ -502,7 +502,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
             for i, transform in enumerate(self.transforms)
         ]
         ensemble_axes_metadata = list(itertools.chain(*ensemble_axes_metadata))
-        
+
         return ensemble_axes_metadata
 
     def _out_ensemble_axes_metadata(self, array_object, index=0) -> list[AxisMetadata]:
@@ -562,14 +562,14 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         ]
         return tuple(itertools.chain(*default_ensemble_chunks))
 
-    def apply(self, array_object):
+    def apply(self, array_object: ArrayObjectSubclass) -> ArrayObjectSubclassAlt | tuple[ArrayObjectSubclassAlt, ...]:
         if len(self):
-            return super().apply(array_object)
+            return super()._apply(array_object)
         else:
             return array_object
 
     def _calculate_new_array(
-        self, array_object: T
+        self, array_object: ArrayObjectSubclass
     ) -> np.ndarray | tuple[np.ndarray, ...]:
         for transform in reversed(self.transforms):
             array_object = transform.apply(array_object)
