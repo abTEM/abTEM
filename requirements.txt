@@ -1,7 +1,6 @@
 numpy
-Pillow
 pandas
-matplotlib
+matplotlib>=3.6
 pyfftw
 scipy
 numba
@@ -9,8 +8,8 @@ dask>=2022.12.1
 distributed
 zarr
 ase
-jupyterlab
-dask-labextension
-bokeh
+threadpoolctl
+tabulate
 ipywidgets
 ipympl
+tqdm
