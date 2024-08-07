@@ -1,14 +1,27 @@
+"""Module for handling electron energy."""
+
 from __future__ import annotations
-from typing import Optional, TYPE_CHECKING
 
 import numpy as np
 from ase import units
 
 from abtem.core.utils import EqualityMixin, CopyMixin
-if TYPE_CHECKING:
-    from abtem.waves import Waves
+
 
 def relativistic_mass_correction(energy: float) -> float:
+    """
+    Calculate relativistic mass correction from energy.
+
+    Parameters
+    ----------
+    energy: float
+        Electron energy [eV].
+
+    Returns
+    -------
+    float
+        Relativistic mass correction.
+    """
     return 1 + units._e * energy / (units._me * units._c**2)
 
 
@@ -18,8 +31,7 @@ def energy2mass(energy: float) -> float:
 
     Parameters
     ----------
-    energy: float
-        Energy [eV].
+    enerElectron energy [eV].
 
     Returns
     -------
@@ -81,7 +93,24 @@ def energy2sigma(energy: float) -> float:
     )
 
 
-def reciprocal_space_sampling_to_angular_sampling(reciprocal_space_sampling, energy):
+def reciprocal_space_sampling_to_angular_sampling(
+    reciprocal_space_sampling: tuple[float, float], energy: float
+) -> tuple[float, float]:
+    """
+    Convert reciprocal space sampling in 1/Å to angular sampling in mrad.
+    
+    Parameters
+    ----------
+    reciprocal_space_sampling: tuple of floats
+        Reciprocal space sampling [1/Å].
+    energy: float
+        Electron energy in [eV].
+
+    Returns
+    -------
+    tuple of floats
+        Angular sampling [mrad].
+    """
     wavelength = energy2wavelength(energy)
     return (
         reciprocal_space_sampling[0] * wavelength * 1e3,
@@ -90,7 +119,9 @@ def reciprocal_space_sampling_to_angular_sampling(reciprocal_space_sampling, ene
 
 
 class EnergyUndefinedError(Exception):
-    pass
+    """
+    Error raised when energy is not defined.
+    """
 
 
 class Accelerator(EqualityMixin, CopyMixin):
@@ -163,7 +194,9 @@ class Accelerator(EqualityMixin, CopyMixin):
         ):
             raise RuntimeError("Inconsistent energies")
 
-    def match(self, other: Accelerator | HasAcceleratorMixin, check_match:bool=False):
+    def match(
+        self, other: Accelerator | HasAcceleratorMixin, check_match: bool = False
+    ):
         """
         Set the parameters of this accelerator to match another accelerator.
 
@@ -187,6 +220,9 @@ class Accelerator(EqualityMixin, CopyMixin):
 
 
 class HasAcceleratorMixin:
+    """
+    Mixin class for objects that have an electron energy.
+    """
     _accelerator: Accelerator
 
     @property
