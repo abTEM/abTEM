@@ -1,4 +1,7 @@
+"""Module for the Grid class and related functions."""
+
 from __future__ import annotations
+from types import ModuleType
 import warnings
 from typing import Sequence, Iterable, Any
 
@@ -9,9 +12,27 @@ from abtem.core.backend import get_array_module, xp_to_str
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 
 
-def validate_gpts(gpts):
+def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
+    """
+    Parameters
+    ----------
+    gpts : tuple of int
+        The tuple of integers representing the GPTs (General Purpose Tokens).
+
+    Returns
+    -------
+    gpts : tuple of int
+        The validated tuple of integers representing the GPTs.
+
+    Raises
+    ------
+    ValueError
+        If any value in the gpts tuple is not greater than 0.
+    """
     if not all(gpts):
         raise ValueError("gpts must be greater than 0")
+
+    return gpts
 
 
 def adjusted_gpts(
@@ -19,6 +40,23 @@ def adjusted_gpts(
     old_sampling: tuple[float, ...],
     old_gpts: tuple[int, ...],
 ) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    """
+    Adjust the number of grid points to match a target sampling.
+
+    Parameters
+    ----------
+    target_sampling : tuple of float
+        The target sampling [Å].
+    old_sampling : tuple of float
+        The old sampling [Å].
+    old_gpts : tuple of int
+        The old number of grid points.
+
+    Returns
+    -------
+    new_sampling : tuple of float
+        The new sampling [Å].
+    """
     new_sampling = ()
     new_gpts = ()
     for d_target, d, n in zip(target_sampling, old_sampling, old_gpts):
@@ -31,19 +69,15 @@ def adjusted_gpts(
 
 
 class GridUndefinedError(Exception):
-    pass
-
-
-def safe_divide(a, b):
-    if b == 0.0:
-        return 0.0
-    else:
-        return a / b
+    """
+    Exception raised when the grid is not defined.
+    """
 
 
 class Grid(CopyMixin, EqualityMixin):
     """
-    The Grid object represent the simulation grid on which the wave functions and potential are discretized.
+    The Grid object represent the simulation grid on which the wave functions and potential are
+    discretized.
 
     Parameters
     ----------
@@ -56,7 +90,14 @@ class Grid(CopyMixin, EqualityMixin):
     dimensions : int
         Number of dimensions represented by the grid.
     endpoint : bool
-        If true include the grid endpoint. Default is False. For periodic grids the endpoint should not be included.
+        If true include the grid endpoint. Default is False. For periodic grids the endpoint should
+        not be included.
+    lock_extent : bool
+        If true the extent cannot be modified. Default is False.
+    lock_gpts : bool
+        If true the gpts cannot be modified. Default is False.
+    lock_sampling : bool
+        If true the sampling cannot be modified. Default is False.
     """
 
     def __init__(
@@ -114,7 +155,7 @@ class Grid(CopyMixin, EqualityMixin):
         if isinstance(value, (np.ndarray, list, tuple)):
             if len(value) != self.dimensions:
                 raise RuntimeError(
-                    "Grid value length of {} != {}".format(len(value), self._dimensions)
+                    f"Grid value length of {len(value)} != {self._dimensions}"
                 )
             return tuple((map(dtype, value)))
 
@@ -124,7 +165,7 @@ class Grid(CopyMixin, EqualityMixin):
         if value is None:
             return value
 
-        raise RuntimeError("Invalid grid property ({})".format(value))
+        raise RuntimeError(f"Invalid grid property ({value})")
 
     def __len__(self) -> int:
         return self.dimensions
@@ -207,6 +248,7 @@ class Grid(CopyMixin, EqualityMixin):
 
     @property
     def reciprocal_space_sampling(self) -> tuple[float, float]:
+        """Reciprocal-space sampling [1/Å]."""
         self.check_is_defined()
         return (
             1 / (self.gpts[0] * self.sampling[0]),
@@ -229,9 +271,16 @@ class Grid(CopyMixin, EqualityMixin):
             )
 
     def _adjust_sampling(self, extent: tuple, gpts: tuple):
+
+        def _safe_divide(a: float, b: float) -> float:
+            if b == 0.0:
+                return 0.0
+            else:
+                return a / b
+
         if (extent is not None) & (gpts is not None):
             self._sampling = tuple(
-                safe_divide(r, (n - 1)) if e else safe_divide(r, n)
+                _safe_divide(r, (n - 1)) if e else _safe_divide(r, n)
                 for r, n, e in zip(extent, gpts, self._endpoint)
             )
             self._sampling = self._validate(self._sampling, float)
@@ -264,7 +313,8 @@ class Grid(CopyMixin, EqualityMixin):
         other : Grid object
             The grid that should be matched.
         check_match : bool
-            If true check whether grids can match without overriding already defined grid parameters.
+            If true check whether grids can match without overriding already defined grid
+            parameters.
         """
 
         if check_match:
@@ -308,21 +358,19 @@ class Grid(CopyMixin, EqualityMixin):
         if (self.extent is not None) & (other.extent is not None):
             if not np.all(np.isclose(self.extent, other.extent)):
                 raise RuntimeError(
-                    "Inconsistent grid extent ({} != {})".format(
-                        self.extent, other.extent
-                    )
+                    "Inconsistent grid extent ({self.extent} != {other.extent})"
                 )
 
         if (self.gpts is not None) & (other.gpts is not None):
             if not np.all(self.gpts == other.gpts):
                 raise RuntimeError(
-                    "Inconsistent grid gpts ({} != {})".format(self.gpts, other.gpts)
+                    "Inconsistent grid gpts ({self.gpts} != {other.gpts})"
                 )
 
     def round_to_power(self, powers: int | tuple[int, ...] = (2, 3, 5, 7)):
         """
-        Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
-        whose size can be factored into small primes (2, 3, 5 and 7).
+        Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are
+        faster for arrays of whose size can be factored into small primes (2, 3, 5 and 7).
 
         Parameters
         ----------
@@ -344,11 +392,12 @@ class Grid(CopyMixin, EqualityMixin):
 
         self.gpts = gpts
 
-    def spatial_frequencies(self):
-        return spatial_frequencies(self.gpts, self.sampling)
-
 
 class HasGridMixin:
+    """
+    Mixin class for objects that have a Grid.
+    """
+
     _grid: Grid
 
     @property
@@ -400,23 +449,29 @@ def spatial_frequencies(
     gpts: tuple[int, ...],
     sampling: tuple[float, ...],
     return_grid: bool = False,
-    xp=np,
+    xp: ModuleType = np,
 ):
     """
-    Calculate spatial frequencies of a grid.
+    Return the spatial frequencies of a grid.
 
     Parameters
     ----------
-    gpts: tuple of int
+    gpts : tuple of int
         Number of grid points.
-    sampling: tuple of float
-        Sampling of the potential [1 / Å].
-
+    sampling : tuple of float
+        Sampling of the grid [Å].
+    return_grid : bool
+        If True, return the grid as a single meshgrid array.
+    xp : module
+        Array module to use, options are numpy or cupy. Default is numpy.
+    
     Returns
     -------
-    tuple of arrays
+    spatial_frequencies : tuple of np.ndarray
+        Tuple of spatial frequencies in each dimension.
+    spatial_frequencies_grid : np.ndarray
+        If return_grid is True, the spatial frequencies as a single meshgrid array.
     """
-
     dtype = get_dtype(complex=False)
     xp = get_array_module(xp)
 
@@ -431,17 +486,30 @@ def spatial_frequencies(
 
 
 def polar_spatial_frequencies(
-    gpts: tuple[int, ...], sampling: tuple[float, ...], xp=np, dtype=None
+    gpts: tuple[int, ...], sampling: tuple[float, ...], xp: ModuleType=np
 ) -> tuple[np.ndarray, np.ndarray]:
+    """ 
+    Return the polar spatial frequencies of a grid.
+    
+    Parameters
+    ----------
+    gpts : tuple of int
+        Number of grid points.
+    sampling : tuple of float
+        Sampling of the potential [1 / Å].
+    xp : module
+        Array module to use, options are numpy or cupy. Default is numpy. asdasdasdasdasdasdasdasdasdasdasdasdasdasdasd
+
+    Returns
+    -------
+    k_and_phi : tuple of np.ndarray
+        Tuple of spatial frequencies in polar coordinates. First element is the radial frequency and 
+        the second element is the azimuthal angle.
+    """
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
     phi = xp.arctan2(ky[None], kx[:, None])
-
-    if dtype is not None:
-        k = k.astype(dtype)
-        phi = phi.astype(dtype)
-
     return k, phi
 
 
