@@ -1,15 +1,16 @@
+"""Module for handling Fourier transforms and convolution in *ab*TEM."""
+
+import warnings
 from typing import Tuple
 
 import dask.array as da
 import numpy as np
+from threadpoolctl import threadpool_limits
 
 from abtem.core import config
-from abtem.core.backend import get_array_module, check_cupy_is_installed
+from abtem.core.backend import check_cupy_is_installed, get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
-from threadpoolctl import threadpool_limits
-import warnings
-
 from abtem.core.utils import get_dtype
 
 try:
@@ -18,12 +19,12 @@ except (ModuleNotFoundError, ImportError):
     pyfftw = None
 
 try:
-    import mkl_fft # noqa
+    import mkl_fft  # pyright: ignore[reportMissingImports]
 except ModuleNotFoundError:
     mkl_fft = None
 
 try:
-    import cupy as cp
+    import cupy as cp  # pyright: ignore[reportMissingImports]
 except ModuleNotFoundError:
     cp = None
 except ImportError:
@@ -35,7 +36,7 @@ except ImportError:
     cp = None
 
 
-def raise_fft_lib_not_present(lib_name):
+def _raise_fft_lib_not_present(lib_name):
     raise RuntimeError(
         f"FFT library {lib_name} not present. Install this package or change the FFT library in your "
         f"configuration."
@@ -100,9 +101,31 @@ def get_fftw_object(
     array: np.ndarray,
     name: str,
     allow_new_wisdom: bool = True,
-    overwrite_x=False,
-    axes=(-2, -1),
+    overwrite_x: bool = False,
+    axes: tuple[int, ...] = (-2, -1),
 ):
+    """
+    Get a pyfftw object for a given array and a given FFT function.
+    The object is cached and reused if the array shape is the same.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        Array to create the FFT object for.
+    name : str
+        Name of the FFT function.
+    allow_new_wisdom : bool, optional
+        Allow new wisdom to be created.
+    overwrite_x : bool, optional
+        Allow the input array to be overwritten.
+
+    Returns
+    -------
+    pyfftw.FFTW
+        FFTW object.
+
+    """
+
     direction = _fft_name_to_fftw_direction(name)
 
     flags = (config.get("fftw.planning_effort"),)
@@ -119,7 +142,7 @@ def get_fftw_object(
             flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
         )
     except RuntimeError as e:
-        if not str(e) == "No FFTW wisdom is known for this plan.":
+        if str(e) != "No FFTW wisdom is known for this plan.":
             raise
 
         if not allow_new_wisdom and config.get("fftw.allow_fallback"):
@@ -139,7 +162,7 @@ def get_fftw_object(
 
 def _mkl_fft_dispatch(x: np.ndarray, func_name: str, overwrite_x: bool, **kwargs):
     if mkl_fft is None:
-        raise_fft_lib_not_present("mkl_fft")
+        _raise_fft_lib_not_present("mkl_fft")
 
     with threadpool_limits(limits=config.get("mkl.threads")):
         return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
@@ -147,7 +170,7 @@ def _mkl_fft_dispatch(x: np.ndarray, func_name: str, overwrite_x: bool, **kwargs
 
 def _fftw_dispatch(x: np.ndarray, func_name: str, overwrite_x: bool, **kwargs):
     if pyfftw is None:
-        raise_fft_lib_not_present("pyfftw")
+        _raise_fft_lib_not_present("pyfftw")
 
     if not overwrite_x:
         x = x.copy()
@@ -184,18 +207,31 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
 
 
 def fft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    """
+    Compute the 2-dimensional discrete Fourier Transform.
+    Using the FFT library specified in the configuration.
+    """
     return _fft_dispatch(x, func_name="fft2", overwrite_x=overwrite_x, **kwargs)
 
 
 def ifft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    """
+    Compute the 2-dimensional inverse discrete Fourier Transform.
+    Using the FFT library specified in the configuration.
+    """
     return _fft_dispatch(x, func_name="ifft2", overwrite_x=overwrite_x, **kwargs)
 
 
 def fftn(x, overwrite_x: bool = False, **kwargs):
+    """Compute the n-dimensional discrete Fourier Transform. Using the FFT library specified in the configuration."""
     return _fft_dispatch(x, func_name="fftn", overwrite_x=overwrite_x, **kwargs)
 
 
 def ifftn(x, overwrite_x=False, **kwargs):
+    """
+    Compute the n-dimensional inverse discrete Fourier Transform.
+    Using the FFT library specified in the configuration.
+    """
     return _fft_dispatch(x, func_name="ifftn", overwrite_x=overwrite_x, **kwargs)
 
 
@@ -208,7 +244,26 @@ def _fft2_convolve(x, kernel, overwrite_x: bool = False):
     return ifft2(x, overwrite_x=overwrite_x)
 
 
-def fft2_convolve(x, kernel, overwrite_x: bool = False):
+def fft2_convolve(
+    x: np.ndarray | da.core.Array, kernel: np.ndarray, overwrite_x: bool = False
+):
+    """
+    Compute the 2-dimensional convolution of an array with a kernel.
+
+    Parameters
+    ----------
+    x : np.ndarray or da.core.Array
+        Array to convolve.
+    kernel : np.ndarray
+        Convolution kernel.
+    overwrite_x : bool, optional
+        Overwrite the input array.
+
+    Returns
+    -------
+    np.ndarray or da.core.Array
+        Convolved array.
+    """
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
@@ -234,15 +289,20 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
 
     Parameters
     ----------
-    positions : array of xy-positions
-    shape : two int
+    positions : np.ndarray
+        Array of positions to shift the array to. The last dimension should be the number of dimensions to shift.
+    shape : tuple
+        Shape of the array to shift.
 
     Returns
     -------
-
+    np.ndarray
+        Array representing the phase ramp(s).
     """
-
     xp = get_array_module(positions)
+
+    if cp is None or not isinstance(positions, cp.ndarray):
+        positions = np.array(positions)
 
     assert positions.shape[-1] == len(shape)
     dims = positions.shape[-1]
@@ -268,7 +328,11 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     return array
 
 
-def fft_shift(array, positions):
+def fft_shift(array: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    """
+    Shi
+    """
+
     xp = get_array_module(array)
     return xp.fft.ifft2(
         xp.fft.fft2(array) * fft_shift_kernel(positions, array.shape[-2:])
@@ -305,14 +369,31 @@ def _fft_interpolation_masks_1d(n1, n2):
     return mask1, mask2
 
 
-def fft_interpolation_masks(shape1, shape2):
+def fft_interpolation_masks(
+    shape_in: tuple[int, ...], shape_out: tuple[int, ...]
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Create boolean masks for interpolating between two arrays using Fourier space interpolation.
+
+    Parameters
+    ----------
+    shape_in : tuple of int
+        Shape of the input array to interpolate from.
+    shape_out : tuple of int
+        Shape of the output array to interpolate to.
+
+    Returns
+    -------
+    tuple of np.ndarray
+        Masks for the input and output arrays.
+    """
     mask1_1d = []
     mask2_1d = []
 
-    for i, (n1, n2) in enumerate(zip(shape1, shape2)):
+    for i, (n1, n2) in enumerate(zip(shape_in, shape_out)):
         m1, m2 = _fft_interpolation_masks_1d(n1, n2)
 
-        s = [np.newaxis] * len(shape1)
+        s = [np.newaxis] * len(shape_in)
         s[i] = slice(None)
 
         mask1_1d += [m1[tuple(s)]]
@@ -329,7 +410,25 @@ def fft_interpolation_masks(shape1, shape2):
     return mask1, mask2
 
 
-def fft_crop(array, new_shape, normalize: bool = False):
+def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = False):
+    """
+    Crop an array. It is assumed that the array is centered in Fourier space, this is used for real-space interpolation.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        Array to crop.
+    new_shape : tuple of int
+        New shape of the array. If the new shape is smaller than the input array, 
+        each preceding dimension is treated as a batch dimension.
+    normalize : bool, optional
+        If True, renormalize the array to conserve the total amplitude.
+    
+    Returns
+    -------
+    np.ndarray
+        Cropped array.
+    """
     xp = get_array_module(array)
 
     if len(new_shape) < len(array.shape):
@@ -353,7 +452,19 @@ def fft_interpolate(
     normalization: str = "values",
     overwrite_x: bool = False,
 ):
-    xp = get_array_module(array)
+    """
+    Interpolate an array using Fourier space interpolation.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        Array to interpolate.
+    new_shape : tuple of int
+        New shape of the array.
+    normalization : str, optional
+
+
+    """
     old_size = np.prod(array.shape[-len(new_shape) :])
 
     is_complex = np.iscomplexobj(array)
@@ -380,7 +491,13 @@ def fft_interpolate(
     if normalization == "values":
         array *= np.prod(array.shape[-len(new_shape) :]) / old_size
 
+    elif normalization == "amplitude":
+        pass
+
     elif normalization != "intensity":
         raise ValueError()
+
+    else:
+        raise ValueError(f"Normalization {normalization} not recognized.")
 
     return array
