@@ -72,10 +72,10 @@ def slice_limits(slice_thickness) -> list[tuple[float, float]]:
     """The entrance and exit thicknesses of each slice [Å]."""
 
     cum_thickness = list(itertools.accumulate((0,) + slice_thickness))
-    slice_limits = [
+    limits = [
         (cum_thickness[i], cum_thickness[i + 1]) for i in range(len(cum_thickness) - 1)
     ]
-    return slice_limits
+    return limits
 
 
 def _unpack_item(item: int | slice, num_items):
@@ -139,7 +139,8 @@ class BaseSlicedAtoms(EqualityMixin):
     @property
     def box(self) -> tuple[float, float, float]:
         """The simulation box [Å]."""
-        return tuple(np.diag(self._atoms.cell))
+        diag = np.diag(self._atoms.cell)
+        return float(diag[0]), float(diag[1]), float(diag[2])
 
     @property
     def num_slices(self) -> int:
@@ -160,9 +161,7 @@ class BaseSlicedAtoms(EqualityMixin):
         """Raises an error if index is greater than the number of slices."""
         if index >= self.num_slices:
             raise RuntimeError(
-                "Slice index {} too large for sliced atoms with {} slices".format(
-                    index, self.num_slices
-                )
+                f"Slice index {index} too large for sliced atoms with {self.num_slices} slices"
             )
 
     @abstractmethod
@@ -186,11 +185,26 @@ class BaseSlicedAtoms(EqualityMixin):
         atoms : Atoms
         """
 
-        pass
-
     def generate_atoms_in_slices(
         self, first_slice: int = 0, last_slice: int = None, atomic_number: int = None
     ):
+        """
+        Generate atoms in slices.
+        
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice of the atoms to return.
+        last_slice : int, optional
+            Index of the last slice of the atoms to return.
+        atomic_number : int, optional
+            If given, only atoms with the given atomic number is returned.
+        
+        Yields
+        ------
+        atoms : Atoms
+            The atoms in each slice.
+        """
         if last_slice is None:
             last_slice = len(self)
 
@@ -231,7 +245,9 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
     """
 
     def __init__(
-        self, atoms: Atoms, slice_thickness: float | Sequence[float], method="closest"
+        self,
+        atoms: Atoms,
+        slice_thickness: float | Sequence[float],
     ):
         super().__init__(atoms, slice_thickness)
 
@@ -239,6 +255,7 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
             self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
         )
 
+        # method="closest"
         # labels = find_closest_indices(
         #    atoms.positions[:, 2], np.cumsum((0,) + self.slice_thickness[:-1])
         # )
