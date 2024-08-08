@@ -1,18 +1,19 @@
+"""Module for handling units and unit conversion."""
 import numpy as np
 
 from abtem.core import config
 from abtem.core.energy import energy2wavelength
 
-categories = {
+_unit_categories = {
     "real_space": ["Å", "Angstrom", "nm", "um", "mm", "m"],
     "reciprocal_space": ["1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"],
     "angular": ["rad", "mrad", "deg"],
     "energy": ["eV", "keV"],
 }
 
-# Use a dictionary comprehension to create the final mapping
+# A mapping from unit to unit category
 units_type = {
-    unit: category for category, units in categories.items() for unit in units
+    unit: category for category, units in _unit_categories.items() for unit in units
 }
 
 _conversion_factors = {
@@ -55,7 +56,6 @@ def _format_units(units):
         except KeyError:
             if units == "%":
                 units = r"\mathrm{\%}"
-                # TODO: temporary fix for the percent sign
             else:
                 units = r"\mathrm{" + f"{units}" + r"}"
 
@@ -64,7 +64,31 @@ def _format_units(units):
         return units
 
 
-def _validate_units(units, old_units=None):
+def validate_units(units: str, old_units: str = None) -> str:
+    """
+    Validate units and convert to a standard format.
+
+    If `old_units` is provided, the function will check if the conversion is 
+    possible and raise an error if not.
+    
+    Parameters
+    ----------
+    units : str
+        The units to validate.
+    old_units : str, optional
+        The optional units to check whether conversion from is possible.
+    
+    Returns
+    -------
+    str
+        The validated units
+    
+    Raises
+    ------
+    ValueError
+        If the units are invalid or if conversion from `old_units` is not possible.
+    """
+
     if old_units is None and units is None:
         return None
     elif units is None:
@@ -108,8 +132,8 @@ def _get_conversion_factor(units: str, old_units: str, energy: float = None):
 
         wavelength = energy2wavelength(energy)
         conversion = (
-                wavelength * 1e3 * _conversion_factors[_validate_units(units, "mrad")]
+            wavelength * 1e3 * _conversion_factors[validate_units(units, "mrad")]
         )
         return conversion
 
-    return _conversion_factors[_validate_units(units, old_units)]
+    return _conversion_factors[validate_units(units, old_units)]
