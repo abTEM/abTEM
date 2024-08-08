@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Type
 import numpy as np
 
 from abtem.array import ArrayObjectSubclass
-from abtem.core.axes import ReciprocalSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
+from abtem.core.axes import AxisMetadata, LinearAxis, RealSpaceAxis, ReciprocalSpaceAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
@@ -19,25 +19,47 @@ from abtem.core.units import units_type
 from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
-    PolarMeasurements,
     Images,
+    PolarMeasurements,
     RealSpaceLineProfiles,
-    _scanned_measurement_type,
+    _diffraction_pattern_resampling_gpts,
     _polar_detector_bins,
-    _scan_shape,
     _scan_axes,
+    _scan_shape,
+    _scanned_measurement_type,
 )
-from abtem.measurements import _diffraction_pattern_resampling_gpts
 from abtem.transform import ArrayObjectTransform
 from abtem.visualize.visualizations import discrete_cmap
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
 
+# pylint: disable=W0237
 
-def _validate_detectors(
-    detectors: BaseDetector | list[BaseDetector], waves=None
+
+def validate_detectors(
+    detectors: BaseDetector | list[BaseDetector], waves: BaseWaves = None
 ) -> list[BaseDetector]:
+    """
+    Validate that a variable is a list of detectors.
+
+    Parameters
+    ----------
+    detectors : BaseDetector or list of BaseDetector
+        The detectors to validate.
+    waves : Waves, optional
+        The waves to match the detectors to.
+    
+    Returns
+    -------
+    list of BaseDetector
+        A list of validated detectors.
+
+    Raises
+    ------
+    TypeError
+        If `detectors` is not a BaseDetector or a list of BaseDetector.
+    """
     if hasattr(detectors, "detect"):
         detectors = [detectors]
 
@@ -49,7 +71,7 @@ def _validate_detectors(
         and all(hasattr(detector, "detect") for detector in detectors)
     ):
         raise RuntimeError(
-            "Detectors must be AbstractDetector or list of AbstractDetector."
+            "Detectors must be BaseDetector or list of BaseDetector."
         )
 
     if waves is not None:
@@ -105,7 +127,7 @@ class BaseDetector(ArrayObjectTransform):
         kwargs = self._copy_kwargs()
         return partial(self._from_partition_args_func, **kwargs)
 
-    def _out_meta(self, waves: Waves, index=0) -> np.ndarray:
+    def _out_meta(self, waves: Waves) -> np.ndarray:
         """
         The meta describing the measurement array created when detecting the given waves.
 
@@ -121,11 +143,11 @@ class BaseDetector(ArrayObjectTransform):
         """
 
         if self.to_cpu:
-            return np.array((), dtype=self._out_dtype(waves))
+            return np.array((), dtype=self._out_dtype(waves)[0])
         else:
             xp = get_array_module(waves.device)
 
-            return xp.array((), dtype=self._out_dtype(waves))
+            return xp.array((), dtype=self._out_dtype(waves)[0])
 
     def detect(self, waves: Waves) -> ArrayObjectSubclass:
         """
@@ -156,7 +178,6 @@ class BaseDetector(ArrayObjectTransform):
         -------
         limits : tuple of float
         """
-        pass
 
 
 class AnnularDetector(BaseDetector):
@@ -217,8 +238,8 @@ class AnnularDetector(BaseDetector):
         """Center offset of the annular integration region [mrad]."""
         return self._offset
 
-    def _out_metadata(self, array_object, index=0):
-        metadata = super()._out_metadata(array_object)
+    def _out_metadata(self, array_object):
+        metadata = super()._out_metadata(array_object)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return metadata
@@ -237,34 +258,30 @@ class AnnularDetector(BaseDetector):
         return inner, outer
 
     def _out_ensemble_axes_metadata(
-        self, waves: BaseWaves, index: int = 0
-    ) -> list[AxisMetadata]:
+        self, waves: BaseWaves
+    ) -> tuple[list[AxisMetadata]]:
         source = _scan_axes(waves)
         scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
         ensemble_axes_metadata = [
             m for i, m in enumerate(waves.ensemble_axes_metadata) if i not in source
         ]
-        return ensemble_axes_metadata + scan_axes_metadata
+        return (ensemble_axes_metadata + scan_axes_metadata,)
 
-    def _out_base_axes_metadata(
-        self, waves: BaseWaves, index: int = 0
-    ) -> list[AxisMetadata]:
-        return []
+    def _out_base_axes_metadata(self, waves: BaseWaves) -> tuple[list[AxisMetadata]]:
+        return ([],)
 
-    def _out_ensemble_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
-        ensemble_shape = super()._out_ensemble_shape(waves, index)  # noqa
-        return ensemble_shape[: -len(_scan_shape(waves))]
+    def _out_ensemble_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
+        ensemble_shape = super()._out_ensemble_shape(waves)
+        return (ensemble_shape[: -len(_scan_shape(waves))],)
 
-    def _out_base_shape(self, waves: BaseWaves, index: int = 0) -> tuple:
-        return _scan_shape(waves)
+    def _out_base_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
+        return (_scan_shape(waves),)
 
-    def _out_dtype(self, array_object, index: int = 0) -> np.dtype.base:
-        return np.float32
+    def _out_dtype(self, array_object) -> tuple[np.dtype.base]:
+        return (get_dtype(complex=False),)
 
-    def _out_type(
-        self, waves: BaseWaves, index: int = 0
-    ) -> Type[RealSpaceLineProfiles] | Type[Images]:
-        return _scanned_measurement_type(waves)
+    def _out_type(self, waves: BaseWaves) -> Type[RealSpaceLineProfiles] | Type[Images]:
+        return (_scanned_measurement_type(waves),)
 
     def _calculate_new_array(self, waves: Waves):
         """
@@ -396,43 +413,39 @@ class _AbstractRadialDetector(BaseDetector):
     @abstractmethod
     def radial_sampling(self):
         """Spacing between the radial detector bins [mrad]."""
-        pass
 
     @property
     @abstractmethod
     def azimuthal_sampling(self):
         """Spacing between the azimuthal detector bins [mrad]."""
-        pass
 
     @property
     @abstractmethod
     def nbins_radial(self):
         """Spacing between the azimuthal detector bins [mrad]."""
-        pass
 
     @property
     @abstractmethod
     def nbins_azimuthal(self):
         """Spacing between the azimuthal detector bins [mrad]."""
-        pass
 
-    def _out_dtype(self, waves: Waves, index: bool = 0):
-        return np.float32
+    def _out_dtype(self, waves: Waves) -> np.dtype.base:
+        return (get_dtype(complex=False),)
 
-    def _out_base_shape(self, waves: Waves, index: bool = 0):
+    def _out_base_shape(self, waves: Waves) -> tuple[tuple[int, int]]:
         self._match_waves(waves)
-        return self.nbins_radial, self.nbins_azimuthal
+        return ((self.nbins_radial, self.nbins_azimuthal),)
 
-    def _out_type(self, waves: Waves, index: bool = 0):
-        return PolarMeasurements
+    def _out_type(self, waves: Waves) -> tuple[Type[PolarMeasurements]]:
+        return (PolarMeasurements,)
 
-    def _out_metadata(self, waves: Waves, index: bool = 0) -> dict:
+    def _out_metadata(self, waves: Waves) -> tuple[dict]:
         metadata = super()._out_metadata(waves)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return metadata
 
-    def _out_base_axes_metadata(self, waves: Waves, index: bool = 0):
+    def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata]]:
         return [
             LinearAxis(
                 label="Radial scattering angle",
@@ -911,13 +924,13 @@ class PixelatedDetector(BaseDetector):
 
         return sampling, gpts
 
-    def _out_base_shape(self, waves: Waves, index: int = 0) -> tuple[int, int]:
+    def _out_base_shape(self, waves: Waves) -> tuple[int, int]:
         return self._new_sampling_and_gpts(waves)[1]
 
-    def _out_dtype(self, array_object, index: int = 0) -> np.dtype.base:
+    def _out_dtype(self, waves: Waves) -> np.dtype.base:
         return get_dtype(complex=False)
 
-    def _out_base_axes_metadata(self, waves: Waves, index=0) -> list[AxisMetadata]:
+    def _out_base_axes_metadata(self, waves: Waves) -> list[AxisMetadata]:
         if self.reciprocal_space:
             sampling, gpts = self._new_sampling_and_gpts(waves)
 
@@ -945,14 +958,14 @@ class PixelatedDetector(BaseDetector):
                 RealSpaceAxis(label="y", sampling=waves.sampling[1], units="Å"),
             ]
 
-    def _out_type(self, waves: Waves, index=0):
+    def _out_type(self, waves: Waves) -> Type[DiffractionPatterns | Images]:
         if self.reciprocal_space:
             return DiffractionPatterns
         else:
             return Images
 
-    def _out_metadata(self, waves: Waves, index: int = 0) -> dict:
-        metadata = super()._out_metadata(waves, index=0)
+    def _out_metadata(self, waves: Waves) -> tuple[dict]:
+        metadata = super()._out_metadata(waves)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return metadata
@@ -1020,13 +1033,13 @@ class WavesDetector(BaseDetector):
     def __init__(self, to_cpu: bool = False, url: str = None):
         super().__init__(to_cpu=to_cpu, url=url)
 
-    def _out_type(self, array_object, index: bool = 0):
-        from abtem.waves import Waves
+    def _out_type(self, waves: Waves) -> Type[Waves]:
+        from abtem.waves import Waves  # pylint: disable=C0415
 
         return Waves
 
-    def _out_metadata(self, waves: Waves, index=0) -> dict:
-        metadata = super()._out_metadata(array_object=waves, index=index)
+    def _out_metadata(self, waves: Waves) -> dict:
+        metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
         return metadata
 
