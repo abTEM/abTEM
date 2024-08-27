@@ -49,7 +49,7 @@ def validate_detectors(
         The detectors to validate.
     waves : Waves, optional
         The waves to match the detectors to.
-    
+
     Returns
     -------
     list of BaseDetector
@@ -70,9 +70,7 @@ def validate_detectors(
         isinstance(detectors, list)
         and all(hasattr(detector, "detect") for detector in detectors)
     ):
-        raise RuntimeError(
-            "Detectors must be BaseDetector or list of BaseDetector."
-        )
+        raise RuntimeError("Detectors must be BaseDetector or list of BaseDetector.")
 
     if waves is not None:
         for detector in detectors:
@@ -143,11 +141,10 @@ class BaseDetector(ArrayObjectTransform):
         """
 
         if self.to_cpu:
-            return np.array((), dtype=self._out_dtype(waves)[0])
+            return (np.array((), dtype=self._out_dtype(waves)[0]),)
         else:
             xp = get_array_module(waves.device)
-
-            return xp.array((), dtype=self._out_dtype(waves)[0])
+            return (xp.array((), dtype=self._out_dtype(waves)[0]),)
 
     def detect(self, waves: Waves) -> ArrayObjectSubclass:
         """
@@ -242,7 +239,7 @@ class AnnularDetector(BaseDetector):
         metadata = super()._out_metadata(array_object)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
-        return metadata
+        return (metadata,)
 
     def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
         if self.inner is not None:
@@ -271,16 +268,20 @@ class AnnularDetector(BaseDetector):
         return ([],)
 
     def _out_ensemble_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
-        ensemble_shape = super()._out_ensemble_shape(waves)
-        return (ensemble_shape[: -len(_scan_shape(waves))],)
+        ensemble_shapes = super()._out_ensemble_shape(waves)
+        if len(_scan_shape(waves)) == 0:
+            raise RuntimeError("annular detector requires a scan axis")
+        return tuple(tuple() for ensemble_shape in ensemble_shapes)
 
     def _out_base_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)
 
-    def _out_dtype(self, array_object) -> tuple[np.dtype.base]:
+    def _out_dtype(self, waves: BaseWaves) -> tuple[np.dtype.base]:
         return (get_dtype(complex=False),)
 
-    def _out_type(self, waves: BaseWaves) -> Type[RealSpaceLineProfiles] | Type[Images]:
+    def _out_type(
+        self, waves: BaseWaves
+    ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images]]:
         return (_scanned_measurement_type(waves),)
 
     def _calculate_new_array(self, waves: Waves):
@@ -326,7 +327,7 @@ class AnnularDetector(BaseDetector):
         -------
         measurement : Images
         """
-        return self._apply(waves)  # noqa
+        return self._apply(waves)
 
     def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
@@ -440,28 +441,30 @@ class _AbstractRadialDetector(BaseDetector):
         return (PolarMeasurements,)
 
     def _out_metadata(self, waves: Waves) -> tuple[dict]:
-        metadata = super()._out_metadata(waves)
+        metadata = super()._out_metadata(waves)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
-        return metadata
+        return (metadata,)
 
     def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata]]:
-        return [
-            LinearAxis(
-                label="Radial scattering angle",
-                offset=self.inner,
-                sampling=self.radial_sampling,
-                _concatenate=False,
-                units="mrad",
-            ),
-            LinearAxis(
-                label="Azimuthal scattering angle",
-                offset=self.rotation,
-                sampling=self.azimuthal_sampling,
-                _concatenate=False,
-                units="rad",
-            ),
-        ]
+        return (
+            [
+                LinearAxis(
+                    label="Radial scattering angle",
+                    offset=self.inner,
+                    sampling=self.radial_sampling,
+                    _concatenate=False,
+                    units="mrad",
+                ),
+                LinearAxis(
+                    label="Azimuthal scattering angle",
+                    offset=self.rotation,
+                    sampling=self.azimuthal_sampling,
+                    _concatenate=False,
+                    units="rad",
+                ),
+            ],
+        )
 
     def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
         if self.inner is not None:
@@ -924,51 +927,55 @@ class PixelatedDetector(BaseDetector):
 
         return sampling, gpts
 
-    def _out_base_shape(self, waves: Waves) -> tuple[int, int]:
-        return self._new_sampling_and_gpts(waves)[1]
+    def _out_base_shape(self, waves: Waves) -> tuple[tuple[int, int]]:
+        return (self._new_sampling_and_gpts(waves)[1],)
 
-    def _out_dtype(self, waves: Waves) -> np.dtype.base:
-        return get_dtype(complex=False)
+    def _out_dtype(self, waves: Waves) -> tuple[np.dtype.base]:
+        return (get_dtype(complex=False),)
 
-    def _out_base_axes_metadata(self, waves: Waves) -> list[AxisMetadata]:
+    def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata]]:
         if self.reciprocal_space:
             sampling, gpts = self._new_sampling_and_gpts(waves)
 
-            return [
-                ReciprocalSpaceAxis(
-                    sampling=sampling[0],
-                    offset=-(gpts[0] // 2) * sampling[0],
-                    label="kx",
-                    units="1/Å",
-                    fftshift=True,
-                    tex_label="$k_x$",
-                ),
-                ReciprocalSpaceAxis(
-                    sampling=sampling[1],
-                    offset=-(gpts[1] // 2) * sampling[1],
-                    label="ky",
-                    units="1/Å",
-                    fftshift=True,
-                    tex_label="$k_y$",
-                ),
-            ]
+            return (
+                [
+                    ReciprocalSpaceAxis(
+                        sampling=sampling[0],
+                        offset=-(gpts[0] // 2) * sampling[0],
+                        label="kx",
+                        units="1/Å",
+                        fftshift=True,
+                        tex_label="$k_x$",
+                    ),
+                    ReciprocalSpaceAxis(
+                        sampling=sampling[1],
+                        offset=-(gpts[1] // 2) * sampling[1],
+                        label="ky",
+                        units="1/Å",
+                        fftshift=True,
+                        tex_label="$k_y$",
+                    ),
+                ],
+            )
         else:
-            return [
-                RealSpaceAxis(label="x", sampling=waves.sampling[0], units="Å"),
-                RealSpaceAxis(label="y", sampling=waves.sampling[1], units="Å"),
-            ]
+            return (
+                [
+                    RealSpaceAxis(label="x", sampling=waves.sampling[0], units="Å"),
+                    RealSpaceAxis(label="y", sampling=waves.sampling[1], units="Å"),
+                ],
+            )
 
-    def _out_type(self, waves: Waves) -> Type[DiffractionPatterns | Images]:
+    def _out_type(self, waves: Waves) -> tuple[Type[DiffractionPatterns | Images]]:
         if self.reciprocal_space:
-            return DiffractionPatterns
+            return (DiffractionPatterns,)
         else:
-            return Images
+            return (Images,)
 
     def _out_metadata(self, waves: Waves) -> tuple[dict]:
         metadata = super()._out_metadata(waves)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
-        return metadata
+        return (metadata,)
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         """
@@ -1036,12 +1043,12 @@ class WavesDetector(BaseDetector):
     def _out_type(self, waves: Waves) -> Type[Waves]:
         from abtem.waves import Waves  # pylint: disable=C0415
 
-        return Waves
+        return (Waves,)
 
     def _out_metadata(self, waves: Waves) -> dict:
         metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
-        return metadata
+        return (metadata,)
 
     def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         waves = waves.ensure_real_space()
