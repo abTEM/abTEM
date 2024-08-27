@@ -6,58 +6,74 @@ import copy
 import json
 import warnings
 from abc import ABCMeta
-from contextlib import nullcontext, contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from numbers import Number
-from typing import TypeVar, Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence, TypeVar
 
 import dask
 import dask.array as da
 import numpy as np
+import toolz
 import zarr
 from dask.array.utils import validate_axis
-from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
+from dask.diagnostics import Profiler, ProgressBar, ResourceProfiler
 
 from abtem._version import __version__
 from abtem.core import config
 from abtem.core.axes import (
-    UnknownAxis,
-    axis_to_dict,
-    axis_from_dict,
-    AxisMetadata,
-    OrdinalAxis,
     AxesMetadataList,
+    AxisMetadata,
     LinearAxis,
+    OrdinalAxis,
+    UnknownAxis,
+    axis_from_dict,
+    axis_to_dict,
 )
 from abtem.core.backend import (
-    get_array_module,
+    check_cupy_is_installed,
     copy_to_device,
     cp,
     device_name_from_array_module,
-    check_cupy_is_installed,
+    get_array_module,
 )
-from abtem.core.chunks import Chunks, validate_chunks, chunk_shape, iterate_chunk_ranges
-from abtem.core.ensemble import (
-    Ensemble,
-    _wrap_with_array,
-    unpack_blockwise_args,
-)
+from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
+from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import (
-    normalize_axes,
     CopyMixin,
-    tuple_range,
     EqualityMixin,
     interleave,
     itemset,
+    normalize_axes,
+    tuple_range,
 )
+from abtem.transform import TransformFromFunc
 
 if TYPE_CHECKING:
     from abtem.transform import ArrayObjectTransform
 
 try:
-    import tifffile
+    import tifffile  # pyright: ignore[reportMissingImports]
 except ImportError:
     tifffile = None
+
+
+try:
+    import hyperspy.api as hs  # pyright: ignore[reportMissingImports]
+except ImportError:
+    hs = None
+
+
+try:
+    import xarray as xr  # pyright: ignore[reportMissingImports]
+except ImportError:
+    xr = None
+
+
+try:
+    from tqdm.dask import TqdmCallback
+except ImportError:
+    TqdmCallback = None
 
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
@@ -192,8 +208,6 @@ def _compute_context(
 
     if progress_bar:
         if progress_bar == "tqdm":
-            from tqdm.dask import TqdmCallback
-
             progress_bar = TqdmCallback(desc="tasks")
         else:
             progress_bar = ProgressBar()
@@ -265,6 +279,95 @@ ArrayObjectSubclass = TypeVar("ArrayObjectSubclass", bound="ArrayObject")
 ArrayObjectSubclassAlt = TypeVar("ArrayObjectSubclassAlt", bound="ArrayObject")
 
 
+def pack_output_func(f, ndim):
+    def pack_output(*args, **kwargs):
+        output = f(*args, **kwargs)
+        arr = np.zeros((1,) * ndim, dtype=object)
+        itemset(arr, 0, output)
+        return arr
+
+    return pack_output
+
+
+def unpack_output(arr, i):
+    arr = arr.item()[i]
+    return arr
+
+
+def multi_value_blockwise(
+    func,
+    out_inds,
+    *args,
+    name=None,
+    token=None,
+    adjust_chunks=None,
+    new_axes=None,
+    align_arrays=True,
+    concatenate=None,
+    metas=None,
+    **kwargs,
+):
+    if new_axes is not None:
+        raise NotImplementedError("new_axes not implemented")
+    
+    new_axes = {}
+
+    if adjust_chunks is None:
+        adjust_chunks = {}
+    
+    if metas is None:
+        metas = tuple(None for _ in out_inds)
+    
+    arginds = [(a, i) for (a, i) in toolz.partition(2, args) if i is not None]
+    default_chunks = {}
+    for arg, ind in arginds:
+        for c, i in zip(arg.chunks, ind):
+            if i not in default_chunks or len(c) > len(default_chunks[i]):
+                default_chunks[i] = c
+
+    # for k, v in new_axes.items():
+    #     if not isinstance(v, tuple):
+    #         v = (v,)
+    #     elif len(v) > 1:
+    #         raise RuntimeError()
+    #     default_chunks[k] = v
+
+    chunkss = tuple(default_chunks.copy() for i in range(len(out_inds)))
+    for i, chunks in enumerate(chunkss):
+        if new_axes is not None:
+            chunks.update(new_axes)
+
+        if adjust_chunks is not None:
+            chunks.update(adjust_chunks[i])
+
+    all_ind = tuple(set(sum(out_inds, ())))
+    packed_func = pack_output_func(func, ndim=len(all_ind))
+
+    arrays = da.blockwise(
+        packed_func,
+        all_ind,
+        *args,
+        name=name,
+        token=token,
+        meta=np.array(()),
+        concatenate=concatenate,
+        align_arrays=align_arrays,
+        **kwargs
+    )
+
+    output = ()
+    for i, (out_ind, meta) in enumerate(zip(out_inds, metas)):
+        chunks = tuple(chunkss[i][j] for j in out_ind)
+        drop_axis = tuple(set(all_ind) - set(out_ind))
+            
+        if any(len(chunkss[axis]) > 1 for axis in drop_axis):
+            raise RuntimeError("Dropping axis with chunks not implemented")
+
+        output += (arrays.map_blocks(unpack_output, i, chunks=chunks, drop_axis=drop_axis, meta=meta),)
+    
+    return output
+
+
 class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     A base class for simulation objects described by an array and associated metadata.
@@ -285,8 +388,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        ensemble_axes_metadata: list[AxisMetadata] | None = None,
+        metadata: dict | None = None,
     ):
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
@@ -368,9 +471,24 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         base_axes = tuple(range(len(self.ensemble_shape), len(self.shape)))
         return len(set(axis).intersection(base_axes)) > 0
 
-    def apply_func(self, func, **kwargs) -> ArrayObjectSubclass:
-        from abtem.transform import TransformFromFunc
+    def apply_func(self, func: callable, **kwargs) -> ArrayObjectSubclass:
+        """
+        Apply a function to the array object. The function must take an array as its first argument,
+        only the array is modified, the metadata is not changed. The function is applied lazily if
+        the array object is lazy.
 
+        Parameters
+        ----------
+        func : callable
+            Function to apply to the array object.
+        kwargs :
+            Additional keyword arguments passed to the function.
+
+        Returns
+        -------
+        array_object : ArrayObject or subclass of ArrayObject
+            The array object with the function applied.
+        """
         transform = TransformFromFunc(func, func_kwargs=kwargs)
         return self.apply_transform(transform)
 
@@ -404,8 +522,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             try:
                 return self.metadata[name]
-            except KeyError:
-                raise RuntimeError(f"Could not resolve metadata for {name}")
+            except KeyError as exc:
+                raise RuntimeError(f"Could not resolve metadata for {name}") from exc
 
     @classmethod
     def from_array_and_metadata(
@@ -801,7 +919,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         elif not isinstance(items, tuple):
             raise NotImplementedError(
-                f"Indices must be integers or slices or a tuple of integers or slices or None, not {type(items).__name__}."
+                (
+                    "Indices must be integers or slices or a tuple of integers or slices or None, "
+                    f"not {type(items).__name__}."
+                )
             )
 
         if keepdims:
@@ -853,7 +974,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         self,
         items: int | tuple[int, ...] | slice,
         keepdims: bool = False,
-    ) -> ArrayObjectSubclass:
+    ) -> dict:
         """
         Index the array and the corresponding axes metadata. Only ensemble axes can be indexed.
 
@@ -998,7 +1119,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def compute(
         self,
-        progress_bar: bool = None,
+        progress_bar: bool | None = None,
         profiler: bool = False,
         resource_profiler: bool = False,
         **kwargs,
@@ -1009,8 +1130,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         progress_bar : bool
-            Display a progress bar in the terminal or notebook during computation. The progress bar is only displayed
-            with a local scheduler.
+            Display a progress bar in the terminal or notebook during computation. The progress bar is only
+            displayed with a local scheduler.
         profiler : bool
             Return Profiler class used to profile Dask's execution at the task level. Only execution with a local
             is profiled.
@@ -1123,24 +1244,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         metadata["type"] = self.__class__.__name__
         return metadata
 
-    def _metadata_to_json_string(self):
-        return json.dumps(self._metadata_to_dict())
-
-    @staticmethod
-    def _metadata_from_json_string(json_string):
-        import abtem
-
-        metadata = json.loads(json_string)
-        cls = getattr(abtem, metadata["type"])
-        del metadata["type"]
-
-        axes_metadata = []
-        for key, axis_metadata in metadata["axes"].items():
-            axes_metadata.append(axis_from_dict(axis_metadata))
-
-        del metadata["axes"]
-        return cls, axes_metadata, metadata
-
     def _metadata_to_json(self):
         metadata = copy.copy(self.metadata)
         metadata["axes"] = {
@@ -1189,6 +1292,24 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """
         return from_zarr(url, chunks=chunks)
 
+    
+    @property
+    def _has_base_chunks(self):
+        if not isinstance(self.array, da.core.Array):
+            return False
+
+        base_chunks = self.array.chunks[-len(self.base_shape) :]
+        return any(len(c) > 1 for c in base_chunks)
+
+    def no_base_chunks(self):
+        """Rechunk to remove chunks across the base dimensions."""
+        if not self._has_base_chunks:
+            return self
+        chunks = self.array.chunks[: -len(self.base_shape)] + (-1,) * len(
+            self.base_shape
+        )
+        return self.rechunk(chunks)
+
     @staticmethod
     def _apply_transform(
         *args,
@@ -1208,33 +1329,16 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         array = transform._calculate_new_array(array_object)
 
-        ensemble_dims = (
-            len(transform.ensemble_shape) + len(array_object.ensemble_shape) + 1
-        )
+        # ensemble_dims = (
+        #     len(transform.ensemble_shape) + len(array_object.ensemble_shape) + 1
+        # )
 
-        if transform._num_outputs > 1:
-            arr = np.zeros((1,) * ensemble_dims, dtype=object)
-            itemset(arr, 0, array)
-            return arr
+        # if transform._num_outputs > 1:
+        #     arr = np.zeros((1,) * ensemble_dims, dtype=object)
+        #     itemset(arr, 0, array)
+        #     return arr
 
         return array
-
-    @property
-    def _has_base_chunks(self):
-        if not isinstance(self.array, da.core.Array):
-            return False
-
-        base_chunks = self.array.chunks[-len(self.base_shape) :]
-        return any(len(c) > 1 for c in base_chunks)
-
-    def no_base_chunks(self):
-        """Rechunk to remove chunks across the base dimensions."""
-        if not self._has_base_chunks:
-            return self
-        chunks = self.array.chunks[: -len(self.base_shape)] + (-1,) * len(
-            self.base_shape
-        )
-        return self.rechunk(chunks)
 
     def apply_transform(
         self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
@@ -1256,7 +1360,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transformed_array_object : ArrayObjectSubclass
             The transformed array object.
         """
-
+        
         if self.is_lazy:
             if not transform._allow_base_chunks and self._has_base_chunks:
                 raise RuntimeError(
@@ -1272,10 +1376,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = validate_chunks(
                 transform.ensemble_shape + self.shape,
                 chunks,
-                limit=max_batch,
+                max_elements=max_batch,
                 dtype=self.dtype,
-            )
-
+            ) 
+            
             assert chunks[len(transform.ensemble_shape) :] == self.array.chunks
 
             transform_chunks = chunks[: len(transform.ensemble_shape)]
@@ -1284,6 +1388,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             transform_args, transform_symbols = transform._get_blockwise_args(
                 transform_chunks
             )
+            array_symbols = tuple_range(len(self.shape), len(transform.ensemble_shape))
 
             axes_args = tuple(
                 axis._to_blocks(
@@ -1299,41 +1404,41 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             array_symbols = tuple_range(len(self.shape), len(transform.ensemble_shape))
 
-            num_ensemble_dims = len(transform._out_ensemble_shape(self))
+            num_ensemble_dims = len(transform._out_ensemble_shape(self)[0])
 
-            base_shape = transform._out_base_shape(self)
+            base_shape = transform._out_base_shape(self)[0]
             symbols = tuple_range(num_ensemble_dims + len(base_shape))
-            chunks = chunks[: -len(base_shape)] + base_shape
-            meta = transform._out_meta(self)
-
+            chunks = chunks[:num_ensemble_dims] + base_shape
+            meta = transform._out_meta(self)[0]
+            
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore", message="Increasing number of chunks."
                 )
-                new_array = da.blockwise(
-                    self._apply_transform,
-                    symbols,
-                    *interleave(transform_args, transform_symbols),
-                    *interleave(axes_args, axes_symbols),
-                    self.array,
-                    array_symbols,
-                    adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                    transform_partial=transform._from_partitioned_args(),
-                    num_transform_args=len(transform_args),  # noqa
-                    array_object_partial=self._from_partitioned_args(),  # noqa
-                    meta=meta,
-                    align_arrays=False,
-                    concatenate=True,
-                )
 
+            new_array = da.blockwise(
+                 self._apply_transform,
+                 symbols,
+                 *interleave(transform_args, transform_symbols),
+                 *interleave(axes_args, axes_symbols),
+                 self.array,
+                 array_symbols,
+                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                 transform_partial=transform._from_partitioned_args(),
+                 num_transform_args=len(transform_args),
+                 array_object_partial=self._from_partitioned_args(),
+                 meta=meta,
+                 align_arrays=False,
+                 concatenate=True,
+            )
             if transform._num_outputs > 1:
                 outputs = transform._pack_multiple_outputs(self, new_array)
                 outputs = ComputableList(outputs)
-
                 return outputs
             else:
                 return transform._pack_single_output(self, new_array)
         else:
+            # TODO: Implement for non-lazy arrays
             return transform.apply(self)
 
     def set_ensemble_axes_metadata(self, axes_metadata: AxisMetadata, axis: int):
@@ -1387,10 +1492,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         This method requires Hyperspy to be installed. You can find more information
         about Hyperspy at https://hyperspy.org.
         """
-
-        try:
-            import hyperspy.api as hs
-        except ImportError:
+        if hs is None:
             raise ImportError(
                 "This functionality of *ab*TEM requires Hyperspy, see https://hyperspy.org."
             )
@@ -1454,9 +1556,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ImportError
             If xarray is not installed.
         """
-        try:
-            import xarray as xr
-        except ImportError:
+        if xr is None:
             raise ImportError(
                 "This functionality of *ab*TEM requires xarray, see https://xarray.dev/."
             )
@@ -1509,8 +1609,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             ensemble_axes_metadata = _wrap_with_array([], 1)
         else:
             chunks = self._validate_ensemble_chunks(chunks)
+            chunk_shape = tuple(len(c) for c in chunks)
 
-            ensemble_axes_metadata = np.zeros(chunk_shape(chunks), dtype=object)
+            ensemble_axes_metadata = np.zeros(chunk_shape, dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
                 new_ensemble_axes_metadata = []
 
@@ -1576,7 +1677,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if len(self.ensemble_shape) == 0:
                 blocks = np.zeros((1,), dtype=object)
             else:
-                blocks = np.zeros(chunk_shape(chunks), dtype=object)
+                chunk_shape = tuple(len(c) for c in chunks)
+                blocks = np.zeros(chunk_shape, dtype=object)
 
             ensemble_axes_metadata = self._partition_ensemble_axes_metadata(
                 chunks, lazy=False
@@ -1682,7 +1784,7 @@ def stack(
     axis: int = 0,
 ) -> ArrayObjectSubclass:
     """
-    Join multiple array objects (e.g. Waves and BaseMeasurement) along a new ensemble axis.
+    Stack multiple array objects (e.g. Waves and BaseMeasurement) along a new ensemble axis.
 
     Parameters
     ----------
@@ -1698,6 +1800,9 @@ def stack(
     array_object : ArrayObject
         The stacked array object of the same type as the input.
     """
+
+    #if not all(isinstance(array, ArrayObjectSubclass) for array in arrays):
+    #    raise ValueError("arrays must be a sequence of array objects.")
 
     assert axis <= len(arrays[0].ensemble_shape)
     assert axis >= 0
@@ -1781,13 +1886,11 @@ def swapaxes(array_object, axis1, axis2):
     )
 
 
-def move_item(lst, from_index, to_index):
-    element = lst.pop(from_index)
-    lst.insert(to_index, element)
-    return lst
-
-
-def moveaxis(array_object, source, destination):
+def moveaxis(
+    array_object: ArrayObjectSubclass,
+    source: tuple[int, ...],
+    destination: tuple[int, ...],
+) -> ArrayObjectSubclass:
     xp = get_array_module(array_object.array)
 
     if array_object.is_lazy:
@@ -1795,67 +1898,12 @@ def moveaxis(array_object, source, destination):
     else:
         array = xp.moveaxis(array_object.array, source, destination)
 
-    cls = array_object.__class__
-
     axes_metadata = copy.copy(array_object.axes_metadata)
 
     for s, d in zip(reversed(source), reversed(destination)):
-        axes_metadata = move_item(axes_metadata, s, d)
+        element = axes_metadata.pop(s)
+        axes_metadata.insert(d, element)
 
-    return cls.from_array_and_metadata(
+    return array_object.__class__.from_array_and_metadata(
         array=array, axes_metadata=axes_metadata, metadata=array_object.metadata
     )
-
-
-def _concatenate_axes_metadata(axes_metadata):
-    if len(axes_metadata) == 0:
-        raise RuntimeError()
-
-    while len(axes_metadata) > 1:
-        axes_metadata = [
-            *axes_metadata[:-2],
-            axes_metadata[-2].concatenate(axes_metadata[-1]),
-        ]
-    return axes_metadata[0]
-
-
-# def _unpack_array_object_blocks(blocks):
-#     new_blocks = np.empty(blocks.shape, dtype=object)
-#     for indices in np.ndindex(blocks.shape):
-#         new_blocks[indices] = blocks[indices].array
-#     return new_blocks
-
-# def _axes_metadata_from_array_object_blocks(blocks):
-#     if blocks.ravel()[0].ensemble_dims == 0:
-#         return []
-
-#     axes_metadata = []
-#     for i, n in enumerate(blocks.shape):
-#         index = tuple(slice(None) if j == i else 0 for j in range(len(blocks.shape)))
-
-#         axes_metadata.append(
-#             _concatenate_axes_metadata(
-#                 [
-#                     block.ensemble_axes_metadata[i]
-#                     for block in blocks[index]
-#                     if len(block.ensemble_axes_metadata)
-#                 ]
-#             )
-#         )
-#     return axes_metadata
-
-# def _concat_array_object_ensemble_blocks(blocks) -> ArrayObject:
-#     array_blocks = _unpack_array_object_blocks(blocks)
-#     concat_array = concatenate_array_blocks(array_blocks)
-#     #concat_axes_metadata = _axes_metadata_from_array_object_blocks(blocks)
-
-#     concat_array_object = ArrayObject(array=concat_array)
-#     #concat_array_object = ArrayObject(array=concat_array, ensemble_axes_metadata=concat_axes_metadata)
-#     return concat_array_object
-
-
-# def _concat_array_object_ensemble_blocks2(blocks) -> ArrayObject:
-#     array_blocks = _unpack_array_object_blocks(blocks)
-#     concat_array = concatenate_array_blocks(array_blocks)
-#     concat_array_object = ArrayObject(array=concat_array)
-#     return concat_array_object

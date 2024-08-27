@@ -818,21 +818,21 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
 
     def __init__(
         self,
-        atoms: Atoms | BaseFrozenPhonons = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        atoms: Atoms | BaseFrozenPhonons | None = None,
+        gpts: int | tuple[int, int] | None = None,
+        sampling: float | tuple[float, float] | None = None,
         slice_thickness: float | tuple[float, ...] = 1,
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
-        exit_planes: int | tuple[int, ...] = None,
+        exit_planes: int | tuple[int, ...] | None = None,
         plane: (
             str | tuple[tuple[float, float, float], tuple[float, float, float]]
         ) = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
-        box: tuple[float, float, float] = None,
+        box: tuple[float, float, float] | None = None,
         periodic: bool = True,
-        integrator: FieldIntegrator = None,
-        device: str = None,
+        integrator: FieldIntegrator | None = None,
+        device: str | None = None,
     ):
         if integrator is None:
             if projection == "finite":
@@ -1287,9 +1287,9 @@ class CrystalPotential(_PotentialBuilder):
         self,
         potential_unit: BasePotential,
         repetitions: tuple[int, int, int],
-        num_frozen_phonons: int = None,
-        exit_planes: int = None,
-        seeds: int | tuple[int, ...] = None,
+        num_frozen_phonons: int | None = None,
+        exit_planes: int | None = None,
+        seeds: int | tuple[int, ...] | None = None,
     ):
         if num_frozen_phonons is None and seeds is None:
             self._seeds = None

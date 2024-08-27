@@ -1,4 +1,7 @@
+"""Module for determining chunk sizes of Dask arrays."""
+
 from __future__ import annotations
+
 import itertools
 from functools import reduce
 from itertools import accumulate
@@ -10,21 +13,49 @@ from dask.utils import parse_bytes
 
 from abtem.core import config
 
+Chunks = Union[int, str, tuple[Union[int, str, tuple[int, ...]], ...]]
+ValidatedChunks = tuple[tuple[int, ...], ...]
 
-def chunk_ranges(chunks):
+
+def chunk_ranges(chunks: ValidatedChunks) -> tuple[tuple[tuple[int, int], ...], ...]:
+    """
+    Get the start and end indices for each chunk.
+
+    Parameters
+    ----------
+    chunks : tuple of tuple of int
+        The chunk sizes of the Dask array.
+
+    Returns
+    -------
+    tuple of tuple of tuple of two int
+        The range of indices for each chunk.
+    """
     return tuple(
         tuple((cumchunks - cc, cumchunks) for cc, cumchunks in zip(c, accumulate(c)))
         for c in chunks
     )
 
 
-def chunk_shape(chunks):
-    return tuple(len(c) for c in chunks)
+def iterate_chunk_ranges(chunks: ValidatedChunks):
+    """
+    Iterate over the chunk ranges.
 
+    Parameters
+    ----------
+    chunks : tuple of tuple of int
+        The chunk sizes of the Dask array.
 
-def iterate_chunk_ranges(chunks):
+    Yields
+    ------
+    block_indices : tuple of int
+        The indices of the current block.
+    slices : tuple of slice
+        The slices indexing the current block.
+    """
+    chunk_shape = tuple(len(c) for c in chunks)
     for block_indices, chunk_range in zip(
-        itertools.product(*(range(n) for n in chunk_shape(chunks))),
+        itertools.product(*(range(n) for n in chunk_shape)),
         itertools.product(*chunk_ranges(chunks)),
     ):
         slic = tuple(slice(*cr) for cr in chunk_range)
@@ -32,41 +63,56 @@ def iterate_chunk_ranges(chunks):
         yield block_indices, slic
 
 
-def config_chunk_size(device):
-    if device == "gpu":
-        return parse_bytes(config.get("dask.chunk-size-gpu"))
-
-    elif device != "cpu":
-        raise RuntimeError("Unknown device")
-
-    return parse_bytes(config.get("dask.chunk-size"))
-
-
-Chunks = Union[int, str, tuple[Union[int, str, tuple[int, ...]], ...]]
-ValidatedChunks = tuple[tuple[int, ...], ...]
-
-
 def validate_chunks(
     shape: tuple[int, ...],
     chunks: Chunks,
-    limit: int | str = "auto",
+    max_elements: int | str = "auto",
     dtype: np.dtype.base = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
+    """
+    Validate the chunks for a Dask array based on the shape and a maximum number of elements.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The shape of the array.
+    chunks : int or tuple of int or str
+        The chunk sizes of the Dask array. If an integer, the array will be split into equal chunks. If a tuple, the
+        array will be split into the specified chunks. If "auto", the chunks will be determined automatically based
+        on the shape and the maximum number of elements.
+    max_elements : int or str
+        The maximum number of elements in a chunk. If "auto", the maximum number of elements will be determined based
+        on the maximum number of bytes per chunk and the dtype.
+    dtype : np.dtype
+        The dtype of the array.
+    device : str
+        The device the array will be stored on.
+
+    Returns
+    -------
+    tuple of tuple of int
+        The chunk sizes of the Dask array.
+    """
+    if isinstance(chunks, tuple):
+        if not len(shape) == len(chunks):
+
+            raise ValueError(f"length of shape: {shape} does not match chunks {chunks}")
+
     if chunks == -1:
         return validate_chunks(shape, shape)
 
     if isinstance(chunks, int):
-        limit = chunks
+        max_elements = chunks
         chunks = ("auto",) * len(shape)
-        return auto_chunks(shape, chunks, limit, dtype=dtype, device=device)
+        return _auto_chunks(shape, chunks, max_elements, dtype=dtype, device=device)
 
     if all(isinstance(c, tuple) for c in chunks):
         assert len(shape) == len(chunks)
         return chunks
 
     if any(isinstance(c, str) for c in chunks):
-        return auto_chunks(shape, chunks, limit, dtype=dtype, device=device)
+        return _auto_chunks(shape, chunks, max_elements, dtype=dtype, device=device)
 
     if len(shape) == 1 and len(chunks) != len(shape):
         assert sum(chunks) == shape[0]
@@ -87,30 +133,66 @@ def validate_chunks(
                 validated_chunks += ((c,) * (s // c),)
         else:
             raise RuntimeError()
-
+    
     assert tuple(sum(c) for c in validated_chunks) == shape
 
     return validated_chunks
 
 
-def auto_chunks(
+def _auto_chunks(
     shape: tuple[int, ...],
     chunks: Chunks,
-    limit: str | int = "auto",
+    max_elements: str | int = "auto",
     dtype: np.dtype.base = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
-    if limit == "auto":
+    """
+    Automatically determine the chunks for a Dask array based on the shape and a maximum number of elements.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The shape of the array.
+    chunks : int or tuple of int or str
+        The chunk sizes of the Dask array. If an integer, the array will be split into equal chunks. If a tuple, the
+        array will be split into the specified chunks. If "auto", the chunks will be determined automatically based
+        on the shape and the maximum number of elements.
+    max_elements : int or str
+        The maximum number of elements in a chunk. If "auto", the maximum number of elements will be determined based
+        on the maximum number of bytes per chunk and the dtype.
+    dtype : np.dtype
+        The dtype of the array.
+    device : str
+        The device the array will be stored on.
+
+    Returns
+    -------
+    tuple of tuple of int
+        The chunk sizes of the Dask array.
+    """
+    if not len(shape) == len(chunks):
+        raise ValueError("shape and chunks must have the same length")
+
+    if max_elements == "auto":
+        if device == "gpu":
+            chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu"))
+        elif device == "cpu":
+            chunk_bytes = parse_bytes(config.get("dask.chunk-size"))
+        else:
+            raise RuntimeError(f"Unknown device: {device}")
+
         if dtype is None:
-            raise ValueError("auto selecting chunk limits requires dtype")
+            raise ValueError("auto selecting chunk sizes requires dtype")
 
-        limit = int(np.floor(config_chunk_size(device)) / np.dtype(dtype).itemsize)
+        max_elements = int(np.floor(chunk_bytes) / np.dtype(dtype).itemsize)
 
-    elif isinstance(limit, str):
-        limit = int(np.floor(parse_bytes(limit) / np.dtype(dtype).itemsize))
+    elif isinstance(max_elements, str):
+        max_elements = int(
+            np.floor(parse_bytes(max_elements) / np.dtype(dtype).itemsize)
+        )
 
-    elif not isinstance(limit, int):
-        raise ValueError
+    elif not isinstance(max_elements, int):
+        raise ValueError("limit must be an integer or a string")
 
     normalized_chunks = tuple(s if c == -1 else c for s, c in zip(shape, chunks))
 
@@ -149,7 +231,7 @@ def auto_chunks(
 
         total = reduce(mul, current_chunks)
 
-        if total > limit:
+        if total > max_elements:
             current_chunks[autodims[j]] -= 1
             break
 
@@ -165,8 +247,7 @@ def auto_chunks(
         else:
             chunks += (c,)
 
-    # current_chunks = tuple(current_chunks)
-    chunks = validate_chunks(shape, chunks, limit, dtype)
+    chunks = validate_chunks(shape, chunks, max_elements, dtype)
     return chunks
 
 

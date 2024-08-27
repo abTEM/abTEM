@@ -15,7 +15,7 @@ import numpy as np
 from ase import Atom
 from ase.cell import Cell
 from matplotlib.axes import Axes
-from numba import jit, prange
+from numba import jit, prange  # type: ignore
 
 from abtem.array import ArrayObject, stack
 from abtem.core import config
@@ -56,6 +56,16 @@ else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None
 
+try:
+    import xarray as xr
+except ImportError:
+    xr = None
+
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
@@ -87,7 +97,7 @@ def _bin_extent(n):
 def _reduced_scanned_images_or_line_profiles(
     new_array: np.ndarray,
     old_measurement: BaseMeasurements,
-    metadata: dict = None,
+    metadata: dict | None = None,
 ) -> RealSpaceLineProfiles | Images | MeasurementsEnsemble | np.ndarray:
     if metadata is None:
         metadata = {}
@@ -163,17 +173,17 @@ def _scan_axes(measurement):
     return scan_axes
 
 
-def _scan_sampling(measurements: BaseMeasurements) -> tuple[float, ...]:
+def _scan_sampling(measurements: BaseMeasurements | BaseWaves) -> tuple[float, ...]:
     return tuple(
         measurements.axes_metadata[i].sampling for i in _scan_axes(measurements)
     )
 
 
-def _scan_axes_metadata(measurements: BaseMeasurements) -> list[AxisMetadata]:
+def _scan_axes_metadata(measurements: BaseMeasurements | BaseWaves) -> list[AxisMetadata]:
     return [measurements.axes_metadata[i] for i in _scan_axes(measurements)]
 
 
-def _scan_shape(measurements: BaseMeasurements) -> tuple[int, ...]:
+def _scan_shape(measurements: BaseMeasurements | BaseWaves) -> tuple[int, ...]:
     return tuple(measurements.shape[i] for i in _scan_axes(measurements))
 
 
@@ -335,7 +345,6 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     @abstractmethod
     def base_axes_metadata(self) -> list:
         """List of AxisMetadata of the base axes."""
-        pass
 
     @property
     def metadata(self) -> dict:
@@ -388,7 +397,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
     def relative_difference(
         self, other: BaseMeasurements, min_relative_tol: float = 0.0
-    ) -> BaseMeasurementsSubclass:
+    ) -> BaseMeasurements:
         """
         Calculates the relative difference with respect to another compatible measurement.
 
@@ -556,33 +565,46 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     @abstractmethod
     def show(self, *args, **kwargs):
         """Documented in subclasses"""
-        pass
 
 
-def periodic_crop(array, corners, new_shape: tuple[int, int]) -> np.ndarray:
+def periodic_crop(
+    array: np.ndarray, corner: tuple[float, float], new_shape: tuple[int, int]
+) -> np.ndarray:
+    """
+    Crop an array with periodic boundary conditions. The cropping region is wrapped around the array.
+
+    Parameters
+    ----------
+    array : ndarray
+        The array to crop.
+    corner : two floats
+        The corner of the cropping region.
+    new_shape : two ints
+        The shape of the cropping region.
+
+    Returns
+    -------
+    cropped_array : ndarray
+        The cropped array.
+    """
+
     xp = get_array_module(array)
 
     if (
-        (corners[0] > 0)
-        & (corners[1] > 0)
-        & (corners[0] + new_shape[0] < array.shape[-2])
-        & (corners[1] + new_shape[1] < array.shape[-1])
+        (corner[0] > 0)
+        & (corner[1] > 0)
+        & (corner[0] + new_shape[0] < array.shape[-2])
+        & (corner[1] + new_shape[1] < array.shape[-1])
     ):
         array = array[
             ...,
-            corners[0] : corners[0] + new_shape[0],
-            corners[1] : corners[1] + new_shape[1],
+            corner[0] : corner[0] + new_shape[0],
+            corner[1] : corner[1] + new_shape[1],
         ]
         return array
 
-    x = (
-        xp.arange(corners[0], corners[0] + new_shape[0], dtype=xp.int64)
-        % array.shape[-2]
-    )
-    y = (
-        xp.arange(corners[1], corners[1] + new_shape[1], dtype=xp.int64)
-        % array.shape[-1]
-    )
+    x = xp.arange(corner[0], corner[0] + new_shape[0], dtype=xp.int64) % array.shape[-2]
+    y = xp.arange(corner[1], corner[1] + new_shape[1], dtype=xp.int64) % array.shape[-1]
 
     x, y = xp.meshgrid(x, y, indexing="ij")
     array = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + new_shape)
@@ -698,7 +720,7 @@ class MeasurementsEnsemble(BaseMeasurements):
         self,
         array: np.ndarray,
         ensemble_axes_metadata: list[AxisMetadata],
-        metadata: dict = None,
+        metadata: dict | None = None,
     ):
         super().__init__(
             array=array,
@@ -768,7 +790,6 @@ class MeasurementsEnsemble(BaseMeasurements):
         -------
         measurement_visualization_2d : VisualizationImshow
         """
-        pass
         # if not interact:
         #     self.compute()
 
@@ -870,7 +891,6 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         Sampling of the measurements in `x` and `y` [Å] or [1/Å].
         """
-        pass
 
     @property
     @abstractmethod
@@ -878,7 +898,6 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         Extent of measurements in `x` and `y` [Å] or [1/Å].
         """
-        pass
 
     @property
     @abstractmethod
@@ -886,14 +905,13 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         The offset of the origin of the measurement coordinates [Å] or [1/Å].
         """
-        pass
 
     def interpolate_line(
         self,
-        start: tuple[float, float] | Atom = None,
-        end: tuple[float, float] | Atom = None,
-        sampling: float = None,
-        gpts: int = None,
+        start: tuple[float, float] | Atom | None = None,
+        end: tuple[float, float] | Atom | None = None,
+        sampling: float | None = None,
+        gpts: int | None = None,
         width: float = 0.0,
         margin: float = 0.0,
         order: int = 3,
@@ -1349,7 +1367,23 @@ class Images(_BaseMeasurement2D):
             ),
         ]
 
-    def integrate_disc(self, position: np.ndarray, radius: float):
+    def integrate_disc(self, position: np.ndarray, radius: float) -> float:
+        """
+        Integrate the values of the images on a disc-shaped region.
+
+        Parameters
+        ----------
+        position : two floats
+            Center of disc-shaped integration region [Å].
+        radius : float
+            Radius of disc-shaped integration region [Å].
+
+        Returns
+        -------
+        float
+            Integral value.
+        """
+
         return integrate_disc(self, position=position, radius=radius)
 
     def integrate_gradient(self):
@@ -2256,7 +2290,6 @@ def _diffraction_pattern_resampling_gpts(
     gpts: tuple[int, int] = None,
     adjust_sampling: bool = True,
 ):
-
     if gpts is None:
         if sampling == "uniform":
             sampling = (max(old_sampling),) * 2
@@ -2627,6 +2660,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def sampling(self) -> tuple[float, float]:
+        """Sampling of diffraction patterns in `x` and `y` [1 / Å]."""
         return self._sampling
 
     @property
@@ -2650,6 +2684,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @property
     def max_frequency(self):
+        """Maximum spatial frequency in `x` and `y` [1 / Å]."""
         return abs(self.limits[0][1]), abs(self.limits[1][1])
 
     @property
@@ -3331,15 +3366,15 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     @staticmethod
     def _azimuthal_average(
-            array,
-            angular_coordinates,
-            max_angle,
-            radial_sampling,
-            weighting_function,
-            width,
+        array,
+        angular_coordinates,
+        max_angle,
+        radial_sampling,
+        weighting_function,
+        width,
     ):
         x, y = np.meshgrid(*angular_coordinates, indexing="ij")
-        r = np.sqrt(x ** 2 + y ** 2)
+        r = np.sqrt(x**2 + y**2)
 
         centers = np.arange(0, max_angle, radial_sampling)
 
@@ -3348,7 +3383,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             if weighting_function == "step":
                 mask = np.abs(r - center) < width
             elif weighting_function == "gaussian":
-                mask = np.exp(-((r - center) ** 2) / (width ** 2 / 2))
+                mask = np.exp(-((r - center) ** 2) / (width**2 / 2))
             else:
                 raise ValueError()
 
@@ -4024,7 +4059,6 @@ class PolarMeasurements(BaseMeasurements):
 
 @jit(nopython=True, nogil=True, fastmath=True)
 def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
-
     k_max = 0.0
     for i in range(len(hkl)):
         lengths = (
@@ -4044,10 +4078,9 @@ def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
     return np.sqrt(k_max)
 
 
-@jit(nopython=True, nogil=True, fastmath=True, parallel=True)
+# @jit(nopython=True, nogil=True)
 def _reciprocal_lattice_vector_lengths(max_lengths, hkl, reciprocal_lattice_vectors):
-
-    for i in prange(len(hkl)):  # pylint: disable=not-an-iterable
+    for i in range(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = np.sqrt(
             (
                 (
@@ -4070,10 +4103,9 @@ def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
     )
 
 
-@jit(nopython=True, nogil=True, fastmath=True, parallel=True)
-def reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
-
-    for i in prange(len(hkl)):
+@jit(nopython=True, nogil=True)
+def _reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
+    for i in range(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = (
             (
                 hkl[i, 0] * reciprocal_lattice_vectors[..., 0, :]
@@ -4083,10 +4115,12 @@ def reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max)
             ** 2
         ).sum(-1)
 
-        if hasattr(lengths, "__len__"):
-            mask[i] = np.any(lengths < k_max**2)
+        new_mask = lengths < k_max**2
+
+        if isinstance(new_mask, bool):
+            mask[i] = new_mask
         else:
-            mask[i] = lengths < k_max**2
+            mask[i] = new_mask.any()
 
     return mask
 
@@ -4124,7 +4158,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         if isinstance(reciprocal_lattice_vectors, Cell):
             reciprocal_lattice_vectors = np.array(reciprocal_lattice_vectors)
 
@@ -4285,7 +4318,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         split_every: int = 2,
         **kwargs,
     ):
-
         reciprocal_lattice_vectors = getattr(np, reduction_func)(
             self.reciprocal_lattice_vectors, axis=axes, keepdims=keepdims
         )
@@ -4399,7 +4431,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         mask = np.zeros(len(self.miller_indices), dtype=bool)
 
-        mask = reciprocal_lattice_vector_mask(
+        mask = _reciprocal_lattice_vector_mask(
             mask,
             self.miller_indices.astype(self.reciprocal_lattice_vectors.dtype),
             self.reciprocal_lattice_vectors,
@@ -4455,23 +4487,22 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         -------
         data_array_of_indexed_spots : xarray.DataArray
         """
-        import xarray
+        if xr is None:
+            raise RuntimeError("xarray is required to convert to DataArray.")
 
         coords = []
         for axes_metadata, n in zip(self.ensemble_axes_metadata, self.ensemble_shape):
             new_coords = list(axes_metadata.coordinates(n))
-            new_coords = xarray.DataArray(
-                new_coords, attrs={"units": axes_metadata.units}
-            )
+            new_coords = xr.DataArray(new_coords, attrs={"units": axes_metadata.units})
             coords.append(new_coords)
 
-        coords.append(["{} {} {}".format(*hkl) for hkl in self.miller_indices])
+        coords.append([f"{h} {k} {l}" for h, k, l in self.miller_indices])
 
         dims = [
             axes_metadata.label for axes_metadata in self.ensemble_axes_metadata
         ] + ["hkl"]
 
-        data = xarray.DataArray(
+        data = xr.DataArray(
             self.array,
             coords=coords,
             dims=dims,
@@ -4489,7 +4520,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         return data
 
     def _miller_indices_to_string(self):
-        return ["{} {} {}".format(*hkl) for hkl in self.miller_indices]
+        return [f"{h} {k} {l}" for h, k, l in self.miller_indices]
 
     def to_dataframe(self):
         """
@@ -4498,8 +4529,10 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         Returns
         -------
         data_frame : pd.DataFrame
+
         """
-        import pandas as pd
+        if pd is None:
+            raise RuntimeError("pandas is required to convert to DataFrame.")
 
         if self.ensemble_shape:
             if len(self.ensemble_shape) > 1:

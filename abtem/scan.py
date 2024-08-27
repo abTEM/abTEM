@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union, Sequence, Tuple, Optional
 
 import dask.array as da
 import numpy as np
@@ -12,15 +12,14 @@ from ase import Atom, Atoms
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
-from abtem.array import ArrayObject, ArrayObjectSubclass
+from abtem.array import ArrayObject
 from abtem.core.axes import ScanAxis, PositionsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import itemset
-from abtem.measurements import _scan_axes
+from abtem.core.utils import itemset, get_dtype
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
@@ -31,7 +30,10 @@ if TYPE_CHECKING:
     from abtem.prism.s_matrix import BaseSMatrix
 
 
-def _validate_scan(scan: np.ndarray | BaseScan, probe: Probe = None) -> BaseScan:
+ScanWithSampling = Union["LineScan", "GridScan"]
+
+
+def _validate_scan(scan: np.ndarray | BaseScan, probe: Probe | None = None) -> BaseScan:
     if scan is None and probe is None:
         scan = CustomScan(np.zeros((1, 2)), squeeze=True)
     elif scan is None:
@@ -47,7 +49,7 @@ def _validate_scan(scan: np.ndarray | BaseScan, probe: Probe = None) -> BaseScan
     return scan
 
 
-def _validate_scan_sampling(scan: BaseScan, probe: Probe):
+def _validate_scan_sampling(scan: ScanWithSampling, probe: Probe | BaseSMatrix):
     if scan.sampling is None:
         if not hasattr(probe, "semiangle_cutoff"):
             raise ValueError()
@@ -131,7 +133,7 @@ class BaseScan(ReciprocalSpaceMultiplication):
             return xp.ones(waves.gpts, dtype=xp.complex64)
 
         positions = xp.asarray(positions) / xp.asarray(waves.sampling).astype(
-            np.float32
+            get_dtype(complex=False)
         )
 
         kernel = fft_shift_kernel(positions, shape=waves.gpts)
@@ -207,12 +209,14 @@ class CustomScan(BaseScan):
     Parameters
     ----------
     positions : np.ndarray, optional
-        Scan positions [Å]. Anything that can be converted to an ndarray of shape (n, 3) is accepted. Default is
+        Scan positions [Å]. Anything that can be converted to a ndarray of shape (n, 3) is accepted. Default is
         (0., 0.).
     """
 
-    def __init__(self, positions: np.ndarray = (0.0, 0.0), squeeze: bool = False):
-        positions = np.array(positions, dtype=np.float32)
+    def __init__(
+        self, positions: np.ndarray | Sequence = (0.0, 0.0), squeeze: bool = False
+    ):
+        positions = np.array(positions, dtype=get_dtype(complex=False))
 
         if len(positions.shape) == 1:
             positions = positions[None]
@@ -233,7 +237,9 @@ class CustomScan(BaseScan):
         """
         if len(self.positions) == 0:
             probe.grid.check_is_defined()
-            self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.0
+            self._positions = (
+                np.array(probe.extent, dtype=get_dtype(complex=False))[None] / 2.0
+            )
 
     @property
     def ensemble_axes_metadata(self):
@@ -271,7 +277,11 @@ class CustomScan(BaseScan):
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            itemset(positions, i, {"positions": self._positions[start_chunk : start_chunk + chunk]})
+            itemset(
+                positions,
+                i,
+                {"positions": self._positions[start_chunk : start_chunk + chunk]},
+            )
 
         if lazy:
             positions = da.from_array(positions, chunks=1)
@@ -321,18 +331,34 @@ class CustomScan(BaseScan):
         return self._positions
 
 
+def _duplicate_as_tuple(value: float | int, n: int) -> tuple[float, ...]:
+    return (value,) * n
+
+
 def _validate_coordinate(
-    coordinate: tuple[float, float] | Atom,
-    potential: BasePotential | Atoms = None,
+    coordinate: float | tuple[float, float] | Atom | None,
+    potential: BasePotential | Atoms | None = None,
     fractional: bool = False,
-) -> tuple[float, float]:
+) -> tuple[float, float] | None:
+
     if isinstance(coordinate, Atom):
         if fractional:
             raise ValueError()
-
         coordinate = coordinate.x, coordinate.y
-
+    elif isinstance(coordinate, (int, float)):
+        coordinate = (float(coordinate), float(coordinate))
+    elif isinstance(coordinate, (tuple, list, np.ndarray)):
+        assert len(coordinate) == 2
+        coordinate = (float(coordinate[0]), float(coordinate[1]))
+    elif coordinate is None:
+        return None
+    else:
+        raise ValueError("coordinate must be a float or a tuple of two floats")
+    
     if fractional:
+        assert potential is not None
+        assert coordinate is not None
+
         potential = _validate_potential(potential)
 
         if isinstance(potential, BasePotential):
@@ -348,19 +374,21 @@ def _validate_coordinate(
             extent[0] * coordinate[0],
             extent[1] * coordinate[1],
         )
-
-    coordinate = coordinate if coordinate is None else tuple(coordinate)
-
-    return coordinate
+        return coordinate
+    else:
+        assert coordinate is not None
+        coordinate = (coordinate[0], coordinate[1])
+        return coordinate
 
 
 def _validate_coordinates(
-    start: tuple[float, float] | Atom,
-    end: tuple[float, float] | Atom,
-    potential: BasePotential | Atoms,
+    start: float | tuple[float, float] | Atom | None,
+    end: float | tuple[float, float] | Atom | None,
+    potential: BasePotential | Atoms | None,
     fractional: bool,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     if fractional:
+        assert potential is not None
         potential = _validate_potential(potential)
 
     start = _validate_coordinate(start, potential, fractional)
@@ -400,12 +428,12 @@ class LineScan(BaseScan):
     def __init__(
         self,
         start: tuple[float, float] | Atom = (0.0, 0.0),
-        end: tuple[float, float] | Atom = None,
-        gpts: int = None,
-        sampling: float = None,
+        end: tuple[float, float] | Atom | None = None,
+        gpts: int | None = None,
+        sampling: float | None = None,
         endpoint: bool = True,
         fractional: bool = False,
-        potential: BasePotential | Atoms = None,
+        potential: BasePotential | Atoms | None = None,
     ):
         self._gpts = gpts
         self._sampling = sampling
@@ -441,13 +469,18 @@ class LineScan(BaseScan):
         margin : float or tuple of float
             The margin added to the start and end of the linescan [Å]. If float the same margin is added.
         """
-        if not np.isscalar(margin):
-            margin = (margin,) * 2
+        if np.isscalar(margin):
+            validated_margin = (margin, margin)
+        elif isinstance(margin, tuple):
+            assert len(margin) == 2
+            validated_margin = margin
+        else:
+            raise ValueError("margin must be a float or a tuple of two floats")
 
         direction = self.direction
 
-        self.start = tuple(np.array(self.start) - direction * margin[0])
-        self.end = tuple(np.array(self.end) + direction * margin[1])
+        self.start = tuple(np.array(self.start) - direction * validated_margin[0])
+        self.end = tuple(np.array(self.end) + direction * validated_margin[1])
         return self
 
     @classmethod
@@ -456,8 +489,8 @@ class LineScan(BaseScan):
         center: tuple[float, float] | Atom,
         extent: float = 1.0,
         angle: float = 0.0,
-        gpts: int = None,
-        sampling: float = None,
+        gpts: int | None = None,
+        sampling: float | None = None,
         endpoint: bool = True,
     ):
         """
@@ -488,8 +521,14 @@ class LineScan(BaseScan):
 
         direction = np.array((np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))))
 
-        start = tuple(np.array(center) - extent / 2 * direction)
-        end = tuple(np.array(center) + extent / 2 * direction)
+        start = (
+            center[0] - extent / 2 * direction[0],
+            center[1] - extent / 2 * direction[1],
+        )
+        end = (
+            center[0] + extent / 2 * direction[0],
+            center[1] + extent / 2 * direction[1],
+        )
 
         return cls(
             start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
@@ -519,7 +558,10 @@ class LineScan(BaseScan):
         if self._start is None or self._end is None:
             return None
 
-        return np.linalg.norm(np.array(self._end) - np.array(self._start))
+        difference = np.array(self._end) - np.array(self._start)
+        extent = np.linalg.norm(difference)
+        assert isinstance(extent, (float | type(None)))
+        return extent
 
     def _adjust_gpts(self):
         if self.extent is None or self.sampling is None:
@@ -544,11 +586,13 @@ class LineScan(BaseScan):
         return self._endpoint
 
     @property
-    def limits(self) -> tuple[tuple[float, float], tuple[float, float]]:
+    def limits(
+        self,
+    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
         return self.start, self.end
 
     @property
-    def gpts(self) -> int:
+    def gpts(self) -> int | None:
         """Number of grid points."""
         return self._gpts
 
@@ -558,7 +602,7 @@ class LineScan(BaseScan):
         self._adjust_sampling()
 
     @property
-    def sampling(self) -> float:
+    def sampling(self) -> float | None:
         """Grid sampling [Å]."""
         return self._sampling
 
@@ -569,7 +613,9 @@ class LineScan(BaseScan):
 
     @property
     def shape(self) -> tuple[int]:
-        return (self._gpts,)
+        if self.gpts is None:
+            raise RuntimeError("gpts is not defined")
+        return (self.gpts,)
 
     @property
     def metadata(self):
@@ -606,6 +652,7 @@ class LineScan(BaseScan):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        assert self.sampling is not None
         return [
             ScanAxis(
                 label="r",
@@ -620,21 +667,19 @@ class LineScan(BaseScan):
     def ensemble_shape(self):
         return self.shape
 
-    def _out_ensemble_shape(
-        self, array_object: ArrayObject, index: int = 0
-    ) -> tuple[int, ...]:
-        return self.ensemble_shape + array_object.ensemble_shape
+    def _out_ensemble_shape(self, array_object: ArrayObject) -> tuple[tuple[int, ...]]:
+        return (self.ensemble_shape + array_object.ensemble_shape,)
 
-    def _out_ensemble_axes_metadata(
-        self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
-    ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
-        ensemble_axes_metadata = self.ensemble_axes_metadata
-
-        if len(_scan_axes(array_object)) > 0:
-            for axis in ensemble_axes_metadata:
-                axis._main = False
-
-        return [*ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
+    # def _out_ensemble_axes_metadata(
+    #    self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
+    # ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
+    #    ensemble_axes_metadata = self.ensemble_axes_metadata
+    #    #
+    #    if len(_scan_axes(array_object)) > 0:
+    #        for axis in ensemble_axes_metadata:
+    #            axis._main = False
+    #
+    #    return [*ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
     @property
     def _default_ensemble_chunks(self):
@@ -644,7 +689,7 @@ class LineScan(BaseScan):
         raise NotImplementedError
 
     @staticmethod
-    def _from_partitioned_args_func(*args, **kwargs):
+    def _from_partitioned_args_func(*args):
         args = unpack_blockwise_args(args)
         line_scan = args[0]
         return _wrap_with_array(line_scan)
@@ -685,20 +730,26 @@ class LineScan(BaseScan):
 
         return (blocks,)
 
-    def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
+    def get_positions(self, chunks: int | None = None, lazy: bool = False) -> np.ndarray:
+        if self.gpts is None:
+            raise RuntimeError("gpts is not defined")   
+        
+        if self.start is None or self.end is None:
+            raise RuntimeError("start and end is not defined")
+
         x = np.linspace(
             self.start[0],
             self.end[0],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=np.float32,
+            dtype=get_dtype(complex=False),
         )
         y = np.linspace(
             self.start[1],
             self.end[1],
             self.gpts,
             endpoint=self.endpoint,
-            dtype=np.float32,
+            dtype=get_dtype(complex=False),
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
@@ -715,16 +766,20 @@ class LineScan(BaseScan):
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-
+        assert isinstance(self.start, tuple)
+        assert isinstance(self.end, tuple)
+        assert isinstance(self.extent, float)
+        
         if width:
-            rect = Rectangle(
-                tuple(self.start), self.extent, width, angle=self.angle, **kwargs
-            )
+            rect = Rectangle(self.start, self.extent, width, angle=self.angle, **kwargs)
             ax.add_patch(rect)
         else:
             ax.plot(
                 [self.start[0], self.end[0]], [self.start[1], self.end[1]], **kwargs
             )
+
+
+
 
 
 class GridScan(HasGridMixin, BaseScan):
@@ -753,24 +808,33 @@ class GridScan(HasGridMixin, BaseScan):
 
     def __init__(
         self,
-        start: tuple[float, float] | Atom = (0.0, 0.0),
-        end: tuple[float, float] | Atom = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        start: Union[float, Tuple[float, float], Atom] = (0.0, 0.0),
+        end: tuple[float, float] | Atom | None = None,
+        gpts: int | tuple[int, int] | None = None,
+        sampling: float | tuple[float, float] | None = None,
         endpoint: bool | tuple[bool, bool] = False,
         fractional: bool = False,
-        potential: BasePotential | Atoms = None,
+        potential: BasePotential | Atoms | None = None,
     ):
         super().__init__()
 
         start, end = _validate_coordinates(start, end, potential, fractional)
 
-        if start is not None:
-            if np.isscalar(start):
-                start = (start,) * 2
-
-            start = tuple(map(float, start))
+        if isinstance(start, (int, float)):
+            start = (float(start), float(start))
+        elif isinstance(start, (tuple, list, np.ndarray)):
             assert len(start) == 2
+            start = (float(start[0]), float(start[1]))
+        else:
+            raise ValueError("start must be a float or a tuple of two floats")
+        
+            #    assert len(start) == 2
+            #    validated_start = start
+            #else:
+            #    raise ValueError("start must be a float or a tuple of two floats")
+            #
+            #start = tuple(map(float, start))
+            #assert len(start) == 2
 
         if end is not None:
             if np.isscalar(end):
@@ -788,7 +852,7 @@ class GridScan(HasGridMixin, BaseScan):
         self._start = start
         self._end = end
         self._grid = Grid(
-            extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
+             extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
         )
 
     def __len__(self):
@@ -801,10 +865,12 @@ class GridScan(HasGridMixin, BaseScan):
     @property
     def endpoint(self) -> tuple[bool, bool]:
         """True if the scan endpoint is the last position. Otherwise, the endpoint is not included."""
+        assert len(self.grid.endpoint) == 2
         return self.grid.endpoint
 
     @property
     def shape(self) -> tuple[int, int]:
+        assert len(self.gpts) == 2
         return self.gpts
 
     @property
@@ -857,7 +923,7 @@ class GridScan(HasGridMixin, BaseScan):
             self.end[0],
             self.gpts[0],
             endpoint=self.endpoint[0],
-            dtype=np.float32,
+            dtype=get_dtype(complex=False),
         )
 
     def _y_coordinates(self):
@@ -866,7 +932,7 @@ class GridScan(HasGridMixin, BaseScan):
             self.end[1],
             self.gpts[1],
             endpoint=self.endpoint[1],
-            dtype=np.float32,
+            dtype=get_dtype(complex=False),
         )
 
     def get_positions(self) -> np.ndarray:
@@ -875,7 +941,9 @@ class GridScan(HasGridMixin, BaseScan):
             self.start, self.end, self.gpts, self.endpoint
         ):
             xi.append(
-                np.linspace(start, end, gpts, endpoint=endpoint, dtype=np.float32)
+                np.linspace(
+                    start, end, gpts, endpoint=endpoint, dtype=get_dtype(complex=False)
+                )
             )
 
         if len(xi) == 1:
@@ -936,16 +1004,16 @@ class GridScan(HasGridMixin, BaseScan):
             )
         return axes_metadata
 
-    def _out_ensemble_axes_metadata(
-        self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
-    ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
-        ensemble_axes_metadata = self.ensemble_axes_metadata
-
-        if len(_scan_axes(array_object)) > 0:
-            for axis in ensemble_axes_metadata:
-                axis._main = False
-
-        return [*ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
+    # def _out_ensemble_axes_metadata(
+    #    self, array_object: ArrayObject | ArrayObjectSubclass, index: int = 0
+    # ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
+    #    ensemble_axes_metadata = self.ensemble_axes_metadata
+    #
+    #    if len(_scan_axes(array_object)) > 0:
+    #        for axis in ensemble_axes_metadata:
+    #            axis._main = False
+    #
+    #    return [*ensemble_axes_metadata, *array_object.ensemble_axes_metadata]
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
@@ -1026,7 +1094,7 @@ class GridScan(HasGridMixin, BaseScan):
                 )
 
         rect = Rectangle(
-            tuple(self.start),
+            self.start,
             *self.extent,
             alpha=alpha,
             facecolor=facecolor,
