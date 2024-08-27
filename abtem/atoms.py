@@ -6,7 +6,7 @@ from numbers import Number
 
 import numpy as np
 from ase import Atoms
-from ase.build.tools import rotation_matrix, cut
+from ase.build.tools import cut, rotation_matrix
 from ase.cell import Cell
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
@@ -92,19 +92,10 @@ def plane_to_axes(plane: str) -> tuple[int, ...]:
     axes : tuple
         Numerical representation of axes.
     """
-    axes = ()
-    last_axis = [0, 1, 2]
-    for axis in list(plane):
-        if axis == "x":
-            axes += (0,)
-            last_axis.remove(0)
-        if axis == "y":
-            axes += (1,)
-            last_axis.remove(1)
-        if axis == "z":
-            axes += (2,)
-            last_axis.remove(2)
-    return axes + (last_axis[0],)
+    axis_map = {"x": 0, "y": 1, "z": 2}
+    axes = tuple(axis_map[axis] for axis in plane)
+    last_axis = {0, 1, 2} - set(axes)
+    return axes + (last_axis.pop(),)
 
 
 def is_cell_hexagonal(atoms: Atoms) -> bool:
@@ -240,7 +231,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
 
-    atoms.positions[np.diag(cell) < 0., :] *= -1
+    atoms.positions[np.diag(cell) < 0.0, :] *= -1
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
 
@@ -424,20 +415,20 @@ def pretty_print_transform(decomposed: tuple[np.ndarray, np.ndarray, np.ndarray]
     decomposed : tuple of np.ndarray
         Tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.
     """
+    euler_angles = decomposed[0] / np.pi * 180
+    strains = (decomposed[1] - 1) * 100
+    shear = (decomposed[2]) * 100
     print(
-        "Euler angles (degrees): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
-            *decomposed[0] / np.pi * 180
+        (
+            f"Euler angles (degrees): \t x = {euler_angles[0]:.3f}, \t y = {euler_angles[1]:.3f}, "
+            "\t z = {euler_angles[2]:.3f}"
         )
     )
     print(
-        "Normal strains (percent): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
-            *(decomposed[1] - 1) * 100
-        )
+        f"Normal strains (percent): \t x = {strains:.3f}, \t y = {strains:.3f}, \t z = {strains:.3f}"
     )
     print(
-        "Shear strains (percent): \t xy = {:.3f}, \t xz = {:.3f}, \t xz = {:.3f}".format(
-            *(decomposed[2]) * 100
-        )
+        f"Shear strains (percent): \t xy = {shear[0]:.3f}, \t xz = {shear[1]:.3f}, \t xz = {shear[2]:.3f}"
     )
 
 
@@ -560,7 +551,7 @@ def shrink_cell(
 
 
 def rotation_matrix_from_plane(
-    plane: str | tuple[tuple[float, float, float] | tuple[float, float, float]] = "xy"
+    plane: str | tuple[tuple[float, float, float] | tuple[float, float, float]] = "xy",
 ) -> np.ndarray:
     """
     Give the rotation matrix corresponding to a rotation from a given plane to the `xy` plane.
@@ -575,7 +566,13 @@ def rotation_matrix_from_plane(
     rotation : np.ndarray
         Rotation matrix of dimension 3x3.
     """
-    x_vector, y_vector = plane
+    if isinstance(plane, str):
+        axes = plane_to_axes(plane)
+        x_vector, y_vector = axes
+    else:
+        assert isinstance(plane, tuple)
+        assert len(plane) == 2
+        x_vector, y_vector = plane
 
     if isinstance(x_vector, str):
         x_vector = np.array(axis_mapping[x_vector])
@@ -659,7 +656,8 @@ def rotate_atoms_to_plane(
         return atoms
 
     atoms = atoms.copy()
-    axes = plane_to_axes(plane)
+    if isinstance(plane, str):
+        axes = plane_to_axes(plane)
 
     atoms.positions[:] = atoms.positions[:][:, list(axes)]
     atoms.cell[:] = atoms.cell[:][:, list(axes)]
@@ -769,7 +767,7 @@ def orthogonalize_cell(
     allow_transform: bool = True,
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
     origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    box: tuple[float, float, float] = None,
+    box: tuple[float, float, float] | None = None,
     tolerance: float = 0.01,
 ):
     """
