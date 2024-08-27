@@ -118,28 +118,34 @@ electron_configurations = {
     "Mc": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p3",
     "Lv": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p4",
     "Ts": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p5",
-    "Og": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p6"
+    "Og": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p6",
 }
 
-azimuthal_number = {'s': 0, 'p': 1, 'd': 2, 'f': 3, 'g': 4, 'h': 5, 'i': 6}
+azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
 azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
 
 
-def config_str_to_config_tuples(config_str):
+def config_str_to_config_tuples(config_str: str) -> list[tuple]:
     config_tuples = []
-    for subshell_string in config_str.split(' '):
-        config_tuples.append((int(subshell_string[0]), azimuthal_number[subshell_string[1]], int(subshell_string[2:])))
+    for subshell_string in config_str.split(" "):
+        config_tuples.append(
+            (
+                int(subshell_string[0]),
+                azimuthal_number[subshell_string[1]],
+                int(subshell_string[2:]),
+            )
+        )
     return config_tuples
 
 
-def config_tuples_to_config_str(config_tuples):
+def config_tuples_to_config_str(config_tuples: list[tuple]) -> str:
     config_str = []
     for n, ell, occ in config_tuples:
         config_str.append(str(n) + azimuthal_letter[ell] + str(occ))
-    return ' '.join(config_str)
+    return " ".join(config_str)
 
 
-def remove_electron_from_config_str(config_str, n, ell):
+def remove_electron_from_config_str(config_str: str, n: int, ell: int) -> str:
     config_tuples = []
     for shell in config_str_to_config_tuples(config_str):
         if shell[:2] == (n, ell):
@@ -149,7 +155,7 @@ def remove_electron_from_config_str(config_str, n, ell):
     return config_tuples_to_config_str(config_tuples)
 
 
-def aufbau(n_max=7):
+def aufbau(n_max: int = 7) -> list[tuple[int, int, int]]:
     shells = np.array([(n + l, n, l) for n in range(1, n_max) for l in range(n)])
     shells = shells[np.lexsort((shells[:, 1], shells[:, 0]))][:, 1:]
     return [tuple(shell) for shell in shells]
