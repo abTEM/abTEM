@@ -1,3 +1,4 @@
+"""Module defining special color maps."""
 from matplotlib.colors import ListedColormap
 
 hsluv = [(0.9677975592919913, 0.44127456009157356, 0.5358103155058701),
