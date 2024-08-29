@@ -5,7 +5,7 @@ from typing import Tuple
 
 import dask.array as da
 import numpy as np
-from threadpoolctl import threadpool_limits
+from threadpoolctl import threadpool_limits  # type: ignore
 
 from abtem.core import config
 from abtem.core.backend import check_cupy_is_installed, get_array_module
@@ -14,17 +14,17 @@ from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import get_dtype
 
 try:
-    import pyfftw
+    import pyfftw  # type: ignore
 except (ModuleNotFoundError, ImportError):
     pyfftw = None
 
 try:
-    import mkl_fft  # pyright: ignore[reportMissingImports]
+    import mkl_fft  # type: ignore
 except ModuleNotFoundError:
     mkl_fft = None
 
 try:
-    import cupy as cp  # pyright: ignore[reportMissingImports]
+    import cupy as cp  # type: ignore
 except ModuleNotFoundError:
     cp = None
 except ImportError:
@@ -76,7 +76,7 @@ class CachedFFTWConvolution:
         self._fftw_objects = None
         self._shape = None
 
-    def __call__(self, array, kernel, overwrite_x):
+    def __call__(self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool):
         if array.shape != self._shape:
             self._fftw_objects = None
 
@@ -128,18 +128,20 @@ def get_fftw_object(
 
     direction = _fft_name_to_fftw_direction(name)
 
-    flags = (config.get("fftw.planning_effort"),)
+    flags = [config.get("fftw.planning_effort")]
     if overwrite_x:
-        flags += ("FFTW_DESTROY_INPUT",)
+        flags.append("FFTW_DESTROY_INPUT")
 
     try:
+        flags.append("FFTW_WISDOM_ONLY")
+
         fftw = pyfftw.FFTW(
             array,
             array,
             axes=axes,
             direction=direction,
-            threads=config.get("fftw.threads"),  # noqa
-            flags=flags + ("FFTW_WISDOM_ONLY",),  # noqa
+            threads=config.get("fftw.threads"),
+            flags=flags,
         )
     except RuntimeError as e:
         if str(e) != "No FFTW wisdom is known for this plan.":
@@ -192,12 +194,13 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
             raise RuntimeError()
 
     if isinstance(x, da.core.Array):
-        return x.map_blocks(
+        return da.map_blocks(
             _fft_dispatch,
+            x,
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
-            meta=xp.array((), dtype=np.complex64),
+            meta=xp.array((), dtype=get_dtype(complex=True)),
         )
 
     check_cupy_is_installed()
@@ -270,11 +273,12 @@ def fft2_convolve(
         return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
-        return x.map_blocks(
+        return da.map_blocks(
             _fft2_convolve,
+            x,
             kernel=kernel,
             overwrite_x=overwrite_x,
-            meta=xp.array((), dtype=np.complex64),
+            meta=xp.array((), dtype=get_dtype(complex=True)),
         )
 
     check_cupy_is_installed()
@@ -309,16 +313,22 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     n = len(positions.shape) - 1
     k = list(spatial_frequencies(shape, (1.0,) * dims, xp=xp))
 
-    positions = [
-        np.expand_dims(positions[..., i], tuple(range(n, n + dims)))
-        for i in range(dims)
-    ]
+    # positions = [
+    #    np.expand_dims(positions[..., i], tuple(range(n, n + dims)))
+    #    for i in range(dims)
+    # ]
 
     for i in range(dims):
+        expanded_positions = np.expand_dims(
+            positions[..., i], tuple(range(n, n + dims))
+        )
         d = list(range(0, n)) + list(range(n, n + dims))
         del d[i + n]
         k[i] = complex_exponential(
-            -2 * np.pi * np.expand_dims(k[i], tuple(d)) * positions[i]
+            -2
+            * np.pi
+            * np.expand_dims(k[i], tuple(d))
+            * expanded_positions  # positions[i]
         )
 
     array = k[0]
@@ -393,8 +403,7 @@ def fft_interpolation_masks(
     for i, (n1, n2) in enumerate(zip(shape_in, shape_out)):
         m1, m2 = _fft_interpolation_masks_1d(n1, n2)
 
-        s = [np.newaxis] * len(shape_in)
-        s[i] = slice(None)
+        s = [np.newaxis if j == i else slice(None) for j in range(len(shape_in))]
 
         mask1_1d += [m1[tuple(s)]]
         mask2_1d += [m2[tuple(s)]]
@@ -419,11 +428,11 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
     array : np.ndarray
         Array to crop.
     new_shape : tuple of int
-        New shape of the array. If the new shape is smaller than the input array, 
+        New shape of the array. If the new shape is smaller than the input array,
         each preceding dimension is treated as a batch dimension.
     normalize : bool, optional
         If True, renormalize the array to conserve the total amplitude.
-    
+
     Returns
     -------
     np.ndarray
@@ -495,9 +504,9 @@ def fft_interpolate(
         pass
 
     elif normalization != "intensity":
-        raise ValueError()
+        raise ValueError("Normalization must be 'values', 'amplitude' or 'intensity'.")
 
-    else:
-        raise ValueError(f"Normalization {normalization} not recognized.")
+    # else:
+    #    raise ValueError(f"Normalization {normalization} not recognized.")
 
     return array
