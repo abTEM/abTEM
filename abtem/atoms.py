@@ -8,8 +8,8 @@ import numpy as np
 from ase import Atoms
 from ase.build.tools import cut, rotation_matrix
 from ase.cell import Cell
-from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.spatial.distance import pdist
+from scipy.cluster.hierarchy import fcluster, linkage  # type: ignore
+from scipy.spatial.distance import pdist  # type: ignore
 
 from abtem.core.utils import label_to_index
 
@@ -147,6 +147,10 @@ def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
     """
     if hasattr(cell, "cell"):
         cell = cell.cell
+    
+    cell = np.array(cell)
+    
+    assert isinstance(cell, np.ndarray)
 
     return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
 
@@ -592,7 +596,7 @@ def rotation_matrix_from_plane(
 def rotate_atoms(
     atoms: Atoms,
     axes: str = "zxz",
-    angles: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    angles: float | tuple[float, float, float] = (0.0, 0.0, 0.0),
     convention: str = "intrinsic",
 ) -> Atoms:
     """
@@ -617,16 +621,19 @@ def rotate_atoms(
     atoms = atoms.copy()
 
     if isinstance(angles, Number):
-        angles = (angles,)
+        padded_angles = (float(angles), 0., 0.)
+    else:
+        assert isinstance(angles, tuple)
+        padded_angles = tuple(float(angles[i]) if i < len(angles) else 0. for i in range(3))
+    
+    assert isinstance(padded_angles, tuple) and len(padded_angles) == 3
 
-    angles = angles + (0.0,) * (3 - len(angles))
-
-    if not len(angles) == 3:
+    if not len(padded_angles) == 3:
         raise ValueError("Angles must be a tuple of length 3.")
-
+    
     axes = axes + "x" * (3 - len(axes))
 
-    R = euler_to_rotation(*angles, axes=axes, convention=convention)
+    R = euler_to_rotation(*padded_angles, axes=axes, convention=convention)
 
     atoms.positions[:] = np.dot(atoms.positions, R.T)
     atoms.cell[:] = np.dot(atoms.cell, R.T)
@@ -689,7 +696,7 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
 
 
 def best_orthogonal_cell(
-    cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12
+    cell: np.ndarray, max_repetitions: int | tuple[int, int, int] = 5, eps: float = 1e-12
 ) -> np.ndarray:
     """
     Find the closest orthogonal cell for a given cell given a maximum number of repetitions in all directions.
@@ -717,6 +724,8 @@ def best_orthogonal_cell(
 
     if isinstance(max_repetitions, int):
         max_repetitions = (max_repetitions,) * 3
+
+    assert isinstance(max_repetitions, tuple)
 
     nx = np.arange(-max_repetitions[0], max_repetitions[0] + 1)
     ny = np.arange(-max_repetitions[1], max_repetitions[1] + 1)
@@ -833,7 +842,9 @@ def orthogonalize_cell(
         atoms = rotate_atoms_to_plane(atoms, plane)
 
     if box is None:
-        box = best_orthogonal_cell(atoms.cell, max_repetitions=max_repetitions)
+        box = tuple(best_orthogonal_cell(atoms.cell, max_repetitions=max_repetitions))
+
+    assert box is not None
 
     if tuple(np.diag(atoms.cell)) == tuple(box):
         if return_transform:
@@ -848,7 +859,7 @@ def orthogonalize_cell(
     vectors = np.dot(np.diag(box), inv)
     vectors = np.round(vectors)
 
-    atoms = cut(atoms, *vectors, tolerance=tolerance)
+    atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[1], tolerance=tolerance)
 
     A = np.linalg.solve(atoms.cell.complete(), np.diag(box))
 
@@ -901,7 +912,7 @@ def atoms_in_cell(
 
 def cut_cell(
     atoms: Atoms,
-    cell: tuple[float, float, float] = None,
+    cell: tuple[float, float, float] | None = None,
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
     origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
     margin: float | tuple[float, float, float] = 0.0,
@@ -930,7 +941,7 @@ def cut_cell(
        Atoms fit into the cell.
     """
     if cell is None:
-        cell = best_orthogonal_cell(atoms.cell)
+        cell = tuple(best_orthogonal_cell(atoms.cell))
 
     if isinstance(margin, Number):
         margin = (margin, margin, margin)
@@ -963,7 +974,7 @@ def cut_cell(
 
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
-    repetitions = np.ceil(scaled_corners.ptp(axis=0)).astype("int") + 1
+    repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
     new_atoms = atoms * repetitions
 
     center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
@@ -1007,7 +1018,9 @@ def pad_atoms(
     #    raise RuntimeError('The cell of the atoms must be orthogonal.')
 
     if isinstance(margins, Number):
-        margins = (margins,) * 3
+        margins = (float(margins),) * 3
+
+    assert isinstance(margins, tuple)
 
     atoms = atoms.copy()
     old_cell = atoms.cell.copy()
