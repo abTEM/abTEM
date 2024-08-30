@@ -3,13 +3,14 @@
 from __future__ import annotations
 from types import ModuleType
 import warnings
-from typing import Sequence, Iterable, Any
+from typing import Sequence, Iterable, Optional, Callable, TypeVar
 
 import numpy as np
 
 from abtem.core import config
-from abtem.core.backend import get_array_module, xp_to_str
+from abtem.core.backend import device_name_from_array_module, get_array_module
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
+import dask.array as da
 
 
 def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
@@ -57,14 +58,14 @@ def adjusted_gpts(
     new_sampling : tuple of float
         The new sampling [Å].
     """
-    new_sampling = ()
-    new_gpts = ()
-    for d_target, d, n in zip(target_sampling, old_sampling, old_gpts):
-        scale_factor = d / d_target
-        nn = int(np.ceil(n * scale_factor))
-        new_sampling += (d * n / nn,)
-        new_gpts += (nn,)
-
+    new_sampling = tuple(
+        d * n / int(np.ceil(n * (d / d_target)))
+        for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
+    )
+    new_gpts = tuple(
+        int(np.ceil(n * (d / d_target)))
+        for d_target, d, n in zip(target_sampling, old_sampling, old_gpts)
+    )
     return new_sampling, new_gpts
 
 
@@ -72,6 +73,10 @@ class GridUndefinedError(Exception):
     """
     Exception raised when the grid is not defined.
     """
+
+
+T = TypeVar("T", int, float)
+U = TypeVar("U")
 
 
 class Grid(CopyMixin, EqualityMixin):
@@ -102,9 +107,9 @@ class Grid(CopyMixin, EqualityMixin):
 
     def __init__(
         self,
-        extent: float | Sequence[float] = None,
-        gpts: int | Sequence[int] = None,
-        sampling: float | Sequence[float] = None,
+        extent: Optional[float | Sequence[float]] = None,
+        gpts: Optional[int | Sequence[int]] = None,
+        sampling: Optional[float | Sequence[float]] = None,
         dimensions: int = 2,
         endpoint: bool | Sequence[bool] = False,
         lock_extent: bool = False,
@@ -118,16 +123,16 @@ class Grid(CopyMixin, EqualityMixin):
 
         self._endpoint = tuple(endpoint)
 
-        extent = self._validate(extent, dtype=float)
-        gpts = self._validate(gpts, dtype=int)
-        sampling = self._validate(sampling, dtype=float)
+        self._extent = self._validate(extent, dtype=float)
+        self._gpts = self._validate(gpts, dtype=int)
+        self._sampling = self._validate(sampling, dtype=float)
 
         if (
-            extent is not None
-            and gpts is not None
-            and sampling is not None
+            self._extent is not None
+            and self._gpts is not None
+            and self._sampling is not None
             and config.get("warnings.overspecified-grid")
-            and not np.allclose(np.array(extent) / gpts, sampling)
+            and not np.allclose(np.array(self._extent) / self._gpts, self._sampling)
         ):
             warnings.warn("Overspecified grid, the provided sampling is ignored")
 
@@ -138,9 +143,9 @@ class Grid(CopyMixin, EqualityMixin):
         self._lock_gpts = lock_gpts
         self._lock_sampling = lock_sampling
 
-        self._extent = extent
-        self._gpts = gpts
-        self._sampling = sampling
+        # self._extent = extent
+        # self._gpts = gpts
+        # self._sampling = sampling
 
         if self.extent is None:
             self._adjust_extent(self.gpts, self.sampling)
@@ -151,7 +156,9 @@ class Grid(CopyMixin, EqualityMixin):
         if sampling is None or extent is not None:
             self._adjust_sampling(self.extent, self.gpts)
 
-    def _validate(self, value: Any, dtype):
+    def _validate(
+        self, value: Optional[T | Sequence[T]], dtype: Callable[[T], U]
+    ) -> Optional[tuple[U, ...]]:
         if isinstance(value, (np.ndarray, list, tuple)):
             if len(value) != self.dimensions:
                 raise RuntimeError(
@@ -159,7 +166,7 @@ class Grid(CopyMixin, EqualityMixin):
                 )
             return tuple((map(dtype, value)))
 
-        if isinstance(value, (int, float, complex)):
+        if isinstance(value, (int, float)):
             return (dtype(value),) * self.dimensions
 
         if value is None:
@@ -181,28 +188,34 @@ class Grid(CopyMixin, EqualityMixin):
         return self._dimensions
 
     @property
-    def extent(self) -> tuple[float, ...]:
+    def extent(self) -> tuple[float, ...] | None:
         """Grid extent in each dimension [Å]."""
         return self._extent
 
     @extent.setter
     def extent(self, extent: float | Sequence[float]):
+        if extent is not None:
+            if (
+                self._lock_extent
+                and self.extent is not None
+                and not np.allclose(extent, self.extent)
+            ):
+                raise RuntimeError("Extent cannot be modified")
 
-        if self._lock_extent and not np.allclose(extent, self.extent):
-            raise RuntimeError("Extent cannot be modified")
+            validated_extent = self._validate(extent, dtype=float)
 
-        extent = self._validate(extent, dtype=float)
+            if self._lock_sampling or (self.gpts is None):
+                self._adjust_gpts(validated_extent, self.sampling)
+                self._adjust_sampling(validated_extent, self.gpts)
+            elif self.gpts is not None:
+                self._adjust_sampling(validated_extent, self.gpts)
+        else:
+            validated_extent = None
 
-        if self._lock_sampling or (self.gpts is None):
-            self._adjust_gpts(extent, self.sampling)
-            self._adjust_sampling(extent, self.gpts)
-        elif self.gpts is not None:
-            self._adjust_sampling(extent, self.gpts)
-
-        self._extent = extent
+        self._extent = validated_extent
 
     @property
-    def gpts(self) -> tuple[int, ...]:
+    def gpts(self) -> tuple[int, ...] | None:
         """Number of grid points in each dimension."""
         return self._gpts
 
@@ -211,19 +224,19 @@ class Grid(CopyMixin, EqualityMixin):
         if self._lock_gpts:
             raise RuntimeError("Grid gpts cannot be modified")
 
-        gpts = self._validate(gpts, dtype=int)
+        validated_gpts = self._validate(gpts, dtype=int)
 
         if self._lock_sampling:
-            self._adjust_extent(gpts, self.sampling)
+            self._adjust_extent(validated_gpts, self.sampling)
         elif self.extent is not None:
-            self._adjust_sampling(self.extent, gpts)
+            self._adjust_sampling(self.extent, validated_gpts)
         else:
-            self._adjust_extent(gpts, self.sampling)
+            self._adjust_extent(validated_gpts, self.sampling)
 
-        self._gpts = gpts
+        self._gpts = validated_gpts
 
     @property
-    def sampling(self) -> tuple[float, ...]:
+    def sampling(self) -> tuple[float, ...] | None:
         """Grid sampling in each dimension [Å]."""
         return self._sampling
 
@@ -247,38 +260,45 @@ class Grid(CopyMixin, EqualityMixin):
             self._adjust_sampling(self.extent, self.gpts)
 
     @property
-    def reciprocal_space_sampling(self) -> tuple[float, float]:
+    def reciprocal_space_sampling(self) -> tuple[float, ...]:
         """Reciprocal-space sampling [1/Å]."""
         self.check_is_defined()
-        return (
-            1 / (self.gpts[0] * self.sampling[0]),
-            1 / (self.gpts[1] * self.sampling[1]),
+        assert (
+            self.sampling is not None
+            and self.gpts is not None
+            and self.extent is not None
         )
+        return tuple(1 / (n * d) for n, d in zip(self.gpts, self.sampling))
 
-    def _adjust_extent(self, gpts: tuple, sampling: tuple):
-        if (gpts is not None) & (sampling is not None):
+    def _adjust_extent(
+        self, gpts: tuple[int, ...] | None, sampling: tuple[float, ...] | None
+    ):
+        if gpts is not None and sampling is not None:
             self._extent = tuple(
                 (n - 1) * d if e else n * d
                 for n, d, e in zip(gpts, sampling, self._endpoint)
             )
             self._extent = self._validate(self._extent, float)
 
-    def _adjust_gpts(self, extent: tuple, sampling: tuple):
-        if (extent is not None) & (sampling is not None):
+    def _adjust_gpts(
+        self, extent: tuple[float, ...] | None, sampling: tuple[float, ...] | None
+    ):
+        if extent is not None and sampling is not None:
             self._gpts = tuple(
                 int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 
-    def _adjust_sampling(self, extent: tuple, gpts: tuple):
-
+    def _adjust_sampling(
+        self, extent: tuple[float, ...] | None, gpts: tuple[int, ...] | None
+    ):
         def _safe_divide(a: float, b: float) -> float:
             if b == 0.0:
                 return 0.0
             else:
                 return a / b
 
-        if (extent is not None) & (gpts is not None):
+        if extent is not None and gpts is not None:
             self._sampling = tuple(
                 _safe_divide(r, (n - 1)) if e else _safe_divide(r, n)
                 for r, n, e in zip(extent, gpts, self._endpoint)
@@ -355,19 +375,21 @@ class Grid(CopyMixin, EqualityMixin):
             The grid that should be checked.
         """
 
-        if (self.extent is not None) & (other.extent is not None):
+        if self.extent is not None and other.extent is not None:
             if not np.all(np.isclose(self.extent, other.extent)):
                 raise RuntimeError(
                     "Inconsistent grid extent ({self.extent} != {other.extent})"
                 )
 
-        if (self.gpts is not None) & (other.gpts is not None):
+        if self.gpts is not None and other.gpts is not None:
             if not np.all(self.gpts == other.gpts):
                 raise RuntimeError(
                     "Inconsistent grid gpts ({self.gpts} != {other.gpts})"
                 )
 
-    def round_to_power(self, powers: int | tuple[int, ...] = (2, 3, 5, 7)):
+    def round_to_power(
+        self, powers: Optional[int | list[int]] = None
+    ) -> tuple[int, ...]:
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are
         faster for arrays of whose size can be factored into small primes (2, 3, 5 and 7).
@@ -377,20 +399,24 @@ class Grid(CopyMixin, EqualityMixin):
         powers : int
             The gpts will be a power of this number.
         """
+        if powers is None:
+            powers = [2, 3, 5, 7]
 
-        if not isinstance(powers, Iterable):
-            powers = (powers,)
+        elif not isinstance(powers, Iterable):
+            powers = [powers]
 
         powers = sorted(powers)
 
-        gpts = ()
-        for n in self.gpts:
-            best_n = powers[0] ** np.ceil(np.log(n) / np.log(powers[0]))
-            for power in powers[1:]:
-                best_n = min(power ** np.ceil(np.log(n) / np.log(power)), best_n)
-            gpts += (best_n,)
+        assert self.gpts is not None
+
+        gpts = tuple(
+            int(min(power ** np.ceil(np.log(n) / np.log(power)) for power in powers))
+            for n in self.gpts
+        )
 
         self.gpts = gpts
+
+        return gpts
 
 
 class HasGridMixin:
@@ -405,17 +431,22 @@ class HasGridMixin:
         """Simulation grid."""
         return self._grid
 
+    def match_grid(self, other: HasGridMixin, check_match: bool = False):
+        """Match the grid to another object with a Grid."""
+        self.grid.match(other, check_match=check_match)
+        return self
+
     @property
-    def extent(self) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
+    def extent(self) -> tuple[float, ...] | None:
         """Extent of grid for each dimension in Ångstrom."""
         return self.grid.extent
 
     @extent.setter
-    def extent(self, extent: tuple[float, ...]):
+    def extent(self, extent: tuple[float, ...] | None):
         self.grid.extent = extent
 
     @property
-    def gpts(self) -> tuple[int] | tuple[int, int] | tuple[int, ...]:
+    def gpts(self) -> tuple[int, ...] | None:
         """Number of grid points for each dimension."""
         return self.grid.gpts
 
@@ -424,7 +455,7 @@ class HasGridMixin:
         self.grid.gpts = gpts
 
     @property
-    def sampling(self) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
+    def sampling(self) -> tuple[float, ...] | None:
         """Grid sampling for each dimension in Ångstrom per grid point."""
         return self.grid.sampling
 
@@ -433,23 +464,86 @@ class HasGridMixin:
         self.grid.sampling = sampling
 
     @property
-    def reciprocal_space_sampling(
-        self,
-    ) -> tuple[float] | tuple[float, float] | tuple[float, ...]:
+    def reciprocal_space_sampling(self) -> tuple[float, ...]:
         """Reciprocal-space sampling in reciprocal Ångstrom."""
         return self.grid.reciprocal_space_sampling
 
-    def match_grid(self, other: "HasGridMixin", check_match: bool = False):
-        """Match the grid to another object with a Grid."""
-        self.grid.match(other, check_match=check_match)
-        return self
+
+class HasGrid2DMixin:
+    _grid: Grid
+
+    @property
+    def grid(self) -> Grid:
+        """Simulation grid."""
+        return self._grid
+
+    @property
+    def extent(self) -> tuple[float, float] | None:
+        """Extent of grid for each dimension in Ångstrom."""
+        extent = self.grid.extent
+        if extent is not None:
+            assert len(extent) == 2
+        return extent
+
+    @extent.setter
+    def extent(self, extent: tuple[float, float] | None):
+        self.grid.extent = extent
+
+    @property
+    def _valid_extent(self) -> tuple[float, float]:
+        if self.extent is None:
+            raise GridUndefinedError("Grid extent is not defined")
+        return self.extent
+
+    @property
+    def gpts(self) -> tuple[int, int] | None:
+        """Number of grid points for each dimension."""
+        gpts = self.grid.gpts
+        if gpts is not None:
+            assert len(gpts) == 2
+        return gpts
+
+    @gpts.setter
+    def gpts(self, gpts: tuple[int, int]):
+        self.grid.gpts = gpts
+
+    @property
+    def _valid_gpts(self) -> tuple[int, int]:
+        if self.gpts is None:
+            raise GridUndefinedError("Grid gpts is not defined")
+        return self.gpts
+
+    @property
+    def sampling(self) -> tuple[float, float] | None:
+        """Grid sampling for each dimension in Ångstrom per grid point."""
+        sampling = self.grid.sampling
+        if sampling is not None:
+            assert len(sampling) == 2
+        return sampling
+
+    @sampling.setter
+    def sampling(self, sampling: tuple[float, float]):
+        self.grid.sampling = sampling
+
+    @property
+    def _valid_sampling(self) -> tuple[float, float]:
+        if self.sampling is None:
+            raise GridUndefinedError("Grid sampling is not defined")
+        return self.sampling
+
+    @property
+    def reciprocal_space_sampling(self) -> tuple[float, float]:
+        """Reciprocal-space sampling in reciprocal Ångstrom."""
+        k = self.grid.reciprocal_space_sampling
+        assert len(k) == 2
+        return k
 
 
 def spatial_frequencies(
     gpts: tuple[int, ...],
     sampling: tuple[float, ...],
     return_grid: bool = False,
-    xp: ModuleType = np,
+    xp: ModuleType | np.ndarray | da.core.Array | str | None = np,
 ):
     """
     Return the spatial frequencies of a grid.
@@ -464,7 +558,7 @@ def spatial_frequencies(
         If True, return the grid as a single meshgrid array.
     xp : module
         Array module to use, options are numpy or cupy. Default is numpy.
-    
+
     Returns
     -------
     spatial_frequencies : tuple of np.ndarray
@@ -473,11 +567,10 @@ def spatial_frequencies(
         If return_grid is True, the spatial frequencies as a single meshgrid array.
     """
     dtype = get_dtype(complex=False)
+
     xp = get_array_module(xp)
 
-    out = ()
-    for n, d in zip(gpts, sampling):
-        out += (xp.fft.fftfreq(n, d).astype(dtype),)
+    out = tuple(xp.fft.fftfreq(n, d).astype(dtype) for n, d in zip(gpts, sampling))
 
     if return_grid:
         return xp.meshgrid(*out, indexing="ij")
@@ -486,11 +579,13 @@ def spatial_frequencies(
 
 
 def polar_spatial_frequencies(
-    gpts: tuple[int, ...], sampling: tuple[float, ...], xp: ModuleType=np
+    gpts: tuple[int, ...],
+    sampling: tuple[float, ...],
+    xp: ModuleType | np.ndarray | da.core.Array | str | None = np,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """ 
+    """
     Return the polar spatial frequencies of a grid.
-    
+
     Parameters
     ----------
     gpts : tuple of int
@@ -503,11 +598,13 @@ def polar_spatial_frequencies(
     Returns
     -------
     k_and_phi : tuple of np.ndarray
-        Tuple of spatial frequencies in polar coordinates. First element is the radial frequency and 
+        Tuple of spatial frequencies in polar coordinates. First element is the radial frequency and
         the second element is the azimuthal angle.
     """
     xp = get_array_module(xp)
-    kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
+    kx, ky = spatial_frequencies(
+        gpts, sampling, False, device_name_from_array_module(xp)
+    )
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
     phi = xp.arctan2(ky[None], kx[:, None])
     return k, phi
