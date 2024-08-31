@@ -1,12 +1,15 @@
 """Module for handling units and unit conversion."""
+
+from typing import Optional
+
 import numpy as np
 
 from abtem.core import config
 from abtem.core.energy import energy2wavelength
 
 _unit_categories = {
-    "real_space": ["Å", "Angstrom", "nm", "um", "mm", "m"],
-    "reciprocal_space": ["1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"],
+    "real_space": ("Å", "Angstrom", "nm", "um", "mm", "m"),
+    "reciprocal_space": ("1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"),
     "angular": ["rad", "mrad", "deg"],
     "energy": ["eV", "keV"],
 }
@@ -49,8 +52,26 @@ _tex_units = {
 }
 
 
-def _format_units(units):
-    if config.get("visualize.use_tex", False) is True:
+def format_units(units: Optional[str], use_tex: Optional[bool] = None) -> str:
+    """
+    Format units as a string.
+
+    Parameters
+    ----------
+    units : str
+        The units to format.
+
+    Returns
+    -------
+    str
+        The formatted units.
+    """
+    if units is None:
+        return ""
+
+    use_tex = config.get("visualize.use_tex", False) if use_tex is None else use_tex
+
+    if use_tex:
         try:
             units = _tex_units[units]
         except KeyError:
@@ -64,25 +85,27 @@ def _format_units(units):
         return units
 
 
-def validate_units(units: str, old_units: str = None) -> str:
+def validate_units(
+    units: Optional[str] = None, old_units: Optional[str] = None
+) -> Optional[str]:
     """
     Validate units and convert to a standard format.
 
-    If `old_units` is provided, the function will check if the conversion is 
+    If `old_units` is provided, the function will check if the conversion is
     possible and raise an error if not.
-    
+
     Parameters
     ----------
     units : str
         The units to validate.
     old_units : str, optional
         The optional units to check whether conversion from is possible.
-    
+
     Returns
     -------
     str
         The validated units
-    
+
     Raises
     ------
     ValueError
@@ -119,21 +142,52 @@ def validate_units(units: str, old_units: str = None) -> str:
     elif units_type[units] == "angular":
         return units
     else:
-        raise NotImplementedError
+        raise ValueError(f"Invalid units: {units}")
 
 
-def _get_conversion_factor(units: str, old_units: str, energy: float = None):
+def get_conversion_factor(
+    units: Optional[str] = None,
+    old_units: Optional[str] = None,
+    energy: Optional[float] = None,
+) -> float:
+    """
+    Get the conversion factor between two units.
+
+    Parameters
+    ----------
+    units : str, optional
+        The units to convert to.
+    old_units : str, optional
+        The units to convert from.
+    energy : float, optional
+        The energy to use for conversion from reciprocal space to angular units [eV].
+
+    Returns
+    -------
+    float
+        The conversion factor.
+    """
     if units is None:
         return 1.0
 
+    if old_units is None and units is not None:
+        raise RuntimeError("old_units must be provided if units is provided")
+
     if units_type[old_units] == "reciprocal_space" and units_type[units] == "angular":
         if energy is None:
-            raise RuntimeError("")
+            raise RuntimeError(
+                "energy must be provided to convert from reciprocal space to angular units"
+            )
 
         wavelength = energy2wavelength(energy)
-        conversion = (
-            wavelength * 1e3 * _conversion_factors[validate_units(units, "mrad")]
-        )
+
+        units = validate_units(units, "mrad")
+        assert units is not None
+
+        conversion = wavelength * 1e3 * _conversion_factors[units]
         return conversion
 
-    return _conversion_factors[validate_units(units, old_units)]
+    validated_units = validate_units(units, old_units)
+    assert validated_units is not None
+
+    return _conversion_factors[validated_units]
