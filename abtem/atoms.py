@@ -113,9 +113,9 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
         True if cell is hexagonal.
     """
     if isinstance(atoms, Atoms):
-        cell = atoms.get_cell()
+        cell = np.array(atoms.get_cell())
     else:
-        cell = atoms
+        cell = np.array(atoms)
 
     a = np.linalg.norm(cell[0], axis=0)
     b = np.linalg.norm(cell[1], axis=0)
@@ -147,9 +147,9 @@ def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
     """
     if hasattr(cell, "cell"):
         cell = cell.cell
-    
+
     cell = np.array(cell)
-    
+
     assert isinstance(cell, np.ndarray)
 
     return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
@@ -171,13 +171,15 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     valid : bool
         True if the atomic structure is usable by abTEM.
     """
-    if np.abs(atoms.cell[0, 0] - np.linalg.norm(atoms.cell[0])) > tol:
+    cell = np.array(atoms.cell)
+
+    if np.abs(cell[0, 0] - np.linalg.norm(cell[0])) > tol:
         return False
 
-    if np.abs(atoms.cell[1, 2]) > tol:
+    if np.abs(cell[1, 2]) > tol:
         return False
 
-    if np.abs(atoms.cell[2, 2] - np.linalg.norm(atoms.cell[2])) > tol:
+    if np.abs(cell[2, 2] - np.linalg.norm(cell[2])) > tol:
         return False
 
     return True
@@ -215,7 +217,6 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
 
         atoms.pbc = True
         atoms.wrap()
-
         return atoms
 
     xy = np.delete(cell, vertical_vector[0], axis=0)
@@ -621,16 +622,18 @@ def rotate_atoms(
     atoms = atoms.copy()
 
     if isinstance(angles, Number):
-        padded_angles = (float(angles), 0., 0.)
+        padded_angles = (float(angles), 0.0, 0.0)
     else:
         assert isinstance(angles, tuple)
-        padded_angles = tuple(float(angles[i]) if i < len(angles) else 0. for i in range(3))
-    
+        padded_angles = tuple(
+            float(angles[i]) if i < len(angles) else 0.0 for i in range(3)
+        )
+
     assert isinstance(padded_angles, tuple) and len(padded_angles) == 3
 
     if not len(padded_angles) == 3:
         raise ValueError("Angles must be a tuple of length 3.")
-    
+
     axes = axes + "x" * (3 - len(axes))
 
     R = euler_to_rotation(*padded_angles, axes=axes, convention=convention)
@@ -696,7 +699,9 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
 
 
 def best_orthogonal_cell(
-    cell: np.ndarray, max_repetitions: int | tuple[int, int, int] = 5, eps: float = 1e-12
+    cell: np.ndarray,
+    max_repetitions: int | tuple[int, int, int] = 5,
+    eps: float = 1e-12,
 ) -> np.ndarray:
     """
     Find the closest orthogonal cell for a given cell given a maximum number of repetitions in all directions.
@@ -859,7 +864,7 @@ def orthogonalize_cell(
     vectors = np.dot(np.diag(box), inv)
     vectors = np.round(vectors)
 
-    atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[1], tolerance=tolerance)
+    atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance)
 
     A = np.linalg.solve(atoms.cell.complete(), np.diag(box))
 
@@ -1032,7 +1037,7 @@ def pad_atoms(
         reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
 
     if any([rep > 1 for rep in reps]):
-        atoms *= reps
+        atoms = atoms * reps
         atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
         atoms.cell = old_cell
 
