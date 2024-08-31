@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from ase import units
+from ase import units  # type: ignore
 
 from abtem.core.utils import CopyMixin, EqualityMixin
 
