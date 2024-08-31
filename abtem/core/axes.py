@@ -1,23 +1,24 @@
+"""Module for handling axes metadata."""
+
 from __future__ import annotations
 
 import dataclasses
 from copy import copy
 from dataclasses import dataclass
 from numbers import Number
-from typing import Union, Sequence
+from typing import Optional
 
 import dask.array as da
 import numpy as np
-from numpy.typing import ArrayLike
-from tabulate import tabulate
+from tabulate import tabulate  # type: ignore
 
 from abtem.core import config
-from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
-from abtem.core.units import _get_conversion_factor, _format_units, _validate_units
+from abtem.core.chunks import iterate_chunk_ranges, validate_chunks
+from abtem.core.units import format_units, get_conversion_factor, validate_units
 from abtem.core.utils import safe_equality
 
 
-def format_label(axes: AxisMetadata, units=None):
+def format_label(axes: AxisMetadata, units: Optional[str] = None) -> str:
     if axes.tex_label is not None and config.get("visualize.use_tex", False):
         label = axes.tex_label
     else:
@@ -29,7 +30,7 @@ def format_label(axes: AxisMetadata, units=None):
     if units is None and axes.units is not None:
         units = axes.units
 
-    units = _format_units(units)
+    units = format_units(units)
 
     if units is None or len(units) == 0:
         return f"{label}"
@@ -37,8 +38,8 @@ def format_label(axes: AxisMetadata, units=None):
         return f"{label} [{units}]"
 
 
-def latex_float(f, formatting):
-    float_str = f"{f:>{formatting}}"
+def latex_float(number: float, formatting: str) -> str:
+    float_str = f"{number:>{formatting}}"
     if "e" in float_str:
         base, exponent = float_str.split("e")
         return f"{base} \\times 10^{{{int(exponent)}}}"
@@ -46,34 +47,42 @@ def latex_float(f, formatting):
         return float_str
 
 
-def format_value(value: Union[tuple, float], formatting: str, tolerance: float = 1e-14):
+def format_value(
+    value: Number | tuple, formatting: str, tolerance: float = 1e-14
+) -> str:
     if isinstance(value, (tuple, list, np.ndarray)):
         return ", ".join(str(format_value(v, formatting=formatting)) for v in value)
-
-    if isinstance(value, float):
+    elif isinstance(value, float):
         if np.abs(value) < tolerance:
-            value = 0.0
+            float_value = 0.0
+        else:
+            float_value = value
 
         if config.get("visualize.use_tex", False):
-            return f"${latex_float(value, formatting)}$"
+            return f"${latex_float(float_value, formatting)}$"
         else:
-            return f"{value:>{formatting}}"
-
-    return value
+            return f"{float_value:>{formatting}}"
+    elif isinstance(value, (int, str)):
+        return str(value)
+    else:
+        raise ValueError(f"Cannot format value of type {type(value)}")
 
 
 def format_title(
-    axes: AxisMetadata,
-    formatting: str = ".3f",
-    units: str = None,
+    axes: OrdinalAxis,
+    formatting: Optional[str] = None,
+    units: Optional[str] = None,
     include_label: bool = True,
-):
+) -> str:
+    if formatting is None:
+        formatting = ".3f"
+
     if units:
-        value = axes.values[0] * _get_conversion_factor(units, axes.units)
+        value = axes.values[0] * get_conversion_factor(units, axes.units)
     else:
         value = axes.values[0]
 
-    units = _validate_units(units, axes.units)
+    units = validate_units(units, axes.units)
 
     use_tex = config.get("visualize.use_tex", False)
 
@@ -88,7 +97,7 @@ def format_title(
         if axes.tex_units is not None:
             units = f" {axes.tex_units}"
         else:
-            units = f" {_format_units(units)}"
+            units = f" {format_units(units)}"
     elif units is not None:
         units = f" {units}"
     else:
@@ -104,9 +113,9 @@ def format_title(
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     label: str = ""
-    units: str = None
-    tex_label: str = None
-    tex_units: str = None
+    units: Optional[str] = None
+    tex_label: Optional[str] = None
+    tex_units: Optional[str] = None
     _default_type: str = "index"
     _concatenate: bool = True
     _ensemble_mean: bool = False
@@ -115,7 +124,7 @@ class AxisMetadata:
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
 
-    def format_coordinates(self, n: int = None):
+    def format_coordinates(self, n: Optional[int] = None):
         return "-"
 
     def __eq__(self, other):
@@ -127,7 +136,7 @@ class AxisMetadata:
     def format_type(self):
         return self.__class__.__name__
 
-    def format_label(self, units: str = None):
+    def format_label(self, units: Optional[str] = None):
         return format_label(self, units=units)
 
     def format_title(self, *args, **kwargs):
@@ -202,18 +211,18 @@ class LinearAxis(AxisMetadata):
     units: str = ""
     offset: float = 0.0
 
-    def format_coordinates(self, n: int = None) -> str:
+    def format_coordinates(self, n: Optional[int] = None) -> str:
+        if n is None:
+            raise ValueError("n must be provided")
+
         coordinates = self.coordinates(n)
         if n > 3:
-            coordinates = [f"{coord:.2f}" for coord in coordinates[[0, 1, -1]]]
-            return f"{coordinates[0]} {coordinates[1]} ... {coordinates[2]}"
+            coordinates_str = [f"{coord:.2f}" for coord in coordinates[[0, 1, -1]]]
+            return f"{coordinates_str[0]} {coordinates_str[1]} ... {coordinates_str[2]}"
         else:
             return " ".join([f"{coord:.2f}" for coord in coordinates])
 
-    def coordinates(self, n: int = None) -> np.ndarray:
-        if n is None:
-            raise ValueError("n is required")
-
+    def coordinates(self, n: int) -> np.ndarray:
         return np.linspace(
             self.offset, self.offset + self.sampling * n, n, endpoint=False
         )
@@ -231,7 +240,7 @@ class LinearAxis(AxisMetadata):
     def convert_units(self, units: str, **kwargs):
         new_copy = self.copy()
         new_copy.units = units
-        conversion = _get_conversion_factor(units, old_units=self.units, **kwargs)
+        conversion = get_conversion_factor(units, old_units=self.units, **kwargs)
         new_copy.sampling = new_copy.sampling * conversion
         new_copy.offset = new_copy.offset * conversion
         return new_copy
@@ -259,48 +268,39 @@ class ScanAxis(RealSpaceAxis):
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class OrdinalAxis(AxisMetadata):
-    values: Union[Sequence, ArrayLike] = ()
+    values: tuple = ()
 
-    def format_title(self, formatting, include_label: bool = True, **kwargs):
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
         return format_title(
             self, formatting=formatting, include_label=include_label, **kwargs
         )
 
-    def format_all_titles(self):
-        titles = []
-        for i, value in enumerate(self.values):
-            if i == 0:
-                value = f"{value}"
-            else:
-                value = ""
+    def format_all_titles(self) -> list[str]:
+        return [
+            f"{self.label} = {value} [{self.units}]"
+            if i == 0
+            else f"{self.label} [{self.units}]"
+            for i, value in enumerate(self.values)
+        ]
 
-            title = f"{self.label} "
-
-            if value:
-                title = f"{title} = {value}"
-
-            if self.units:
-                titles += f"{title} [{self.units}]"
-
-        return titles
-
-    def to_ordinal_axis(self, n):
+    def to_ordinal_axis(self, n) -> OrdinalAxis:
         assert n == len(self)
         return self
 
-    def concatenate(self, other):
+    def concatenate(self, other: AxisMetadata) -> OrdinalAxis:
         if not safe_equality(self, other, ("values",)):
             raise RuntimeError()
+
+        assert isinstance(other, OrdinalAxis)
 
         kwargs = dataclasses.asdict(self)
         kwargs["values"] = kwargs["values"] + other.values
 
-        return self.__class__(**kwargs)  # noqa
+        return self.__class__(**kwargs)
 
-    def compatible(self, other):
-        return
-
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.values)
 
     def __post_init__(self):
@@ -329,7 +329,7 @@ class OrdinalAxis(AxisMetadata):
 
         return self.__class__(**kwargs)  # noqa
 
-    def coordinates(self, n):
+    def coordinates(self, n: int) -> tuple:
         return self.values
 
     def _to_blocks(self, chunks):
@@ -348,7 +348,7 @@ class OrdinalAxis(AxisMetadata):
 class NonLinearAxis(OrdinalAxis):
     units: str = "unknown"
 
-    def format_coordinates(self, n: int = None):
+    def format_coordinates(self, n: Optional[int] = None):
         if len(self.values) > 3:
             values = [f"{self.values[i]:.2f}" for i in [0, 1, -1]]
             return f"{values[0]} {values[1]} ... {values[-1]}"
@@ -358,8 +358,12 @@ class NonLinearAxis(OrdinalAxis):
             except TypeError:
                 return self.values
 
-    def format_title(self, formatting, **kwargs):
-        return format_title(self, formatting=formatting, **kwargs)
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
+        return format_title(
+            self, formatting=formatting, include_label=include_label, **kwargs
+        )
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -375,7 +379,7 @@ class AxisAlignedTiltAxis(NonLinearAxis):
             values = tuple((0.0, value) for value in self.values)
         else:
             raise RuntimeError(f"Invalid tilt direction {self.direction}")
-        
+
         return values
 
     def item_metadata(self, item, metadata=None):
@@ -393,23 +397,20 @@ class AxisAlignedTiltAxis(NonLinearAxis):
 class WaveVectorAxis(OrdinalAxis):
     units: str = "1/Å"
 
-    def format_title(self, formatting, include_label: bool = True, **kwargs):
-        return format_title(self, formatting, units=None, include_label=include_label)
-
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class TiltAxis(OrdinalAxis):
     units: str = "mrad"
 
     @property
-    def tilt(self):
+    def tilt(self) -> tuple:
         return self.values
 
-    def format_title(self, formatting, include_label: bool = True, **kwargs):
-        return format_title(self, formatting, units=None, include_label=include_label)
-
     def item_metadata(self, item, metadata=None):
-        return {f"base_tilt_x": self.values[item][0], f"base_tilt_y": self.values[item][1]}
+        return {
+            "base_tilt_x": self.values[item][0],
+            "base_tilt_y": self.values[item][1],
+        }
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -428,7 +429,9 @@ class PositionsAxis(OrdinalAxis):
     label: str = "x, y"
     units: str = "Å"
 
-    def format_title(self, formatting, units=None, include_label=True):
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
         formatted = ", ".join(
             tuple(f"{value:>{formatting}}" for value in self.values[0])
         )
@@ -451,7 +454,7 @@ class PrismPlaneWavesAxis(AxisMetadata):
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class ScaleAxis:
     label: str = ""
-    units: str = None
+    units: Optional[str] = None
     tex_label: str | None = None
 
     def format_label(self):
@@ -522,9 +525,9 @@ def _find_axes_type(has_axes, axis_type):
 
 
 class AxesMetadataList(list):
-    def __init__(self, l, shape):
+    def __init__(self, lst, shape):
         self._shape = shape
-        super().__init__(l)
+        super().__init__(lst)
 
     def __repr__(self):
         return format_axes_metadata(self, self._shape)
