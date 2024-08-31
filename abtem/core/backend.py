@@ -1,18 +1,22 @@
+"""Module for handling the array backend (NumPy, CuPy, Dask, etc.) of the library."""
+
 from __future__ import annotations
 
-import types
+from types import ModuleType
 import warnings
 from numbers import Number
 from typing import Union
 
 import dask.array as da
 import numpy as np
-import scipy
+import scipy  # type: ignore
+import scipy.ndimage  # type: ignore
+
 
 from abtem.core.config import config
 
 try:
-    import cupy as cp
+    import cupy as cp  # type: ignore
 except ModuleNotFoundError:
     cp = None
 except ImportError:
@@ -25,38 +29,55 @@ except ImportError:
 
 
 try:
-    import cupyx
-except:
+    import cupyx  # type: ignore
+except ImportError:
     cupyx = None
 
-ArrayModule = Union[types.ModuleType, str]
+
+try:
+    import cupyx.ndimage as cupyx  # type: ignore
+except ImportError:
+    cupyx_ndimage = None
+
+
+ArrayModule = Union[ModuleType, str]
 
 
 def check_cupy_is_installed():
+    """
+    Check if CuPy is installed, raise an error if not.
+    """
     if cp is None:
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
 
 
-def xp_to_str(xp):
-    if xp is np:
-        return "numpy"
+def validate_device(device: str | None = None) -> str:
+    """
+    Validate the device string.
 
-    check_cupy_is_installed()
+    Parameters
+    ----------
+    device : str, None
+        The device string to validate. Must be either 'cpu' or 'gpu'. If None, the device from the configuration is
+        used.
 
-    if xp is cp:
-        return "cupy"
+    Returns
+    -------
+    str
+        The validated device string.
+    """
 
-    raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
-
-
-def validate_device(device):
     if device is None:
-        return config.get("device")
+        device = config.get("device")
+        assert isinstance(device, str)
+        return device
 
     return device
 
 
-def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
+def get_array_module(
+    x: ModuleType | np.ndarray | da.core.Array | str | None = None,
+) -> ModuleType:
     """
     Get the array module (NumPy or CuPy) for a given array or string.
 
@@ -64,7 +85,7 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
     ----------
     x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
         The array or string to get the array module for. If None, the default device is used.
-    
+
     Returns
     -------
     numpy or cupy
@@ -74,7 +95,7 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
     if x is None:
         return get_array_module(config.get("device"))
 
-    if isinstance(x, da.core.Array):
+    if isinstance(x, da.Array):
         return get_array_module(x._meta)
 
     if isinstance(x, str):
@@ -104,51 +125,110 @@ def get_array_module(x: np.ndarray | str = None) -> ArrayModule:
     raise ValueError(f"array module specification {x} not recognized")
 
 
-def device_name_from_array_module(xp):
+def device_name_from_array_module(xp: ArrayModule) -> str:
+    """
+    Get the device string from the array module. The array module must be either NumPy or CuPy.
+
+    Parameters
+    ----------
+    xp : numpy or cupy
+        The array module.
+
+    Returns
+    -------
+    str
+        The device string.
+    """
     if xp is np:
         return "cpu"
 
     if xp is cp:
         return "gpu"
 
-    assert False
+    raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
 
 
-def get_scipy_module(x):
+def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = None):
+    """
+    Get the SciPy module for a given array or device string.
+
+    Parameters
+    ----------
+    x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
+        The array or string to get the SciPy module for. If None, the default device is used.
+
+    Returns
+    -------
+    scipy or cupyx.scipy
+        The SciPy module.
+    """
+
     xp = get_array_module(x)
 
     if xp is np:
         return scipy
 
-    if xp is cp:
-        return cupyx.scipy
+    elif xp is cp:
+        return cupyx.scipy # type: ignore
+
+    else:
+        raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
 
 
-def get_ndimage_module(x):
+def get_ndimage_module(
+    x: ModuleType | np.ndarray | da.core.Array | str | None = None,
+) -> ModuleType:
+    """
+    Get the ndimage module for a given array or device string.
+
+    Parameters
+    ----------
+    x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
+        The array or string to get the ndimage module for. If None, the default device is used.
+
+    Returns
+    -------
+    scipy.ndimage or cupyx.ndimage
+        The ndimage module.
+    """
     xp = get_array_module(x)
 
     if xp is np:
-        import scipy.ndimage
-
         return scipy.ndimage
 
     if xp is cp:
-        import cupyx.scipy.ndimage
+        return cupyx_ndimage # type: ignore
+    
+    raise RuntimeError("Invalid array module")
 
-        return cupyx.scipy.ndimage
 
+def asnumpy(array: np.ndarray | da.Array):
+    """
+    Convert an array to NumPy.
 
-def asnumpy(array):
+    Parameters
+    ----------
+    array : numpy.ndarray, dask.array.Array
+        The array to convert.
+
+    Returns
+    -------
+    numpy.ndarray
+        The array converted to NumPy.
+    """
     if cp is None:
         return array
 
-    if isinstance(array, da.core.Array):
-        return array.map_blocks(asnumpy)
+    if isinstance(array, da.core.Array):  # pyright: ignore[reportAttributeAccessIssue]
+        return da.map_blocks(asnumpy, array)
 
     return cp.asnumpy(array)
 
 
-def copy_to_device(array: np.ndarray, device: str):
+def copy_to_device(
+    array: np.ndarray | da.core.Array,
+    device: ModuleType | np.ndarray | da.core.Array | str | None = None,
+):
     """
     Copy an array to a different device (CPU or GPU) using CuPy.
 
@@ -171,8 +251,11 @@ def copy_to_device(array: np.ndarray, device: str):
         return array
 
     if isinstance(array, da.core.Array):
-        return array.map_blocks(
-            copy_to_device, meta=new_xp.array((), dtype=array.dtype), device=device
+        return da.map_blocks(
+            copy_to_device,
+            array,
+            meta=new_xp.array((), dtype=array.dtype),
+            device=device,
         )
 
     if new_xp is np:
