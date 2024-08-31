@@ -6,7 +6,7 @@ import itertools
 from functools import reduce
 from itertools import accumulate
 from operator import mul
-from typing import Union
+from typing import Generator, Optional, TypeGuard, Union
 
 import numpy as np
 from dask.utils import parse_bytes
@@ -14,7 +14,46 @@ from dask.utils import parse_bytes
 from abtem.core import config
 
 Chunks = Union[int, str, tuple[Union[int, str, tuple[int, ...]], ...]]
+ChunksTuple = tuple[Union[int, str, tuple[int, ...]], ...]
 ValidatedChunks = tuple[tuple[int, ...], ...]
+
+
+def is_tuple_of_ints(x: Chunks) -> TypeGuard[tuple[int, ...]]:
+    return isinstance(x, tuple) and all(isinstance(c, int) for c in x)
+
+
+def is_tuple_of_tuple_of_ints(x: Chunks) -> TypeGuard[tuple[tuple[int, ...], ...]]:
+    return isinstance(x, tuple) and all(
+        isinstance(x1, tuple) and all(isinstance(c, int) for c in x1) for x1 in x
+    )
+
+
+def is_tuple_of_ints_or_tuple_of_tuple_of_ints(
+    x: Chunks,
+) -> TypeGuard[tuple[int | tuple[int, ...], ...]]:
+    return is_tuple_of_ints(x) or is_tuple_of_tuple_of_ints(x)
+
+
+def is_validated_chunks(x: Chunks) -> TypeGuard[ValidatedChunks]:
+    """
+    Check if the input is are valid chunk sizes.
+
+    Parameters
+    ----------
+    x : int or tuple of int or tuple of tuple of int or str
+        The chunk sizes of the Dask array.
+
+    Returns
+    -------
+    TypeGuard[ValidatedChunks]
+        True if the input is a valid chunk size.
+    """
+    return is_tuple_of_tuple_of_ints(x)
+
+
+def assert_chunks_match_shape(shape: tuple[int, ...], chunks: ValidatedChunks) -> None:
+    if not all(sum(c) == s for s, c in zip(shape, chunks)):
+        raise ValueError(f"chunks must match shape, got {chunks} for shape {shape}")
 
 
 def chunk_ranges(chunks: ValidatedChunks) -> tuple[tuple[tuple[int, int], ...], ...]:
@@ -63,11 +102,37 @@ def iterate_chunk_ranges(chunks: ValidatedChunks):
         yield block_indices, slic
 
 
+def fill_in_chunk_sizes(
+    shape: tuple[int, ...], chunks: tuple[int | tuple[int, ...], ...]
+) -> ValidatedChunks:
+    validated_chunks = []
+    for s, c in zip(shape, chunks):
+        if isinstance(c, tuple):
+            validated_chunks.append(c)
+        elif isinstance(c, int):
+            if c == -1:
+                validated_chunks.append((s,))
+            else:
+                chunk_size = (c,) * (s // c)
+                if s % c:
+                    chunk_size += (s % c,)
+                validated_chunks.append(chunk_size)
+        else:
+            raise RuntimeError("Invalid chunk type")
+
+    return tuple(validated_chunks)
+
+
+def check_chunks_match_shape_length(shape: tuple[int, ...], chunks: Chunks) -> None:
+    if isinstance(chunks, tuple) and not len(shape) == len(chunks):
+        raise ValueError(f"length of shape: {shape} does not match chunks {chunks}")
+
+
 def validate_chunks(
     shape: tuple[int, ...],
     chunks: Chunks,
     max_elements: int | str = "auto",
-    dtype: np.dtype.base = None,
+    dtype: Optional[np.dtype] = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
     """
@@ -94,56 +159,47 @@ def validate_chunks(
     tuple of tuple of int
         The chunk sizes of the Dask array.
     """
-    if isinstance(chunks, tuple):
-        if not len(shape) == len(chunks):
+    check_chunks_match_shape_length(shape, chunks)
 
-            raise ValueError(f"length of shape: {shape} does not match chunks {chunks}")
+    if is_validated_chunks(chunks):
+        validated_chunks = chunks
 
-    if chunks == -1:
-        return validate_chunks(shape, shape)
+    elif chunks == -1:
+        validated_chunks = validate_chunks(shape, shape)
 
-    if isinstance(chunks, int):
+    elif isinstance(chunks, int):
         max_elements = chunks
         chunks = ("auto",) * len(shape)
-        return _auto_chunks(shape, chunks, max_elements, dtype=dtype, device=device)
+        validated_chunks = _auto_chunks(
+            shape, chunks, max_elements, dtype=dtype, device=device
+        )
 
-    if all(isinstance(c, tuple) for c in chunks):
-        assert len(shape) == len(chunks)
-        return chunks
+    elif isinstance(chunks, str):
+        raise NotImplementedError()
 
-    if any(isinstance(c, str) for c in chunks):
-        return _auto_chunks(shape, chunks, max_elements, dtype=dtype, device=device)
+    elif any(isinstance(c, str) for c in chunks):
+        validated_chunks = _auto_chunks(
+            shape, chunks, max_elements, dtype=dtype, device=device
+        )
 
-    if len(shape) == 1 and len(chunks) != len(shape):
-        assert sum(chunks) == shape[0]
-        return (chunks,)
+    elif is_tuple_of_ints_or_tuple_of_tuple_of_ints(chunks):
+        validated_chunks = fill_in_chunk_sizes(shape, chunks)
 
-    validated_chunks = ()
-    for s, c in zip(shape, chunks):
-        if isinstance(c, tuple):
-            assert sum(c) == s
-            validated_chunks += (c,)
+    else:
+        raise ValueError(
+            "chunks must be an integer, a tuple of integers a tuple of tuple of integers or 'auto' got {chunks}",
+        )
 
-        elif isinstance(c, int):
-            if c == -1:
-                validated_chunks += ((s,),)
-            elif s % c:
-                validated_chunks += ((c,) * (s // c) + (s - c * (s // c),),)
-            else:
-                validated_chunks += ((c,) * (s // c),)
-        else:
-            raise RuntimeError()
-    
-    assert tuple(sum(c) for c in validated_chunks) == shape
+    assert_chunks_match_shape(shape, validated_chunks)
 
     return validated_chunks
 
 
 def _auto_chunks(
     shape: tuple[int, ...],
-    chunks: Chunks,
+    chunks: ChunksTuple,
     max_elements: str | int = "auto",
-    dtype: np.dtype.base = None,
+    dtype: Optional[np.dtype] = None,
     device: str = "cpu",
 ) -> ValidatedChunks:
     """
@@ -153,7 +209,7 @@ def _auto_chunks(
     ----------
     shape : tuple of int
         The shape of the array.
-    chunks : int or tuple of int or str
+    chunks : tuple of int or str
         The chunk sizes of the Dask array. If an integer, the array will be split into equal chunks. If a tuple, the
         array will be split into the specified chunks. If "auto", the chunks will be determined automatically based
         on the shape and the maximum number of elements.
@@ -170,8 +226,7 @@ def _auto_chunks(
     tuple of tuple of int
         The chunk sizes of the Dask array.
     """
-    if not len(shape) == len(chunks):
-        raise ValueError("shape and chunks must have the same length")
+    check_chunks_match_shape_length(shape, chunks)
 
     if max_elements == "auto":
         if device == "gpu":
@@ -251,7 +306,9 @@ def _auto_chunks(
     return chunks
 
 
-def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = None):
+def equal_sized_chunks(
+    num_items: int, num_chunks: Optional[int] = None, chunk_size: Optional[int] = None
+) -> tuple[int, ...]:
     """
     Split an n integer into m (almost) equal integers, such that the sum of smaller integers equals n.
 
@@ -261,19 +318,25 @@ def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = Non
         The integer to split.
     num_chunks: int
         The number integers n will be split into.
+    chunk_size: int
+        The size of each chunk.
 
     Returns
     -------
-    list of int
+    tuple of int
+        The split integers.
     """
     if num_items == 0:
         return 0, 0
 
-    if (num_chunks is not None) & (chunks is not None):
-        raise RuntimeError()
+    if num_chunks is not None and chunk_size is not None:
+        raise RuntimeError("specify either num_chunks or chunks, not both")
 
-    if (num_chunks is None) & (chunks is not None):
-        num_chunks = (num_items + (-num_items % chunks)) // chunks
+    if num_chunks is None:
+        if chunk_size is not None:
+            num_chunks = (num_items + (-num_items % chunk_size)) // chunk_size
+        else:
+            raise RuntimeError("either num_chunks or chunks must be specified")
 
     if num_items < num_chunks:
         raise RuntimeError(
@@ -281,22 +344,41 @@ def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = Non
         )
 
     elif num_items % num_chunks == 0:
-        return tuple([num_items // num_chunks] * num_chunks)
+        chunks = tuple([num_items // num_chunks] * num_chunks)
     else:
-        v = []
         zp = num_chunks - (num_items % num_chunks)
         pp = num_items // num_chunks
-        for i in range(num_chunks):
-            if i >= zp:
-                v = [pp + 1] + v
-            else:
-                v = [pp] + v
-        return tuple(v)
+        chunks = tuple(pp + 1 if i >= zp else pp for i in range(num_chunks))
+
+    assert sum(chunks) == num_items
+    return chunks
 
 
 def generate_chunks(
-    num_items: int, num_chunks: int = None, chunks: int = None, start: int = 0
-):
+    num_items: int,
+    num_chunks: Optional[int] = None,
+    chunks: Optional[int] = None,
+    start: int = 0,
+) -> Generator[tuple[int, int], None, None]:
+    """
+    Generate start and end indices for each chunks of equal sized chunks.
+
+    Parameters
+    ----------
+    num_items: int
+        The integer to split.
+    num_chunks: int
+        The number integers n will be split into.
+    chunks: int
+        The size of each chunk.
+    start: int
+        The starting index.
+
+    Yields
+    ------
+    tuple of int
+        The start and end indices of the current chunk.
+    """
     for batch in equal_sized_chunks(num_items, num_chunks, chunks):
         if num_items == 0:
             break
