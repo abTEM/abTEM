@@ -305,10 +305,10 @@ def label_to_index(
     sorted_labels = labels[labels_order]
     indices = xp.arange(0, len(labels) + 1)[labels_order]
     index = xp.arange(min_label, max_label + 1)
-    lo = xp.searchsorted(sorted_labels, index, side="left")
-    hi = xp.searchsorted(sorted_labels, index, side="right")
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        yield indices[l:h]
+    lows = xp.searchsorted(sorted_labels, index, side="left")
+    highs = xp.searchsorted(sorted_labels, index, side="right")
+    for i, (low, high) in enumerate(zip(lows, highs)):
+        yield indices[low:high]
 
 
 def get_data_path(file: str) -> str:

@@ -1,40 +1,14 @@
-import ast
 import os
-import sys
 import threading
 import warnings
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Union
 
 import yaml
-from dask.config import deserialize, update, canonical_name, collect
+from dask.config import canonical_name, collect, update
 
 no_default = "__no_default__"
 
-
-def _get_paths():
-    """Get locations to search for YAML configuration files.
-
-    This logic exists as a separate function for testing purposes.
-    """
-
-    paths = [
-        os.getenv("ABTEM_ROOT_CONFIG", "/etc/abtem"),
-        os.path.join(sys.prefix, "etc", "abtem"),
-        os.path.join(os.path.expanduser("~"), ".config", "abtem"),
-        os.path.join(os.path.expanduser("~"), ".abtem"),
-    ]
-
-    if "ABTEM_CONFIG" in os.environ:
-        paths.append(os.environ["ABTEM_CONFIG"])
-
-    # Remove duplicate paths while preserving ordering
-    paths = list(reversed(list(dict.fromkeys(reversed(paths)))))
-
-    return paths
-
-
-paths = _get_paths()
 
 if "ABTEM_CONFIG" in os.environ:
     PATH = os.environ["ABTEM_CONFIG"]
@@ -42,69 +16,11 @@ else:
     PATH = os.path.join(os.path.expanduser("~"), ".config", "abtem")
 
 config: dict = {}
-global_config = config  # alias
 
 config_lock = threading.Lock()
 
 defaults: list[Mapping] = []
 
-
-def _load_config_file(path: str) -> Union[dict, None]:
-    """A helper for loading a config file from a path, and erroring
-    appropriately if the file is malformed."""
-    try:
-        with open(path) as f:
-            config = yaml.safe_load(f.read())
-    except OSError:
-        # Ignore permission errors
-        return None
-    except Exception as exc:
-        raise ValueError(
-            f"An abTEM config file at {path!r} is malformed, original error "
-            f"message:\n\n{exc}"
-        ) from None
-    if config is not None and not isinstance(config, dict):
-        raise ValueError(
-            f"A abTEM config file at {path!r} is malformed - config files must have "
-            f"a dict as the top level object, got a {type(config).__name__} instead"
-        )
-    return config
-
-
-def collect_env(env: Union[Mapping[str, str], None] = None) -> dict:
-    """Collect config from environment variables
-
-    This grabs environment variables of the form "ABTEM_FOO__BAR_BAZ=123" and
-    turns these into config variables of the form ``{"foo": {"bar-baz": 123}}``
-    It transforms the key and value in the following way:
-
-    -  Lower-cases the key text
-    -  Treats ``__`` (double-underscore) as nested access
-    -  Calls ``ast.literal_eval`` on the value
-
-    Any serialized config passed via ``ABTEM_INTERNAL_INHERIT_CONFIG`` is also set here.
-
-    """
-
-    if env is None:
-        env = os.environ
-
-    if "ABTEM_INTERNAL_INHERIT_CONFIG" in env:
-        d = deserialize(env["ABTEM_INTERNAL_INHERIT_CONFIG"])
-    else:
-        d = {}
-
-    for name, value in env.items():
-        if name.startswith("ABTEM_"):
-            varname = name[5:].lower().replace("__", ".")
-            try:
-                d[varname] = ast.literal_eval(value)
-            except (SyntaxError, ValueError):
-                d[varname] = value
-
-    result: dict = {}
-    set(d, config=result)
-    return result
 
 
 class set:
@@ -273,24 +189,6 @@ def get(
     return result
 
 
-def rename(aliases: Mapping, config: dict = config) -> None:
-    """Rename old keys to new keys
-
-    This helps migrate older configuration versions over time
-    """
-    old = []
-    new = {}
-    for o, n in aliases.items():
-        value = get(o, None, config=config)
-        if value is not None:
-            old.append(o)
-            new[n] = value
-
-    for k in old:
-        del config[canonical_name(k, config)]  # TODO: support nested keys
-
-    set(new, config=config)
-
 
 def update_defaults(
     new: Mapping, config: dict = config, defaults: list[Mapping] = defaults
@@ -307,7 +205,7 @@ def update_defaults(
     update(config, new, priority="old")
 
 
-deprecations = {}
+deprecations: dict[str, str | None] = {}
 
 
 def check_deprecations(key: str, deprecations: dict = deprecations) -> str:

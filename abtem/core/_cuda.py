@@ -1,8 +1,8 @@
 import warnings
 
-import cupy as cp
+import cupy as cp  # type: ignore
 import numpy as np
-from numba import cuda, NumbaPerformanceWarning
+from numba import cuda, NumbaPerformanceWarning  # type: ignore
 import math
 
 
@@ -13,7 +13,9 @@ def _batch_crop_2d(new_array, array, corners):
         new_array[x, y, z] = array[x, corners[x, 0] + y, corners[x, 1] + z]
 
 
-def batch_crop_2d(array, corners, new_shape):
+def batch_crop_2d(
+    array: cp.ndarray, corners: cp.ndarray, new_shape: tuple[int, int]
+) -> cp.ndarray:
     threads_per_block = (1, 32, 32)
 
     blocks_per_grid_x = int(np.ceil(corners.shape[0] / threads_per_block[0]))
@@ -47,18 +49,22 @@ def sum_run_length_encoded(array, result, separators):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=NumbaPerformanceWarning)
-        _sum_run_length_encoded[blockspergrid, threadsperblock](array, result, separators)
+        _sum_run_length_encoded[blockspergrid, threadsperblock](
+            array, result, separators
+        )
 
 
 @cuda.jit
-def _interpolate_radial_functions(array,
-                                  positions,
-                                  disk_indices,
-                                  sampling,
-                                  radial_gpts,
-                                  radial_functions,
-                                  radial_derivatives,
-                                  dt):
+def _interpolate_radial_functions(
+    array,
+    positions,
+    disk_indices,
+    sampling,
+    radial_gpts,
+    radial_functions,
+    radial_derivatives,
+    dt,
+):
     i, j = cuda.grid(2)
 
     if (i < positions.shape[0]) & (j < disk_indices.shape[0]):
@@ -66,8 +72,10 @@ def _interpolate_radial_functions(array,
         m = round(positions[i, 1] / sampling[1]) + disk_indices[j, 1]
 
         if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
-            r_interp = math.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
-                                 (m * sampling[1] - positions[i, 1]) ** 2)
+            r_interp = math.sqrt(
+                (k * sampling[0] - positions[i, 0]) ** 2
+                + (m * sampling[1] - positions[i, 1]) ** 2
+            )
 
             idx = int(math.log(r_interp / radial_gpts[0] + 1e-12) / dt)
 
@@ -76,16 +84,22 @@ def _interpolate_radial_functions(array,
 
             elif idx < radial_gpts.shape[0] - 1:
                 slope = radial_derivatives[i, idx]
-                cuda.atomic.add(array, (k, m), radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope)
+                cuda.atomic.add(
+                    array,
+                    (k, m),
+                    radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope,
+                )
 
 
-def interpolate_radial_functions(array,
-                                 positions,
-                                 disk_indices,
-                                 sampling,
-                                 radial_gpts,
-                                 radial_functions,
-                                 radial_derivative):
+def interpolate_radial_functions(
+    array,
+    positions,
+    disk_indices,
+    sampling,
+    radial_gpts,
+    radial_functions,
+    radial_derivative,
+):
     if len(positions) == 0:
         return array
 
@@ -96,14 +110,16 @@ def interpolate_radial_functions(array,
 
     dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
 
-    _interpolate_radial_functions[blockspergrid, threadsperblock](array,
-                                                                  positions,
-                                                                  disk_indices,
-                                                                  sampling,
-                                                                  radial_gpts,
-                                                                  radial_functions,
-                                                                  radial_derivative,
-                                                                  dt)
+    _interpolate_radial_functions[blockspergrid, threadsperblock](
+        array,
+        positions,
+        disk_indices,
+        sampling,
+        radial_gpts,
+        radial_functions,
+        radial_derivative,
+        dt,
+    )
 
 
 def interpolate_bilinear(x, v, u, vw, uw):
@@ -112,7 +128,9 @@ def interpolate_bilinear(x, v, u, vw, uw):
     y = cp.empty((B, out_H, out_W), dtype=x.dtype)
 
     cp.ElementwiseKernel(
-        'raw T x, S v, S u, T vw, T uw, S H, S W, S outsize', 'T y', '''
+        "raw T x, S v, S u, T vw, T uw, S H, S W, S outsize",
+        "T y",
+        """
         // indices
         S v0 = v;
         S v1 = min(v + 1, (S)(H - 1));
@@ -131,7 +149,8 @@ def interpolate_bilinear(x, v, u, vw, uw):
         T px3 = x[offset + v1 * W + u1];
         // interpolate
         y = (w0 * px0 + w1 * px1) + (w2 * px2 + w3 * px3);
-        ''', 'resize_images_interpolate_bilinear'
+        """,
+        "resize_images_interpolate_bilinear",
     )(x, v, u, vw, uw, H, W, out_H * out_W, y)
 
     return y

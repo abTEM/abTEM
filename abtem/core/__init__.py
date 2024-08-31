@@ -1,6 +1,6 @@
 import os
 
-from abtem.core import config
+from abtem.core import config as config
 
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 

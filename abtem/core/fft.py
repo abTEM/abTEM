@@ -123,25 +123,22 @@ def get_fftw_object(
     -------
     pyfftw.FFTW
         FFTW object.
-
     """
 
     direction = _fft_name_to_fftw_direction(name)
 
-    flags = [config.get("fftw.planning_effort")]
+    flags: tuple[str, ...] = (config.get("fftw.planning_effort"),)
     if overwrite_x:
-        flags.append("FFTW_DESTROY_INPUT")
+        flags += ("FFTW_DESTROY_INPUT",)
 
     try:
-        flags.append("FFTW_WISDOM_ONLY")
-
         fftw = pyfftw.FFTW(
             array,
             array,
             axes=axes,
             direction=direction,
             threads=config.get("fftw.threads"),
-            flags=flags,
+            flags=flags + ("FFTW_WISDOM_ONLY",),
         )
     except RuntimeError as e:
         if str(e) != "No FFTW wisdom is known for this plan.":
@@ -200,7 +197,7 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
-            meta=xp.array((), dtype=get_dtype(complex=True)),
+            meta=xp.array((), dtype=np.complex64),
         )
 
     check_cupy_is_installed()
@@ -278,7 +275,7 @@ def fft2_convolve(
             x,
             kernel=kernel,
             overwrite_x=overwrite_x,
-            meta=xp.array((), dtype=get_dtype(complex=True)),
+            meta=xp.array((), dtype=np.complex64),
         )
 
     check_cupy_is_installed()
@@ -313,22 +310,15 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     n = len(positions.shape) - 1
     k = list(spatial_frequencies(shape, (1.0,) * dims, xp=xp))
 
-    # positions = [
-    #    np.expand_dims(positions[..., i], tuple(range(n, n + dims)))
-    #    for i in range(dims)
-    # ]
-
     for i in range(dims):
+        d = list(range(0, n)) + list(range(n, n + dims))
+        del d[i + n]
         expanded_positions = np.expand_dims(
             positions[..., i], tuple(range(n, n + dims))
         )
-        d = list(range(0, n)) + list(range(n, n + dims))
-        del d[i + n]
+
         k[i] = complex_exponential(
-            -2
-            * np.pi
-            * np.expand_dims(k[i], tuple(d))
-            * expanded_positions  # positions[i]
+            -2 * np.pi * np.expand_dims(k[i], tuple(d)) * expanded_positions
         )
 
     array = k[0]
@@ -340,13 +330,21 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
 
 def fft_shift(array: np.ndarray, positions: np.ndarray) -> np.ndarray:
     """
-    Shi
-    """
+    Shift an array in real space using Fourier space interpolation.
 
-    xp = get_array_module(array)
-    return xp.fft.ifft2(
-        xp.fft.fft2(array) * fft_shift_kernel(positions, array.shape[-2:])
-    )
+    Parameters
+    ----------
+    array : np.ndarray
+        Array to shift.
+    positions : np.ndarray
+        Array of positions to shift the array to. The last dimension should be the number of dimensions to shift.
+
+    Returns
+    -------
+    np.ndarray
+        Shifted array
+    """
+    return ifft2(fft2(array) * fft_shift_kernel(positions, array.shape[-2:]))
 
 
 def _fft_interpolation_masks_1d(n1, n2):
@@ -403,7 +401,7 @@ def fft_interpolation_masks(
     for i, (n1, n2) in enumerate(zip(shape_in, shape_out)):
         m1, m2 = _fft_interpolation_masks_1d(n1, n2)
 
-        s = [np.newaxis if j == i else slice(None) for j in range(len(shape_in))]
+        s = [slice(None) if j == i else np.newaxis for j in range(len(shape_in))]
 
         mask1_1d += [m1[tuple(s)]]
         mask2_1d += [m2[tuple(s)]]
@@ -471,8 +469,14 @@ def fft_interpolate(
     new_shape : tuple of int
         New shape of the array.
     normalization : str, optional
+        Normalization to apply to the array. Can be 'values' or 'amplitude'.
+    overwrite_x : bool, optional
+        Overwrite the input array.
 
-
+    Returns
+    -------
+    np.ndarray
+        Interpolated array.
     """
     old_size = np.prod(array.shape[-len(new_shape) :])
 
@@ -503,8 +507,8 @@ def fft_interpolate(
     elif normalization == "amplitude":
         pass
 
-    elif normalization != "intensity":
-        raise ValueError("Normalization must be 'values', 'amplitude' or 'intensity'.")
+    # elif normalization != "intensity":
+    #    raise ValueError()
 
     # else:
     #    raise ValueError(f"Normalization {normalization} not recognized.")
