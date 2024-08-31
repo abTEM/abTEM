@@ -7,17 +7,15 @@ import inspect
 import itertools
 import os
 import warnings
-from typing import Sequence, Any
+from typing import Any, Optional, Sequence
 
 import numpy as np
 
-from abtem.core.backend import cp
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
 
 
 def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> None:
-
     if arr.shape == ():
         arr[...] = item
         return
@@ -40,19 +38,21 @@ def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> No
     raise RuntimeError()
 
 
-def is_array_like(x):
-    if isinstance(x, np.ndarray) or (cp is not None and isinstance(x, cp.ndarray)):
+def is_broadcastable(*shapes: tuple[int, ...]) -> bool | tuple[int, ...]:
+    if not shapes:
         return True
-    else:
-        return False
 
+    # Start with the first shape
+    result_shape = shapes[0]
 
-def is_broadcastable(shape1, shape2):
-    for a, b in zip(shape1[::-1], shape2[::-1]):
-        if a == 1 or b == 1 or a == b:
-            pass
-        else:
-            return False
+    for shape in shapes[1:]:
+        # Check broadcastability between result_shape and the current shape
+        for a, b in zip(result_shape[::-1], shape[::-1]):
+            if a != 1 and b != 1 and a != b:
+                return False
+        # Update result_shape to the broadcasted shape
+        result_shape = tuple(max(a, b) for a, b in zip(result_shape[::-1], shape[::-1]))[::-1]
+
     return True
 
 
@@ -121,10 +121,10 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
 def _get_dims_to_broadcast(
     arr1: np.ndarray,
     arr2: np.ndarray,
-    match_dims: tuple[tuple[int, ...], tuple[int, ...]] = None,
+    match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
     if match_dims is None:
-        match_dims = [(), ()]
+        match_dims = ((), ())
 
     assert len(match_dims) == 2
     assert len(match_dims[0]) == len(match_dims[1])
@@ -146,19 +146,17 @@ def _get_dims_to_broadcast(
 
         last_length = len(match_axis1) + len(match_axis2)
 
-    if len(match_axis1) < len(match_axis2):
-        match_axis1 = [None] * (len(match_axis2) - len(match_axis1)) + match_axis1
-    elif len(match_axis1) > len(match_axis2):
-        match_axis2 = [None] * (len(match_axis1) - len(match_axis2)) + match_axis2
+    max_len = max(len(match_axis1), len(match_axis2))
+    padded_match_axis1 = [None] * (max_len - len(match_axis1)) + match_axis1
+    padded_match_axis2 = [None] * (max_len - len(match_axis2)) + match_axis2
 
-    axis1 = tuple(i for i, a in enumerate(match_axis1) if a is None)
-    axis2 = tuple(i for i, a in enumerate(match_axis2) if a is None)
+    axis1 = tuple(i for i, a in enumerate(padded_match_axis1) if a is None)
+    axis2 = tuple(i for i, a in enumerate(padded_match_axis2) if a is None)
 
     return axis1, axis2
 
 
 class EqualityMixin:
-
     def __eq__(self, other):
         return safe_equality(self, other)
 
@@ -231,7 +229,7 @@ def normalize_axes(
 def expand_dims_to_broadcast(
     arr1: np.ndarray,
     arr2: np.ndarray,
-    match_dims: tuple[tuple[int, ...], tuple[int, ...]] = None,
+    match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
     broadcast: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -278,12 +276,14 @@ def interleave(l1: list | tuple, l2: list | tuple) -> list | tuple:
     return tuple(val for pair in zip(l1, l2) for val in pair)
 
 
-def flatten_list_of_lists(lst) -> list:
+def flatten_list_of_lists(lst: list[list]) -> list:
     """Flatten a list of lists into a single list."""
     return list(itertools.chain(*lst))
 
 
-def label_to_index(labels, max_label=None, min_label=0):
+def label_to_index(
+    labels: np.ndarray, max_label: Optional[int] = None, min_label: int = 0
+):
     """
     Returns a generator that yields indices for each label in the labels array.
 
@@ -311,7 +311,7 @@ def label_to_index(labels, max_label=None, min_label=0):
         yield indices[l:h]
 
 
-def get_data_path(file:str) -> str:
+def get_data_path(file: str) -> str:
     this_file = os.path.abspath(os.path.dirname(file))
     return os.path.join(this_file, "data")
 
