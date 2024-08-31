@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from abc import abstractmethod, ABCMeta
+from abc import ABCMeta, abstractmethod
 from functools import partial
 from numbers import Number
-from typing import Sequence, Iterable, Iterator
+from typing import Callable, Iterable, Iterator, Optional, Sequence, TypeVar
 
 import dask.array as da
 import numpy as np
 
-from abtem.core.backend import get_array_module, ArrayModule
-from abtem.core.chunks import Chunks, equal_sized_chunks
+from abtem.core.backend import ArrayModule, get_array_module
+from abtem.core.chunks import Chunks, equal_sized_chunks, is_tuple_of_ints
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.utils import EqualityMixin, CopyMixin
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 
 
 class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -21,7 +21,7 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     Base object for defining distributions of simulation parameters.
     """
 
-    def __array__(self):
+    def __array__(self) -> np.ndarray:
         return self.values
 
     def __iter__(self) -> Iterator[float]:
@@ -31,46 +31,56 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @abstractmethod
     def dimensions(self) -> int:
         """The number of dimensions in the distribution."""
-        pass
 
     @property
     @abstractmethod
     def shape(self) -> tuple[int, ...]:
         """The shape of the distribution parameters."""
-        pass
 
     @abstractmethod
-    def divide(self, chunks: Chunks, lazy: bool = True):
+    def divide(
+        self, chunks: int | tuple[int, ...] = 1, lazy: bool = True
+    ) -> np.ndarray | da.Array:
         """Divide the distribution into chunks."""
-        pass
 
     @property
     @abstractmethod
     def ensemble_mean(self) -> bool:
         """Calculate the mean of the ensemble."""
-        pass
 
     @property
     @abstractmethod
     def values(self) -> np.ndarray:
         """Scalar values representing the distribution."""
-        pass
 
     @property
     @abstractmethod
     def weights(self) -> np.ndarray:
         """Weight of each of distribution value."""
-        pass
 
 
 class DistributionFromValues(BaseDistribution):
+    """
+    Distribution defined by user-defined values and weights.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        The values of the distribution.
+    weights : np.ndarray, optional
+        The values of the weights. If None, all weights are set to 1.
+    ensemble_mean : bool, optional
+        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full
+        ensemble is kept.
+    """
+
     def __init__(
         self,
         values: np.ndarray,
-        weights: np.ndarray = None,
+        weights: np.ndarray | None = None,
         ensemble_mean: bool = False,
     ):
-        self._values = values
+        self._values = np.array(values)
 
         if weights is None:
             weights = np.ones(len(values))
@@ -88,21 +98,22 @@ class DistributionFromValues(BaseDistribution):
     def dimensions(self) -> int:
         if len(self.shape) > 1:
             return self.shape[1]
-
         return 1
 
     @property
     def shape(self) -> tuple[int]:
         return (self.values.shape[0],)
 
-    def divide(self, chunks: int | tuple[int, ...] = 1, lazy: bool = True):
+    def divide(
+        self, chunks: int | tuple[int, ...] = 1, lazy: bool = True
+    ) -> np.ndarray | da.Array:
         if isinstance(chunks, int):
-            chunks = equal_sized_chunks(len(self), chunks=chunks)
-        elif isinstance(chunks, tuple):
+            chunks = equal_sized_chunks(len(self), num_chunks=chunks)
+        elif is_tuple_of_ints(chunks):
             assert sum(chunks) == len(self)
         else:
-            raise ValueError
-
+            raise ValueError("chunks must be an int or a tuple of ints")
+        
         blocks = np.empty(len(chunks), dtype=object)
         for i, (start, stop) in enumerate(
             zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
@@ -160,7 +171,7 @@ class MultidimensionalDistribution(BaseDistribution):
         The lower-dimensional distributions composed into a higher-dimensional distribution.
     """
 
-    def __init__(self, distributions: list[BaseDistribution]):
+    def __init__(self, distributions: Sequence[BaseDistribution]):
         for distribution in distributions:
             assert distribution.dimensions == 1
 
@@ -171,35 +182,36 @@ class MultidimensionalDistribution(BaseDistribution):
         """The lower dimensional distributions making up this distribution."""
         return self._distributions
 
-    def _apply_to_distributions(self, method_name):
+    def _apply_to_distributions(self, method: str) -> MultidimensionalDistribution:
         return self.__class__(
-            [
-                getattr(distribution, method_name)()
-                for distribution in self.distributions
-            ]
+            [getattr(distribution, method)() for distribution in self.distributions]
         )
 
-    def __neg__(self):
+    def __neg__(self) -> MultidimensionalDistribution:
         return self._apply_to_distributions("__neg__")
 
-    def divide(self, chunks: Chunks, lazy: bool = True):
+    def divide(
+        self, chunks: int | tuple[int, ...] = 1, lazy: bool = True
+    ) -> np.ndarray | da.Array:
         if self.dimensions == 1:
             return self._distributions[0].divide(chunks, lazy)
-
-        raise NotImplementedError
+        else:
+            raise NotImplementedError(
+                "Dividing multidimensional distributions is not supported."
+            )
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int, ...]:
         return tuple(
             map(sum, tuple(distribution.shape for distribution in self._distributions))
         )
 
     @property
-    def dimensions(self):
+    def dimensions(self) -> int:
         return len(self._distributions)
 
     @property
-    def values(self):
+    def values(self) -> np.ndarray:
         if self.dimensions == 1:
             return self._distributions[0].values
         values = [distribution.values for distribution in self._distributions]
@@ -207,11 +219,17 @@ class MultidimensionalDistribution(BaseDistribution):
         return xp.stack(xp.meshgrid(*values, indexing="ij"), axis=-1)
 
     @property
-    def ensemble_mean(self):
-        return tuple(distribution.ensemble_mean for distribution in self._distributions)
+    def ensemble_mean(self) -> bool:
+        ensemble_means = tuple(
+            distribution.ensemble_mean for distribution in self._distributions
+        )
+        assert all(
+            ensemble_mean == ensemble_means[0] for ensemble_mean in ensemble_means
+        )
+        return ensemble_means[0]
 
     @property
-    def weights(self):
+    def weights(self) -> np.ndarray:
         if self.dimensions == 1:
             return self._distributions[0].weights
 
@@ -227,7 +245,9 @@ class MultidimensionalDistribution(BaseDistribution):
 
 
 def from_values(
-    values: Sequence[Number], weights: np.ndarray = None, ensemble_mean: bool = False
+    values: Sequence[Number],
+    weights: np.ndarray | None = None,
+    ensemble_mean: bool = False,
 ) -> DistributionFromValues:
     """
     Return a distribution from user-defined values and weights.
@@ -244,9 +264,9 @@ def from_values(
     """
     if weights is None:
         weights = np.ones(len(values))
-    values = np.array(values)
+    values_array = np.array(values)
     return DistributionFromValues(
-        values=values, weights=weights, ensemble_mean=ensemble_mean
+        values=values_array, weights=weights, ensemble_mean=ensemble_mean
     )
 
 
@@ -285,6 +305,17 @@ def uniform(
     )
 
 
+T = TypeVar("T", float, int, bool)
+
+
+def number_to_tuple(value: T | tuple[T, ...], dimension: int) -> tuple[T, ...]:
+    if isinstance(value, (float, int, bool)):
+        return (value,) * dimension
+    else:
+        assert len(value) == dimension
+        return value
+
+
 def gaussian(
     standard_deviation: float | tuple[float, ...],
     num_samples: int | tuple[int, ...],
@@ -320,22 +351,13 @@ def gaussian(
     normalize : str, optional
         Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
     """
-    if np.isscalar(center):
-        center = (center,) * dimension
+    center = number_to_tuple(center, dimension)
+    standard_deviation = number_to_tuple(standard_deviation, dimension)
+    ensemble_mean = number_to_tuple(ensemble_mean, dimension)
+    sampling_limit = number_to_tuple(sampling_limit, dimension)
+    num_samples = number_to_tuple(num_samples, dimension)
 
-    if np.isscalar(standard_deviation):
-        standard_deviation = (standard_deviation,) * dimension
-
-    if np.isscalar(num_samples):
-        num_samples = (num_samples,) * dimension
-
-    if np.isscalar(ensemble_mean):
-        ensemble_mean = (ensemble_mean,) * dimension
-
-    if np.isscalar(sampling_limit):
-        sampling_limit = (sampling_limit,) * dimension
-
-    distributions = []
+    distributions: list[BaseDistribution] = []
     for i in range(dimension):
         values = np.linspace(
             -standard_deviation[i] * sampling_limit[i] + center[i],
@@ -343,14 +365,16 @@ def gaussian(
             num_samples[i],
         )
 
-        weights = np.exp(-0.5 * (values - center[i]) ** 2 / standard_deviation[i] ** 2)
+        weights = np.exp(
+            -0.5 * (values - center[i]) ** 2 / standard_deviation[i] ** 2
+        )
 
         if normalize == "intensity":
             weights /= np.sqrt((weights**2).sum())
         elif normalize == "amplitude":
             weights /= weights.sum()
         else:
-            raise RuntimeError()
+            raise RuntimeError(f"Unknown normalization method: {normalize}")
 
         distributions.append(
             DistributionFromValues(
@@ -362,8 +386,8 @@ def gaussian(
 
 
 def validate_distribution(
-    distribution: BaseDistribution | Iterable | Number,
-) -> BaseDistribution | Number:
+    distribution: BaseDistribution | np.ndarray | Number,
+) -> BaseDistribution | Number | str:
     """
     Parameters
     ----------
@@ -389,54 +413,56 @@ def validate_distribution(
     if isinstance(distribution, (BaseDistribution, Number, str)):
         return distribution
 
-    if isinstance(distribution, np.ndarray) and len(distribution.shape) == 0:
+    elif isinstance(distribution, np.ndarray) and len(distribution.shape) == 0:
         return distribution.item()
 
-    if isinstance(distribution, (tuple, list, np.ndarray)):
-        try:
-            distribution = np.array(distribution)
-        except ValueError:
-            distribution = np.array(distribution, dtype=object)
+    elif isinstance(distribution, (tuple, list, np.ndarray)):
+        distribution = np.array(distribution)
 
         return DistributionFromValues(
-            distribution, np.ones_like(distribution, dtype=np.float32)
+            distribution, np.ones_like(distribution, dtype=get_dtype(complex=False))
+        )
+    else:
+        raise ValueError(
+            f"value {distribution} is not a single number or could not be converted to a valid distribution"
         )
 
-    raise ValueError(
-        f"value {distribution} is not a single number or could not be converted to a valid distribution"
-    )
+
+def tuple_range_except(n, i):
+    return tuple(x for x in range(n) if x != i)
 
 
 def _unpack_distributions(
-    *args: float | BaseDistribution, shape: tuple, xp: ArrayModule = np
-):
+    *args: float | BaseDistribution, shape: tuple[int, ...], xp: ArrayModule = np
+) -> tuple[tuple[float | np.ndarray, ...], float | np.ndarray]:
     if len(args) == 0:
         return (), 1.0
 
-    num_new_axes = sum(len(arg.shape) for arg in args if hasattr(arg, "shape"))
+    xp = get_array_module(xp)
+    dtype = get_dtype(complex=False)
 
-    unpacked = ()
+    num_new_axes = sum(len(arg.shape) for arg in args if hasattr(arg, "shape"))
+    base_axes = tuple(range(num_new_axes, num_new_axes + len(shape)))
+
+    unpacked = []
     weights = 1.0
     i = 0
     for arg in args:
         if not isinstance(arg, BaseDistribution):
-            unpacked += (arg,)
-            continue
+            unpacked.append(arg)
+        else:
+            axis = tuple_range_except(num_new_axes, i) + base_axes
+            values = xp.asarray(np.expand_dims(arg.values, axis=axis), dtype=dtype)
+            unpacked.append(values)
+            new_weights = xp.asarray(
+                np.expand_dims(arg.weights, axis=axis), dtype=dtype
+            )
+            weights = new_weights if weights is None else weights * new_weights
+            i += 1
 
-        axis = list(range(num_new_axes))
-        del axis[i]
-        i += 1
+    unpacked_tuple = tuple(unpacked)
 
-        axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(shape)))
-        values = xp.asarray(np.expand_dims(arg.values, axis=axis), dtype=xp.float32)
-        unpacked += (values,)
-
-        new_weights = xp.asarray(
-            np.expand_dims(arg.weights, axis=axis), dtype=xp.float32
-        )
-        weights = new_weights if weights is None else weights * new_weights
-
-    return unpacked, weights
+    return unpacked_tuple, weights
 
 
 class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
@@ -454,14 +480,14 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
         super().__init__(**kwargs)
 
     @property
-    def _num_ensemble_axes(self):
+    def _num_ensemble_axes(self) -> int:
         return sum(
             len(distribution.shape)
             for distribution in self._distribution_properties.values()
         )
 
     @property
-    def _distribution_properties(self):
+    def _distribution_properties(self) -> dict[str, BaseDistribution]:
         ensemble_parameters = {}
         for parameter in self._distributions:
             value = getattr(self, parameter)
@@ -470,28 +496,23 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
         return ensemble_parameters
 
     @property
-    def ensemble_shape(self):
+    def ensemble_shape(self) -> tuple[int, ...]:
         return tuple(
-            map(
-                sum,
-                tuple(
-                    distribution.shape
-                    for distribution in self._distribution_properties.values()
-                ),
-            )
+            sum(distribution.shape)
+            for distribution in self._distribution_properties.values()
         )
 
-    def _partition_args(self, chunks: int = 1, lazy: bool = True):
+    def _partition_args(self, chunks: Optional[Chunks] = 1, lazy: bool = True) -> tuple:
         distributions = self._distribution_properties
         chunks = self._validate_ensemble_chunks(chunks)
-        blocks = ()
-        for distribution, n in zip(distributions.values(), chunks):
-            blocks += (distribution.divide(n, lazy=lazy),)
-
+        blocks = tuple(
+            distribution.divide(n, lazy=lazy)
+            for distribution, n in zip(distributions.values(), chunks)
+        )
         return blocks
 
     @classmethod
-    def _partial_transform(cls, *args, keys, **kwargs):
+    def _partial_transform(cls, *args, keys, **kwargs) -> EnsembleFromDistributions:
         assert len(args) == len(keys)
 
         args = unpack_blockwise_args(args)
@@ -502,11 +523,11 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
 
         return new_transform
 
-    def _from_partitioned_args(self):
+    def _from_partitioned_args(self) -> Callable[..., EnsembleFromDistributions]:
         keys = tuple(self._distribution_properties.keys())
         kwargs = self._copy_kwargs()
         return partial(self._partial_transform, keys=keys, **kwargs)
 
     @property
-    def _default_ensemble_chunks(self):
+    def _default_ensemble_chunks(self) -> Chunks:
         return ("auto",) * len(self.ensemble_shape)
