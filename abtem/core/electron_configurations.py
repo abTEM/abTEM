@@ -156,6 +156,6 @@ def remove_electron_from_config_str(config_str: str, n: int, ell: int) -> str:
 
 
 def aufbau(n_max: int = 7) -> list[tuple[int, int, int]]:
-    shells = np.array([(n + l, n, l) for n in range(1, n_max) for l in range(n)])
+    shells = np.array([(n + m, n, m) for n in range(1, n_max) for m in range(n)])
     shells = shells[np.lexsort((shells[:, 1], shells[:, 0]))][:, 1:]
     return [tuple(shell) for shell in shells]
