@@ -1,38 +1,39 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any
+from typing import Any, Optional
 
 from abtem.core import config
 
 try:
-    from tqdm.auto import tqdm
+    from tqdm.auto import tqdm  # type: ignore
 except ImportError:
     tqdm = None
 
 
 class TqdmWrapper:
-    def __init__(self, enabled: bool = None, *args, **kwargs: Any):
-        """
-        This class is a wrapper for the tqdm bar, which implements fallback logic if tqdm is not installed.
+    """
+    This class is a wrapper for the tqdm bar, which implements fallback logic if tqdm is not installed.
 
-        Initializes TqdmWrapper with user_tqdm flag, total iterations, and additional arguments for tqdm.
+    Initializes TqdmWrapper with user_tqdm flag, total iterations, and additional arguments for tqdm.
 
-        Parameters
-        ----------
-        enabled : bool, optional
-            A flag indicating if the wrapper is enabled. If None, the value from the configuration key
-            "local_diagnostics.task_level_progress" is used.
-        *args
-            Variable length argument list for tqdm.
-        **kwargs
-            Arbitrary keyword arguments for tqdm.
+    Parameters
+    ----------
+    enabled : bool, optional
+        A flag indicating if the wrapper is enabled. If None, the value from the configuration key
+        "local_diagnostics.task_level_progress" is used.
+    *args
+        Variable length argument list for tqdm.
+    **kwargs
+        Arbitrary keyword arguments for tqdm.
 
-        Raises
-        ------
-        Warning
-            Issues a warning if the progress display is enabled but tqdm is not installed.
-        """
+    Raises
+    ------
+    Warning
+        Issues a warning if the progress display is enabled but tqdm is not installed.
+    """
+
+    def __init__(self, *args, enabled: Optional[bool] = None, **kwargs: Any):
         if enabled is None:
             enabled = config.get("local_diagnostics.task_level_progress", False)
 
@@ -40,9 +41,7 @@ class TqdmWrapper:
             self._pbar = tqdm(*args, **kwargs)
         else:
             if enabled:
-                raise warnings.warn(
-                    "displaying task level progress require tqdm installed"
-                )
+                warnings.warn("displaying task level progress require tqdm installed")
 
             self._pbar = None
 
