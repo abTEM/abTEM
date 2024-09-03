@@ -28,6 +28,16 @@ def is_tuple_of_tuple_of_ints(x: Chunks) -> TypeGuard[tuple[tuple[int, ...], ...
     )
 
 
+def is_tuple_of_ints_or_tuple_of_ints(
+    x: Chunks,
+) -> TypeGuard[tuple[tuple[int, ...], ...]]:
+    return isinstance(x, tuple) and all(
+        isinstance(x1, int)
+        or (isinstance(x1, tuple) and all(isinstance(c, int) for c in x1))
+        for x1 in x
+    )
+
+
 def is_tuple_of_ints_or_tuple_of_tuple_of_ints(
     x: Chunks,
 ) -> TypeGuard[tuple[int | tuple[int, ...], ...]]:
@@ -182,12 +192,12 @@ def validate_chunks(
             shape, chunks, max_elements, dtype=dtype, device=device
         )
 
-    elif is_tuple_of_ints_or_tuple_of_tuple_of_ints(chunks):
+    elif is_tuple_of_ints_or_tuple_of_ints(chunks):
         validated_chunks = fill_in_chunk_sizes(shape, chunks)
 
     else:
         raise ValueError(
-            "chunks must be an integer, a tuple of integers a tuple of tuple of integers or 'auto' got {chunks}",
+            f"chunks must be an integer, a tuple of integers a tuple of tuple of integers or 'auto' got {chunks}",
         )
 
     assert_chunks_match_shape(shape, validated_chunks)
