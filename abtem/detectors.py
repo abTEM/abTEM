@@ -269,9 +269,11 @@ class AnnularDetector(BaseDetector):
 
     def _out_ensemble_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
         ensemble_shapes = super()._out_ensemble_shape(waves)
+
         if len(_scan_shape(waves)) == 0:
             raise RuntimeError("annular detector requires a scan axis")
-        return tuple(tuple() for ensemble_shape in ensemble_shapes)
+        
+        return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
 
     def _out_base_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)
