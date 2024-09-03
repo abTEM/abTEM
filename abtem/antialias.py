@@ -1,25 +1,25 @@
 """Module for describing antialiasing objects."""
+
 from __future__ import annotations
 
-import numpy as np
 from typing import TYPE_CHECKING
 
+import numpy as np
 
 from abtem.core import config
 from abtem.core.backend import get_array_module
 from abtem.core.fft import fft2_convolve
 from abtem.core.grid import HasGridMixin, spatial_frequencies
-from abtem.core.utils import EqualityMixin, CopyMixin
+from abtem.core.utils import CopyMixin, EqualityMixin
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves
     from abtem.potentials.iam import TransmissionFunction
+    from abtem.waves import Waves
 
 
 def antialias_aperture(
     gpts: tuple[int, int], sampling: tuple[float, float], xp=None
 ) -> np.ndarray:
-
     """
     Array defining a Fourier-space antialiasing aperture.
 
@@ -69,8 +69,8 @@ class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
             return self._array
 
         self._array = antialias_aperture(
-            x.gpts,
-            x.sampling,
+            x._valid_gpts,
+            x._valid_sampling,
             get_array_module(x.device),
         )
         self._key = key
