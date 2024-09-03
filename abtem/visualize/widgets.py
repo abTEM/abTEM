@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from typing import Sequence, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
 from traitlets.traitlets import link
-from matplotlib import colors
+
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
 
 if TYPE_CHECKING:
-    from abtem.visualize.visualizations import Visualization
+    pass
 
 
 try:

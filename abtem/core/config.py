@@ -22,7 +22,6 @@ config_lock = threading.Lock()
 defaults: list[Mapping] = []
 
 
-
 class set:
     """Temporarily set configuration values within a context manager
 
@@ -187,7 +186,6 @@ def get(
             else:
                 raise
     return result
-
 
 
 def update_defaults(

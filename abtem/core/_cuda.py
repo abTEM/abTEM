@@ -1,9 +1,9 @@
+import math
 import warnings
 
 import cupy as cp  # type: ignore
 import numpy as np
-from numba import cuda, NumbaPerformanceWarning  # type: ignore
-import math
+from numba import NumbaPerformanceWarning, cuda  # type: ignore
 
 
 @cuda.jit

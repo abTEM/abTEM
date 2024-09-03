@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import itertools
 from typing import TYPE_CHECKING
 
 import matplotlib
@@ -19,7 +18,7 @@ from matplotlib.patches import Circle
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
-from abtem.core.utils import label_to_index, itemset
+from abtem.core.utils import itemset, label_to_index
 from abtem.visualize.artists import (
     DomainColoringArtist,
     ImageArtist,
@@ -200,7 +199,7 @@ class Visualization:
             axes_shape = tuple(
                 n
                 for i, n in enumerate(measurement.ensemble_shape)
-                if not i in self.indexing_axes and i not in overlay
+                if i not in self.indexing_axes and i not in overlay
             )
             shape = axes_shape + (0,) * (2 - len(axes_shape))
             ncols, nrows = (max(shape[0], 1), max(shape[1], 1))
@@ -278,9 +277,9 @@ class Visualization:
             self.axes.set_sizes(cbar_spacing=0.5)
 
     def interact(self, gui_type, display):
-        if not "ipympl" in matplotlib.get_backend():
+        if "ipympl" not in matplotlib.get_backend():
             raise RuntimeError(
-                f"interactive visualizations requires the 'ipympl' matplotlib backend"
+                "interactive visualizations requires the 'ipympl' matplotlib backend"
             )
 
         sliders = [

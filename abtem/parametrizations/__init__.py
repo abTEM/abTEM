@@ -6,7 +6,7 @@ import json
 import os
 from abc import ABCMeta, abstractmethod
 from numbers import Number
-from typing import Sequence, Callable
+from typing import Callable, Sequence
 
 import numpy as np
 from ase.data import chemical_symbols
@@ -17,8 +17,8 @@ from abtem.core.axes import OrdinalAxis
 from abtem.core.config import config
 from abtem.core.constants import kappa
 from abtem.core.utils import EqualityMixin, get_dtype
-from abtem.measurements import ReciprocalSpaceLineProfiles, RealSpaceLineProfiles
-from abtem.parametrizations.functions import kirkland, ewald, peng, lobato
+from abtem.measurements import RealSpaceLineProfiles, ReciprocalSpaceLineProfiles
+from abtem.parametrizations.functions import ewald, kirkland, lobato, peng
 
 
 def _get_data_path():

@@ -1,5 +1,5 @@
-from ase import units  # type: ignore
 import numpy as np
+from ase import units  # type: ignore
 
 # Vacuum permitivity in ASE units
 eps0 = units._eps0 * units.A**2 * units.s**4 / (units.kg * units.m**3)

@@ -59,11 +59,11 @@ def abs2(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.Array:
         elif x.dtype == "complex128":
             return _abs2_cupy_float64(x.real, x.imag)
         else:
-            raise RuntimeError("Unsupported dtype for calculation of abs2 with cupy array.")
+            raise RuntimeError(
+                "Unsupported dtype for calculation of abs2 with cupy array."
+            )
 
-    raise ValueError(
-        "abs2 only supports numpy arrays, dask arrays and cupy arrays."
-    )
+    raise ValueError("abs2 only supports numpy arrays, dask arrays and cupy arrays.")
 
 
 def complex_exponential(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.Array:

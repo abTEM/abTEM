@@ -1,16 +1,17 @@
 """Module for the Grid class and related functions."""
 
 from __future__ import annotations
-from types import ModuleType
-import warnings
-from typing import Sequence, Iterable, Optional, Callable, TypeVar
 
+import warnings
+from types import ModuleType
+from typing import Callable, Iterable, Optional, Sequence, TypeVar
+
+import dask.array as da
 import numpy as np
 
 from abtem.core import config
 from abtem.core.backend import device_name_from_array_module, get_array_module
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
-import dask.array as da
 
 
 def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:

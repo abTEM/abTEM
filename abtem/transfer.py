@@ -262,7 +262,7 @@ def soft_aperture(
 
     semiangle_cutoff, alpha = expand_dims_to_broadcast(semiangle_cutoff, alpha)
     semiangle_cutoff, phi = expand_dims_to_broadcast(
-        semiangle_cutoff, phi, match_dims=[(-2, -1), (-2, -1)]
+        semiangle_cutoff, phi, match_dims=((-2, -1), (-2, -1))
     )
 
     angular_sampling = xp.array(angular_sampling, dtype=get_dtype(complex=False)) * 1e-3
@@ -708,7 +708,6 @@ def _aberration_property(name, key):
 
 class _HasAberrations:
     _aberration_coefficients: dict
-    energy: float
 
     C10: float | BaseDistribution = _aberration_property(
         "_aberration_coefficients", "C10"
@@ -1171,7 +1170,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
     def __init__(
         self,
         aberration_coefficients: dict[str, float | BaseDistribution] = None,
-        energy: float = None,
+        energy: Optional[float] = None,
         extent: float | tuple[float, float] = None,
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
@@ -1289,7 +1288,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
             )
 
         dtype = get_dtype(complex=False)
-        array *= dtype(2 * xp.pi / self.wavelength)
+        array *= np.array(2 * xp.pi / self.wavelength, dtype=dtype)
         array = complex_exponential(-array)
 
         if cp is not None:
@@ -1541,7 +1540,7 @@ class CTF(_HasAberrations, BaseAperture):
 
             new_array = self._spatial_envelope._evaluate_from_angular_grid(alpha, phi)
             array, new_array = expand_dims_to_broadcast(
-                array, new_array, match_dims=[old_match_dims, new_match_dims]
+                array, new_array, match_dims=(old_match_dims, new_match_dims)
             )
 
             array = array * new_array
@@ -1549,14 +1548,14 @@ class CTF(_HasAberrations, BaseAperture):
         if self._temporal_envelope.focal_spread != 0.0:
             new_array = self._temporal_envelope._evaluate_from_angular_grid(alpha, phi)
             array, new_array = expand_dims_to_broadcast(
-                array, new_array, match_dims=2 * [match_dims]
+                array, new_array, match_dims=(match_dims, match_dims)
             )
             array = array * new_array
 
         if self._aperture.semiangle_cutoff != np.inf:
             new_array = self._aperture._evaluate_from_angular_grid(alpha, phi)
             array, new_array = expand_dims_to_broadcast(
-                array, new_array, match_dims=2 * [match_dims]
+                array, new_array, match_dims=(match_dims, match_dims)
             )
             array = array * new_array
 

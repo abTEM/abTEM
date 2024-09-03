@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import itertools
-from numbers import Number
-from typing import Sequence
+from typing import Optional, Sequence
 
 import numpy as np
-from numba import njit, prange
-
-from abtem.core.energy import energy2wavelength
-from ase.cell import Cell
-from abtem.core.backend import cp
 import pandas as pd
+from ase.cell import Cell
+from numba import njit
+
+from abtem.core.backend import cp
+from abtem.core.energy import energy2wavelength
 
 
 def reciprocal_cell(cell):
@@ -56,7 +55,7 @@ def generate_linear_combinations(
         Coefficients to use in the linear combinations.
     exclude_zero : bool, optional
         Whether to exclude the zero vector from the output.
-    
+
     Returns
     -------
     np.array
@@ -80,7 +79,7 @@ def get_shortest_g_vec_length(cell: Cell):
     ----------
     cell : Cell
         Unit cell.
-    
+
     Returns
     -------
     float
@@ -94,7 +93,7 @@ def get_shortest_g_vec_length(cell: Cell):
 
 
 def reciprocal_space_gpts(
-    cell: np.ndarray,
+    cell: np.ndarray | Cell,
     g_max: float,
 ) -> tuple[int, int, int]:
     # if isinstance(g_max, Number):
@@ -112,6 +111,12 @@ def reciprocal_space_gpts(
     return gpts
 
 
+def a() -> np.ndarray:
+    b = np.meshgrid((0, 1), (0, 1))
+
+    return b
+
+
 def make_hkl_grid(
     cell: np.ndarray | Cell,
     g_max: float,
@@ -123,13 +128,12 @@ def make_hkl_grid(
 
     freqs = tuple(freqs[axis] for axis in axes)
 
-    hkl = np.meshgrid(*freqs, indexing="ij")
-    hkl = np.stack(hkl, axis=-1)
+    hkl_grids = np.meshgrid(*freqs, indexing="ij")
+    hkl = np.stack(hkl_grids, axis=-1)
 
     hkl = hkl.reshape((-1, len(axes)))
     g_vec = calculate_g_vec(hkl, cell)
     hkl = hkl[(g_vec**2).sum(-1) <= g_max**2]
-    
     return hkl
 
 
@@ -197,12 +201,12 @@ def get_reflection_condition(hkl: np.ndarray, centering: str):
         raise ValueError()
 
 
-#@njit(parallel=True, fastmath=True, nogil=True, error_model="numpy")
+@njit(nogil=True, error_model="numpy")
 def fast_filter_excitation_errors(mask, g, orientation_matrices, wavelength, sg_max):
     g_length_2 = (g**2).sum(axis=-1)
 
     b = 0.5 * wavelength * g_length_2
-    for i in prange(len(orientation_matrices)):
+    for i in range(len(orientation_matrices)):
         R = orientation_matrices[i]
 
         sg = -g[:, 0] * R[2, 0] - g[:, 1] * R[2, 1] - g[:, 2] * R[2, 2] - b
@@ -217,7 +221,7 @@ def filter_reciprocal_space_vectors(
     sg_max: float,
     g_max: float,
     centering: str = "P",
-    orientation_matrices: np.ndarray = None,
+    orientation_matrices: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Filter reciprocal space vectors based on excitation errors and reflection conditions.
@@ -256,7 +260,7 @@ def filter_reciprocal_space_vectors(
 
         orientation_matrices = orientation_matrices.reshape((-1, 3, 3))
 
-        #if not len(orientation_matrices.shape) == 3:
+        # if not len(orientation_matrices.shape) == 3:
         #    raise ValueError(
         #        "'orientation_matrices' must have shape (3, 3) or (n, 3, 3)"
         #    )

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from types import ModuleType
 import warnings
 from numbers import Number
+from types import ModuleType
 from typing import Union
 
 import dask.array as da
 import numpy as np
 import scipy  # type: ignore
 import scipy.ndimage  # type: ignore
-
 
 from abtem.core.config import config
 
@@ -169,7 +168,7 @@ def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = N
         return scipy
 
     elif xp is cp:
-        return cupyx.scipy # type: ignore
+        return cupyx.scipy  # type: ignore
 
     else:
         raise ValueError(f"array module must be NumPy or CuPy, not {xp}")
@@ -197,8 +196,8 @@ def get_ndimage_module(
         return scipy.ndimage
 
     if xp is cp:
-        return cupyx_ndimage # type: ignore
-    
+        return cupyx_ndimage  # type: ignore
+
     raise RuntimeError("Invalid array module")
 
 

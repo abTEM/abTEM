@@ -24,7 +24,6 @@ from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
     expand_dims_to_broadcast,
-    tuple_range,
 )
 from abtem.distributions import (
     BaseDistribution,
@@ -149,11 +148,10 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         return (array_object.base_shape,)
 
     def _out_shape(self, array_object: ArrayObjectSubclass) -> tuple[int, ...]:
-        
         ensemble_shapes = self._out_ensemble_shape(array_object)
-        
+
         base_shapes = self._out_base_shape(array_object)
-        
+
         return tuple(
             ensemble_shape + base_shape
             for ensemble_shape, base_shape in zip(ensemble_shapes, base_shapes)
@@ -161,13 +159,13 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
 
     def _out_dims(self, array_object: ArrayObjectSubclass) -> int:
         return tuple(dims for dims in self._out_shape(array_object))
-    
+
     def _out_chunks(
         self, array_object: ArrayObjectSubclass, max_elements=None
     ) -> ValidatedChunks:
         chunkss = self._default_ensemble_chunks + array_object.array.chunks
         shapess = self._out_shape(array_object)
-        
+
         new_chunkss = ()
         for shapes, chunks in zip(shapess, chunkss):
             new_chunkss += tuple(
@@ -176,8 +174,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
                     chunks,
                     max_elements=max_elements,
                     dtype=array_object.dtype,
-                ))
-        
+                )
+            )
+
         return chunks
 
     def _out_base_axes_metadata(
@@ -201,7 +200,6 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
     def _out_ensemble_axes_metadata(
         self, array_object: ArrayObject | ArrayObjectSubclass
     ) -> list[AxisMetadata] | tuple[list[AxisMetadata], ...]:
-
         return ([*self.ensemble_axes_metadata, *array_object.ensemble_axes_metadata],)
 
     def __add__(self, other: ArrayObjectTransform) -> CompositeArrayObjectTransform:
@@ -255,7 +253,6 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
     def _pack_multiple_outputs(
         self, array_object: ArrayObjectSubclass, new_arrays: np.ndarray | da.core.Array
     ):
-        
         is_lazy = isinstance(new_arrays, da.core.Array)
 
         base_shapes = self._out_base_shape(array_object)
@@ -266,7 +263,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         base_axes_metadatas = self._out_base_axes_metadata(array_object)
         ensemble_axes_metadatas = self._out_ensemble_axes_metadata(array_object)
         outputs = ()
-        
+
         assert len(base_shapes) == self._num_outputs
         assert len(ensemble_shapes) == self._num_outputs
         assert len(metas) == self._num_outputs
@@ -274,7 +271,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
         assert len(metadatas) == self._num_outputs
         assert len(base_axes_metadatas) == self._num_outputs
         assert len(ensemble_axes_metadatas) == self._num_outputs
-        
+
         for i in range(self._num_outputs):
             base_shape = base_shapes[i]
             ensemble_shape = ensemble_shapes[i]
@@ -283,7 +280,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
             metadata = metadatas[i]
             base_axes_metadata = base_axes_metadatas[i]
             ensemble_axes_metadata = ensemble_axes_metadatas[i]
-            
+
             if is_lazy:
                 shape = ensemble_shape + base_shape
                 consumed_ensemble_axes = len(new_arrays.shape) - len(ensemble_shape)
@@ -310,7 +307,7 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
             )
 
             outputs += (output,)
-        
+
         return outputs
 
     def _pack_single_output(
@@ -324,11 +321,11 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
 
         if len(ensemble_axes_metadata) > 1 or len(base_axes_metadata) > 1:
             raise NotImplementedError
-        
+
         axes_metadata = ensemble_axes_metadata[0] + base_axes_metadata[0]
 
         cls = self._out_type(array_object)[0]
-        metadata= self._out_metadata(array_object)[0]
+        metadata = self._out_metadata(array_object)[0]
 
         array_object = cls.from_array_and_metadata(
             new_array, axes_metadata=axes_metadata, metadata=metadata
@@ -343,11 +340,9 @@ class ArrayObjectTransform(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta
     def _apply(
         self, array_object: ArrayObjectSubclass
     ) -> ArrayObjectSubclassAlt | tuple[ArrayObjectSubclassAlt, ...]:
-
         new_array = self._calculate_new_array(array_object)
 
         if self._num_outputs > 1:
-
             return self._pack_multiple_outputs(array_object, new_array)
         else:
             return self._pack_single_output(array_object, new_array)
@@ -406,7 +401,6 @@ class WavesTransform(EnsembleTransform):
 
 
 class TransformFromFunc(WavesTransform):
-
     def __init__(self, func, func_kwargs):
         self._func = func
         self._func_kwargs = func_kwargs
@@ -533,7 +527,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
             for i, transform in enumerate(self.transforms)
         ]
         ensemble_axes_metadata = list(itertools.chain(*ensemble_axes_metadata))
-
         return ensemble_axes_metadata
 
     def _out_ensemble_axes_metadata(self, array_object) -> list[AxisMetadata]:
@@ -543,8 +536,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
     def _out_base_axes_metadata(self, array_object) -> list[AxisMetadata]:
         if self._base_axes_metadata is not None:
-            return self._base_axes_metadata
-
+            return (self._base_axes_metadata,)
 
         return self.transforms[0]._out_base_axes_metadata(array_object)
 
@@ -558,7 +550,7 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
             return self._ensemble_shapes
 
         ensemble_shape = self.ensemble_shape + array_object.ensemble_shape
-        return ensemble_shape
+        return (ensemble_shape,)
 
     def _out_base_shape(self, array_object):
         if self._base_shapes is not None:
@@ -639,8 +631,6 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
     def _partition_args(self, chunks=None, lazy: bool = True):
         if chunks is None:
             chunks = self._default_ensemble_chunks
-
-
 
         chunks = validate_chunks(self.ensemble_shape, chunks, max_elements="auto")
 

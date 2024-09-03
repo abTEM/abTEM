@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import warnings
 from abc import abstractmethod
-from typing import Callable, Generator, Optional, Union, Any
+from typing import Any, Callable, Generator, Optional, Union
 
 import dask.array as da
 import numpy as np
@@ -96,7 +96,7 @@ class Ensemble:
         args = self._partition_args(chunks, lazy=True)
 
         out_symbols = tuple_range(sum(len(arg.shape) for arg in args))
-        
+
         arg_symbols = tuple(
             tuple_range(len(arg.shape), sum(len(a.shape) for a in args[:i]))
             for i, arg in enumerate(args)
@@ -117,7 +117,9 @@ class Ensemble:
                 meta=np.array((), dtype=object),
             )
 
-    def generate_blocks(self, chunks: Chunks = 1) -> Generator[tuple[tuple[int, ...], tuple[slice, ...], Ensemble], None, None]:
+    def generate_blocks(
+        self, chunks: Chunks = 1
+    ) -> Generator[tuple[tuple[int, ...], tuple[slice, ...], Ensemble], None, None]:
         """
         Generate chunks of the ensemble.
 
@@ -152,7 +154,9 @@ class EmptyEnsemble(Ensemble):
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return []
 
-    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True) -> tuple:
+    def _partition_args(
+        self, chunks: Optional[Chunks] = None, lazy: bool = True
+    ) -> tuple:
         return ()
 
     def _from_partitioned_args(self) -> type:

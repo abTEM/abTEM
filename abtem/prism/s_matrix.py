@@ -1,6 +1,7 @@
 """Module describing the scattering matrix used in the PRISM algorithm."""
 
 from __future__ import annotations
+
 import inspect
 import operator
 import warnings
@@ -12,53 +13,46 @@ import numpy as np
 from ase import Atoms
 from dask.graph_manipulation import wait_on
 
-from abtem.array import _validate_lazy, ArrayObject, ComputableList
+from abtem.array import ArrayObject, ComputableList, _validate_lazy
 from abtem.core import config
 from abtem.core.axes import (
-    OrdinalAxis,
     AxisMetadata,
+    OrdinalAxis,
     ScanAxis,
     UnknownAxis,
     WaveVectorAxis,
 )
-from abtem.core.backend import get_array_module, cp, validate_device, copy_to_device
-from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks, Chunks
+from abtem.core.backend import copy_to_device, cp, get_array_module, validate_device
+from abtem.core.chunks import Chunks, chunk_ranges, equal_sized_chunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.grid import Grid, GridUndefinedError
 from abtem.core.utils import (
-    safe_ceiling_int,
-    expand_dims_to_broadcast,
-    ensure_list,
     CopyMixin,
     EqualityMixin,
-    tuple_range, itemset,
+    ensure_list,
+    expand_dims_to_broadcast,
+    get_dtype,
+    itemset,
+    safe_ceiling_int,
+    tuple_range,
 )
 from abtem.detectors import (
-    BaseDetector,
-    _validate_detectors,
-    WavesDetector,
-    FlexibleAnnularDetector,
     AnnularDetector,
+    BaseDetector,
+    FlexibleAnnularDetector,
+    WavesDetector,
+    validate_detectors,
 )
 from abtem.measurements import BaseMeasurements
-from abtem.multislice import (
-    allocate_multislice_measurements,
-    multislice_and_detect,
-)
+from abtem.multislice import allocate_multislice_measurements, multislice_and_detect
 from abtem.potentials.iam import BasePotential, _validate_potential
-from abtem.prism.utils import (
-    plane_waves,
-    wrapped_crop_2d,
-    minimum_crop,
-    batch_crop_2d,
-)
-from abtem.scan import BaseScan, _validate_scan, GridScan
+from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
+from abtem.scan import BaseScan, GridScan, _validate_scan
 from abtem.transfer import CTF
-from abtem.waves import BaseWaves, _antialias_cutoff_gpts
-from abtem.waves import Waves, Probe
+from abtem.waves import BaseWaves, Probe, Waves, _antialias_cutoff_gpts
 
 
 def _extract_measurement(array, index):
@@ -76,20 +70,18 @@ def _wrap_measurements(measurements):
 def _finalize_lazy_measurements(
     arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
-
     if extra_ensemble_axes_metadata is None:
         extra_ensemble_axes_metadata = []
 
     measurements = []
     for i, detector in enumerate(detectors):
-
-        base_shape = detector._out_base_shape(waves)
+        base_shape = detector._out_base_shape(waves)[0]
 
         if isinstance(detector, AnnularDetector):
             # TODO
             base_shape = ()
 
-        meta = detector._out_meta(waves)
+        meta = detector._out_meta(waves)[0]
 
         new_axis = tuple(range(len(arrays.shape), len(arrays.shape) + len(base_shape)))
 
@@ -104,15 +96,15 @@ def _finalize_lazy_measurements(
             meta=meta,
         )
 
-        ensemble_axes_metadata = detector._out_ensemble_axes_metadata(waves)
+        ensemble_axes_metadata = detector._out_ensemble_axes_metadata(waves)[0]
 
-        base_axes_metadata = detector._out_base_axes_metadata(waves)
+        base_axes_metadata = detector._out_base_axes_metadata(waves)[0]
 
         axes_metadata = ensemble_axes_metadata + base_axes_metadata
 
-        metadata = detector._out_metadata(waves)
+        metadata = detector._out_metadata(waves)[0]
 
-        cls = detector._out_type(waves)
+        cls = detector._out_type(waves)[0]
 
         axes_metadata = extra_ensemble_axes_metadata + axes_metadata
 
@@ -295,7 +287,6 @@ def _chunked_axis(s_matrix_array):
 
 
 def _chunks_for_multiple_rechunk_reduce(partitions):
-
     chunks_1 = ()
     chunk_indices_1 = ()
     for i in range(1, len(partitions) - 1, 3):
@@ -325,11 +316,11 @@ def _chunks_for_multiple_rechunk_reduce(partitions):
     assert len(chunk_indices_1 + chunk_indices_2 + chunk_indices_3) == (
         len(partitions) - 2
     )
-    return (chunks_1, chunks_2, chunks_3), (
-        chunk_indices_1,
-        chunk_indices_2,
-        chunk_indices_3,
-    )
+
+    chunks = (chunks_1, chunks_2, chunks_3)
+    chunk_indices = (chunk_indices_1, chunk_indices_2, chunk_indices_3)
+
+    return chunks, chunk_indices
 
 
 def _lazy_reduce(
@@ -345,6 +336,7 @@ def _lazy_reduce(
 ) -> np.ndarray:
     args = (array, ensemble_axes_metadata)
     waves = waves_partial(args).item()
+
     s_matrix = SMatrixArray._from_waves(waves, **from_waves_kwargs)
 
     measurements = s_matrix._batch_reduce_to_measurements(
@@ -358,7 +350,6 @@ def _lazy_reduce(
 
 
 def _map_blocks(array, scans, block_indices, window_offset=(0, 0), **kwargs):
-
     ctf_chunks = tuple((n,) for n in kwargs["ctf"].ensemble_shape)
 
     blocks = ()
@@ -411,7 +402,7 @@ def _map_blocks(array, scans, block_indices, window_offset=(0, 0), **kwargs):
     return blocks
 
 
-def _tuple_from_indices(*args):
+def _tuple_from_index_value_pairs(*args):
     temp_list = [None] * (len(args) // 2)
 
     for arg1, arg2 in zip(args[::2], args[1::2]):
@@ -433,9 +424,10 @@ def _multiple_rechunk_reduce(
     window_margin = s_matrix_array._window_margin
     chunked_axis, nochunks_axis = _chunked_axis(s_matrix_array)
 
-    pad_amounts = _tuple_from_indices(
+    pad_amounts = _tuple_from_index_value_pairs(
         chunked_axis, (window_margin[chunked_axis],) * 2, nochunks_axis, (0, 0)
     )
+    print(pad_amounts)
     s_matrix_array = s_matrix_array._pad(pad_amounts)
 
     chunk_size = window_margin[chunked_axis]
@@ -444,12 +436,13 @@ def _multiple_rechunk_reduce(
 
     num_chunks = -(size // -chunk_size)
 
-    partitions = _tuple_from_indices(
+    partitions = _tuple_from_index_value_pairs(
         chunked_axis,
         (chunk_size,) * num_chunks,
         nochunks_axis,
-        (s_matrix_array.shape[len(s_matrix_array.shape) - 2 + chunked_axis],),
+        (s_matrix_array.shape[-2:][nochunks_axis],),
     )
+    print(partitions, s_matrix_array.sampling, s_matrix_array.shape)
 
     chunk_extents = tuple(
         tuple(((cc[0]) * d, (cc[1]) * d) for cc in c)
@@ -468,26 +461,29 @@ def _multiple_rechunk_reduce(
         - sum(partitions),
     )
 
-    (chunks_1, chunks_2, chunks_3), (
-        scan_indices_1,
-        scan_indices_2,
-        scan_indices_3,
+    (
+        (chunks_1, chunks_2, chunks_3),
+        (
+            scan_indices_1,
+            scan_indices_2,
+            scan_indices_3,
+        ),
     ) = _chunks_for_multiple_rechunk_reduce(partitions)
 
     chunks_1 = (
         s_matrix_array.array.chunks[:-3]
         + (-1,)
-        + _tuple_from_indices(chunked_axis, chunks_1, nochunks_axis, -1)
+        + _tuple_from_index_value_pairs(chunked_axis, chunks_1, nochunks_axis, -1)
     )
     chunks_2 = (
         s_matrix_array.array.chunks[:-3]
         + (-1,)
-        + _tuple_from_indices(chunked_axis, chunks_2, nochunks_axis, -1)
+        + _tuple_from_index_value_pairs(chunked_axis, chunks_2, nochunks_axis, -1)
     )
     chunks_3 = (
         s_matrix_array.array.chunks[:-3]
         + (-1,)
-        + _tuple_from_indices(chunked_axis, chunks_3, nochunks_axis, -1)
+        + _tuple_from_index_value_pairs(chunked_axis, chunks_3, nochunks_axis, -1)
     )
 
     shape = tuple(len(c) for c in scan_chunks)
@@ -502,13 +498,13 @@ def _multiple_rechunk_reduce(
         "max_batch_reduction": max_batch_reduction,
         "pbar": pbar,
     }
-    
+
     array = s_matrix_array.array.rechunk(chunks_1)
 
     window_offset = s_matrix_array.window_offset
 
     block_indices = [
-        _tuple_from_indices(chunked_axis, i, nochunks_axis, 0)
+        _tuple_from_index_value_pairs(chunked_axis, i, nochunks_axis, 0)
         for i in range(len(scan_indices_1))
     ]
 
@@ -538,7 +534,7 @@ def _multiple_rechunk_reduce(
     array = array.rechunk(chunks_2)
 
     block_indices = [
-        _tuple_from_indices(chunked_axis, i, nochunks_axis, 0)
+        _tuple_from_index_value_pairs(chunked_axis, i, nochunks_axis, 0)
         for i in range(1, len(scan_indices_2) + 1)
     ]
 
@@ -568,7 +564,7 @@ def _multiple_rechunk_reduce(
     array = array.rechunk(chunks_3)
 
     block_indices = [
-        _tuple_from_indices(chunked_axis, i, nochunks_axis, 0)
+        _tuple_from_index_value_pairs(chunked_axis, i, nochunks_axis, 0)
         for i in range(1, len(scan_indices_3) + 1)
     ]
 
@@ -604,7 +600,6 @@ def _single_rechunk_reduce(
     ctf: CTF,
     max_batch_reduction: int,
 ):
-
     chunked_axis, nochunks_axis = _chunked_axis(s_matrix_array)
 
     num_chunks = (
@@ -620,7 +615,7 @@ def _single_rechunk_reduce(
     chunks = (
         s_matrix_array.array.chunks[:-3]
         + (-1,)
-        + _tuple_from_indices(chunked_axis, chunks, nochunks_axis, -1)
+        + _tuple_from_index_value_pairs(chunked_axis, chunks, nochunks_axis, -1)
     )
 
     array = s_matrix_array._array.rechunk(chunks)
@@ -659,11 +654,11 @@ def _single_rechunk_reduce(
     }
 
     for indices, _, sub_scan in scan.generate_blocks(scan_chunks):
-
         sub_scan = sub_scan.item()
 
         if len(sub_scan) == 0:
-            itemset(blocks,
+            itemset(
+                blocks,
                 (0,) * len(array.shape[:-3]) + indices,
                 da.zeros(
                     (0,) * len(blocks.shape),
@@ -675,7 +670,6 @@ def _single_rechunk_reduce(
         slics = (slice(None),) * (len(array.shape) - 2)
         window_offset = ()
         for i, k in enumerate(indices):
-
             if len(array.chunks[-2:][i]) > 1:
                 slics += ([k - 1, k, (k + 1) % len(array.chunks[-2:][i])],)
                 window_offset += (
@@ -730,10 +724,9 @@ def _no_chunks_reduce(
     scan: BaseScan,
     detectors: list[BaseDetector],
     ctf: CTF,
-    max_batch_reduction: int,
+    max_batch_reduction: int = 1,
     pbar: bool = False,
 ):
-
     kwargs = {
         "waves_partial": s_matrix_array.waves._from_partitioned_args(),
         "ensemble_axes_metadata": s_matrix_array.waves.ensemble_axes_metadata,
@@ -741,7 +734,7 @@ def _no_chunks_reduce(
         "ctf": ctf,
         "detectors": detectors,
         "max_batch_reduction": max_batch_reduction,
-        "pbar": pbar
+        "pbar": pbar,
     }
 
     array = s_matrix_array.array
@@ -779,6 +772,7 @@ def _no_chunks_reduce(
         detectors=detectors,
         extra_ensemble_axes_metadata=s_matrix_array.ensemble_axes_metadata,
     )
+
     return measurements
 
 
@@ -840,7 +834,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         self._grid = Grid(
             extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
         )
@@ -940,11 +933,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
     @property
     def interpolation(self) -> tuple[int, int]:
-
         return self._interpolation
 
     def rechunk(self, chunks: Chunks, in_place: bool = True):
-
         array = self.array.rechunk(chunks)
 
         if in_place:
@@ -1073,7 +1064,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         max_batch_reduction: int,
         pbar: bool = False,
     ) -> tuple[BaseMeasurements | Waves, ...]:
-
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
         measurements = allocate_multislice_measurements(
@@ -1193,8 +1183,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         return self.__class__(array, **kwargs)
 
     def _chunks_for_reduction(self):
-        chunks = -(self.gpts[0] // -(self.interpolation[0] * 2)), -(
-            self.gpts[1] // -(self.interpolation[1] * 2)
+        chunks = (
+            -(self.gpts[0] // -(self.interpolation[0] * 2)),
+            -(self.gpts[1] // -(self.interpolation[1] * 2)),
         )
 
         num_chunks = self.gpts[0] // chunks[0], self.gpts[1] // chunks[1]
@@ -1219,14 +1210,12 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     def _validate_max_batch_reduction(
         self, scan, max_batch_reduction: int | str = "auto"
     ):
-
         shape = (len(scan),) + self.window_gpts
         chunks = (max_batch_reduction, -1, -1)
 
         return validate_chunks(shape, chunks, dtype=np.dtype("complex64"))[0][0]
 
     def _validate_reduction_scheme(self, reduction_scheme):
-
         if self.interpolation == (1, 1) and reduction_scheme == "no-chunks":
             raise NotImplementedError
 
@@ -1289,8 +1278,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         scan = _validate_scan(
             scan, Probe._from_ctf(extent=self.extent, ctf=ctf, energy=self.energy)
         )
-
-        detectors = detectors = _validate_detectors(
+        detectors = detectors = validate_detectors(
             detectors, self.dummy_probes(downsample=False)
         )
 
@@ -1303,7 +1291,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         pbar = config.get("diagnostics.task_progress", False)
 
         if self.is_lazy:
-
             if reduction_scheme == "multiple-rechunk":
                 measurements = _multiple_rechunk_reduce(
                     self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
@@ -1317,6 +1304,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 measurements = _no_chunks_reduce(
                     self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
                 )
+
             else:
                 raise ValueError()
         else:
@@ -1325,8 +1313,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             )
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
-
-        return _wrap_measurements(measurements)
+        out = _wrap_measurements(measurements)
+        return out
 
     def scan(
         self,
@@ -1440,7 +1428,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         device: str = None,
         store_on_host: bool = False,
     ):
-
         if downsample is True:
             downsample = "cutoff"
 
@@ -1588,7 +1575,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         chunks = validate_chunks(
             shape=(len(self),) + self.gpts,
             chunks=("auto", -1, -1),
-            limit=max_batch,
+            max_elements=max_batch,
             dtype=np.dtype("complex64"),
             device=self.device,
         )
@@ -1710,7 +1697,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     @staticmethod
     def _wave_vector_blocks(wave_vector_chunks, lazy: bool = True):
-
         wave_vector_blocks = chunk_ranges(wave_vector_chunks)[0]
 
         array = np.zeros(len(wave_vector_blocks), dtype=object)
@@ -1723,7 +1709,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     @staticmethod
     def _build_s_matrix(s_matrix, wave_vector_range=slice(None), pbar: bool = False):
-
         if isinstance(s_matrix, np.ndarray):
             s_matrix = s_matrix.item()
 
@@ -1836,7 +1821,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 concatenate=True,
                 adjust_chunks=adjust_chunks,
                 pbar=pbar,
-                meta=xp.array((), dtype=np.complex64),
+                meta=xp.array((), dtype=get_dtype(complex=True)),
             )
 
         else:
@@ -1973,7 +1958,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         for shape, axis_metadata in zip(
             self.ensemble_shape, self.ensemble_axes_metadata
         ):
-
             extra_ensemble_axes_metadata += [axis_metadata]
             extra_ensemble_axes_shape += (shape,)
 
@@ -1988,7 +1972,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 self.potential.base_axes_metadata[0]
             ]
 
-        detectors = _validate_detectors(detectors)
+        detectors = validate_detectors(detectors)
 
         if self.ensemble_shape:
             measurements = allocate_multislice_measurements(
@@ -2094,7 +2078,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             The detected measurement (if detector(s) given).
         """
 
-        detectors = _validate_detectors(detectors, self.dummy_probes(downsample=False))
+        detectors = validate_detectors(detectors, self.dummy_probes(downsample=False))
 
         if scan is None:
             scan = (self.extent[0] / 2, self.extent[1] / 2)
@@ -2164,7 +2148,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             return _wrap_measurements(measurements)
 
         s_matrix_array = self.build(max_batch=max_batch_multislice, lazy=lazy)
-
         return s_matrix_array.reduce(
             scan=scan,
             detectors=detectors,

@@ -2,8 +2,9 @@ from numbers import Number
 
 import numpy as np
 from ase import units
-from abtem.potentials.gpaw import unpack2
 from scipy.special import sph_harm
+
+from abtem.potentials.gpaw import unpack2
 
 
 def spherical_coordinates(box, gpts, origin):

@@ -1,7 +1,8 @@
 import math
 
-from abtem.core.backend import cp
 import numpy as np
+
+from abtem.core.backend import cp
 
 # ### expm ###
 b = [

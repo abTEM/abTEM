@@ -13,7 +13,7 @@ from numba import jit
 from scipy.interpolate import interp1d
 from scipy.special import sph_harm, spherical_jn
 
-from abtem import Images, RealSpaceLineProfiles
+from abtem.measurements import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import copy_to_device, get_array_module

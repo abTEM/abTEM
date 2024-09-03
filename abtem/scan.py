@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Union, Sequence, Tuple, Optional
+from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -13,21 +13,21 @@ from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
 from abtem.array import ArrayObject
-from abtem.core.axes import ScanAxis, PositionsAxis, AxisMetadata
+from abtem.core.axes import AxisMetadata, PositionsAxis, ScanAxis
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import itemset, get_dtype
+from abtem.core.utils import get_dtype, itemset
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
 from abtem.visualize.visualizations import Visualization
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves, Probe
     from abtem.prism.s_matrix import BaseSMatrix
+    from abtem.waves import Probe, Waves
 
 
 ScanWithSampling = Union["LineScan", "GridScan"]
@@ -300,7 +300,7 @@ class CustomScan(BaseScan):
                 * (self.positions[:, 1] < y_extents[1])
             )
 
-            n = np.sum(mask)
+            n = int(np.sum(mask))
             chunks += (n,)
             stop = start + n
             new_positions[start:stop] = self.positions[mask]
@@ -340,7 +340,6 @@ def _validate_coordinate(
     potential: BasePotential | Atoms | None = None,
     fractional: bool = False,
 ) -> tuple[float, float] | None:
-
     if isinstance(coordinate, Atom):
         if fractional:
             raise ValueError()
@@ -354,7 +353,7 @@ def _validate_coordinate(
         return None
     else:
         raise ValueError("coordinate must be a float or a tuple of two floats")
-    
+
     if fractional:
         assert potential is not None
         assert coordinate is not None
@@ -730,10 +729,12 @@ class LineScan(BaseScan):
 
         return (blocks,)
 
-    def get_positions(self, chunks: int | None = None, lazy: bool = False) -> np.ndarray:
+    def get_positions(
+        self, chunks: int | None = None, lazy: bool = False
+    ) -> np.ndarray:
         if self.gpts is None:
-            raise RuntimeError("gpts is not defined")   
-        
+            raise RuntimeError("gpts is not defined")
+
         if self.start is None or self.end is None:
             raise RuntimeError("start and end is not defined")
 
@@ -769,7 +770,7 @@ class LineScan(BaseScan):
         assert isinstance(self.start, tuple)
         assert isinstance(self.end, tuple)
         assert isinstance(self.extent, float)
-        
+
         if width:
             rect = Rectangle(self.start, self.extent, width, angle=self.angle, **kwargs)
             ax.add_patch(rect)
@@ -777,9 +778,6 @@ class LineScan(BaseScan):
             ax.plot(
                 [self.start[0], self.end[0]], [self.start[1], self.end[1]], **kwargs
             )
-
-
-
 
 
 class GridScan(HasGridMixin, BaseScan):
@@ -827,14 +825,14 @@ class GridScan(HasGridMixin, BaseScan):
             start = (float(start[0]), float(start[1]))
         else:
             raise ValueError("start must be a float or a tuple of two floats")
-        
+
             #    assert len(start) == 2
             #    validated_start = start
-            #else:
+            # else:
             #    raise ValueError("start must be a float or a tuple of two floats")
             #
-            #start = tuple(map(float, start))
-            #assert len(start) == 2
+            # start = tuple(map(float, start))
+            # assert len(start) == 2
 
         if end is not None:
             if np.isscalar(end):
@@ -852,7 +850,7 @@ class GridScan(HasGridMixin, BaseScan):
         self._start = start
         self._end = end
         self._grid = Grid(
-             extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
+            extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
         )
 
     def __len__(self):
@@ -870,7 +868,6 @@ class GridScan(HasGridMixin, BaseScan):
 
     @property
     def shape(self) -> tuple[int, int]:
-        assert len(self.gpts) == 2
         return self.gpts
 
     @property
@@ -964,7 +961,7 @@ class GridScan(HasGridMixin, BaseScan):
         x_chunks_new = []
         for i in range(len(separators)):
             if i in unique:
-                x_chunks_new.append(x_chunks[unique.index(i)])
+                x_chunks_new.append(int(x_chunks[unique.index(i)]))
             else:
                 x_chunks_new.append(0)
 
@@ -973,15 +970,13 @@ class GridScan(HasGridMixin, BaseScan):
         )
 
         separators = [l for _, l in extents[1]]
-        unique, y_chunks = np.unique(
-            np.digitize(y, [l for _, l in extents[1]]), return_counts=True
-        )
+        unique, y_chunks = np.unique(np.digitize(y, separators), return_counts=True)
         unique = list(unique)
 
         y_chunks_new = []
         for i in range(len(separators)):
             if i in unique:
-                y_chunks_new.append(y_chunks[unique.index(i)])
+                y_chunks_new.append(int(y_chunks[unique.index(i)]))
             else:
                 y_chunks_new.append(0)
 

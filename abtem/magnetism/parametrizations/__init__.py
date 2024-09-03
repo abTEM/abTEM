@@ -1,7 +1,9 @@
 from __future__ import annotations
-from abtem.core.utils import get_data_path
+
 import json
 import os
+
+from abtem.core.utils import get_data_path
 
 
 def get_parameters():

@@ -8,7 +8,7 @@ from abc import ABCMeta, abstractmethod
 from collections import defaultdict
 from numbers import Number
 from types import ModuleType
-from typing import TYPE_CHECKING, Dict, Sequence, Type, TypeVar
+from typing import TYPE_CHECKING, Dict, Optional, Sequence, Type, TypeVar
 
 import dask.array as da
 import numpy as np
@@ -37,7 +37,7 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
-from abtem.core.units import _get_conversion_factor
+from abtem.core.units import get_conversion_factor
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -179,7 +179,9 @@ def _scan_sampling(measurements: BaseMeasurements | BaseWaves) -> tuple[float, .
     )
 
 
-def _scan_axes_metadata(measurements: BaseMeasurements | BaseWaves) -> list[AxisMetadata]:
+def _scan_axes_metadata(
+    measurements: BaseMeasurements | BaseWaves,
+) -> list[AxisMetadata]:
     return [measurements.axes_metadata[i] for i in _scan_axes(measurements)]
 
 
@@ -484,7 +486,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         dose_per_area: float | Sequence[float] | None = None,
         total_dose: float | Sequence[float] | None = None,
         samples: int = 1,
-        seed: int = None,
+        seed: Optional[int] = None,
     ):
         """
         Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided 'total_dose' (per measurement
@@ -2048,7 +2050,7 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
         return self.__class__(**kwargs)
 
     # def _plot_extent(self, units=None):
-    #     scale = _get_conversion_factor(units, "Å")
+    #     scale = get_conversion_factor(units, "Å")
     #     return [0, self.extent * scale]
     #
     # # def _plot_extent(self, units=None):
@@ -2481,8 +2483,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         energy,
         radius,
     ):
-        from abtem.bloch.utils import filter_reciprocal_space_vectors
         from abtem.bloch.indexing import index_diffraction_spots
+        from abtem.bloch.utils import filter_reciprocal_space_vectors
 
         mask = filter_reciprocal_space_vectors(
             hkl,
@@ -4057,7 +4059,7 @@ class PolarMeasurements(BaseMeasurements):
         )
 
 
-@jit(nopython=True, nogil=True, fastmath=True)
+# @jit(nopython=True, nogil=True, fastmath=True)
 def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
     k_max = 0.0
     for i in range(len(hkl)):
@@ -4103,7 +4105,7 @@ def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
     )
 
 
-@jit(nopython=True, nogil=True)
+# @jit(nopython=True, nogil=True)
 def _reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
     for i in range(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = (
@@ -4665,7 +4667,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         visualization : Visualization
         """
 
-        k_max = self.max_reciprocal_space_vector_length() * _get_conversion_factor(
+        k_max = self.max_reciprocal_space_vector_length() * get_conversion_factor(
             units, "1/Å", self.metadata.get("energy", None)
         )
 

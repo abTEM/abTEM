@@ -10,7 +10,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.atoms import is_cell_orthogonal
-from abtem.core.utils import label_to_index, EqualityMixin
+from abtem.core.utils import EqualityMixin, label_to_index
 
 
 def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarray:
@@ -44,7 +44,6 @@ def _validate_slice_thickness(
     thickness: float = None,
     num_slices: int = None,
 ) -> tuple[float, ...]:
-
     if np.isscalar(slice_thickness):
         if thickness is not None:
             thickness = float(thickness)
@@ -190,7 +189,7 @@ class BaseSlicedAtoms(EqualityMixin):
     ):
         """
         Generate atoms in slices.
-        
+
         Parameters
         ----------
         first_slice : int, optional
@@ -199,7 +198,7 @@ class BaseSlicedAtoms(EqualityMixin):
             Index of the last slice of the atoms to return.
         atomic_number : int, optional
             If given, only atoms with the given atomic number is returned.
-        
+
         Yields
         ------
         atoms : Atoms

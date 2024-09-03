@@ -38,7 +38,7 @@ from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_ch
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.grid import Grid, HasGridMixin, HasGrid2DMixin
+from abtem.core.grid import Grid, HasGrid2DMixin, HasGridMixin
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
     AtomsEnsemble,

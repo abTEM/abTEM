@@ -7,8 +7,7 @@ import numpy as np
 from matplotlib.axes import Axes
 from mpl_toolkits.axes_grid1 import Divider, Size
 from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
-import matplotlib
-import matplotlib.colorbar as cbar
+
 from abtem.core.utils import flatten_list_of_lists, interleave
 
 

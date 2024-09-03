@@ -5,15 +5,15 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import scipy.ndimage
-from numba import stencil, njit
+from numba import njit, stencil
 
 from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma
 from abtem.potentials.iam import TransmissionFunction
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves
     from abtem.potentials.iam import PotentialArray
+    from abtem.waves import Waves
 
 fd_coefficients = {
     2: [1.0, -2.0, 1.0],

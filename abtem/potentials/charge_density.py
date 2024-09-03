@@ -20,7 +20,7 @@ from abtem.core.fft import fft_crop, fft_interpolate
 from abtem.core.utils import itemset
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
-from abtem.potentials.iam import Potential, _PotentialBuilder, PotentialArray
+from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
 
 def _spatial_frequencies_orthorhombic(shape, cell: Cell):

@@ -12,7 +12,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module
 from abtem.core.utils import get_dtype
-from abtem.distributions import validate_distribution, BaseDistribution
+from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.transform import EnsembleTransform
 

@@ -11,14 +11,14 @@ from scipy.integrate import trapezoid
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 
-from abtem.core.axes import ThicknessAxis, RealSpaceAxis, OrdinalAxis, AxisMetadata
+from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessAxis
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
 from abtem.potentials.iam import (
     BaseField,
-    _FieldBuilderFromAtoms,
     FieldArray,
+    _FieldBuilderFromAtoms,
 )
 
 

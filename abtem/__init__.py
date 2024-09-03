@@ -1,36 +1,35 @@
 """Main abTEM module."""
 
+from abtem import distributions, transfer
 from abtem._version import __version__
-from abtem import distributions
+from abtem.array import concatenate, from_zarr, stack
 from abtem.atoms import orthogonalize_cell, standardize_cell
-from abtem.potentials.charge_density import ChargeDensityPotential
+from abtem.bloch import BlochWaves, StructureFactor
 from abtem.core import axes, config
-from abtem.array import concatenate, stack, from_zarr
 from abtem.detectors import (
     AnnularDetector,
-    SegmentedDetector,
     FlexibleAnnularDetector,
     PixelatedDetector,
+    SegmentedDetector,
     WavesDetector,
 )
-from abtem.potentials.gpaw import GPAWPotential
+from abtem.inelastic.phonons import AtomsEnsemble, FrozenPhonons
 from abtem.measurements import (
-    Images,
     DiffractionPatterns,
+    Images,
+    IndexedDiffractionPatterns,
+    PolarMeasurements,
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
-    PolarMeasurements,
-    IndexedDiffractionPatterns,
 )
+from abtem.potentials.charge_density import ChargeDensityPotential
+from abtem.potentials.gpaw import GPAWPotential
+from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
-from abtem.inelastic.phonons import FrozenPhonons, AtomsEnsemble
-from abtem.potentials.iam import Potential, CrystalPotential, PotentialArray
-from abtem.scan import CustomScan, LineScan, GridScan
-from abtem.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope
+from abtem.scan import CustomScan, GridScan, LineScan
+from abtem.transfer import CTF, Aperture, SpatialEnvelope, TemporalEnvelope
 from abtem.visualize.visualizations import show_atoms
-from abtem.waves import Waves, Probe, PlaneWave
-from abtem import transfer
-from abtem.bloch import BlochWaves, StructureFactor
+from abtem.waves import PlaneWave, Probe, Waves
 
 __all__ = [
     "__version__",

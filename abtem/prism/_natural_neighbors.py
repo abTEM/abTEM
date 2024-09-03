@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.spatial import cKDTree, ConvexHull, Delaunay
+from scipy.spatial import ConvexHull, Delaunay, cKDTree
 
 
 def triangle_area(pt1, pt2, pt3):

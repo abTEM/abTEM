@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from numbers import Number
-from typing import TYPE_CHECKING, Any, List, Tuple, Union
+from typing import Any, List, Tuple, Union
 
 import dask
 import dask.array as da
@@ -18,7 +18,6 @@ from ase.data import atomic_numbers, chemical_symbols
 from scipy.interpolate import interp1d
 
 from abtem.core.axes import AxisMetadata
-from abtem.core.constants import eps0
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
     electron_configurations,

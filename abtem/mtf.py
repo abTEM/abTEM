@@ -1,5 +1,7 @@
 """Module describing the detector modulation transfer function (MTF)."""
+
 import numpy as np
+
 
 def default_mtf_func(k: np.ndarray, c0: float, c1: float, c2: float, c3: float):
     """
@@ -31,6 +33,7 @@ class MTF:
     kwargs :
         Provide the MTF parameters as keyword arguments.
     """
+
     def __init__(self, func: callable = None, **kwargs):
         if func is None:
             self.f = default_mtf_func
@@ -56,7 +59,7 @@ class MTF:
         sampling = []
         for calibration in measurement.calibrations:
             if calibration is not None:
-                if calibration.units.lower() in ('angstrom', 'å'):
+                if calibration.units.lower() in ("angstrom", "å"):
                     sampling.append(calibration.sampling)
 
         # Get number of grid points from measurement
@@ -65,13 +68,13 @@ class MTF:
         else:
             gpts = (measurement.array.shape[1], measurement.array.shape[2])
 
-        # Get measurement array   
+        # Get measurement array
         measurement = measurement.copy()
         img = measurement.array
 
         # Get spatial frequencies
         kx, ky = spatial_frequencies(gpts, sampling)
-        k = np.sqrt(kx ** 2 + ky ** 2)
+        k = np.sqrt(kx**2 + ky**2)
 
         # Compute MTF
         mtf = self.f(k, **self.params)

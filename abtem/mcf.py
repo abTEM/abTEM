@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Union, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -7,9 +7,9 @@ from scipy.sparse.linalg import eigsh
 
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import get_array_module
-from abtem.core.energy import HasAcceleratorMixin, Accelerator
+from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.fft import fft_crop
-from abtem.core.grid import spatial_frequencies, Grid
+from abtem.core.grid import Grid, spatial_frequencies
 from abtem.core.utils import itemset
 from abtem.transfer import ArrayWaveTransform
 

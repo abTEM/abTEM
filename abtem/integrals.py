@@ -16,16 +16,18 @@ from scipy.special import erf
 
 from abtem.core.backend import (
     cp,
+    cupyx,
+    device_name_from_array_module,
     get_array_module,
     get_ndimage_module,
 )
-from abtem.core.backend import cupyx
-from abtem.core.backend import device_name_from_array_module
 from abtem.core.fft import fft2, ifft2
-from abtem.core.grid import disk_meshgrid
-from abtem.core.grid import polar_spatial_frequencies
-from abtem.core.grid import spatial_frequencies
-from abtem.core.utils import EqualityMixin, CopyMixin, get_dtype
+from abtem.core.grid import (
+    disk_meshgrid,
+    polar_spatial_frequencies,
+    spatial_frequencies,
+)
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 from abtem.parametrizations import validate_parametrization
 
 if cp is not None:

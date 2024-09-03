@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from bisect import bisect_left
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from ase import Atoms
@@ -254,7 +254,7 @@ def allocate_measurement(
     axes_metadata = detector._out_axes_metadata(waves)[0]
 
     shape = detector._out_shape(waves)[0]
-
+    #
     if extra_ensemble_axes_shape is not None:
         assert len(extra_ensemble_axes_shape) == len(extra_ensemble_axes_shape)
         shape = extra_ensemble_axes_shape + shape
@@ -264,9 +264,12 @@ def allocate_measurement(
 
     array = xp.zeros(shape, dtype=detector._out_dtype(waves)[0])
 
-    return measurement_type.from_array_and_metadata(
+    out_measuerement = measurement_type.from_array_and_metadata(
         array=array, axes_metadata=axes_metadata, metadata=metadata
     )
+    # ssss
+
+    return out_measuerement
 
 
 def _potential_ensemble_shape_and_metadata(
@@ -924,7 +927,7 @@ class MultisliceTransform(ArrayObjectTransform):
     def __init__(
         self,
         potential: BasePotential,
-        detectors: BaseDetector | list[BaseDetector] = None,
+        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         conjugate: bool = False,
         transpose: bool = False,
         multislice_func: callable = None,
@@ -1044,7 +1047,9 @@ class MultisliceTransform(ArrayObjectTransform):
 
     def _out_ensemble_axes_metadata(self, waves: BaseWaves):
         if len(self.potential.exit_planes) > 1:
-            potential_axes_metadata = self.potential.ensemble_axes_metadata + [self.potential._get_exit_planes_axes_metadata()]
+            potential_axes_metadata = self.potential.ensemble_axes_metadata + [
+                self.potential._get_exit_planes_axes_metadata()
+            ]
         else:
             potential_axes_metadata = self.potential.ensemble_axes_metadata
 
@@ -1055,11 +1060,11 @@ class MultisliceTransform(ArrayObjectTransform):
 
         return ensemble_axes_metadata
 
-    def _partition_args(self, chunks:int =1, lazy: bool = True):
+    def _partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
         if len(self._potential.exit_planes) > 1:
             chunks = chunks[:-1]
-        
+
         args = self._potential._partition_args(chunks=chunks, lazy=lazy)
         if len(self._potential.ensemble_shape) > 0:
             args = (args[0][..., None],)

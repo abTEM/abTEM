@@ -2,7 +2,7 @@ from typing import Tuple
 
 import numpy as np
 
-from abtem.core.backend import get_array_module, cp
+from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
 from abtem.core.utils import expand_dims_to_broadcast

@@ -1,20 +1,21 @@
 """Module for simulating beam tilt."""
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from abtem.core.axes import AxisMetadata, TiltAxis, AxisAlignedTiltAxis
+from abtem.core.axes import AxisAlignedTiltAxis, AxisMetadata, TiltAxis
 from abtem.core.backend import get_array_module
-from abtem.transform import CompositeArrayObjectTransform, ArrayObjectTransform
 from abtem.distributions import (
     BaseDistribution,
-    MultidimensionalDistribution,
     EnsembleFromDistributions,
+    MultidimensionalDistribution,
     from_values,
     validate_distribution,
 )
+from abtem.transform import ArrayObjectTransform, CompositeArrayObjectTransform
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -127,15 +128,6 @@ class BaseBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
         """
 
         return self._apply(waves)
-
-        # kwargs = waves._copy_kwargs(exclude=("array",))
-        # kwargs["array"] = array
-        # kwargs["metadata"] = self._out_metadata(waves)
-        # kwargs["ensemble_axes_metadata"] = (
-        #     self.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
-        # )
-
-        # return waves.__class__(**kwargs)
 
 
 class BeamTilt(BaseBeamTilt):

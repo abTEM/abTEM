@@ -366,7 +366,7 @@ class AnnularDetector(BaseDetector):
         """
 
         array = self._get_detector_region_array(waves, fftshift=fftshift)
-        metadata = {"energy": waves.energy, "label": "detector efficiency"}
+        metadata = {"energy": waves.energy, "label": "detector efficiency", "units": "%"}
         diffraction_patterns = DiffractionPatterns(
             array, metadata=metadata, sampling=waves.reciprocal_space_sampling
         )
