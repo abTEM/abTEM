@@ -78,20 +78,24 @@ def calculate_scattering_factors(
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard' is a hard cutoff.
     """
 
-    validated_thermal_sigma = validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
-    validated_occupancy = validate_per_atom_property(atoms, occupancy, return_array=True)
+    validated_thermal_sigma = validate_sigmas(atoms, thermal_sigma, return_array=True)[
+        0
+    ]
+    validated_occupancy = validate_per_atom_property(
+        atoms, occupancy, return_array=True
+    )
 
     assert isinstance(validated_thermal_sigma, np.ndarray)  # Type narrowing for mypy
     assert isinstance(validated_occupancy, np.ndarray)  # Type narrowing for mypy
 
     parametrization = validate_parametrization(parametrization)
 
-    #Z_unique, Z_inverse = np.unique(atoms.numbers, return_inverse=True)
-    #g_unique, g_inverse = np.unique(g, return_inverse=True)
+    # Z_unique, Z_inverse = np.unique(atoms.numbers, return_inverse=True)
+    # g_unique, g_inverse = np.unique(g, return_inverse=True)
 
     Z_unique = np.unique(atoms.numbers)
 
-    #f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=get_dtype(complex=True))
+    # f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=get_dtype(complex=True))
 
     scattering_factors = {Z: parametrization.scattering_factor(Z) for Z in Z_unique}
 
@@ -101,13 +105,13 @@ def calculate_scattering_factors(
         Z = atoms.numbers[i]
         s = validated_thermal_sigma[i]
         o = validated_occupancy[i]
-        
-        if s != 0.:
-            DWF = np.exp(-0.5 * s ** 2 * g ** 2 * (2 * np.pi) ** 2)
+
+        if s != 0.0:
+            DWF = np.exp(-0.5 * s**2 * g**2 * (2 * np.pi) ** 2)
         else:
             DWF = 1.0
 
-        f_e[i] = scattering_factors[Z](g ** 2) * DWF * o
+        f_e[i] = scattering_factors[Z](g**2) * DWF * o
 
     if cutoff == "taper":
         T = 0.005
@@ -128,7 +132,7 @@ def calculate_scattering_factors(
     #     else:
     #         DWF = 1.0
 
-    #     scattering_factor = 
+    #     scattering_factor =
 
     #     f_e_uniq[idx, :] = scattering_factor(g_unique**2) * DWF
 
@@ -354,7 +358,7 @@ class StructureFactor(BaseStructureFactor):
         Maximum scattering vector length [1/Å].
     parametrization : str
         Parametrization for the scattering factors.
-    thermal_sigma : float or dict 
+    thermal_sigma : float or dict
         Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
     occupancy : float
         The occupancy of the atoms.

@@ -7,12 +7,28 @@ import inspect
 import itertools
 import os
 import warnings
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, TypeVar
 
 import numpy as np
 
 from abtem.core.backend import get_array_module
 from abtem.core.config import config
+
+T = TypeVar("T", float, int, bool)
+
+
+def number_to_tuple(
+    value: T | tuple[T, ...], dimension: Optional[int] = None
+) -> tuple[T, ...]:
+    if isinstance(value, (float, int, bool)):
+        if dimension is None:
+            return (value,)
+        else:
+            return (value,) * dimension
+    else:
+        if dimension is not None:
+            assert len(value) == dimension
+        return value
 
 
 def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> None:
@@ -51,7 +67,9 @@ def is_broadcastable(*shapes: tuple[int, ...]) -> bool | tuple[int, ...]:
             if a != 1 and b != 1 and a != b:
                 return False
         # Update result_shape to the broadcasted shape
-        result_shape = tuple(max(a, b) for a, b in zip(result_shape[::-1], shape[::-1]))[::-1]
+        result_shape = tuple(
+            max(a, b) for a, b in zip(result_shape[::-1], shape[::-1])
+        )[::-1]
 
     return True
 
