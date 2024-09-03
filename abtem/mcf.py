@@ -18,14 +18,15 @@ if TYPE_CHECKING:
 
 
 class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
-
-    def __init__(self,
-                 eigenvectors: Union[int, Tuple[int]],
-                 focal_spread: float = 0.,
-                 source_size: float = 0.,
-                 rectangular_offset: Tuple[float, float] = (0., 0.),
-                 energy: float = None,
-                 semiangle_cutoff: float = None, ):
+    def __init__(
+        self,
+        eigenvectors: Union[int, Tuple[int]],
+        focal_spread: float = 0.0,
+        source_size: float = 0.0,
+        rectangular_offset: Tuple[float, float] = (0.0, 0.0),
+        energy: float = None,
+        semiangle_cutoff: float = None,
+    ):
         """
         The diagonal mixed coherence may be used to efficient calculate partial coherence for electron probes.
 
@@ -81,15 +82,31 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
     def _cropped_shape(self, extent, semiangle_cutoff, wavelength):
         fourier_space_sampling = 1 / extent[0], 1 / extent[1]
-        return (int(np.ceil(2 * semiangle_cutoff / (fourier_space_sampling[0] * wavelength * 1e3))),
-                int(np.ceil(2 * semiangle_cutoff / (fourier_space_sampling[1] * wavelength * 1e3))))
+        return (
+            int(
+                np.ceil(
+                    2
+                    * semiangle_cutoff
+                    / (fourier_space_sampling[0] * wavelength * 1e3)
+                )
+            ),
+            int(
+                np.ceil(
+                    2
+                    * semiangle_cutoff
+                    / (fourier_space_sampling[1] * wavelength * 1e3)
+                )
+            ),
+        )
 
     def _safe_semiangle_cutoff(self, waves):
         if self.semiangle_cutoff is None:
             try:
-                semiangle_cutoff = waves.metadata['semiangle_cutoff']
+                semiangle_cutoff = waves.metadata["semiangle_cutoff"]
             except KeyError:
-                raise RuntimeError('"Semiangle_cutoff" could not be inferred from Waves, please provide as an argument.')
+                raise RuntimeError(
+                    '"Semiangle_cutoff" could not be inferred from Waves, please provide as an argument.'
+                )
         else:
             semiangle_cutoff = self.semiangle_cutoff
 
@@ -100,12 +117,15 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
         semiangle_cutoff = self._safe_semiangle_cutoff(waves)
 
-        grid = Grid(extent=waves.extent, gpts=self._cropped_shape(waves.extent, semiangle_cutoff, waves.wavelength))
+        grid = Grid(
+            extent=waves.extent,
+            gpts=self._cropped_shape(waves.extent, semiangle_cutoff, waves.wavelength),
+        )
 
         kx, ky = spatial_frequencies(gpts=grid.gpts, sampling=grid.sampling, xp=np)
 
         k2 = kx[:, None] ** 2 + ky[None] ** 2
-        kx, ky = np.meshgrid(kx, ky, indexing='ij')
+        kx, ky = np.meshgrid(kx, ky, indexing="ij")
 
         A = k2 < (semiangle_cutoff / waves.wavelength / 1e3) ** 2
 
@@ -117,14 +137,18 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         k2 = np.subtract.outer(k2, k2)
 
         E = A
-        if self.focal_spread > 0.:
-            E *= np.exp(-(0.5 * np.pi * waves.wavelength * self.focal_spread) ** 2 * k2 ** 2)
+        if self.focal_spread > 0.0:
+            E *= np.exp(
+                -((0.5 * np.pi * waves.wavelength * self.focal_spread) ** 2) * k2**2
+            )
 
-        if self.source_size > 0.:
-            E *= np.exp(-(np.pi * self.source_size) ** 2 * (kx ** 2 + ky ** 2))
+        if self.source_size > 0.0:
+            E *= np.exp(-((np.pi * self.source_size) ** 2) * (kx**2 + ky**2))
 
-        if self.rectangular_offset != (0., 0.):
-            E *= np.sinc(kx * self.rectangular_offset[0]) * np.sinc(ky * self.rectangular_offset[1])
+        if self.rectangular_offset != (0.0, 0.0):
+            E *= np.sinc(kx * self.rectangular_offset[0]) * np.sinc(
+                ky * self.rectangular_offset[1]
+            )
 
         return E
 
@@ -150,13 +174,15 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
         if max(self.eigenvectors) + 1 >= E.shape[0]:
             raise RuntimeError()
-        
+
         values, vectors = eigsh(E, k=max(self.eigenvectors) + 1)
         order = np.argsort(-values)
 
         selected = order[np.array(self.eigenvectors)]
         vectors = vectors[:, selected].T.reshape(
-            (len(selected),) + self._cropped_shape(waves.extent, semiangle_cutoff, waves.wavelength))
+            (len(selected),)
+            + self._cropped_shape(waves.extent, semiangle_cutoff, waves.wavelength)
+        )
         values = values[selected]
 
         vectors = fft_crop(vectors, waves.gpts)
@@ -180,33 +206,35 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
     def ensemble_partial(self):
         def diagonal_mcf(*args, kwargs):
-            kwargs['eigenvectors'] = tuple(args[0])
+            kwargs["eigenvectors"] = tuple(args[0])
             arr = np.zeros((1,), dtype=object)
             itemset(arr, 0, DiagonalMCF(**kwargs))
             return arr
 
         kwargs = self._copy_as_dict()
-        del kwargs['eigenvectors']
+        del kwargs["eigenvectors"]
         return partial(diagonal_mcf, kwargs=kwargs)
 
     @property
     def default_ensemble_chunks(self):
-        return 'auto',
+        return ("auto",)
 
     def ensemble_blocks(self, chunks):
-        return da.from_array(self.eigenvectors, chunks=chunks),
+        return (da.from_array(self.eigenvectors, chunks=chunks),)
 
     @property
     def ensemble_shape(self):
-        return len(self.eigenvectors),
+        return (len(self.eigenvectors),)
 
     def _copy_as_dict(self):
-        return {'focal_spread': self.focal_spread,
-                'source_size': self.source_size,
-                'rectangular_offset': self.rectangular_offset,
-                'eigenvectors': self.eigenvectors,
-                'energy': self.energy,
-                'semiangle_cutoff': self.semiangle_cutoff}
+        return {
+            "focal_spread": self.focal_spread,
+            "source_size": self.source_size,
+            "rectangular_offset": self.rectangular_offset,
+            "eigenvectors": self.eigenvectors,
+            "energy": self.energy,
+            "semiangle_cutoff": self.semiangle_cutoff,
+        }
 
     def copy(self):
         return self.__class__(**self._copy_as_dict())

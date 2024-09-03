@@ -346,7 +346,6 @@ class ChargeDensityPotential(_PotentialBuilder):
         exit_planes: int = None,
         device: str = None,
     ):
-
         if hasattr(atoms, "randomize"):
             self._frozen_phonons = atoms
         elif isinstance(atoms, Atoms):
@@ -401,7 +400,6 @@ class ChargeDensityPotential(_PotentialBuilder):
         )
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
-
         chunks = self._validate_ensemble_chunks(chunks)
 
         charge_densities = self.charge_density
@@ -439,7 +437,6 @@ class ChargeDensityPotential(_PotentialBuilder):
         for i, (charge_density, frozen_phonon) in enumerate(
             zip(charge_densities, frozen_phonon_blocks)
         ):
-
             if lazy:
                 block = dask.delayed(self._wrap_charge_density)(
                     charge_density.item(), frozen_phonon

@@ -3,7 +3,14 @@ from scipy.spatial import cKDTree, ConvexHull, Delaunay
 
 
 def triangle_area(pt1, pt2, pt3):
-    a = pt1[0] * pt2[1] - pt2[0] * pt1[1] + pt2[0] * pt3[1] - pt3[0] * pt2[1] + pt3[0] * pt1[1] - pt1[0] * pt3[1]
+    a = (
+        pt1[0] * pt2[1]
+        - pt2[0] * pt1[1]
+        + pt2[0] * pt3[1]
+        - pt3[0] * pt2[1]
+        + pt3[0] * pt1[1]
+        - pt1[0] * pt3[1]
+    )
     return abs(a) / 2
 
 
@@ -34,7 +41,7 @@ def circumcenter(pt0, pt1, pt2, eps=1e-12):
     ac_x_diff = a_x - c_x
     ba_x_diff = b_x - a_x
 
-    d_div = (a_x * bc_y_diff + b_x * ca_y_diff + c_x * ab_y_diff)
+    d_div = a_x * bc_y_diff + b_x * ca_y_diff + c_x * ab_y_diff
 
     if abs(d_div) < eps:
         line = np.array([pt0, pt1, pt2])
@@ -77,7 +84,6 @@ def find_local_boundary(tri, triangles):
 
     for triangle in triangles:
         for i in range(3):
-
             pt1 = tri.simplices[triangle][i]
             pt2 = tri.simplices[triangle][(i + 1) % 3]
 
@@ -111,7 +117,6 @@ def order_edges(edges):
 
     num_max = len(edges)
     while len(edges) > 0 and num_max > 0:
-
         match = edge[1]
 
         for search_edge in edges:
@@ -129,10 +134,12 @@ def order_edges(edges):
 def natural_neighbor_weights(points, query_point, tri, neighbors, circumcenters):
     weights = np.zeros(len(points))
 
-    overlap = np.isclose(query_point[0], points[:, 0]) * np.isclose(query_point[1], points[:, 1])
+    overlap = np.isclose(query_point[0], points[:, 0]) * np.isclose(
+        query_point[1], points[:, 1]
+    )
 
     if np.any(overlap):
-        weights[np.where(overlap)[0]] = 1.
+        weights[np.where(overlap)[0]] = 1.0
         return weights
 
     edges = find_local_boundary(tri, neighbors)
@@ -145,7 +152,6 @@ def natural_neighbor_weights(points, query_point, tri, neighbors, circumcenters)
     c1 = circumcenter(query_point, tri.points[p1], tri.points[p2])
     polygon = [c1]
     for i in range(num_vertices):
-
         p3 = edge_vertices[(i + 2) % num_vertices]
 
         c2 = circumcenter(query_point, tri.points[p3], tri.points[p2])
@@ -157,7 +163,9 @@ def natural_neighbor_weights(points, query_point, tri, neighbors, circumcenters)
 
         pts = [polygon[i] for i in ConvexHull(polygon).vertices]
         area = polygon_area(pts)
-        weights[(tri.points[p2][0] == points[:, 0]) & (tri.points[p2][1] == points[:, 1])] += area
+        weights[
+            (tri.points[p2][0] == points[:, 0]) & (tri.points[p2][1] == points[:, 1])
+        ] += area
 
         polygon = [c2]
         p2 = p3
@@ -170,6 +178,8 @@ def pairwise_weights(points, query_points):
     members, circumcenters = find_natural_neighbors(triangulation, query_points)
     weights = np.zeros((len(points), len(query_points)))
     for i, query_point in enumerate(query_points):
-        weights[:, i] = natural_neighbor_weights(points, query_point, triangulation, members[i], circumcenters)
+        weights[:, i] = natural_neighbor_weights(
+            points, query_point, triangulation, members[i], circumcenters
+        )
 
     return weights

@@ -43,7 +43,6 @@ def discrete_cmap(num_colors, base_cmap):
 
 
 def _validate_axes_types(overlay, explode, ensemble_dims):
-
     if explode is True:
         explode = tuple(range(ensemble_dims))
     elif explode is False:
@@ -93,7 +92,6 @@ def convert_complex(measurement: BaseMeasurements, method: str) -> BaseMeasureme
 
 
 def _validate_artist_type(measurement, complex_conversion, artist_type=None):
-
     if artist_type is not None:
         return artist_type
 
@@ -223,7 +221,7 @@ class Visualization:
             caxes = np.zeros_like(axes, dtype=object)
 
             for i in np.ndindex(axes.shape):
-               caxes[i] = [_make_cax(ax, **kwargs) for i in range(ncbars)] 
+                caxes[i] = [_make_cax(ax, **kwargs) for i in range(ncbars)]
 
             axes = AxesCollection(axes, caxes, cbar_mode=cbar_mode)
 
@@ -450,7 +448,6 @@ class Visualization:
 
         row_titles = []
         for i, ax in enumerate(self.axes[0, :]):
-            
             annotation = ax.annotate(
                 titles[i],
                 xy=(0, 0.5),
@@ -552,7 +549,7 @@ class Visualization:
                 ax.spines["right"].set_visible(False)
                 ax.spines["bottom"].set_visible(False)
                 ax.spines["left"].set_visible(False)
-    
+
     def axis_off(self):
         self.axis("none", spines=False)
 

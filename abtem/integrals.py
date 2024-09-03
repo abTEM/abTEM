@@ -11,13 +11,12 @@ from ase.data import chemical_symbols
 from numba import jit
 from scipy import integrate
 from scipy.interpolate import interp1d
-from scipy.optimize import brentq, fsolve
+from scipy.optimize import brentq
 from scipy.special import erf
 
 from abtem.core.backend import (
     cp,
     get_array_module,
-    get_scipy_module,
     get_ndimage_module,
 )
 from abtem.core.backend import cupyx
@@ -91,7 +90,6 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
             The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
             configuration file.
         """
-        pass
 
     @property
     def periodic(self) -> bool:
@@ -104,40 +102,9 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         projections."""
         return self._finite
 
-    # @abstractmethod
-    # def build(
-    #     self,
-    #     symbol: str,
-    #     gpts: tuple[int, int],
-    #     sampling: tuple[float, float],
-    #     device: str,
-    # ):
-    #     """
-    #     Build projection integrator for given chemical symbol, grid and device.
-    #
-    #     Parameters
-    #     ----------
-    #     symbol : str
-    #         Chemical symbol to build the projection integrator for.
-    #     gpts : two int
-    #         Number of grid points in `x` and `y` describing each slice of the potential.
-    #     sampling : two float
-    #         Sampling of the potential in `x` and `y` [1 / Å].
-    #     device : str, optional
-    #         The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
-    #         configuration file.
-    #
-    #     Returns
-    #     -------
-    #     projection_integrator : ProjectionIntegrator
-    #         The projection integrator for the specified chemical symbol.
-    #     """
-    #     pass
-
     @abstractmethod
     def cutoff(self, symbol: str) -> float:
         """Radial cutoff of the potential for the given chemical symbol."""
-        pass
 
 
 def correction_projected_scattering_factors(
@@ -235,7 +202,7 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         return self._correction_parametrization
 
     def cutoff(self, symbol: str) -> float:
-        return cutoff(
+        return optimize_cutoff(
             self.gaussian_parametrization.potential(symbol),
             self.cutoff_tolerance,
             a=1e-3,
@@ -299,7 +266,6 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         device: str = "cpu",
         fourier_space: bool = False,
     ) -> np.ndarray:
-
         xp = get_array_module(device)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=True))
@@ -307,8 +273,12 @@ class GaussianProjectionIntegrals(FieldIntegrator):
             positions = atoms.positions[atoms.numbers == number]
             symbol = chemical_symbols[number]
 
-            array += self._integrate_gaussians(positions, symbol, a, b, gpts, sampling, device)
-            array += self._integrate_corrections(positions, symbol, a, b, gpts, sampling, device)
+            array += self._integrate_gaussians(
+                positions, symbol, a, b, gpts, sampling, device
+            )
+            array += self._integrate_corrections(
+                positions, symbol, a, b, gpts, sampling, device
+            )
 
         return ifft2(array / sinc(gpts, sampling, device)).real
 
@@ -592,7 +562,7 @@ class ProjectionIntegralTable:
         return f(b) - f(a)
 
 
-def cutoff(func: callable, tolerance: float, a: float, b: float) -> float:
+def optimize_cutoff(func: callable, tolerance: float, a: float, b: float) -> float:
     """
     Calculate the point where a function becomes lower than a given tolerance within a given bracketing interval.
 
@@ -611,7 +581,7 @@ def cutoff(func: callable, tolerance: float, a: float, b: float) -> float:
     -------
     cutoff : float
     """
-    f = brentq(f=lambda r: np.abs(func(r)) - tolerance, a=a, b=b)  # noqa
+    f = brentq(f=lambda r: np.abs(func(r)) - tolerance, a=a, b=b)
     return f
 
 
@@ -689,7 +659,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         return self._integration_step
 
     def cutoff(self, symbol: str) -> float:
-        return cutoff(
+        return optimize_cutoff(
             self.parametrization.potential(symbol), self.cutoff_tolerance, a=1e-3, b=1e3
         )
 

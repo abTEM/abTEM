@@ -375,7 +375,6 @@ class ScatterGUI(BaseGUI):
     ]
 
     def __init__(self, sliders, canvas, cmap_options=None):
-
         self._scale_slider = widgets.FloatSlider(
             description="Point size",
         )

@@ -17,7 +17,7 @@ from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from abtem.core import config
 from abtem.core.axes import LinearAxis
 from abtem.core.colors import hsluv_cmap
-from abtem.core.units import _get_conversion_factor
+from abtem.core.units import get_conversion_factor
 
 if TYPE_CHECKING:
     from matplotlib.text import Annotation
@@ -195,7 +195,6 @@ class LinesArtist(Artist1D):
         legend: bool = False,
         **kwargs,
     ):
-
         super().__init__(ax=ax, measurement=measurement)
 
         y = self._reshape_data(measurement.array)
@@ -426,10 +425,10 @@ def validate_cmap(cmap, measurement, complex_conversion="none"):
 def get_extent(measurement, units=None):
     energy = measurement.metadata.get("energy", None)
 
-    conversion_x = _get_conversion_factor(
+    conversion_x = get_conversion_factor(
         units, measurement.base_axes_metadata[0].units, energy=energy
     )
-    conversion_y = _get_conversion_factor(
+    conversion_y = get_conversion_factor(
         units, measurement.base_axes_metadata[0].units, energy=energy
     )
 
@@ -474,7 +473,6 @@ class ImageArtist(Artist2D):
         units: str = None,
         **kwargs,
     ):
-
         super().__init__(ax=ax, measurement=measurement)
 
         if measurement.is_complex:
@@ -580,7 +578,6 @@ class ScaledCircleCollection(Collection):
         threshold: float = 1e-6,
         **kwargs,
     ):
-
         self._scale = scale
         self._threshold = threshold
         self._mask = array > threshold
@@ -818,7 +815,6 @@ class ScatterArtist(Artist2D):
         annotation_kwargs: dict = None,
         **kwargs,
     ):
-
         if annotation_kwargs is None:
             annotation_kwargs = {}
 
@@ -829,7 +825,7 @@ class ScatterArtist(Artist2D):
 
         energy = measurement.metadata.get("energy", None)
 
-        self._unit_conversion = _get_conversion_factor(
+        self._unit_conversion = get_conversion_factor(
             units, old_units="1/Å", energy=energy
         )
 
@@ -862,7 +858,7 @@ class ScatterArtist(Artist2D):
             annotations = []
             for hkl in measurement.miller_indices:
                 if config.get("visualize.use_tex"):
-                    annotation = " \ ".join(
+                    annotation = r" \ ".join(
                         [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
                     )
                     annotations.append(f"${annotation}$")

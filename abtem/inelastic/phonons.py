@@ -2,26 +2,25 @@
 
 from __future__ import annotations
 
-from abc import abstractmethod, ABCMeta
+from abc import ABCMeta, abstractmethod
 from functools import partial
 from numbers import Number
-from typing import Sequence, Iterable
+from typing import Dict, Optional, Sequence, TypeGuard, Union
 
 import dask
 import dask.array as da
 import numpy as np
-from ase import Atoms
-from ase import data
+from ase import Atoms, data
 from ase.cell import Cell
 from ase.data import chemical_symbols
 from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
 
-from abtem.core.axes import FrozenPhononsAxis, AxisMetadata, UnknownAxis
+from abtem.core.axes import AxisMetadata, FrozenPhononsAxis, UnknownAxis
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.utils import CopyMixin, EqualityMixin, itemset
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 
 try:
     from gpaw.io import Reader  # noqa
@@ -69,7 +68,9 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._cell
 
     @staticmethod
-    def _validate_atomic_numbers_and_cell(atoms: Atoms | np.ndarray, atomic_numbers, cell):
+    def _validate_atomic_numbers_and_cell(
+        atoms: Atoms | np.ndarray, atomic_numbers, cell
+    ):
         if isinstance(atoms, da.core.Array) and (
             atomic_numbers is None or cell is None
         ):
@@ -98,7 +99,6 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @abstractmethod
     def atoms(self) -> Atoms:
         """Base atomic configuration used for displacements."""
-        pass
 
     @abstractmethod
     def randomize(self, atoms: Atoms) -> Atoms:
@@ -109,7 +109,6 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         ----------
         atoms : Atoms
         """
-        pass
 
     @abstractmethod
     def __len__(self) -> int:
@@ -119,7 +118,6 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @abstractmethod
     def num_configs(self):
         """Number of atomic configurations."""
-        pass
 
     def __iter__(self):
         for _, _, fp in self.generate_blocks(1):
@@ -133,7 +131,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
     def __init__(
         self,
         atoms: Atoms,
-        num_configs: int = None,
+        num_configs: Optional[int] = None,
     ):
         self._atoms = atoms
         self._num_configs = num_configs
@@ -170,6 +168,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
     @property
     def numbers(self):
+        """The atomic numbers of the atoms."""
         return self.atoms.numbers
 
     @property
@@ -206,7 +205,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 
 
 def _validate_seeds(
-    seeds: int | tuple[int, ...] | None, num_seeds: int = None
+    seeds: int | tuple[int, ...] | None, num_seeds: Optional[int] = None
 ) -> tuple[int, ...]:
     if seeds is None or np.isscalar(seeds):
         if num_seeds is None:
@@ -228,9 +227,64 @@ def _validate_seeds(
     return seeds
 
 
+def ensure_all_values_are_tuples(
+    props: dict[str, float | int] | dict[str, tuple[float | int, ...]],
+) -> TypeGuard[Dict[str, tuple[float | int, ...]]]:
+    return all(isinstance(value, tuple) for value in props.values())
+
+
+AtomProperties = Union[
+    float, dict[str, float], dict[str, tuple[float, ...]], Sequence[float]
+]
+
+
+def validate_per_atom_property(
+    atoms: Atoms,
+    props: AtomProperties,
+    return_array: bool = False,
+) -> np.ndarray | dict[str, np.ndarray]:
+    atomic_numbers = np.unique(atoms.numbers)
+    unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
+
+    validated_props: np.ndarray | dict[str, np.ndarray]
+    dtype = get_dtype(complex=False)
+
+    if isinstance(props, Number):
+        validated_props = {
+            symbol: np.array(props, dtype=dtype) for symbol in unique_symbols
+        }
+
+    elif isinstance(props, dict):
+        if not set(unique_symbols) == set(props.keys()):
+            raise RuntimeError("Property must be provided for all atomic species.")
+
+        if ensure_all_values_are_tuples(props):
+            first_attr = next(iter(props.values()))
+
+            if not all(len(attr) == len(first_attr) for attr in props.values()):
+                raise RuntimeError("All values must have the same length.")
+
+        validated_props = {
+            symbol: np.array(value, dtype=dtype) for symbol, value in props.items()
+        }
+
+    elif isinstance(props, (list, tuple, np.ndarray)):
+        print(props)
+        validated_props = np.array(props, dtype=dtype)
+        if len(props) != len(atoms):
+            raise RuntimeError("Property must be provided for all atoms.")
+    else:
+        raise ValueError("Invalid type for `props`.")
+
+    if return_array and isinstance(validated_props, dict):
+        return atom_property_dict_to_atom_property_array(atoms, validated_props)
+
+    return validated_props
+
+
 def validate_sigmas(
-    atoms: Atoms, sigmas: float | dict[str | int, float] | Sequence[float]
-):
+    atoms: Atoms, sigmas: AtomProperties, return_array: bool = False
+) -> tuple[np.ndarray | dict[str, np.ndarray], bool]:
     """
     Validate the standard deviations of displacement for atoms in an atomic structure.
 
@@ -264,52 +318,43 @@ def validate_sigmas(
         three values for each atom or each element are not given for anisotropic displacements.
     """
 
-    atomic_numbers = np.unique(atoms.numbers)
-    unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
+    validated_sigmas = validate_per_atom_property(
+        atoms, sigmas, return_array=return_array
+    )
 
-    if isinstance(sigmas, Number):
-        new_sigmas = {}
-        for symbol in unique_symbols:
-            new_sigmas[symbol] = sigmas
-
-        anisotropic = False
-        sigmas = new_sigmas
-
-    elif isinstance(sigmas, dict):
-        anisotropic = any(hasattr(value, "__len__") for value in sigmas.values())
-
-        if anisotropic and not all(len(value) == 3 for value in sigmas.values()):
-            raise RuntimeError(
-                "Three values for each element must be given for anisotropic displacements."
-            )
-
-        if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
-            raise RuntimeError(
-                "Displacement standard deviation must be provided for all atomic species."
-            )
-
-    elif isinstance(sigmas, Iterable):
-        sigmas = np.array(sigmas, dtype=np.float32)
-        if len(sigmas) != len(atoms):
-            raise RuntimeError(
-                "Displacement standard deviation must be provided for all atoms."
-            )
-
-        if len(sigmas.shape) == 2:
-            if sigmas.shape[1] == 3:
-                anisotropic = True
-            else:
-                raise RuntimeError(
-                    "Three values for each atom must be given for anisotropic displacements."
-                )
-        elif len(sigmas.shape) == 1:
-            anisotropic = False
-        else:
-            raise RuntimeError()
+    if isinstance(validated_sigmas, dict):
+        sigmas_array = next(iter(validated_sigmas.values()))
     else:
-        raise ValueError()
+        sigmas_array = validated_sigmas
 
-    return sigmas, anisotropic
+    if (
+        sigmas_array.shape
+        and len(sigmas_array.shape) == 2
+        and sigmas_array.shape[-1] == (3,)
+    ):
+        anisotropic = True
+    elif len(sigmas_array.shape) < 2:
+        anisotropic = False
+    else:
+        raise RuntimeError("Anisotropic displacements must be given as three values.")
+
+    return validated_sigmas, anisotropic
+
+
+def atom_property_dict_to_atom_property_array(
+    atoms: Atoms, props: dict[str, np.ndarray]
+) -> np.ndarray:
+    dtype = get_dtype(complex=False)
+
+    n = next(iter(props.values())).shape
+    array = np.zeros((len(atoms.numbers),) + n, dtype=dtype)
+
+    for unique in np.unique(atoms.numbers):
+        array[atoms.numbers == unique] = np.array(
+            props[chemical_symbols[unique]], dtype=dtype
+        )
+
+    return array
 
 
 class FrozenPhonons(BaseFrozenPhonons):
@@ -347,10 +392,13 @@ class FrozenPhonons(BaseFrozenPhonons):
         self,
         atoms: Atoms,
         num_configs: int,
-        sigmas: float | dict[str | int, float] | Sequence[float],
+        sigmas: float
+        | dict[str, float]
+        | dict[str, tuple[float, ...]]
+        | Sequence[float],
         directions: str = "xyz",
         ensemble_mean: bool = True,
-        seed: int | tuple[int, ...] = None,
+        seed: Optional[int | tuple[int, ...]] = None,
     ):
         if isinstance(sigmas, dict):
             atomic_numbers = [data.atomic_numbers[symbol] for symbol in sigmas.keys()]
@@ -361,7 +409,7 @@ class FrozenPhonons(BaseFrozenPhonons):
             atoms, atomic_numbers, cell=None
         )
 
-        self._sigmas = sigmas
+        self._sigmas = validate_sigmas(atoms, sigmas)[0]
         self._directions = directions
         self._atoms = atoms
         self._seed = _validate_seeds(seed, num_seeds=num_configs)
@@ -429,19 +477,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         sigmas, anisotropic = self._validate_sigmas(atoms)
 
         if isinstance(sigmas, dict):
-            if anisotropic:
-                temp = np.zeros((len(atoms.numbers), 3), dtype=np.float32)
-            else:
-                temp = np.zeros(len(atoms.numbers), dtype=np.float32)
+            sigmas = atom_property_dict_to_atom_property_array(atoms, sigmas)
 
-            for unique in np.unique(atoms.numbers):
-                temp[atoms.numbers == unique] = np.float32(
-                    sigmas[chemical_symbols[unique]]
-                )
-            sigmas = temp
-
-        elif not isinstance(sigmas, np.ndarray):
-            raise RuntimeError()
+        assert isinstance(sigmas, np.ndarray)
 
         atoms = atoms.copy()
 
@@ -528,8 +566,8 @@ class AtomsEnsemble(BaseFrozenPhonons):
         self,
         trajectory: Sequence[Atoms],
         ensemble_mean: bool = True,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        cell: Cell = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        cell: Optional[Cell] = None,
     ):
         if isinstance(trajectory, str):
             trajectory = read(trajectory, index=":")
@@ -586,6 +624,7 @@ class AtomsEnsemble(BaseFrozenPhonons):
 
     @property
     def numbers(self):
+        """The atomic numbers of the atoms."""
         return self.trajectory[0].numbers
 
     def __getitem__(self, item):

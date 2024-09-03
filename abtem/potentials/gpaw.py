@@ -228,7 +228,6 @@ def _generate_slices(
     first_slice=0,
     last_slice=None,
 ):
-
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
@@ -347,7 +346,6 @@ class GPAWPotential(_PotentialBuilder):
         gridrefinement: int = 4,
         device: str = None,
     ):
-
         if GPAW is None:
             raise RuntimeError(
                 "This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/."
@@ -418,7 +416,6 @@ class GPAWPotential(_PotentialBuilder):
         return self._calculators
 
     def _get_all_electron_density(self):
-
         calculator = (
             self.calculators[0]
             if isinstance(self.calculators, list)
@@ -604,7 +601,6 @@ class GPAWPotential(_PotentialBuilder):
         )
 
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
-
         chunks = self._validate_ensemble_chunks(chunks)
 
         def frozen_phonons(calculators, frozen_phonons):
@@ -641,7 +637,6 @@ class GPAWPotential(_PotentialBuilder):
                 array = np.zeros(self.ensemble_shape[0], dtype=object)
 
             for i, calculator in enumerate(calculators):
-
                 if len(self.ensemble_shape) > 0:
                     calculator = [calculator]
 
@@ -695,7 +690,6 @@ class GPAWParametrization:
 
         electrons = []
         for key in set(config.keys()).union(set(ionic_config.keys())):
-
             difference = config[key] - ionic_config[key]
 
             for i in range(np.abs(difference)):

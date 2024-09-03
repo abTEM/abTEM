@@ -607,7 +607,9 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
         device: str = None,
     ):
         if integrator is None:
-            integrator = QuasiDipoleMagneticFieldProjections(parametrization=parametrization)
+            integrator = QuasiDipoleMagneticFieldProjections(
+                parametrization=parametrization
+            )
 
         super().__init__(
             atoms=atoms,

@@ -11,11 +11,7 @@ def gaussian_potential(r, Z, width):
 
 
 def gaussian_charge(r, Z, width):
-    return (
-        Z
-        / (width**3 * np.sqrt(2 * np.pi) ** 3)
-        * np.exp(-(r**2) / (2 * width**2))
-    )
+    return Z / (width**3 * np.sqrt(2 * np.pi) ** 3) * np.exp(-(r**2) / (2 * width**2))
 
 
 def point_charge_potential(r, Z):

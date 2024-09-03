@@ -1,11 +1,12 @@
 """Module for describing analytical potential parametrizations."""
+
 from __future__ import annotations
 
 import json
 import os
 from abc import ABCMeta, abstractmethod
 from numbers import Number
-from typing import Sequence
+from typing import Sequence, Callable
 
 import numpy as np
 from ase.data import chemical_symbols
@@ -135,7 +136,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         """
         return self.get_function("potential", symbol, charge)
 
-    def scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
+    def scattering_factor(self, symbol: str, charge: float = 0.0) -> Callable:
         """
         Radial scattering factor for given chemical symbol and charge.
 
@@ -153,7 +154,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         """
         return self.get_function("scattering_factor", symbol, charge)
 
-    def projected_potential(self, symbol: str, charge: float = 0.0) -> callable:
+    def projected_potential(self, symbol: str, charge: float = 0.0) -> Callable:
         """
         Analytical infinite projection of radial electrostatic potential for given chemical symbol and charge.
 

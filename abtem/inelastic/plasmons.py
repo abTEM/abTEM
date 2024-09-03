@@ -49,7 +49,6 @@ def draw_scattering_depths(
     max_attempts: int = 50_000_000,
     rng=None,
 ) -> Tuple[Tuple]:
-
     if rng is None:
         rng = np.random.default_rng()
 
@@ -89,7 +88,6 @@ def draw_radial_scattering_angle(
     num_depths,
     rng=None,
 ) -> Tuple[Tuple[float]]:
-
     if rng is None:
         rng = np.random.default_rng()
 
@@ -114,7 +112,6 @@ def draw_radial_scattering_angle(
 
 
 def draw_azimuthal_angle(num_samples, num_depths, rng=None) -> Tuple[float]:
-
     if rng is None:
         rng = np.random.default_rng()
 
@@ -177,10 +174,8 @@ class PlasmonAxis(OrdinalAxis):
         return tilt
 
     def update(self, depth):
-
         values = ()
         for excitation_depths, value in zip(self.depths, self.values):
-
             for i, excitation_depth in enumerate(excitation_depths):
                 if excitation_depth > depth:
                     break
@@ -307,10 +302,8 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         ax.set_ylabel("Number of events")
 
     def get_scattering_event_depths(self, num_excitations: int = 1):
-
         event_depths = defaultdict(list)
         for depths in self.depths:
-
             n = len(depths)
             if n >= num_excitations:
                 event_depths[ntuples[n]].append(depths[num_excitations - 1])
@@ -364,7 +357,6 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         ax.set_xlabel("Scattering angle [mrad]")
 
     def show_weights(self):
-
         uniques, indices = np.unique(
             [len(depths) for depths in self.depths], return_index=True
         )

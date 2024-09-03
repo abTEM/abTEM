@@ -38,7 +38,7 @@ from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_ch
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.grid import Grid, HasGridMixin
+from abtem.core.grid import Grid, HasGridMixin, HasGrid2DMixin
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -55,7 +55,8 @@ from abtem.slicing import (
     BaseSlicedAtoms,
     SlicedAtoms,
     SliceIndexedAtoms,
-    _validate_slice_thickness, slice_limits,
+    _validate_slice_thickness,
+    slice_limits,
 )
 
 if TYPE_CHECKING:
@@ -64,8 +65,7 @@ if TYPE_CHECKING:
     from abtem.waves import BaseWaves, Waves
 
 
-class BaseField(Ensemble, HasGridMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
-
+class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     # @property
     # @abstractmethod
     # def device(self) -> str:

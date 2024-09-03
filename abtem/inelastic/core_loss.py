@@ -7,30 +7,28 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING
 
 import numpy as np
-from ase import Atom, Atoms
-from ase import units
+from ase import Atom, Atoms, units
 from ase.data import chemical_symbols
 from numba import jit
 from scipy.interpolate import interp1d
-from scipy.special import spherical_jn, sph_harm
+from scipy.special import sph_harm, spherical_jn
 
 from abtem import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
-from abtem.core.axes import OrdinalAxis, AxisMetadata
+from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import copy_to_device, get_array_module
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
-    HasAcceleratorMixin,
     Accelerator,
+    HasAcceleratorMixin,
+    energy2sigma,
     energy2wavelength,
     relativistic_mass_correction,
-    energy2sigma,
 )
-from abtem.core.fft import fft_shift_kernel, fft2, fft2_convolve
-from abtem.core.fft import ifft2
-from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
+from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
+from abtem.core.grid import Grid, HasGridMixin, polar_spatial_frequencies
 from abtem.core.utils import CopyMixin
 from abtem.measurements import _polar_detector_bins
 
@@ -491,7 +489,7 @@ class TransitionPotential(BaseTransitionPotential):
             OrdinalAxis(
                 values=values,
                 label="(l,ml)→(l',ml')",
-                tex_label="$(\ell, m_l) → (\ell', m_l')$",
+                tex_label=r"$(\ell, m_l) → (\ell', m_l')$",
             )
         ]
 
@@ -776,10 +774,9 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         included = order[:n]
         return self[included]
 
-    def absolute_threshold(self, waves: Waves, threshold: float=1.):
-
-        if threshold >= 1.:
-            return 0.
+    def absolute_threshold(self, waves: Waves, threshold: float = 1.0):
+        if threshold >= 1.0:
+            return 0.0
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
@@ -820,7 +817,6 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         return sites
 
     def filter_sites(self, waves, sites, threshold):
-
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
 
@@ -830,10 +826,11 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             xp = get_array_module(waves.array)
             validated_sites = copy_to_device(validated_sites, waves.array)
 
-            rounded_sites = xp.round((validated_sites / xp.array(self.sampling))).astype(int)
+            rounded_sites = xp.round(
+                (validated_sites / xp.array(self.sampling))
+            ).astype(int)
 
             local_potential = copy_to_device(self._local_potential, waves.array)
-
 
             shifted_local_potential = fast_roll(local_potential, rounded_sites)
 
@@ -874,7 +871,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             #     # plt.imshow(abs2(waves.array[0, 0]))
             #     plt.show()
 
-            #print(type(mask), type(sites))
+            # print(type(mask), type(sites))
 
             sites = sites[mask]
 
@@ -947,7 +944,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         chunks = validate_chunks(
             shape=(len(sites),) + waves.shape,
             chunks=(max_batch,) + (-1,) * len(waves.shape),
-            limit=limit,
+            max_elements=limit,
             dtype=waves.dtype,
         )[0]
 

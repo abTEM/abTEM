@@ -272,7 +272,7 @@ class AnnularDetector(BaseDetector):
 
         if len(_scan_shape(waves)) == 0:
             raise RuntimeError("annular detector requires a scan axis")
-        
+
         return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
 
     def _out_base_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
@@ -629,8 +629,9 @@ class _AbstractRadialDetector(BaseDetector):
                 if not hasattr(sampling, "__len__"):
                     sampling = (sampling,) * 2
 
-                reciprocal_space_sampling = 1 / (gpts[0] * sampling[0]), 1 / (
-                    gpts[0] * sampling[0]
+                reciprocal_space_sampling = (
+                    1 / (gpts[0] * sampling[0]),
+                    1 / (gpts[0] * sampling[0]),
                 )
                 angular_sampling = (
                     reciprocal_space_sampling[0] * energy2wavelength(energy) * 1e3,

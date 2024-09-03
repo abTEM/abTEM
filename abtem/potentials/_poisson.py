@@ -63,7 +63,7 @@ def sum_spherical_basis_functions(splines, density_matrix, r, theta, phi):
     r = r / units.Bohr
     splines = spline_orders(splines)
 
-    for (i, j) in np.ndindex(density_matrix.shape):
+    for i, j in np.ndindex(density_matrix.shape):
         spline_i, degree_i, order_i = splines[i]
         spline_j, degree_j, order_j = splines[j]
         density_element = density_matrix[i, j]

@@ -22,9 +22,7 @@ def _cbar_orientation(cbar_loc):
     return orientation
 
 
-
 class AxesCollection:
-
     def __init__(self, axes, caxes, cbar_mode="single"):
         self._axes = axes
         self._caxes = caxes
@@ -55,7 +53,7 @@ class AxesCollection:
     @property
     def shape(self) -> tuple[int, int]:
         return self._axes.shape
-    
+
 
 class AxesGrid:
     def __init__(
@@ -116,7 +114,7 @@ class AxesGrid:
             for inner_axes in self._axes[1:]:
                 for ax in inner_axes:
                     ax._axislines["left"].toggle(ticklabels=False, label=False)
-        
+
     def axis_location_to_indices(self, axis_location):
         axis_locations = {
             "all": tuple(np.ndindex(self.shape)),

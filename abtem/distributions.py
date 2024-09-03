@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from numbers import Number
-from typing import Callable, Iterable, Iterator, Optional, Sequence, TypeVar
+from typing import Callable, Iterator, Optional, Sequence
 
 import dask.array as da
 import numpy as np
@@ -13,7 +13,7 @@ import numpy as np
 from abtem.core.backend import ArrayModule, get_array_module
 from abtem.core.chunks import Chunks, equal_sized_chunks, is_tuple_of_ints
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
+from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, number_to_tuple
 
 
 class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
@@ -113,7 +113,7 @@ class DistributionFromValues(BaseDistribution):
             assert sum(chunks) == len(self)
         else:
             raise ValueError("chunks must be an int or a tuple of ints")
-        
+
         blocks = np.empty(len(chunks), dtype=object)
         for i, (start, stop) in enumerate(
             zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
@@ -305,17 +305,6 @@ def uniform(
     )
 
 
-T = TypeVar("T", float, int, bool)
-
-
-def number_to_tuple(value: T | tuple[T, ...], dimension: int) -> tuple[T, ...]:
-    if isinstance(value, (float, int, bool)):
-        return (value,) * dimension
-    else:
-        assert len(value) == dimension
-        return value
-
-
 def gaussian(
     standard_deviation: float | tuple[float, ...],
     num_samples: int | tuple[int, ...],
@@ -365,9 +354,7 @@ def gaussian(
             num_samples[i],
         )
 
-        weights = np.exp(
-            -0.5 * (values - center[i]) ** 2 / standard_deviation[i] ** 2
-        )
+        weights = np.exp(-0.5 * (values - center[i]) ** 2 / standard_deviation[i] ** 2)
 
         if normalize == "intensity":
             weights /= np.sqrt((weights**2).sum())
