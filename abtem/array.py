@@ -9,15 +9,26 @@ from abc import ABCMeta
 from contextlib import contextmanager, nullcontext
 from functools import partial
 from numbers import Number
-from typing import TYPE_CHECKING, Sequence, TypeVar
+from types import ModuleType
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generator,
+    Optional,
+    Sequence,
+    TypeVar,
+    Union,
+)
 
 import dask
 import dask.array as da
 import numpy as np
-import toolz
-import zarr
+import toolz  # type: ignore
+import zarr  # type: ignore
 from dask.array.utils import validate_axis
 from dask.diagnostics import Profiler, ProgressBar, ResourceProfiler
+from tqdm.dask import TqdmCallback
 
 from abtem._version import __version__
 from abtem.core import config
@@ -45,6 +56,7 @@ from abtem.core.utils import (
     interleave,
     itemset,
     normalize_axes,
+    number_to_tuple,
     tuple_range,
 )
 from abtem.transform import TransformFromFunc
@@ -52,31 +64,31 @@ from abtem.transform import TransformFromFunc
 if TYPE_CHECKING:
     from abtem.transform import ArrayObjectTransform
 
+
+tifffile: Optional[ModuleType] = None
 try:
-    import tifffile  # pyright: ignore[reportMissingImports]
+    import tifffile  # type: ignore
 except ImportError:
-    tifffile = None
+    pass
 
 
+hs: Optional[ModuleType] = None
 try:
-    import hyperspy.api as hs  # pyright: ignore[reportMissingImports]
+    import hyperspy.api as hs  # type: ignore
 except ImportError:
-    hs = None
+    pass
 
 
+xr: Optional[ModuleType] = None
 try:
-    import xarray as xr  # pyright: ignore[reportMissingImports]
+    import xarray as xr  # type: ignore
 except ImportError:
-    xr = None
+    pass
 
 
-try:
-    from tqdm.dask import TqdmCallback
-except ImportError:
-    TqdmCallback = None
-
-
-def _to_hyperspy_axes_metadata(axes_metadata, shape):
+def _to_hyperspy_axes_metadata(
+    axes_metadata: list[AxisMetadata], shape: tuple[int, ...]
+):
     hyperspy_axes = []
 
     if not isinstance(shape, (list, tuple)):
@@ -90,7 +102,6 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
             hyperspy_axis["offset"] = metadata.offset
             hyperspy_axis["units"] = metadata.units
         elif isinstance(metadata, OrdinalAxis):
-
             if all(isinstance(value, Number) for value in metadata.values) and (
                 all(
                     metadata.values[i] < metadata.values[i + 1]
@@ -121,7 +132,7 @@ class ComputableList(list):
         url: str,
         compute: bool = True,
         overwrite: bool = False,
-        progress_bar: bool = None,
+        progress_bar: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -171,12 +182,7 @@ class ComputableList(list):
         ) as (_, profiler, resource_profiler):
             output = dask.compute(computables, **kwargs)[0]
 
-        profilers = ()
-        if profiler is not None:
-            profilers += (profiler,)
-
-        if resource_profiler is not None:
-            profilers += (resource_profiler,)
+        profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
 
         if profilers:
             return output, profilers
@@ -199,46 +205,60 @@ class ComputableList(list):
         return output
 
 
-@contextmanager
-def _compute_context(
-    progress_bar: bool = None, profiler=False, resource_profiler=False
-):
+def _get_progress_bar(
+    progress_bar: Optional[bool] = None,
+) -> Union[ProgressBar, TqdmCallback, nullcontext]:
     if progress_bar is None:
         progress_bar = config.get("diagnostics.progress_bar")
 
+    progress_bar_obj: Union[ProgressBar, TqdmCallback, nullcontext]
+
     if progress_bar:
         if progress_bar == "tqdm":
-            progress_bar = TqdmCallback(desc="tasks")
+            progress_bar_obj = TqdmCallback(desc="tasks")
         else:
-            progress_bar = ProgressBar()
+            progress_bar_obj = ProgressBar()
     else:
-        progress_bar = nullcontext()
+        progress_bar_obj = nullcontext()
+
+    return progress_bar_obj
+
+
+@contextmanager
+def _compute_context(
+    progress_bar: Optional[bool] = None,
+    profiler: int = False,
+    resource_profiler: int = False,
+) -> Generator[tuple[Any, Any, Any], None, None]:
+    progress_bar_ctx = _get_progress_bar(progress_bar)
+    profiler_ctx: Union[Profiler, nullcontext]
+    resource_profiler_ctx: Union[ResourceProfiler, nullcontext]
 
     if profiler:
-        profiler = Profiler()
+        profiler_ctx = Profiler()
     else:
-        profiler = nullcontext()
+        profiler_ctx = nullcontext()
 
     if resource_profiler:
-        resource_profiler = ResourceProfiler()
+        resource_profiler_ctx = ResourceProfiler()
     else:
-        resource_profiler = nullcontext()
+        resource_profiler_ctx = nullcontext()
 
     with (
-        progress_bar as progress_bar,
-        profiler as profiler,
-        resource_profiler as resource_profiler,
+        progress_bar_ctx as progress_bar_ctx1,
+        profiler_ctx as profiler_ctx1,
+        resource_profiler_ctx as resource_profiler_ctx1,
     ):
-        yield progress_bar, profiler, resource_profiler
+        yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
 def _compute(
-    dask_array_wrappers,
-    progress_bar: bool = None,
+    array_objects: list[ArrayObject],
+    progress_bar: Optional[bool] = None,
     profiler: bool = False,
     resource_profiler: bool = False,
     **kwargs,
-):
+) -> tuple[list[ArrayObject], tuple]:
     if config.get("device") == "gpu":
         check_cupy_is_installed()
 
@@ -251,21 +271,14 @@ def _compute(
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
     ) as (_, profiler, resource_profiler):
-        arrays = dask.compute(
-            [wrapper.array for wrapper in dask_array_wrappers], **kwargs
-        )[0]
+        arrays = dask.compute([wrapper.array for wrapper in array_objects], **kwargs)[0]
 
-    for array, wrapper in zip(arrays, dask_array_wrappers):
+    for array, wrapper in zip(arrays, array_objects):
         wrapper._array = array
 
-    profilers = ()
-    if profiler is not None:
-        profilers += (profiler,)
+    profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
 
-    if resource_profiler is not None:
-        profilers += (resource_profiler,)
-
-    return dask_array_wrappers, profilers
+    return array_objects, profilers
 
 
 def _validate_lazy(lazy):
@@ -295,11 +308,11 @@ def unpack_output(arr, i):
 
 
 def multi_value_blockwise(
-    func,
+    func: Callable,
     out_inds,
     *args,
-    name=None,
-    token=None,
+    name: Optional[str] = None,
+    token: Optional[str] = None,
     adjust_chunks=None,
     new_axes=None,
     align_arrays=True,
@@ -309,15 +322,15 @@ def multi_value_blockwise(
 ):
     if new_axes is not None:
         raise NotImplementedError("new_axes not implemented")
-    
+
     new_axes = {}
 
     if adjust_chunks is None:
         adjust_chunks = {}
-    
+
     if metas is None:
         metas = tuple(None for _ in out_inds)
-    
+
     arginds = [(a, i) for (a, i) in toolz.partition(2, args) if i is not None]
     default_chunks = {}
     for arg, ind in arginds:
@@ -352,19 +365,23 @@ def multi_value_blockwise(
         meta=np.array(()),
         concatenate=concatenate,
         align_arrays=align_arrays,
-        **kwargs
+        **kwargs,
     )
 
     output = ()
     for i, (out_ind, meta) in enumerate(zip(out_inds, metas)):
         chunks = tuple(chunkss[i][j] for j in out_ind)
         drop_axis = tuple(set(all_ind) - set(out_ind))
-            
+
         if any(len(chunkss[axis]) > 1 for axis in drop_axis):
             raise RuntimeError("Dropping axis with chunks not implemented")
 
-        output += (arrays.map_blocks(unpack_output, i, chunks=chunks, drop_axis=drop_axis, meta=meta),)
-    
+        output += (
+            arrays.map_blocks(
+                unpack_output, i, chunks=chunks, drop_axis=drop_axis, meta=meta
+            ),
+        )
+
     return output
 
 
@@ -410,12 +427,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         self._check_axes_metadata()
 
     @property
-    def base_dims(self):
+    def base_dims(self) -> int:
         """Number of base dimensions."""
         return self._base_dims
 
     @property
-    def ensemble_dims(self):
+    def ensemble_dims(self) -> int:
         """Number of ensemble dimensions."""
         return len(self.shape) - self.base_dims
 
@@ -439,7 +456,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self.shape[: self.ensemble_dims]
 
     @property
-    def ensemble_axes_metadata(self):
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         """List of AxisMetadata of the ensemble axes."""
         return self._ensemble_axes_metadata
 
@@ -450,7 +467,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
         )
 
-    def _check_axes_metadata(self):
+    def _check_axes_metadata(self) -> None:
         if len(self.shape) != len(self.axes_metadata):
             raise RuntimeError(
                 f"number of array dimensions ({len(self.shape)}) does not match number of axis metadata items "
@@ -465,13 +482,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 )
 
     def _is_base_axis(self, axis: int | tuple[int, ...]) -> bool:
-        if isinstance(axis, Number):
-            axis = (axis,)
-
+        axis = number_to_tuple(axis)
         base_axes = tuple(range(len(self.ensemble_shape), len(self.shape)))
         return len(set(axis).intersection(base_axes)) > 0
 
-    def apply_func(self, func: callable, **kwargs) -> ArrayObjectSubclass:
+    def apply_func(self, func: Callable, **kwargs) -> ArrayObject | list[ArrayObject]:
         """
         Apply a function to the array object. The function must take an array as its first argument,
         only the array is modified, the metadata is not changed. The function is applied lazily if
@@ -493,7 +508,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self.apply_transform(transform)
 
     def get_from_metadata(self, name: str, broadcastable: bool = False):
-
         axes_metadata_index = None
         data = None
         for i, (n, axis) in enumerate(zip(self.shape, self.ensemble_axes_metadata)):
@@ -531,7 +545,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
         metadata: dict,
-    ) -> ArrayObjectSubclass:
+    ) -> ArrayObject:
         """
         Creates array object from a given array and metadata.
 
@@ -551,7 +565,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """
         raise NotImplementedError
 
-    def rechunk(self, chunks: Chunks, **kwargs):
+    def rechunk(self, chunks: Chunks, **kwargs) -> ArrayObject:
         """
         Rechunk dask array.
 
@@ -568,12 +582,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             chunks = chunks + ("auto",) * max((self.ensemble_dims - len(chunks), 0))
             chunks = chunks + (-1,) * max((len(self.shape) - len(chunks), 0))
 
-        array = self._array.rechunk(chunks=chunks, **kwargs)
+        array = self._lazy_array.rechunk(chunks=chunks, **kwargs)
         kwargs = self._copy_kwargs(exclude=("array",))
         return self.__class__(array, **kwargs)
 
     @property
-    def metadata(self):
+    def metadata(self) -> dict:
         """Metadata stored as a dictionary."""
         return self._metadata
 
@@ -588,7 +602,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return self._array
 
     @array.setter
-    def array(self, array):
+    def array(self, array: np.ndarray | da.core.Array):
         """
         Set underlying array describing the array object.
         """
@@ -604,7 +618,27 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         self._array = array
 
     @property
-    def dtype(self) -> np.dtype.base:
+    def _lazy_array(self) -> da.core.Array:
+        """
+        Underlying lazy array describing the array object.
+        """
+        if not self.is_lazy:
+            raise RuntimeError("array object is not lazy")
+        assert isinstance(self.array, da.core.Array)
+        return self.array
+
+    @property
+    def _eager_array(self) -> np.ndarray:
+        """
+        Underlying eager array describing the array object.
+        """
+        if self.is_lazy:
+            raise RuntimeError("array object is lazy")
+        assert not isinstance(self.array, da.core.Array)
+        return self.array
+
+    @property
+    def dtype(self) -> np.dtype:
         """
         Datatype of array.
         """
@@ -671,10 +705,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def mean(
         self,
-        axis: int | tuple[int, ...] = None,
+        axis: Optional[int | tuple[int, ...]] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> ArrayObjectSubclass:
+    ) -> ArrayObject:
         """
         Mean of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -700,10 +734,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def sum(
         self,
-        axis: int | tuple[int, ...] = None,
+        axis: Optional[int | tuple[int, ...]] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> ArrayObjectSubclass:
+    ) -> ArrayObject:
         """
         Sum of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -729,10 +763,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def std(
         self,
-        axis: int | tuple[int, ...] = None,
+        axis: Optional[int | tuple[int, ...]] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> ArrayObjectSubclass:
+    ) -> ArrayObject:
         """
         Standard deviation of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -758,10 +792,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def min(
         self,
-        axis: int | tuple[int, ...] = None,
+        axis: Optional[int | tuple[int, ...]] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> ArrayObjectSubclass:
+    ) -> ArrayObject:
         """
         Minmimum of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -787,10 +821,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def max(
         self,
-        axis: int | tuple[int, ...] = None,
+        axis: Optional[int | tuple[int, ...]] = None,
         keepdims: bool = False,
         split_every: int = 2,
-    ) -> ArrayObjectSubclass:
+    ) -> ArrayObject:
         """
         Maximum of array object over one or more axes. Only ensemble axes can be reduced.
 
@@ -816,12 +850,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def _reduction(
         self,
-        reduction_func,
-        axes,
+        reduction_func: str,
+        axes: Optional[int | tuple[int, ...]] = None,
         keepdims: bool = False,
         split_every: int = 2,
         **kwargs,
-    ) -> ArrayObjectSubclass:
+    ) -> ArrayObject:
         xp = get_array_module(self.array)
 
         if axes is None:
@@ -830,8 +864,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             else:
                 return getattr(xp, reduction_func)(self.array)
 
-        if isinstance(axes, Number):
-            axes = (axes,)
+        axes = number_to_tuple(axes)
 
         axes = tuple(axis if axis >= 0 else len(self.shape) + axis for axis in axes)
 
@@ -863,7 +896,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
-    def _arithmetic(self, other, func) -> ArrayObjectSubclass:
+    def _arithmetic(self, other, func) -> ArrayObject:
         if hasattr(other, "array"):
             self._check_is_compatible(other)
             other = other.array
@@ -872,7 +905,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["array"] = getattr(self.array, func)(other)
         return self.__class__(**kwargs)
 
-    def _in_place_arithmetic(self, other, func) -> ArrayObjectSubclass:
+    def _in_place_arithmetic(self, other, func) -> ArrayObject:
         # if hasattr(other, 'array'):
         #    self.check_is_compatible(other)
         #    other = other.array
@@ -883,31 +916,31 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
         return self._arithmetic(other, func)
 
-    def __mul__(self, other) -> ArrayObjectSubclass:
+    def __mul__(self, other) -> ArrayObject:
         return self._arithmetic(other, "__mul__")
 
-    def __imul__(self, other) -> ArrayObjectSubclass:
+    def __imul__(self, other) -> ArrayObject:
         return self._in_place_arithmetic(other, "__imul__")
 
-    def __truediv__(self, other) -> ArrayObjectSubclass:
+    def __truediv__(self, other) -> ArrayObject:
         return self._arithmetic(other, "__truediv__")
 
-    def __itruediv__(self, other) -> ArrayObjectSubclass:
+    def __itruediv__(self, other) -> ArrayObject:
         return self._arithmetic(other, "__itruediv__")
 
-    def __sub__(self, other) -> ArrayObjectSubclass:
+    def __sub__(self, other) -> ArrayObject:
         return self._arithmetic(other, "__sub__")
 
-    def __isub__(self, other) -> ArrayObjectSubclass:
+    def __isub__(self, other) -> ArrayObject:
         return self._in_place_arithmetic(other, "__isub__")
 
-    def __add__(self, other) -> ArrayObjectSubclass:
+    def __add__(self, other) -> ArrayObject:
         return self._arithmetic(other, "__add__")
 
-    def __iadd__(self, other) -> ArrayObjectSubclass:
+    def __iadd__(self, other) -> ArrayObject:
         return self._in_place_arithmetic(other, "__iadd__")
 
-    def __pow__(self, other) -> ArrayObjectSubclass:
+    def __pow__(self, other) -> ArrayObject:
         return self._arithmetic(other, "__pow__")
 
     __rmul__ = __mul__
@@ -1002,12 +1035,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["metadata"] = {**self.metadata, **metadata}
         return kwargs
 
-    def __getitem__(self, items) -> ArrayObjectSubclass:
+    def __getitem__(self, items) -> ArrayObject:
         return self.__class__(**self.get_items(items))
 
     def expand_dims(
-        self, axis: tuple[int, ...] = None, axis_metadata: list[AxisMetadata] = None
-    ) -> ArrayObjectSubclass:
+        self,
+        axis: Optional[tuple[int, ...]] = None,
+        axis_metadata: Optional[list[AxisMetadata]] = None,
+    ) -> ArrayObject:
         """
         Expand the shape of the array object.
 
@@ -1026,8 +1061,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if axis is None:
             axis = (0,)
 
-        if type(axis) not in (tuple, list):
-            axis = (axis,)
+        axis = number_to_tuple(axis)
 
         if axis_metadata is None:
             axis_metadata = [UnknownAxis()] * len(axis)
@@ -1047,7 +1081,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
-    def squeeze(self, axis: tuple[int, ...] = None) -> ArrayObjectSubclass:
+    def squeeze(self, axis: Optional[tuple[int, ...]] = None) -> ArrayObject:
         """
         Remove axes of length one from array object.
 
@@ -1089,7 +1123,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self.__class__(**kwargs)
 
-    def ensure_lazy(self, chunks: str = "auto") -> ArrayObjectSubclass:
+    def ensure_lazy(self, chunks: str = "auto") -> ArrayObject:
         """
         Creates an equivalent lazy version of the array object.
 
@@ -1114,7 +1148,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
 
-    def lazy(self, chunks: str = "auto") -> ArrayObjectSubclass:
+    def lazy(self, chunks: str = "auto") -> ArrayObject:
         return self.ensure_lazy(chunks)
 
     def compute(
@@ -1158,7 +1192,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return output
 
-    def copy_to_device(self, device: str) -> ArrayObjectSubclass:
+    def copy_to_device(self, device: str) -> ArrayObject:
         """
         Copy array to specified device.
 
@@ -1175,13 +1209,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self.__class__(**kwargs)
 
-    def to_cpu(self) -> ArrayObjectSubclass:
+    def to_cpu(self) -> ArrayObject:
         """
         Move the array to the host memory from an arbitrary source array.
         """
         return self.copy_to_device("cpu")
 
-    def to_gpu(self, device: str = "gpu") -> ArrayObjectSubclass:
+    def to_gpu(self, device: str = "gpu") -> ArrayObject:
         """
         Move the array from the host memory to a gpu.
         """
@@ -1272,14 +1306,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array = self.array
         if self.is_lazy:
             warnings.warn("Lazy arrays are computed in memory before writing to tiff.")
-            array = array.compute()
+            array = self._lazy_array.compute()
 
         return tifffile.imwrite(
             filename, array, description=self._metadata_to_json(), **kwargs
         )
 
     @classmethod
-    def from_zarr(cls, url, chunks: int = "auto") -> ArrayObjectSubclass:
+    def from_zarr(cls, url: str, chunks: int = "auto") -> ArrayObject:
         """
         Read wave functions from a hdf5 file.
 
@@ -1292,7 +1326,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """
         return from_zarr(url, chunks=chunks)
 
-    
     @property
     def _has_base_chunks(self):
         if not isinstance(self.array, da.core.Array):
@@ -1342,7 +1375,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def apply_transform(
         self, transform: ArrayObjectTransform, max_batch: int | str = "auto"
-    ) -> ArrayObjectSubclass | ComputableList[ArrayObjectSubclass, ...]:
+    ) -> ArrayObject | list[ArrayObject, ...]:
         """
         Transform the wave functions by a given transformation.
 
@@ -1357,10 +1390,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         Returns
         -------
-        transformed_array_object : ArrayObjectSubclass
+        transformed_array_object : ArrayObject
             The transformed array object.
         """
-        
+
         if self.is_lazy:
             if not transform._allow_base_chunks and self._has_base_chunks:
                 raise RuntimeError(
@@ -1371,19 +1404,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self.base_shape))
 
-            chunks = transform._default_ensemble_chunks + self.array.chunks
+            chunks = transform._default_ensemble_chunks + self._lazy_array.chunks
 
             chunks = validate_chunks(
                 transform.ensemble_shape + self.shape,
                 chunks,
                 max_elements=max_batch,
                 dtype=self.dtype,
-            ) 
-            
-            assert chunks[len(transform.ensemble_shape) :] == self.array.chunks
+            )
+
+            assert chunks[len(transform.ensemble_shape) :] == self._lazy_array.chunks
 
             transform_chunks = chunks[: len(transform.ensemble_shape)]
-            array_ensemble_chunks = self.array.chunks[: len(self.ensemble_shape)]
+            array_ensemble_chunks = self._lazy_array.chunks[: len(self.ensemble_shape)]
 
             transform_args, transform_symbols = transform._get_blockwise_args(
                 transform_chunks
@@ -1410,26 +1443,26 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             symbols = tuple_range(num_ensemble_dims + len(base_shape))
             chunks = chunks[:num_ensemble_dims] + base_shape
             meta = transform._out_meta(self)[0]
-            
+
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore", message="Increasing number of chunks."
                 )
 
             new_array = da.blockwise(
-                 self._apply_transform,
-                 symbols,
-                 *interleave(transform_args, transform_symbols),
-                 *interleave(axes_args, axes_symbols),
-                 self.array,
-                 array_symbols,
-                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                 transform_partial=transform._from_partitioned_args(),
-                 num_transform_args=len(transform_args),
-                 array_object_partial=self._from_partitioned_args(),
-                 meta=meta,
-                 align_arrays=False,
-                 concatenate=True,
+                self._apply_transform,
+                symbols,
+                *interleave(transform_args, transform_symbols),
+                *interleave(axes_args, axes_symbols),
+                self.array,
+                array_symbols,
+                adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                transform_partial=transform._from_partitioned_args(),
+                num_transform_args=len(transform_args),
+                array_object_partial=self._from_partitioned_args(),
+                meta=meta,
+                align_arrays=False,
+                concatenate=True,
             )
             if transform._num_outputs > 1:
                 outputs = transform._pack_multiple_outputs(self, new_array)
@@ -1441,7 +1474,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             # TODO: Implement for non-lazy arrays
             return transform.apply(self)
 
-    def set_ensemble_axes_metadata(self, axes_metadata: AxisMetadata, axis: int):
+    def set_ensemble_axes_metadata(
+        self, axes_metadata: AxisMetadata, axis: int
+    ) -> ArrayObject:
         """
         Sets the axes metadata of an ensemble axis.
 
@@ -1603,7 +1638,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         return cls(**kwargs)
 
     def _partition_ensemble_axes_metadata(
-        self, chunks: Chunks = None, lazy: bool = True
+        self, chunks: Optional[Chunks] = None, lazy: bool = True
     ):
         if len(self.ensemble_shape) == 0:
             ensemble_axes_metadata = _wrap_with_array([], 1)
@@ -1637,7 +1672,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             raise NotImplementedError
 
-    def _partition_args(self, chunks: int = None, lazy: bool = True):
+    def _partition_args(self, chunks: Optional[int] = None, lazy: bool = True):
         if chunks is None and self.is_lazy:
             chunks = self.array.chunks[: -len(self.base_shape)]
         elif chunks is None:
@@ -1729,7 +1764,7 @@ def _expand_dims(array: np.ndarray, axis: int | tuple | list) -> np.ndarray:
     return array.reshape(shape)
 
 
-def from_zarr(url: str, chunks: Chunks = None):
+def from_zarr(url: str, chunks: Optional[Chunks] = None):
     """
     Read abTEM data from zarr.
 
@@ -1779,10 +1814,10 @@ def from_zarr(url: str, chunks: Chunks = None):
 
 
 def stack(
-    arrays: Sequence[ArrayObjectSubclass],
-    axis_metadata: AxisMetadata | Sequence[str] = None,
+    arrays: Sequence[ArrayObject],
+    axis_metadata: Optional[AxisMetadata | Sequence[str]] = None,
     axis: int = 0,
-) -> ArrayObjectSubclass:
+) -> ArrayObject:
     """
     Stack multiple array objects (e.g. Waves and BaseMeasurement) along a new ensemble axis.
 
@@ -1801,7 +1836,7 @@ def stack(
         The stacked array object of the same type as the input.
     """
 
-    #if not all(isinstance(array, ArrayObjectSubclass) for array in arrays):
+    # if not all(isinstance(array, ArrayObject) for array in arrays):
     #    raise ValueError("arrays must be a sequence of array objects.")
 
     assert axis <= len(arrays[0].ensemble_shape)
@@ -1813,7 +1848,7 @@ def stack(
     elif isinstance(axis_metadata, (tuple, list)):
         if not all(isinstance(element, str) for element in axis_metadata):
             raise ValueError()
-        axis_metadata = OrdinalAxis(values=axis_metadata)
+        axis_metadata = OrdinalAxis(values=tuple(axis_metadata))
 
     elif isinstance(axis_metadata, dict):
         axis_metadata = OrdinalAxis(**axis_metadata)
@@ -1824,7 +1859,7 @@ def stack(
     return arrays[0]._stack(arrays, axis_metadata, axis)
 
 
-def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObjectSubclass:
+def concatenate(arrays: Sequence[ArrayObject], axis: int = 0) -> ArrayObject:
     """
     Join a sequence of abTEM array classes along an existing axis.
 
@@ -1887,10 +1922,10 @@ def swapaxes(array_object, axis1, axis2):
 
 
 def moveaxis(
-    array_object: ArrayObjectSubclass,
+    array_object: ArrayObject,
     source: tuple[int, ...],
     destination: tuple[int, ...],
-) -> ArrayObjectSubclass:
+) -> ArrayObject:
     xp = get_array_module(array_object.array)
 
     if array_object.is_lazy:
