@@ -3,15 +3,14 @@ from __future__ import annotations
 import warnings
 from abc import ABCMeta, abstractmethod
 from functools import partial
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
-from ase.data import chemical_symbols
-from scipy.linalg import expm as expm_scipy
-from scipy.spatial.transform import Rotation
+from scipy.linalg import expm as expm_scipy  # type: ignore
+from scipy.spatial.transform import Rotation  # type: ignore
 
 from abtem.array import ArrayObject
 from abtem.atoms import is_cell_orthogonal
@@ -25,7 +24,6 @@ from abtem.bloch.utils import (
     raveled_hkl_to_hkl,
     reciprocal_space_gpts,
 )
-from abtem.inelastic.phonons import validate_sigmas
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis, TiltAxis
 from abtem.core.backend import cp, get_array_module, validate_device
@@ -39,8 +37,12 @@ from abtem.core.fft import fft_interpolate, ifft2
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, flatten_list_of_lists, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
+from abtem.inelastic.phonons import (
+    validate_per_atom_property,
+    validate_sigmas,
+)
 from abtem.measurements import IndexedDiffractionPatterns
-from abtem.parametrizations import validate_parametrization, Parametrization
+from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
 from abtem.waves import Waves
 
@@ -53,7 +55,8 @@ def calculate_scattering_factors(
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
-    thermal_sigma: float = 0.0,
+    thermal_sigma: float | dict[str, float] | Sequence[float] = 0.0,
+    occupancy: float | dict[str, float] | Sequence[float] = 1.0,
     cutoff: str = "taper",
 ):
     """
@@ -75,40 +78,63 @@ def calculate_scattering_factors(
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard' is a hard cutoff.
     """
 
-    if not thermal_sigma is dict:
-        pass
-        # TODO: use AI
+    validated_thermal_sigma = validate_sigmas(atoms, thermal_sigma, return_array=True)[0]
+    validated_occupancy = validate_per_atom_property(atoms, occupancy, return_array=True)
+
+    assert isinstance(validated_thermal_sigma, np.ndarray)  # Type narrowing for mypy
+    assert isinstance(validated_occupancy, np.ndarray)  # Type narrowing for mypy
 
     parametrization = validate_parametrization(parametrization)
 
-    Z_unique, Z_inverse = np.unique(atoms.numbers, return_inverse=True)
-    g_unique, g_inverse = np.unique(g, return_inverse=True)
+    #Z_unique, Z_inverse = np.unique(atoms.numbers, return_inverse=True)
+    #g_unique, g_inverse = np.unique(g, return_inverse=True)
 
-    f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=get_dtype(complex=True))
+    Z_unique = np.unique(atoms.numbers)
+
+    #f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=get_dtype(complex=True))
+
+    scattering_factors = {Z: parametrization.scattering_factor(Z) for Z in Z_unique}
+
+    f_e = np.zeros((len(atoms), len(g)), dtype=get_dtype(complex=True))
+
+    for i in range(len(atoms)):
+        Z = atoms.numbers[i]
+        s = validated_thermal_sigma[i]
+        o = validated_occupancy[i]
+        
+        if s != 0.:
+            DWF = np.exp(-0.5 * s ** 2 * g ** 2 * (2 * np.pi) ** 2)
+        else:
+            DWF = 1.0
+
+        f_e[i] = scattering_factors[Z](g ** 2) * DWF * o
 
     if cutoff == "taper":
         T = 0.005
         alpha = 1 - 0.05
-        cutoff = 1 / (1 + np.exp((g_unique / g_max - alpha) / T))
+        cutoff_array = 1 / (1 + np.exp((g / g_max - alpha) / T))
     elif cutoff == "hard":
-        cutoff = g_unique <= g_max
+        cutoff_array = g <= g_max
     else:
         raise ValueError("cutoff must be 'taper' or 'hard'")
 
-    for idx, Z in enumerate(Z_unique):
-        if thermal_sigma is not None:
-            s = thermal_sigma[chemical_symbols[Z]]
-            DWF = np.exp(-0.5 * s**2 * g_unique**2 * (2 * np.pi) ** 2)
-        else:
-            DWF = 1.0
+    f_e *= cutoff_array
+    return f_e
 
-        scattering_factor = parametrization.scattering_factor(Z)
+    # for idx, Z in enumerate(Z_unique):
+    #     if atomic_thermal_sigmas is not None:
+    #         s = atomic_thermal_sigmas[idx]
+    #         DWF = np.exp(-0.5 * s**2 * g_unique**2 * (2 * np.pi) ** 2)
+    #     else:
+    #         DWF = 1.0
 
-        f_e_uniq[idx, :] = scattering_factor(g_unique**2) * DWF
+    #     scattering_factor = 
 
-        f_e_uniq[idx, :] *= cutoff
+    #     f_e_uniq[idx, :] = scattering_factor(g_unique**2) * DWF
 
-    return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
+    #     f_e_uniq[idx, :] *= cutoff
+
+    # return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
 
 
 def calculate_structure_factors(
@@ -116,7 +142,8 @@ def calculate_structure_factors(
     atoms: Atoms,
     parametrization: str,
     g_max: float,
-    thermal_sigma: float = None,
+    thermal_sigma: float | dict[str, float] | Sequence[float] = 0.0,
+    occupancy: float | dict[str, float] | Sequence[float] = 1.0,
     cutoff: str = "taper",
     device: str = "cpu",
 ):
@@ -150,6 +177,7 @@ def calculate_structure_factors(
         parametrization=parametrization,
         cutoff=cutoff,
         thermal_sigma=thermal_sigma,
+        occupancy=occupancy,
     )
 
     xp = get_array_module(device)
@@ -233,10 +261,9 @@ def slice_potential(
     potential_3d: np.ndarray,
     slice_chunks,
     slice_thicknesses,
-    gpts=None,
-    rollaxis=True,
+    gpts: Optional[tuple[int, int]] = None,
+    rollaxis: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
-
     num_slices = len(slice_chunks)
     assert num_slices == len(slice_thicknesses)
 
@@ -264,7 +291,6 @@ def slice_potential(
 
 
 class BaseStructureFactor(metaclass=ABCMeta):
-
     def __len__(self):
         return len(self.hkl)
 
@@ -302,15 +328,15 @@ class BaseStructureFactor(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def get_potential_3d(self, **kwargs) -> np.ndarray:
+    def get_potential_3d(self) -> np.ndarray:
         pass
 
     @abstractmethod
     def get_projected_potential(
         self,
-        slice_thickness: float | Sequence[float],
-        sampling: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
+        slice_thickness: Optional[float | Sequence[float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
         **kwargs,
     ) -> PotentialArray:
         pass
@@ -328,8 +354,10 @@ class StructureFactor(BaseStructureFactor):
         Maximum scattering vector length [1/Å].
     parametrization : str
         Parametrization for the scattering factors.
-    thermal_sigma : float
+    thermal_sigma : float or dict 
         Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
+    occupancy : float
+        The occupancy of the atoms.
     cutoff : {'taper', 'hard'}
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard' is a hard cutoff.
     device : {'cpu', 'gpu'}
@@ -343,17 +371,17 @@ class StructureFactor(BaseStructureFactor):
         atoms: Atoms,
         g_max: float,
         parametrization: str = "lobato",
-        thermal_sigma: float = 0.,
+        thermal_sigma: float | dict[str, float] | Sequence[float] = 0.0,
+        occupancy: float | dict[str, float] | Sequence[float] = 1.0,
         cutoff: str = "taper",
-        device: str = None,
+        device: Optional[str] = None,
         centering: str = "P",
     ):
-
         self._atoms = atoms
 
-        thermal_sigma, _ = validate_sigmas(atoms, thermal_sigma)
+        self._thermal_sigma = validate_sigmas(atoms, thermal_sigma)[0]
 
-        self._thermal_sigma = thermal_sigma
+        self._occupancy = validate_per_atom_property(atoms, occupancy)
 
         hkl = make_hkl_grid(atoms.cell, g_max)
 
@@ -430,6 +458,7 @@ class StructureFactor(BaseStructureFactor):
                 atoms=self.atoms,
                 parametrization=self.parametrization,
                 thermal_sigma=self._thermal_sigma,
+                occupancy=self._occupancy,
                 g_max=self.g_max,
                 cutoff=self._cutoff,
                 device=self._device,
@@ -442,6 +471,7 @@ class StructureFactor(BaseStructureFactor):
                 self.atoms,
                 parametrization=self._parametrization,
                 thermal_sigma=self._thermal_sigma,
+                occupancy=self._occupancy,
                 g_max=self.g_max,
                 cutoff=self._cutoff,
                 device=self._device,
@@ -467,9 +497,9 @@ class StructureFactor(BaseStructureFactor):
 
     def get_projected_potential(
         self,
-        slice_thickness: float | Sequence[float] = None,
-        sampling: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
+        slice_thickness: Optional[float | Sequence[float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
         lazy: bool = True,
     ) -> PotentialArray:
         """
@@ -524,8 +554,8 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         hkl: np.ndarray,
         cell: np.ndarray | Cell,
         g_max: float,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         if not array.shape[-1] == len(hkl):
             raise ValueError(
@@ -610,9 +640,9 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
 
     def get_projected_potential(
         self,
-        slice_thickness: float | Sequence[float] = None,
-        sampling: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
+        slice_thickness: Optional[float | Sequence[float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
     ) -> PotentialArray:
         """
         Calculate the projected potential from the structure factors.
@@ -723,7 +753,7 @@ def calculate_structure_matrix(
     hkl_selected: np.ndarray,
     cell: Cell | np.ndarray,
     energy: float,
-    gpts: tuple[int, int, int] = None,
+    gpts: Optional[tuple[int, int, int]] = None,
     use_wave_eq: bool = False,
 ) -> np.ndarray:
     """
@@ -1047,14 +1077,13 @@ class BlochWaves:
         self,
         structure_factor: StructureFactor,
         energy: float,
-        sg_max: float = None,
-        g_max: float = None,
-        orientation_matrix: np.ndarray = None,
+        sg_max: Optional[float] = None,
+        g_max: Optional[float] = None,
+        orientation_matrix: Optional[np.ndarray] = None,
         centering: str = "P",
-        device: str = None,
+        device: Optional[str] = None,
         use_wave_eq: bool = False,
     ):
-
         cell = structure_factor.cell
 
         if orientation_matrix is not None:
@@ -1144,7 +1173,7 @@ class BlochWaves:
         return self.num_bloch_waves**2 * bytes_per_element
 
     def get_kinematical_diffraction_pattern(
-        self, excitation_error_sigma: float = None
+        self, excitation_error_sigma: Optional[float] = None
     ) -> IndexedDiffractionPatterns:
         """
         Calculate the kinematical diffraction pattern.
@@ -1279,7 +1308,7 @@ class BlochWaves:
         thicknesses: float | Sequence[float],
         return_complex: bool = False,
         lazy: bool = True,
-        merge_tol: float = None,
+        merge_tol: Optional[float] = None,
     ):
         """
         Calculate the dynamical diffraction patterns for a given set of thicknesses.
@@ -1522,7 +1551,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         sg_max: float,
         g_max: float,
         centering: str = "P",
-        device: str = None,
+        device: Optional[str] = None,
         use_wave_eq: bool = False,
         use_degrees: bool = False,
     ):
@@ -1572,7 +1601,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         """
         orientation_matrices = np.eye(3)
         for axes, rotation in zip(self.axes[::-1], self.rotations[::-1]):
-
             if hasattr(rotation, "values"):
                 R = Rotation.from_euler(
                     axes, rotation.values, degrees=self._use_degrees
@@ -1627,7 +1655,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     @property
     def ensemble_axes_metadata(self) -> list[NonLinearAxis]:
-
         if self.use_degrees:
             units = "deg"
         else:
@@ -1671,7 +1698,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     def _partition_args(
         self,
-        chunks: int | str | tuple[int | str | tuple[int, ...], ...] = None,
+        chunks: Optional[int | str | tuple[int | str | tuple[int, ...], ...]] = None,
         lazy: bool = True,
     ):
         blocks = ()
@@ -1685,7 +1712,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     @classmethod
     def _partial_transform(cls, *args, axes, order, num_ensemble_dims, **kwargs):
-
         args = unpack_blockwise_args(args)
 
         rotations = tuple(
@@ -1721,9 +1747,8 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return_complex: bool,
         pbar: bool,
         merge_tol: float = np.inf,
-        hkl_mask: np.ndarray = None,
+        hkl_mask: Optional[np.ndarray] = None,
     ):
-
         if hkl_mask is None:
             hkl_mask = self.get_ensemble_hkl_mask()
 
@@ -1746,7 +1771,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         # lil_matrix((np.prod(shape[:-1]), shape[-1]))
 
         for i in np.ndindex(orientation_matrices.shape[:-2]):
-
             bw = BlochWaves(
                 structure_factor=self._structure_factor,
                 energy=self.energy,
@@ -1831,7 +1855,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: float | Sequence[float],
         return_complex: bool = False,
         lazy: bool = True,
-        pbar: bool = None,
+        pbar: Optional[bool] = None,
         merge_tol=1e-12,
     ) -> IndexedDiffractionPatterns:
         """

@@ -197,7 +197,7 @@ def get_reflection_condition(hkl: np.ndarray, centering: str):
         raise ValueError()
 
 
-@njit(parallel=True, fastmath=True, nogil=True, error_model="numpy")
+#@njit(parallel=True, fastmath=True, nogil=True, error_model="numpy")
 def fast_filter_excitation_errors(mask, g, orientation_matrices, wavelength, sg_max):
     g_length_2 = (g**2).sum(axis=-1)
 
