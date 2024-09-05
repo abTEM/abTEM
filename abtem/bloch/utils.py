@@ -6,13 +6,13 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 from ase.cell import Cell
-from numba import njit
+from numba import njit  # type: ignore
 
 from abtem.core.backend import cp
 from abtem.core.energy import energy2wavelength
 
 
-def reciprocal_cell(cell):
+def reciprocal_cell(cell: np.ndarray | Cell) -> np.ndarray:
     """
     Calculate the reciprocal cell of a unit cell.
 
@@ -37,15 +37,16 @@ def calculate_g_vec_length(hkl: np.ndarray, cell: np.ndarray | Cell) -> np.ndarr
     return np.linalg.norm(calculate_g_vec(hkl, cell), axis=-1)
 
 
-def hkl_strings_to_array(hkl):
+def hkl_strings_to_array(hkl: list[str]) -> np.ndarray:
     return np.array([tuple(map(int, hkli.split(" "))) for hkli in hkl])
 
 
 def generate_linear_combinations(
-    vectors: np.array, coefficients: Sequence[int], exclude_zero: bool = False
-):
+    vectors: np.ndarray, coefficients: Sequence[int], exclude_zero: bool = False
+) -> np.ndarray:
     """
-    Generate all possible linear combinations of the given vectors with the given coefficients.
+    Generate all possible linear combinations of the given vectors with the given
+    coefficients.
 
     Parameters
     ----------
@@ -61,17 +62,18 @@ def generate_linear_combinations(
     np.array
         Array of linear combinations.
     """
-    combinations = [
-        sum(c * v for c, v in zip(coef_comb, vectors))
-        for coef_comb in itertools.product(coefficients, repeat=len(vectors))
-    ]
-    combinations = np.array(combinations)
+    combinations = np.array(
+        [
+            sum(c * v for c, v in zip(coef_comb, vectors))
+            for coef_comb in itertools.product(coefficients, repeat=len(vectors))
+        ]
+    )
     if exclude_zero:
         combinations = combinations[(combinations == 0).all(axis=1) == 0]
     return combinations
 
 
-def get_shortest_g_vec_length(cell: Cell):
+def get_shortest_g_vec_length(cell: Cell) -> float:
     """
     Get the length of the shortest reciprocal space vector in the given unit cell.
 
@@ -86,8 +88,9 @@ def get_shortest_g_vec_length(cell: Cell):
         Length of the shortest reciprocal space vector [1/Å].
     """
     coefficients = [-1, 0, 1]
+    reciprocal_cell = np.array(cell.reciprocal())
     combinations = generate_linear_combinations(
-        cell.reciprocal(), coefficients, exclude_zero=True
+        reciprocal_cell, coefficients, exclude_zero=True
     )
     return np.min(np.linalg.norm(combinations, axis=1))
 
@@ -109,12 +112,6 @@ def reciprocal_space_gpts(
         int(np.ceil(g_max / dk[2])) * 2 + 1,
     )
     return gpts
-
-
-def a() -> np.ndarray:
-    b = np.meshgrid((0, 1), (0, 1))
-
-    return b
 
 
 def make_hkl_grid(
@@ -150,7 +147,8 @@ def excitation_errors(
     energy : float
         Electron energy [eV].
     use_wave_eq : bool, optional
-        Whether to use the excitation errors derived from the wave equation. Default is False.
+        Whether to use the excitation errors derived from the wave equation.
+        Default is False.
 
     Returns
     -------
@@ -224,7 +222,8 @@ def filter_reciprocal_space_vectors(
     orientation_matrices: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Filter reciprocal space vectors based on excitation errors and reflection conditions.
+    Filter reciprocal space vectors based on excitation errors and reflection
+    conditions.
 
     Parameters
     ----------
@@ -278,8 +277,19 @@ def filter_reciprocal_space_vectors(
     return mask
 
 
+def ravel_hkl(hkl: np.ndarray, gpts: tuple[int, int, int]) -> np.ndarray:
+    hkl = np.asarray(hkl)
+    shift = np.array((gpts[0] // 2, gpts[1] // 2, gpts[2] // 2))
+    hkl = hkl + shift
+    multi_index = (hkl[..., 0], hkl[..., 1], hkl[..., 2])
+    return np.ravel_multi_index(multi_index, gpts)
+
+
 def raveled_hkl_to_hkl(
-    array, hkl_source: np.ndarray, hkl_destination, gpts: tuple[int, int, int]
+    array: np.ndarray,
+    hkl_source: np.ndarray,
+    hkl_destination: np.ndarray,
+    gpts: tuple[int, int, int],
 ) -> np.ndarray:
     """
     Convert a raveled array to a 3D array with the shape of the structure factor.
@@ -300,14 +310,9 @@ def raveled_hkl_to_hkl(
     np.ndarray
         The 3D array.
     """
-    hkl_source = np.asarray(hkl_source)
-    hkl_destination = np.asarray(hkl_destination)
 
-    hkl_source = hkl_source + (gpts[0] // 2, gpts[1] // 2, gpts[2] // 2)
-    hkl_source = np.ravel_multi_index(hkl_source.T, gpts)
-
-    hkl_destination = hkl_destination + (gpts[0] // 2, gpts[1] // 2, gpts[2] // 2)
-    hkl_destination = np.ravel_multi_index(hkl_destination.T, gpts)
+    hkl_source = ravel_hkl(hkl_source, gpts)
+    hkl_destination = ravel_hkl(hkl_destination, gpts)
 
     if cp is not None and isinstance(array, cp.ndarray):
         convert_to_numpy = True
@@ -318,7 +323,7 @@ def raveled_hkl_to_hkl(
         array = cp.asnumpy(array)
 
     df = pd.Series(array, index=hkl_source)
-    array = df.get(hkl_destination, default=0.0).to_numpy()
+    array = df.get(hkl_destination, default=0.0).to_numpy()  # type: ignore
 
     if convert_to_numpy:
         array = cp.asarray(array)

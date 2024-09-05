@@ -1,16 +1,33 @@
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
 
-from abtem.bloch.utils import excitation_errors
+from abtem.bloch.utils import excitation_errors, reciprocal_cell
 from abtem.core.utils import is_broadcastable
 
 
 def _pixel_edges(
     shape: tuple[int, int], sampling: tuple[float, float]
 ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Get the pixel edges of an array.
+
+    Parameters:
+    -----------
+    shape : tuple[int, int]
+        The shape of the array.
+    sampling : tuple[float, float]
+        The sampling rate of the array in the x and y directions [Å].
+
+    Returns:
+    --------
+    tuple[np.ndarray, np.ndarray]
+        The pixel edges in reciprocal
+    """
     x = np.fft.fftshift(np.fft.fftfreq(shape[0], d=1 / shape[0]))
     y = np.fft.fftshift(np.fft.fftfreq(shape[1], d=1 / shape[1]))
     x = (x - 0.5) * sampling[0]
@@ -19,7 +36,7 @@ def _pixel_edges(
 
 
 def _find_projected_pixel_index(
-    g: tuple[np.ndarray, np.ndarray],
+    g: np.ndarray,
     shape: tuple[int, int],
     sampling: tuple[float, float],
 ) -> np.ndarray:
@@ -32,7 +49,7 @@ def _find_projected_pixel_index(
     return nm
 
 
-def estimate_necessary_excitation_error(energy, k_max):
+def estimate_necessary_excitation_error(energy: float, k_max: float) -> float:
     hkl_corner = np.array([[np.sqrt(k_max), np.sqrt(k_max), 0]])
     sg = np.abs(excitation_errors(hkl_corner, energy).item())
     return sg
@@ -53,17 +70,17 @@ def validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> Ce
         The validated cell.
     """
     if isinstance(cell, Atoms):
-        cell = cell.cell
+        validated_cell = cell.cell
 
     if np.isscalar(cell):
-        cell = np.diag([cell] * 3)
+        validated_cell = np.diag([cell] * 3)
 
-    cell = np.array(cell)
+    validated_cell = np.array(cell)
 
     if isinstance(cell, np.ndarray) and cell.shape != (3, 3):
-        cell = np.diag(cell)
+        validated_cell = np.diag(cell)
 
-    return Cell(cell)
+    return Cell(validated_cell)
 
 
 def prefix_indices(shape):
@@ -75,7 +92,8 @@ def prefix_indices(shape):
 
 def overlapping_spots_mask(nm: np.ndarray, sg: np.ndarray) -> np.ndarray:
     """
-    Create a mask for overlapping diffraction spots. Spots with the same h and k indices are considered overlapping.
+    Create a mask for overlapping diffraction spots. Spots with the same h and k indices
+    are considered overlapping.
     """
     mask = np.zeros(nm.shape[:-1], dtype=bool)
     order = np.argsort(np.abs(sg), axis=-1)
@@ -156,12 +174,12 @@ def integrate_ellipse_around_pixels(
 
 def index_diffraction_spots(
     array: np.ndarray,
-    hkl,
+    hkl: np.ndarray,
     sampling: tuple[float, float],
-    cell: Atoms | Cell | float | tuple[float, float, float],
+    cell: Cell | np.ndarray,
     energy: float,
-    orientation_matrices: np.ndarray = None,
-    radius: float = None,
+    orientation_matrices: Optional[np.ndarray] = None,
+    radius: Optional[float] = None,
 ) -> np.ndarray:
     """
     Indexes diffraction spots in an array.
@@ -174,7 +192,7 @@ def index_diffraction_spots(
         The Miller indices to index.
     sampling : tuple[float, float]
         The sampling rate of the array in the x and y directions [Å].
-    cell : Atoms | Cell | float | tuple[float, float, float]
+    cell : Cell | np.ndarray
         The unit cell of the crystal structure.
     energy : float
         The energy of the incident electrons [eV].
@@ -186,7 +204,8 @@ def index_diffraction_spots(
     Returns
     -------
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-        A tuple containing the indexed hkl values, wavevector transfer values, pixel coordinates, and intensities.
+        A tuple containing the indexed hkl values, wavevector transfer values, pixel
+        coordinates, and intensities.
     """
 
     assert len(hkl.shape) == 2
@@ -198,7 +217,7 @@ def index_diffraction_spots(
     assert is_broadcastable(array.shape[:-2], orientation_matrices.shape[:-2])
 
     reciprocal_lattice_vectors = np.matmul(
-        cell.reciprocal(), np.swapaxes(orientation_matrices, -2, -1)
+        reciprocal_cell(cell), np.swapaxes(orientation_matrices, -2, -1)
     )
     g_vec = hkl @ reciprocal_lattice_vectors
 
@@ -219,7 +238,7 @@ def index_diffraction_spots(
     return intensities
 
 
-def miller_to_miller_bravais(hkl: tuple[int, int, int]):
+def miller_to_miller_bravais(hkl: tuple[int, int, int]) -> tuple[int, int, int, int]:
     """
     Convert Miller indices to Miller-Bravais indices.
 
@@ -233,17 +252,19 @@ def miller_to_miller_bravais(hkl: tuple[int, int, int]):
     tuple
         The Miller-Bravais indices (H, K, I, L).
     """
-    h, k, l = hkl
+    h, k, l = hkl  #  noqa: E741
 
     H = 2 * h - k
     K = 2 * k - h
-    I = -H - K
+    I = -H - K  # noqa: E741
     L = l
 
     return H, K, I, L
 
 
-def check_translation_symmetry(atoms, translation, tol=1e-12):
+def check_translation_symmetry(
+    atoms: Atoms, translation: np.ndarray, tol: float = 1e-12
+):
     positions = atoms.get_scaled_positions()
     shifted_positions = positions + translation
 
