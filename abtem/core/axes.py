@@ -6,7 +6,7 @@ import dataclasses
 from copy import copy
 from dataclasses import dataclass
 from numbers import Number
-from typing import Optional
+from typing import Any, Optional
 
 import dask.array as da
 import numpy as np
@@ -62,7 +62,7 @@ def format_value(
             return f"${latex_float(float_value, formatting)}$"
         else:
             return f"{float_value:>{formatting}}"
-    elif isinstance(value, (int, str)):
+    elif isinstance(value, (int, str, np.number)):
         return str(value)
     else:
         raise ValueError(f"Cannot format value of type {type(value)}")
@@ -127,10 +127,10 @@ class AxisMetadata:
     def format_coordinates(self, n: Optional[int] = None):
         return "-"
 
-    def __eq__(self, other):
+    def __eq__(self, other: AxisMetadata):
         return safe_equality(self, other)
 
-    def coordinates(self, n):
+    def coordinates(self, n: int) -> np.ndarray:
         return np.arange(n)
 
     def format_type(self):
@@ -139,7 +139,7 @@ class AxisMetadata:
     def format_label(self, units: Optional[str] = None):
         return format_label(self, units=units)
 
-    def format_title(self, *args, **kwargs):
+    def format_title(self, *args: Any, **kwargs: dict) -> str:
         return f"{self.label}"
 
     def item_metadata(self, item, metadata=None):

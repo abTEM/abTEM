@@ -18,7 +18,7 @@ from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
-from abtem.core.grid import Grid, HasGridMixin
+from abtem.core.grid import Grid, HasGrid2DMixin
 from abtem.core.utils import get_dtype, itemset
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.transfer import nyquist_sampling
@@ -33,20 +33,22 @@ if TYPE_CHECKING:
 ScanWithSampling = Union["LineScan", "GridScan"]
 
 
-def _validate_scan(scan: np.ndarray | BaseScan, probe: Probe | None = None) -> BaseScan:
+def validate_scan(scan: np.ndarray | BaseScan, probe: Probe | None = None) -> BaseScan:
+    validated_scan: BaseScan
     if scan is None and probe is None:
-        scan = CustomScan(np.zeros((1, 2)), squeeze=True)
+        validated_scan = CustomScan(np.zeros((1, 2)), squeeze=True)
     elif scan is None:
-        scan = CustomScan(np.zeros((0, 2)), squeeze=True)
-
-    if not isinstance(scan, BaseScan):
-        scan = CustomScan(scan, squeeze=True)
+        validated_scan = CustomScan(np.zeros((0, 2)), squeeze=True)
+    elif not isinstance(scan, BaseScan):
+        validated_scan = CustomScan(scan, squeeze=True)
+    else:
+        validated_scan = scan
 
     if probe is not None:
-        scan = scan.copy()
-        scan.match_probe(probe)
+        validated_scan = validated_scan.copy()
+        validated_scan.match_probe(probe)
 
-    return scan
+    return validated_scan
 
 
 def _validate_scan_sampling(scan: ScanWithSampling, probe: Probe | BaseSMatrix):
@@ -59,7 +61,7 @@ def _validate_scan_sampling(scan: ScanWithSampling, probe: Probe | BaseSMatrix):
 
         semiangle_cutoff = probe.aperture._max_semiangle_cutoff
 
-        scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe.energy)
+        scan.sampling = 0.99 * nyquist_sampling(semiangle_cutoff, probe._valid_energy)
 
 
 class BaseScan(ReciprocalSpaceMultiplication):
@@ -90,16 +92,19 @@ class BaseScan(ReciprocalSpaceMultiplication):
     @abstractmethod
     def get_positions(self, *args, **kwargs) -> np.ndarray:
         """Get the scan positions as numpy array."""
-        pass
 
     def _get_weights(self):
         raise NotImplementedError
 
+    @abstractmethod
+    def match_probe(self, probe: Probe | BaseSMatrix):
+        """Match the scan to a probe or s-matrix."""
+
     @property
     @abstractmethod
     def limits(self):
-        """Lower left and upper right corner of the bounding box containing all positions in the scan."""
-        pass
+        """Lower left and upper right corner of the bounding box containing all
+        positions in the scan."""
 
     @abstractmethod
     def _sort_into_extents(
@@ -130,13 +135,12 @@ class BaseScan(ReciprocalSpaceMultiplication):
 
         positions = self.get_positions()
         if len(positions) == 0:
-            return xp.ones(waves.gpts, dtype=xp.complex64)
+            return xp.ones(waves.gpts, dtype=get_dtype(complex=False))
 
-        positions = xp.asarray(positions) / xp.asarray(waves.sampling).astype(
-            get_dtype(complex=False)
-        )
+        positions = xp.asarray(positions) / xp.asarray(waves.sampling)
+        positions = positions.astype(get_dtype(complex=False))
 
-        kernel = fft_shift_kernel(positions, shape=waves.gpts)
+        kernel = fft_shift_kernel(positions, shape=waves._valid_gpts)
 
         try:
             kernel *= self._get_weights()[..., None, None]
@@ -209,8 +213,8 @@ class CustomScan(BaseScan):
     Parameters
     ----------
     positions : np.ndarray, optional
-        Scan positions [Å]. Anything that can be converted to a ndarray of shape (n, 3) is accepted. Default is
-        (0., 0.).
+        Scan positions [Å]. Anything that can be converted to a ndarray of shape (n, 3)
+        is accepted. Default is (0., 0.).
     """
 
     def __init__(
@@ -331,11 +335,7 @@ class CustomScan(BaseScan):
         return self._positions
 
 
-def _duplicate_as_tuple(value: float | int, n: int) -> tuple[float, ...]:
-    return (value,) * n
-
-
-def _validate_coordinate(
+def validate_coordinate(
     coordinate: float | tuple[float, float] | Atom | None,
     potential: BasePotential | Atoms | None = None,
     fractional: bool = False,
@@ -352,52 +352,27 @@ def _validate_coordinate(
     elif coordinate is None:
         return None
     else:
-        raise ValueError("coordinate must be a float or a tuple of two floats")
+        raise ValueError(
+            f"coordinate must be a float or a tuple of two floats, got {coordinate}"
+        )
 
-    if fractional:
-        assert potential is not None
-        assert coordinate is not None
-
+    if fractional and potential is None:
+        raise ValueError("provide potential for fractional coordinates")
+    elif fractional and potential is not None:
         potential = _validate_potential(potential)
 
         if isinstance(potential, BasePotential):
-            if potential is None:
-                raise ValueError("provide potential for fractional coordinates")
-
-            potential = _validate_potential(potential)
-            extent = potential.extent
+            extent = potential._valid_extent
         else:
+            assert potential is not None
             extent = potential
 
         coordinate = (
             extent[0] * coordinate[0],
             extent[1] * coordinate[1],
         )
-        return coordinate
-    else:
-        assert coordinate is not None
-        coordinate = (coordinate[0], coordinate[1])
-        return coordinate
 
-
-def _validate_coordinates(
-    start: float | tuple[float, float] | Atom | None,
-    end: float | tuple[float, float] | Atom | None,
-    potential: BasePotential | Atoms | None,
-    fractional: bool,
-) -> tuple[tuple[float, float], tuple[float, float]]:
-    if fractional:
-        assert potential is not None
-        potential = _validate_potential(potential)
-
-    start = _validate_coordinate(start, potential, fractional)
-    end = _validate_coordinate(end, potential, fractional)
-
-    if start is not None and end is not None:
-        if np.allclose(start, end):
-            raise RuntimeError("scan start and end is identical")
-
-    return start, end
+    return coordinate
 
 
 class LineScan(BaseScan):
@@ -407,21 +382,27 @@ class LineScan(BaseScan):
     Parameters
     ----------
     start : two float or Atom, optional
-        Start point of the scan [Å]. May be given as fractional coordinate if `fractional=True`. Default is (0., 0.).
+        Start point of the scan [Å]. May be given as fractional coordinate if
+        `fractional=True`. Default is (0., 0.).
     end : two float or Atom, optional
-        End point of the scan [Å]. May be given as fractional coordinate if `fractional=True`.
+        End point of the scan [Å]. May be given as fractional coordinate if
+        `fractional=True`.
         Default is None, the scan end point will match the extent of the potential.
     gpts : int, optional
         Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling : float, optional
-        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
-        match the Nyquist sampling of the Probe in a multislice simulation.
+        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling.
+        If not provided the sampling will match the Nyquist sampling of the Probe
+        in a multislice simulation.
     endpoint : bool, optional
-        If True, end is the last position. Otherwise, it is not included. Default is True.
+        If True, end is the last position. Otherwise, it is not included.
+        Default is True.
     fractional : bool, optional
-        If True, use fractional coordinates with respect to the given potential for `start` and `end`.
+        If True, use fractional coordinates with respect to the given potential for
+        `start` and `end`.
     potential : BasePotential or Atoms, optional
-        Potential defining the grid with respect to which the fractional coordinates should be given.
+        Potential defining the grid with respect to which the fractional coordinates
+        should be given.
     """
 
     def __init__(
@@ -437,9 +418,8 @@ class LineScan(BaseScan):
         self._gpts = gpts
         self._sampling = sampling
 
-        self._start, self._end = _validate_coordinates(
-            start, end, potential, fractional
-        )
+        self._start = validate_coordinate(start, potential, fractional)
+        self._end = validate_coordinate(end, potential, fractional)
 
         self._endpoint = endpoint
         self._adjust_gpts()
@@ -466,7 +446,8 @@ class LineScan(BaseScan):
         Parameters
         ----------
         margin : float or tuple of float
-            The margin added to the start and end of the linescan [Å]. If float the same margin is added.
+            The margin added to the start and end of the linescan [Å]. If float the same
+            margin is added.
         """
         if np.isscalar(margin):
             validated_margin = (margin, margin)
@@ -535,8 +516,8 @@ class LineScan(BaseScan):
 
     def match_probe(self, probe: Probe | BaseSMatrix):
         """
-        Sets sampling to the Nyquist frequency. If the start and end point of the scan is not given, set them to the
-        lower and upper left corners of the probe extent.
+        Sets sampling to the Nyquist frequency. If the start and end point of the scan
+        is not given, set them to the lower and upper left corners of the probe extent.
 
         Parameters
         ----------
@@ -581,7 +562,8 @@ class LineScan(BaseScan):
 
     @property
     def endpoint(self) -> bool:
-        """True if the scan endpoint is the last position. Otherwise, the endpoint is not included."""
+        """True if the scan endpoint is the last position. Otherwise, the endpoint is
+        not included."""
         return self._endpoint
 
     @property
@@ -780,28 +762,36 @@ class LineScan(BaseScan):
             )
 
 
-class GridScan(HasGridMixin, BaseScan):
+class GridScan(HasGrid2DMixin, BaseScan):
     """
-    A scan over a regular grid for calculating scanning transmission electron microscopy.
+    A scan over a regular grid for calculating scanning transmission electron
+    microscopy.
 
     Parameters
     ----------
     start : two float or Atom, optional
-        Start corner of the scan [Å]. May be given as fractional coordinate if `fractional=True`. Default is (0., 0.).
+        Start corner of the scan [Å]. May be given as fractional coordinate if
+        `fractional=True`. Default is (0., 0.).
     end : two float or Atom, optional
-        End corner of the scan [Å]. May be given as fractional coordinate if `fractional=True`.
+        End corner of the scan [Å]. May be given as fractional coordinate
+        if `fractional=True`.
         Default is None, the scan end point will match the extent of the potential.
     gpts : two int, optional
-        Number of scan positions in the `x`- and `y`-direction of the scan. Provide one of gpts or sampling.
+        Number of scan positions in the `x`- and `y`-direction of the scan. Provide one
+        of gpts or sampling.
     sampling : two float, optional
-        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
-        match the Nyquist sampling of the  Probe in a multislice simulation.
+        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling.
+        If not provided the sampling will match the Nyquist sampling of the  Probe
+        in a multislice simulation.
     endpoint : bool, optional
-        If True, end is the last position. Otherwise, it is not included. Default is False.
+        If True, end is the last position. Otherwise, it is not included.
+        Default is False.
     fractional : bool, optional
-        If True, use fractional coordinates with respect to the given potential for `start` and `end`.
+        If True, use fractional coordinates with respect to the given potential for
+        `start` and `end`.
     potential : BasePotential or Atoms, optional
-        Potential defining the grid with respect to which the fractional coordinates should be given.
+        Potential defining the grid with respect to which the fractional coordinates
+        should be given.
     """
 
     def __init__(
@@ -816,39 +806,20 @@ class GridScan(HasGridMixin, BaseScan):
     ):
         super().__init__()
 
-        start, end = _validate_coordinates(start, end, potential, fractional)
+        self._start = validate_coordinate(
+            coordinate=start, potential=potential, fractional=fractional
+        )
+        self._end = validate_coordinate(
+            coordinate=end, potential=potential, fractional=fractional
+        )
 
-        if isinstance(start, (int, float)):
-            start = (float(start), float(start))
-        elif isinstance(start, (tuple, list, np.ndarray)):
-            assert len(start) == 2
-            start = (float(start[0]), float(start[1]))
-        else:
-            raise ValueError("start must be a float or a tuple of two floats")
-
-            #    assert len(start) == 2
-            #    validated_start = start
-            # else:
-            #    raise ValueError("start must be a float or a tuple of two floats")
-            #
-            # start = tuple(map(float, start))
-            # assert len(start) == 2
-
-        if end is not None:
-            if np.isscalar(end):
-                end = (end,) * 2
-
-            end = tuple(map(float, end))
-
-            assert len(end) == 2
-
-        if start is not None and end is not None:
-            extent = np.array(end, dtype=float) - start
+        if self._start is not None and self._end is not None:
+            extent = (self._end[0] - self._start[0], self._end[1] - self._start[1])
+            if all(d <= 0. for d in extent):
+                raise ValueError(f"scan extent must be positive, got {extent}")
         else:
             extent = None
-
-        self._start = start
-        self._end = end
+        
         self._grid = Grid(
             extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
         )
@@ -862,13 +833,14 @@ class GridScan(HasGridMixin, BaseScan):
 
     @property
     def endpoint(self) -> tuple[bool, bool]:
-        """True if the scan endpoint is the last position. Otherwise, the endpoint is not included."""
+        """True if the scan endpoint is the last position. Otherwise, the endpoint is
+        not included."""
         assert len(self.grid.endpoint) == 2
         return self.grid.endpoint
 
     @property
     def shape(self) -> tuple[int, int]:
-        return self.gpts
+        return self._valid_gpts
 
     @property
     def start(self) -> tuple[float, float] | None:
@@ -898,8 +870,9 @@ class GridScan(HasGridMixin, BaseScan):
 
     def match_probe(self, probe: Probe | BaseSMatrix):
         """
-        Sets sampling to the Nyquist frequency. If the start and end point of the scan is not given, set them to the
-        lower left and upper right corners of the probe extent.
+        Sets sampling to the Nyquist frequency. If the start and end point of the scan
+        is not given, set them to the lower left and upper right corners of the probe
+        extent.
 
         Parameters
         ----------
@@ -933,15 +906,17 @@ class GridScan(HasGridMixin, BaseScan):
         )
 
     def get_positions(self) -> np.ndarray:
-        xi = []
-        for start, end, gpts, endpoint in zip(
-            self.start, self.end, self.gpts, self.endpoint
-        ):
-            xi.append(
-                np.linspace(
-                    start, end, gpts, endpoint=endpoint, dtype=get_dtype(complex=False)
-                )
+        if self.start is None or self.end is None or self.gpts is None:
+            raise RuntimeError("start, end, or gpts is not defined")
+
+        xi = [
+            np.linspace(
+                start, end, gpts, endpoint=endpoint, dtype=get_dtype(complex=False)
             )
+            for start, end, gpts, endpoint in zip(
+                self.start, self.end, self.gpts, self.endpoint
+            )
+        ]
 
         if len(xi) == 1:
             return xi[0]
@@ -1078,7 +1053,8 @@ class GridScan(HasGridMixin, BaseScan):
         edgecolor : str, optional
             Color of the edge of the scan area visualization.
         kwargs :
-            Additional options for matplotlib.patches.Rectangle used for scan area visualization as keyword arguments.
+            Additional options for matplotlib.patches.Rectangle used for scan area
+            visualization as keyword arguments.
         """
 
         if isinstance(ax, Visualization):
@@ -1088,9 +1064,13 @@ class GridScan(HasGridMixin, BaseScan):
                     ax, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor, **kwargs
                 )
 
+        if self.start is None or self.extent is None:
+            raise RuntimeError("start or extent is not defined")
+
         rect = Rectangle(
-            self.start,
-            *self.extent,
+            xy=self.start,
+            width=self.extent[0],
+            height=self.extent[1],
             alpha=alpha,
             facecolor=facecolor,
             edgecolor=edgecolor,
