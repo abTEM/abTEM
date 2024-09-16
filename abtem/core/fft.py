@@ -30,20 +30,20 @@ except ModuleNotFoundError:
 except ImportError:
     if config.get("device") == "gpu":
         warnings.warn(
-            "The CuPy library could not be imported. Please check your installation, or change your configuration to "
-            "use CPU."
+            "The CuPy library could not be imported. Please check your installation, or"
+            "change your configuration to use CPU."
         )
     cp = None
 
 
-def _raise_fft_lib_not_present(lib_name):
+def _raise_fft_lib_not_present(lib_name: str):
     raise RuntimeError(
-        f"FFT library {lib_name} not present. Install this package or change the FFT library in your "
-        f"configuration."
+        f"FFT library {lib_name} not present. Install this package or change the FFT"
+        "library in your configuration."
     )
 
 
-def _fft_name_to_fftw_direction(name: str):
+def _fft_name_to_fftw_direction(name: str) -> str:
     if name[0] == "i":
         direction = "FFTW_BACKWARD"
     else:
@@ -51,7 +51,7 @@ def _fft_name_to_fftw_direction(name: str):
     return direction
 
 
-def _new_fftw_object(array: np.ndarray, name: str, flags=()):
+def _new_fftw_object(array: np.ndarray, name: str, flags: tuple[str, ...] = ()):
     dummy = np.zeros_like(array)
 
     direction = _fft_name_to_fftw_direction(name)
@@ -61,9 +61,9 @@ def _new_fftw_object(array: np.ndarray, name: str, flags=()):
         dummy,
         axes=(-2, -1),
         direction=direction,
-        threads=config.get("fftw.threads"),  # noqa
-        flags=(config.get("fftw.planning_effort"),) + flags,  # noqa
-        planning_timelimit=config.get("fftw.planning_timelimit"),  # noqa
+        threads=config.get("fftw.threads"),
+        flags=(config.get("fftw.planning_effort"),) + flags,
+        planning_timelimit=config.get("fftw.planning_timelimit"),
     )
 
     fftw_object.update_arrays(array, array)
@@ -76,7 +76,7 @@ class CachedFFTWConvolution:
         self._fftw_objects = None
         self._shape = None
 
-    def __call__(self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool):
+    def __call__(self, array: np.ndarray, kernel: np.ndarray, overwrite_x: bool) -> np.ndarray:
         if array.shape != self._shape:
             self._fftw_objects = None
 
@@ -177,7 +177,12 @@ def _fftw_dispatch(x: np.ndarray, func_name: str, overwrite_x: bool, **kwargs):
     return get_fftw_object(x, func_name, overwrite_x=overwrite_x, **kwargs)()
 
 
-def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
+def _fft_dispatch(
+    x: np.ndarray | da.core.Array,
+    func_name: str,
+    overwrite_x: bool = False,
+    **kwargs: dict,
+):
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
@@ -223,7 +228,8 @@ def ifft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
 
 
 def fftn(x, overwrite_x: bool = False, **kwargs):
-    """Compute the n-dimensional discrete Fourier Transform. Using the FFT library specified in the configuration."""
+    """Compute the n-dimensional discrete Fourier Transform. Using the FFT library
+    specified in the configuration."""
     return _fft_dispatch(x, func_name="fftn", overwrite_x=overwrite_x, **kwargs)
 
 
@@ -284,14 +290,15 @@ def fft2_convolve(
         return _fft2_convolve(x, kernel, overwrite_x)
 
 
-def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
+def fft_shift_kernel(positions: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
     """
     Create an array representing one or more phase ramp(s) for shifting another array.
 
     Parameters
     ----------
     positions : np.ndarray
-        Array of positions to shift the array to. The last dimension should be the number of dimensions to shift.
+        Array of positions to shift the array to. The last dimension should be the
+        number of dimensions to shift.
     shape : tuple
         Shape of the array to shift.
 
@@ -337,7 +344,8 @@ def fft_shift(array: np.ndarray, positions: np.ndarray) -> np.ndarray:
     array : np.ndarray
         Array to shift.
     positions : np.ndarray
-        Array of positions to shift the array to. The last dimension should be the number of dimensions to shift.
+        Array of positions to shift the array to. The last dimension should be
+        the number of dimensions to shift.
 
     Returns
     -------
@@ -381,7 +389,8 @@ def fft_interpolation_masks(
     shape_in: tuple[int, ...], shape_out: tuple[int, ...]
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Create boolean masks for interpolating between two arrays using Fourier space interpolation.
+    Create boolean masks for interpolating between two arrays using Fourier space
+    interpolation.
 
     Parameters
     ----------
@@ -419,7 +428,8 @@ def fft_interpolation_masks(
 
 def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = False):
     """
-    Crop an array. It is assumed that the array is centered in Fourier space, this is used for real-space interpolation.
+    Crop an array. It is assumed that the array is centered in Fourier space, this is
+    used for real-space interpolation.
 
     Parameters
     ----------
