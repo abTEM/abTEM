@@ -16,7 +16,6 @@ from ase import Atoms
 import abtem
 from abtem.array import (
     ArrayObject,
-    ArrayObjectSubclass,
     ComputableList,
     _expand_dims,
     _validate_lazy,
@@ -43,11 +42,7 @@ from abtem.core.ensemble import (
     unpack_blockwise_args,
 )
 from abtem.core.fft import fft2, fft_crop, fft_interpolate, ifft2
-from abtem.core.grid import (
-    Grid,
-    HasGrid2DMixin,
-    polar_spatial_frequencies,
-)
+from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -72,7 +67,7 @@ from abtem.multislice import (
     transition_potential_multislice_and_detect,
 )
 from abtem.potentials.iam import BasePotential, _validate_potential
-from abtem.scan import BaseScan, CustomScan, GridScan, _validate_scan
+from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _validate_tilt
 from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture
@@ -244,7 +239,8 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     @property
     def rectangle_cutoff_angles(self) -> tuple[float, float]:
-        """Scattering angles corresponding to the sides of the largest rectangle within the antialias cutoff [mrad]."""
+        """Scattering angles corresponding to the sides of the largest rectangle within
+        the antialias cutoff [mrad]."""
         return (
             self.antialias_valid_gpts[0] // 2 * self.angular_sampling[0],
             self.antialias_valid_gpts[1] // 2 * self.angular_sampling[1],
@@ -276,24 +272,25 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
 
 def _reduce_ensemble(
-    ensemble,
-) -> ArrayObjectSubclass | ComputableList[ArrayObjectSubclass]:
-    if isinstance(ensemble, (list, tuple)):
+    ensemble: ArrayObject | list[ArrayObject],
+) -> ArrayObject | list[ArrayObject]:
+    if isinstance(ensemble, (ComputableList, list, tuple)):
         outputs = [_reduce_ensemble(x) for x in ensemble]
 
-        if hasattr(ensemble, "compute"):
+        if isinstance(ensemble, ComputableList):
             outputs = ComputableList(outputs)
 
         return outputs
 
-    squeeze = ()
-    for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata):
-        if axes_metadata._squeeze:
-            squeeze += (i,)
+    squeeze = tuple(
+        i
+        for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
+        if axes_metadata._squeeze
+    )
 
     output = ensemble.squeeze(squeeze)
 
-    if hasattr(output, "reduce_ensemble"):
+    if isinstance(output, BaseMeasurements):
         output = output.reduce_ensemble()
 
     return output
@@ -335,7 +332,7 @@ class Waves(BaseWaves, ArrayObject):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        energy: float,
+        energy: Optional[float] = None,
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         reciprocal_space: bool = False,
@@ -1056,7 +1053,7 @@ class Waves(BaseWaves, ArrayObject):
         self,
         potential: BasePotential,
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
-    ) -> Waves | BaseMeasurements | ComputableList[Waves | BaseMeasurements]:
+    ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """
         Propagate and transmit wave function through the provided potential using the multislice algorithm. When
         detector(s) are given, output will be the corresponding measurement.
@@ -1119,7 +1116,7 @@ class Waves(BaseWaves, ArrayObject):
         exit_waves : Waves
             Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
-        scan = _validate_scan(scan)
+        scan = validate_scan(scan)
         waves = self.apply_transform(scan, max_batch=max_batch)
 
         if potential is None:
@@ -1305,7 +1302,7 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         pass
 
     @staticmethod
-    def _lazy_build_waves(waves_builder: _WavesBuilder, max_batch: int) -> Waves:
+    def _lazy_build_waves(waves_builder: _WavesBuilder, max_batch: int | str) -> Waves:
         if isinstance(max_batch, int):
             max_batch = int(max_batch * np.prod(waves_builder._valid_gpts))
 
@@ -1322,8 +1319,9 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
         xp = get_array_module(waves_builder.device)
 
-        array = blocks.map_blocks(
+        array = da.map_blocks(
             waves_builder._build_waves,
+            blocks,
             meta=xp.array((), dtype=get_dtype(complex=True)),
             new_axis=tuple_range(2, len(waves_builder.ensemble_shape)),
             chunks=blocks.chunks + waves_builder.gpts,
@@ -1738,7 +1736,7 @@ class Probe(_WavesBuilder):
         if potential is not None:
             probe.grid.match(potential)
 
-        scan = _validate_scan(scan, probe)
+        scan = validate_scan(scan, probe)
 
         if isinstance(scan, CustomScan):
             squeeze = True

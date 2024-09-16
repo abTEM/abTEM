@@ -9,6 +9,7 @@ import os
 import warnings
 from typing import Any, Optional, Sequence, TypeVar
 
+import dask.array as da
 import numpy as np
 
 from abtem.core.backend import get_array_module
@@ -36,22 +37,23 @@ def itemset(arr: np.ndarray, args: int | slice | Sequence[int], item: Any) -> No
         arr[...] = item
         return
 
-    if isinstance(args, tuple):
+    elif isinstance(args, tuple):
         assert len(args) == len(arr.shape)
         arr[args] = item
         return
 
-    if isinstance(args, int) and len(arr.shape) == 1:
+    elif isinstance(args, int) and len(arr.shape) == 1:
         arr[args] = item
         return
 
-    if isinstance(args, int):
+    elif isinstance(args, int):
         assert all(n == 1 for n in arr.shape[1:])
         args = (args,) + (0,) * (len(arr.shape) - 1)
         arr[args] = item
         return
 
-    raise RuntimeError()
+    else:
+        raise RuntimeError()
 
 
 def is_broadcastable(*shapes: tuple[int, ...]) -> bool | tuple[int, ...]:
@@ -245,8 +247,8 @@ def normalize_axes(
 
 
 def expand_dims_to_broadcast(
-    arr1: np.ndarray,
-    arr2: np.ndarray,
+    arr1: np.ndarray | da.core.Array,
+    arr2: np.ndarray | da.core.Array,
     match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
     broadcast: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:

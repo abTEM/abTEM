@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import warnings
 from abc import abstractmethod
+from itertools import accumulate
 from typing import Any, Callable, Generator, Optional, Union
 
 import dask.array as da
@@ -10,7 +11,7 @@ import numpy as np
 
 from abtem.core.axes import AxesMetadataList, AxisMetadata
 from abtem.core.chunks import Chunks, ValidatedChunks, chunk_ranges, validate_chunks
-from abtem.core.utils import interleave, itemset, tuple_range
+from abtem.core.utils import interleave, itemset
 
 
 def _wrap_with_array(x: Any, ndims: int | None = None):
@@ -33,6 +34,21 @@ class Ensemble:
         return ()
 
     @property
+    def base_shape(self) -> tuple[int, ...]:
+        """Shape of the base axes."""
+        return ()
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Shape of the ensemble."""
+        return self.ensemble_shape + self.base_shape
+
+    @property
+    def base_axes_metadata(self) -> list[AxisMetadata]:
+        """List of AxisMetadata of the base axes."""
+        return []
+
+    @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         """List of AxisMetadata of the ensemble axes."""
         return []
@@ -43,21 +59,6 @@ class Ensemble:
         return AxesMetadataList(
             self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
         )
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """Shape of the ensemble."""
-        return self.ensemble_shape + self.base_shape
-
-    @property
-    def base_shape(self) -> tuple[int, ...]:
-        """Shape of the base axes."""
-        return ()
-
-    @property
-    def base_axes_metadata(self) -> list[AxisMetadata]:
-        """List of AxisMetadata of the base axes."""
-        return []
 
     @property
     @abstractmethod
@@ -74,7 +75,9 @@ class Ensemble:
         return chunks
 
     @abstractmethod
-    def _partition_args(self, chunks: Chunks | None = None, lazy: bool = True) -> tuple:
+    def _partition_args(
+        self, chunks: Optional[Chunks] = None, lazy: bool = True
+    ) -> tuple:
         pass
 
     @abstractmethod
@@ -95,13 +98,15 @@ class Ensemble:
 
         args = self._partition_args(chunks, lazy=True)
 
-        out_symbols = tuple_range(sum(len(arg.shape) for arg in args))
-
-        arg_symbols = tuple(
-            tuple_range(len(arg.shape), sum(len(a.shape) for a in args[:i]))
-            for i, arg in enumerate(args)
+        arg_dims = tuple(len(arg.shape) for arg in args)
+        arg_starts = accumulate((0,) + arg_dims[:-1])
+        arg_ends = accumulate(arg_dims)
+        arg_ind = tuple(
+            tuple(range(start, end)) for start, end in zip(arg_starts, arg_ends)
         )
 
+        out_ind = tuple(range(sum(arg_dims)))
+        
         adjust_chunks = {i: axes_chunks for i, axes_chunks in enumerate(chunks)}
 
         func = self._from_partitioned_args()
@@ -110,8 +115,8 @@ class Ensemble:
             warnings.filterwarnings("ignore", message="Increasing number of chunks")
             return da.blockwise(
                 func,
-                out_symbols,
-                *interleave(args, arg_symbols),
+                out_ind,
+                *interleave(args, arg_ind),
                 adjust_chunks=adjust_chunks,
                 concatenate=True,
                 meta=np.array((), dtype=object),

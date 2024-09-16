@@ -2,7 +2,7 @@ import itertools
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
-from typing import Union, Tuple, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Tuple, Union
 
 import dask
 import dask.array as da
@@ -16,13 +16,13 @@ from abtem.core.axes import (
     _iterate_axes_type,
 )
 from abtem.core.backend import get_array_module
-from abtem.core.chunks import validate_chunks, chunk_ranges
+from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.utils import itemset
 from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
-    from abtem.waves import Waves
     from abtem.potentials import BasePotential
+    from abtem.waves import Waves
 
 
 nth = {1: "First", 2: "Second", 3: "Third", 4: "Fourth"}
@@ -326,7 +326,7 @@ class PlasmonScatteringEvents(ArrayObjectTransform):
         if isinstance(axes, Axes):
             axes = [axes]
 
-        if not "bins" in kwargs:
+        if "bins" not in kwargs:
             kwargs["bins"] = 20
 
         for i, (n, ax) in enumerate(zip(num_excitations, axes)):

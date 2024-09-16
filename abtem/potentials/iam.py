@@ -7,7 +7,7 @@ from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
 from numbers import Number
 from operator import mul
-from typing import TYPE_CHECKING, Sequence, Type
+from typing import TYPE_CHECKING, Optional, Sequence, Type
 
 import dask
 import dask.array as da
@@ -70,6 +70,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     # @abstractmethod
     # def device(self) -> str:
     #     pass
+    device: str
 
     @property
     def base_shape(self):
@@ -129,16 +130,16 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         return len(self.exit_planes)
 
     @abstractmethod
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+    def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
 
     @abstractmethod
     def build(
         self,
         first_slice: int = 0,
-        last_slice: int = None,
+        last_slice: Optional[int] = None,
         chunks: int = 1,
-        lazy: bool = None,
+        lazy: Optional[bool] = None,
     ):
         pass
 
@@ -237,7 +238,7 @@ class BasePotential(BaseField, metaclass=ABCMeta):
 
 
 def _validate_potential(
-    potential: Atoms | BasePotential, waves: BaseWaves = None
+    potential: Atoms | BasePotential, waves: Optional[BaseWaves] = None
 ) -> BasePotential:
     if isinstance(potential, (Atoms, BaseFrozenPhonons)):
         device = None
@@ -295,15 +296,15 @@ class _FieldBuilder(BaseField):
         slice_thickness: float | tuple[float, ...],
         exit_planes: int | tuple[int, ...],
         cell: np.ndarray | Cell,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
-        box: tuple[float, float, float] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        box: Optional[tuple[float, float, float]] = None,
         plane: (
             str | tuple[tuple[float, float, float], tuple[float, float, float]]
         ) = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         periodic: bool = True,
-        device: str = None,
+        device: Optional[str] = None,
     ):
         self._array_object = array_object
         if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
@@ -350,9 +351,11 @@ class _FieldBuilder(BaseField):
         return self._periodic
 
     @property
-    def plane(self) -> str:
-        """The plane relative to the atoms mapped to `xy` plane of the potential, i.e. the plane is perpendicular to the
-        propagation direction."""
+    def plane(
+        self,
+    ) -> str | tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """The plane relative to the atoms mapped to `xy` plane of the potential,
+        i.e. the plane is perpendicular to the propagation direction."""
         return self._plane
 
     @property
@@ -362,7 +365,8 @@ class _FieldBuilder(BaseField):
 
     @property
     def origin(self) -> tuple[float, float, float]:
-        """The origin relative to the provided atoms mapped to the origin of the potential."""
+        """The origin relative to the provided atoms mapped to the origin of the
+        potential."""
         return self._origin
 
     def __getitem__(self, item) -> PotentialArray:
@@ -377,9 +381,9 @@ class _FieldBuilder(BaseField):
     def build(
         self,
         first_slice: int = 0,
-        last_slice: int = None,
+        last_slice: Optional[int] = None,
         max_batch: int | str = 1,
-        lazy: bool = None,
+        lazy: Optional[bool] = None,
     ) -> FieldArray:
         """
         Build the potential.
@@ -393,8 +397,8 @@ class _FieldBuilder(BaseField):
         max_batch : int or str, optional
             Maximum number of slices to calculate in task. Default is 1.
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
-            value set in the configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly.
+            If None, this defaults to the value set in the configuration file.
 
         Returns
         -------
@@ -426,8 +430,9 @@ class _FieldBuilder(BaseField):
             else:
                 new_axis = tuple(range(1, len(self.base_shape)))
 
-            array = blocks.map_blocks(
+            array = da.map_blocks(
                 self._wrap_build_potential,
+                blocks,
                 new_axis=new_axis,
                 first_slice=first_slice,
                 last_slice=last_slice,
@@ -459,7 +464,7 @@ class _FieldBuilder(BaseField):
 
         potential = self._array_object(
             array,
-            sampling=(self.sampling[0], self.sampling[1]),
+            sampling=self._valid_sampling,
             slice_thickness=self.slice_thickness[first_slice:last_slice],
             exit_planes=self.exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
@@ -472,18 +477,18 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         self,
         atoms: Atoms | BaseFrozenPhonons,
         array_object: Type[FieldArray],
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
         slice_thickness: float | tuple[float, ...] = 1,
-        exit_planes: int | tuple[int, ...] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: (
             str | tuple[tuple[float, float, float], tuple[float, float, float]]
         ) = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
-        box: tuple[float, float, float] = None,
+        box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
         integrator=None,
-        device: str = None,
+        device: Optional[str] = None,
     ):
         self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
@@ -612,7 +617,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return self._sliced_atoms
 
     def generate_slices(
-        self, first_slice: int = 0, last_slice: int = None, return_depth: float = False
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        return_depth: float = False,
     ):
         """
         Generate the slices for the potential.
@@ -866,12 +874,12 @@ class FieldArray(BaseField, ArrayObject):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: float | tuple[float, ...] = None,
-        extent: float | tuple[float, float] = None,
-        sampling: float | tuple[float, float] = None,
-        exit_planes: int | tuple[int, ...] = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         self._slice_thickness = _validate_slice_thickness(
             slice_thickness, num_slices=array.shape[-self._base_dims]
@@ -907,13 +915,13 @@ class FieldArray(BaseField, ArrayObject):
     def build(
         self,
         first_slice: int = 0,
-        last_slice: int = None,
+        last_slice: Optional[int] = None,
         chunks: int = 1,
-        lazy: bool = None,
+        lazy: Optional[bool] = None,
     ):
         raise RuntimeError("potential is already built")
 
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+    def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         """
         Generate the slices for the potential.
 
@@ -1091,12 +1099,12 @@ class PotentialArray(BasePotential, FieldArray):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: float | tuple[float, ...] = None,
-        extent: float | tuple[float, float] = None,
-        sampling: float | tuple[float, float] = None,
-        exit_planes: int | tuple[int, ...] = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         super().__init__(
             array=array,
@@ -1113,6 +1121,15 @@ class PotentialArray(BasePotential, FieldArray):
         sigma = np.array(energy2sigma(energy), dtype=get_dtype())
         array = complex_exponential(sigma * array)
         return array
+
+    @classmethod
+    def from_array_and_metadata(
+        cls: type[ArrayObject],
+        array: np.ndarray | da.core.Array,
+        axes_metadata: list[AxisMetadata],
+        metadata: dict,
+    ) -> ArrayObjectType:
+        pass
 
     def transmission_function(self, energy: float) -> TransmissionFunction:
         """
@@ -1131,8 +1148,9 @@ class PotentialArray(BasePotential, FieldArray):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self._array.map_blocks(
+            array = da.map_blocks(
                 self._transmission_function,
+                self._array.map_blocks,
                 energy=energy,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
@@ -1192,9 +1210,9 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self,
         array: np.ndarray,
         slice_thickness: float | Sequence[float],
-        extent: float | tuple[float, float] = None,
-        sampling: float | tuple[float, float] = None,
-        energy: float = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        energy: Optional[float] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
         super().__init__(array, slice_thickness, extent, sampling)
@@ -1259,12 +1277,14 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
 class CrystalPotential(_PotentialBuilder):
     """
-    The crystal potential may be used to represent a potential consisting of a repeating unit. This may allow
-    calculations to be performed with lower computational cost by calculating the potential unit once and repeating it.
+    The crystal potential may be used to represent a potential consisting of a repeating
+    unit. This may allow calculations to be performed with lower computational cost by
+    calculating the potential unit once and repeating it.
 
-    If the repeating unit is a potential with frozen phonons it is treated as an ensemble from which each repeating
-    unit along the `z`-direction is randomly drawn. If `num_frozen_phonons` an ensemble of crystal potentials are
-    created each with a random seed for choosing potential units.
+    If the repeating unit is a potential with frozen phonons it is treated as an
+    ensemble from which each repeating unit along the `z`-direction is randomly drawn.
+    If `num_frozen_phonons` an ensemble of crystal potentials are created each with a
+    random seed for choosing potential units.
 
     Parameters
     ----------
@@ -1276,11 +1296,13 @@ class CrystalPotential(_PotentialBuilder):
         Number of frozen phonon configurations assembled from the potential units.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
-        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
-        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
-        an integer a measurement will be collected every `exit_planes` number of slices.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the
+        slice indices after which an exit plane is desired, and hence during a
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        a measurement will be collected every `exit_planes` number of slices.
     seeds: int or sequence of int
-        Seed for the random number generator (RNG), or one seed for each RNG in the frozen phonon ensemble.
+        Seed for the random number generator (RNG), or one seed for each RNG in the
+        frozen phonon ensemble.
     """
 
     def __init__(
@@ -1307,7 +1329,8 @@ class CrystalPotential(_PotentialBuilder):
             and (num_frozen_phonons > 1)
         ):
             warnings.warn(
-                "'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons"
+                "'num_frozen_phonons' is greater than one, but the potential unit does"
+                "not have frozen phonons"
             )
 
         # if (potential_unit.num_frozen_phonons > 1) and (num_frozen_phonons is not None):
@@ -1316,12 +1339,12 @@ class CrystalPotential(_PotentialBuilder):
         #     )
 
         gpts = (
-            potential_unit.gpts[0] * repetitions[0],
-            potential_unit.gpts[1] * repetitions[1],
+            potential_unit._valid_gpts[0] * repetitions[0],
+            potential_unit._valid_gpts[1] * repetitions[1],
         )
         extent = (
-            potential_unit.extent[0] * repetitions[0],
-            potential_unit.extent[1] * repetitions[1],
+            potential_unit._valid_extent[0] * repetitions[0],
+            potential_unit._valid_extent[1] * repetitions[1],
         )
 
         box = extent + (potential_unit.thickness * repetitions[2],)
@@ -1462,7 +1485,10 @@ class CrystalPotential(_PotentialBuilder):
         return (array,)
 
     def generate_slices(
-        self, first_slice: int = 0, last_slice: int = None, return_depth: bool = False
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        return_depth: bool = False,
     ):
         """
         Generate the slices for the potential.

@@ -597,6 +597,9 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
     def g_max(self):
         return self._g_max
 
+    def from_array_and_metadata(self):
+        pass
+
     @property
     def gpts(self) -> tuple[int, int, int]:
         """Number of reciprocal space grid points for 3D structure factors."""
@@ -1215,7 +1218,7 @@ class BlochWaves:
     @property
     def structure_matrix_nbytes(self) -> int:
         """The number of bytes used by the structure matrix."""
-        bytes_per_element = 128 // 8
+        bytes_per_element = np.dtype(get_dtype(complex=True)).itemsize
         return self.num_bloch_waves**2 * bytes_per_element
 
     def _get_structure_factor_array(self, lazy: bool = False) -> StructureFactorArray:

@@ -3,25 +3,25 @@ from __future__ import annotations
 import warnings
 from typing import Any, Optional
 
-from abtem.core import config
+from tqdm.asyncio import tqdm_asyncio
+from tqdm.auto import tqdm  # type: ignore
 
-try:
-    from tqdm.auto import tqdm  # type: ignore
-except ImportError:
-    tqdm = None
+from abtem.core import config
 
 
 class TqdmWrapper:
     """
-    This class is a wrapper for the tqdm bar, which implements fallback logic if tqdm is not installed.
+    This class is a wrapper for the tqdm bar, which implements fallback logic if tqdm is
+    not installed.
 
-    Initializes TqdmWrapper with user_tqdm flag, total iterations, and additional arguments for tqdm.
+    Initializes TqdmWrapper with user_tqdm flag, total iterations, and additional
+    arguments for tqdm.
 
     Parameters
     ----------
     enabled : bool, optional
-        A flag indicating if the wrapper is enabled. If None, the value from the configuration key
-        "local_diagnostics.task_level_progress" is used.
+        A flag indicating if the wrapper is enabled. If None, the value from the
+        configuration key "local_diagnostics.task_level_progress" is used.
     *args
         Variable length argument list for tqdm.
     **kwargs
@@ -37,13 +37,13 @@ class TqdmWrapper:
         if enabled is None:
             enabled = config.get("local_diagnostics.task_level_progress", False)
 
+        self._pbar: Optional[tqdm_asyncio] = None
+
         if tqdm is not None and enabled:
             self._pbar = tqdm(*args, **kwargs)
         else:
             if enabled:
                 warnings.warn("displaying task level progress require tqdm installed")
-
-            self._pbar = None
 
     @property
     def pbar(self):
@@ -52,7 +52,8 @@ class TqdmWrapper:
 
     def update_if_exists(self, n: int = 1) -> None:
         """
-        Updates the progress bar by n steps, if tqdm is successfully imported and enabled.
+        Updates the progress bar by n steps, if tqdm is successfully imported and
+        enabled.
 
         Parameters
         ----------

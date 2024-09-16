@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from abtem.array import ArrayObjectSubclass
 from abtem.core.axes import (
     NonLinearAxis,
     SampleAxis,

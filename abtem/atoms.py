@@ -426,11 +426,11 @@ def pretty_print_transform(decomposed: tuple[np.ndarray, np.ndarray, np.ndarray]
     print(
         (
             f"Euler angles (degrees): \t x = {euler_angles[0]:.3f}, \t y = {euler_angles[1]:.3f}, "
-            "\t z = {euler_angles[2]:.3f}"
+            f"\t z = {euler_angles[2]:.3f}"
         )
     )
     print(
-        f"Normal strains (percent): \t x = {strains:.3f}, \t y = {strains:.3f}, \t z = {strains:.3f}"
+        f"Normal strains (percent): \t x = {strains[0]:.3f}, \t y = {strains[1]:.3f}, \t z = {strains[2]:.3f}"
     )
     print(
         f"Shear strains (percent): \t xy = {shear[0]:.3f}, \t xz = {shear[1]:.3f}, \t xz = {shear[2]:.3f}"
@@ -778,6 +778,7 @@ def orthogonalize_cell(
     atoms: Atoms,
     max_repetitions: int = 5,
     return_transform: bool = False,
+    return_transform_matrix: bool = False,
     allow_transform: bool = True,
     plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
     origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -872,12 +873,14 @@ def orthogonalize_cell(
         atoms.positions[:] = np.dot(atoms.positions, A)
         atoms.cell[:] = np.diag(box)
 
-    elif not np.allclose(A, np.eye(3)):
-        raise RuntimeError()
+    #elif not np.allclose(A, np.eye(3)):
+    #    raise RuntimeError()
 
     if return_transform:
         rotation, scale, shear = decompose_affine_transform(A)
         return atoms, (np.array(rotation_matrix_to_euler(rotation)), scale, shear)
+    elif return_transform_matrix:
+        return atoms, A
     else:
         return atoms
 

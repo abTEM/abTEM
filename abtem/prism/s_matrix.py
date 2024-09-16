@@ -50,7 +50,7 @@ from abtem.measurements import BaseMeasurements
 from abtem.multislice import allocate_multislice_measurements, multislice_and_detect
 from abtem.potentials.iam import BasePotential, _validate_potential
 from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
-from abtem.scan import BaseScan, GridScan, _validate_scan
+from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF
 from abtem.waves import BaseWaves, Probe, Waves, _antialias_cutoff_gpts
 
@@ -876,6 +876,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
     def _packed_wave_vectors(wave_vectors):
         return _pack_wave_vectors(wave_vectors)
 
+    def from_array_and_metadata(array, axes_metadata, metadata):
+        raise NotImplementedError
+
     @property
     def device(self):
         """The device on which the SMatrixArray is reduced."""
@@ -1275,7 +1278,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             squeeze_scan = True
             scan = self.extent[0] / 2, self.extent[1] / 2
 
-        scan = _validate_scan(
+        scan = validate_scan(
             scan, Probe._from_ctf(extent=self.extent, ctf=ctf, energy=self.energy)
         )
         detectors = detectors = validate_detectors(
@@ -2094,7 +2097,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             disable_s_matrix_chunks = False
 
         if not lazy:
-            scan = _validate_scan(scan, self)
+            scan = validate_scan(scan, self)
 
             measurements = self._eager_build_s_matrix_detect(
                 scan, ctf, detectors, squeeze=True
@@ -2102,7 +2105,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             return _wrap_measurements(measurements)
 
         if disable_s_matrix_chunks:
-            scan = _validate_scan(scan, self)
+            scan = validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
 

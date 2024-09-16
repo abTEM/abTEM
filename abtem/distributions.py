@@ -21,6 +21,9 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     Base object for defining distributions of simulation parameters.
     """
 
+    def __len__(self) -> int:
+        return self.shape[0]
+
     def __array__(self) -> np.ndarray:
         return self.values
 
@@ -373,7 +376,7 @@ def gaussian(
 
 
 def validate_distribution(
-    distribution: BaseDistribution | np.ndarray | Number,
+    distribution: BaseDistribution | tuple | list | np.ndarray | Number | str,
 ) -> BaseDistribution | Number | str:
     """
     Parameters

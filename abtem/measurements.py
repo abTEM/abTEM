@@ -8,7 +8,16 @@ from abc import ABCMeta, abstractmethod
 from collections import defaultdict
 from numbers import Number
 from types import ModuleType
-from typing import TYPE_CHECKING, Dict, Optional, Sequence, Type, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    Hashable,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+)
 
 import dask.array as da
 import numpy as np
@@ -49,6 +58,8 @@ from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.visualizations import Visualization
 from abtem.visualize.widgets import ImageGUI, LinesGUI, ScatterGUI
 
+interpolate_bilinear_cuda: Optional[Callable] = None
+sum_run_length_encoded: Optional[Callable] = None
 if cp is not None:
     from abtem.core._cuda import interpolate_bilinear as interpolate_bilinear_cuda
     from abtem.core._cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
@@ -56,12 +67,13 @@ else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None
 
+xr: Optional[ModuleType] = None
 try:
     import xarray as xr
 except ImportError:
     xr = None
 
-
+pd: Optional[ModuleType] = None
 try:
     import pandas as pd
 except ImportError:
@@ -70,7 +82,7 @@ except ImportError:
 if TYPE_CHECKING:
     from abtem.waves import BaseWaves
 
-# Ensures that `Measurement` objects created by `Measurement` objects retain their type (e.g. `Images`).
+
 BaseMeasurementsSubclass = TypeVar("BaseMeasurementsSubclass", bound="BaseMeasurements")
 
 
@@ -87,7 +99,7 @@ def _scanned_measurement_type(
         return MeasurementsEnsemble
 
 
-def _bin_extent(n):
+def _bin_extent(n: int) -> tuple[float, float]:
     if n % 2 == 0:
         return -n // 2 - 0.5, n // 2 - 0.5
     else:
@@ -296,7 +308,9 @@ def _sum_run_length_encoded(array, result, separators):
                 result[i, x] += array[i, j]
 
 
-def _interpolate_stack(array, positions, mode, order, **kwargs):
+def _interpolate_stack(
+    array: np.ndarray, positions: np.ndarray, mode: str, order: int, **kwargs
+):
     map_coordinates = get_ndimage_module(array).map_coordinates
     xp = get_array_module(array)
 
@@ -324,7 +338,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     Parameters
     ----------
     array : ndarray
-        Array containing data of type `float` or ´complex´.
+        Array containing data of type `float` or `complex`.
     ensemble_axes_metadata : list of AxisMetadata, optional
         Metadata associated with an ensemble axis.
     metadata : dict, optional
@@ -353,7 +367,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         """Metadata describing the measurement."""
         return self._metadata
 
-    def _get_from_metadata(self, key):
+    def _get_from_metadata(self, key: Hashable):
         if key not in self.metadata.keys():
             raise RuntimeError(f"{key} not in measurement metadata.")
         return self.metadata[key]
@@ -362,35 +376,35 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         if not np.iscomplexobj(self.array):
             raise RuntimeError("Function not implemented for non-complex measurements.")
 
-    def real(self) -> BaseMeasurementsSubclass:
+    def real(self: BaseMeasurementsSubclass) -> BaseMeasurementsSubclass:
         """Returns the real part of a complex-valued measurement."""
         self._check_is_complex()
         self.metadata["label"] = "real"
         self.metadata["units"] = "arb. unit"
         return self._apply_element_wise_func(get_array_module(self.array).real)
 
-    def imag(self) -> BaseMeasurementsSubclass:
+    def imag(self: BaseMeasurementsSubclass) -> BaseMeasurementsSubclass:
         """Returns the imaginary part of a complex-valued measurement."""
         self._check_is_complex()
         self.metadata["label"] = "imaginary"
         self.metadata["units"] = "arb. unit"
         return self._apply_element_wise_func(get_array_module(self.array).imag)
 
-    def phase(self) -> BaseMeasurementsSubclass:
+    def phase(self: BaseMeasurementsSubclass) -> BaseMeasurementsSubclass:
         """Calculates the phase of a complex-valued measurement."""
         self._check_is_complex()
         self.metadata["label"] = "phase"
         self.metadata["units"] = "rad."
         return self._apply_element_wise_func(get_array_module(self.array).angle)
 
-    def abs(self) -> BaseMeasurementsSubclass:
+    def abs(self: BaseMeasurementsSubclass) -> BaseMeasurementsSubclass:
         """Calculates the absolute value of a complex-valued measurement."""
         # self._check_is_complex()
         self.metadata["label"] = "amplitude"
         self.metadata["units"] = "arb. unit"
         return self._apply_element_wise_func(get_array_module(self.array).abs)
 
-    def intensity(self) -> BaseMeasurementsSubclass:
+    def intensity(self: BaseMeasurementsSubclass) -> BaseMeasurementsSubclass:
         """Calculates the squared norm of a complex-valued measurement."""
         self._check_is_complex()
         self.metadata["label"] = "intensity"
@@ -454,12 +468,16 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
     @classmethod
     @abstractmethod
     def from_array_and_metadata(
-        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict
-    ) -> "BaseMeasurementsSubclass":
+        cls,
+        array: np.ndarray | da.core.Array,
+        axes_metadata: list[AxisMetadata],
+        metadata: Optional[dict] = None,
+    ) -> ArrayObject:
         pass
 
-    def reduce_ensemble(self) -> "BaseMeasurementsSubclass":
-        """Calculates the mean of an ensemble measurement (e.g. of frozen phonon configurations)."""
+    def reduce_ensemble(self) -> ArrayObject:
+        """Calculates the mean of an ensemble measurement (e.g. of frozen phonon
+        configurations)."""
         axis = tuple(
             i
             for i, axis in enumerate(self.axes_metadata)
@@ -619,7 +637,7 @@ def integrate_disc(
     radius: float,
     return_mean: bool = False,
     border: str = "wrap",
-    interpolate: tuple[float, bool] = None,
+    interpolate: Optional[tuple[float, bool]] = None,
 ) -> float:
     """
     Integrate the values of a 2d measurement on a disc-shaped region.
@@ -747,14 +765,14 @@ class MeasurementsEnsemble(BaseMeasurements):
     def show(
         self,
         type: str = "lines",
-        ax: Axes = None,
+        ax: Optional[Axes] = None,
         power: float = 1.0,
         common_scale: bool = False,
         explode: bool | Sequence[int] = (),
         overlay: bool | Sequence[int] = (),
-        figsize: tuple[int, int] = None,
+        figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
-        units: str = None,
+        units: Optional[str] = None,
         interact: bool = False,
         display: bool = True,
         **kwargs,
@@ -1002,8 +1020,9 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         if self.is_lazy:
             base_axes = tuple(range(len(self.base_shape)))
-            array = self.array.map_blocks(
+            array = da.map_blocks(
                 _interpolate_stack,
+                self.array,
                 positions=positions,
                 mode="wrap",
                 order=order,
@@ -1045,25 +1064,27 @@ class _BaseMeasurement2D(BaseMeasurements):
         Parameters
         ----------
         sigma : float or two float
-            Standard deviation for the Gaussian kernel in the `x` and `y`-direction. If given as a single number, the
-            standard deviation is equal for both axes.
+            Standard deviation for the Gaussian kernel in the `x` and `y`-direction. If
+            given as a single number, the standard deviation is equal for both axes.
 
         boundary : {'periodic', 'reflect', 'constant'}
-            The boundary parameter determines how the images are extended beyond their boundaries when the filter
-            overlaps with a border.
+            The boundary parameter determines how the images are extended beyond their
+            boundaries when the filter overlaps with a border.
 
                 ``periodic`` :
-                    The images are extended by wrapping around to the opposite edge. Use this mode for periodic
-                    (default).
+                    The images are extended by wrapping around to the opposite edge. Use
+                    this mode for periodic (default).
 
                 ``reflect`` :
-                    The images are extended by reflecting about the edge of the last pixel.
+                    The images are extended by reflecting about the edge of the last
+                    pixel.
 
                 ``constant`` :
-                    The images are extended by filling all values beyond the edge with the same constant value, defined
-                    by the 'cval' parameter.
+                    The images are extended by filling all values beyond the edge with
+                    the same constant value, defined by the 'cval' parameter.
         cval : scalar, optional
-            Value to fill past edges in spline interpolation input if boundary is 'constant' (default is 0.0).
+            Value to fill past edges in spline interpolation input if boundary is
+            'constant' (default is 0.0).
 
         Returns
         -------
@@ -1092,8 +1113,9 @@ class _BaseMeasurement2D(BaseMeasurements):
                 min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.shape)
             )
 
-            array = self.array.map_overlap(
+            array = da.map_overlap(
                 gaussian_filter,
+                self.array,
                 sigma=sigma,
                 boundary=boundary,
                 mode=mode,
@@ -1113,8 +1135,8 @@ class _BaseMeasurement2D(BaseMeasurements):
         center: tuple[float, float] | Atom,
         angle: float,
         extent: float,
-        gpts: int = None,
-        sampling: float = None,
+        gpts: Optional[int] = None,
+        sampling: Optional[float] = None,
         width: float = 0.0,
         order: int = 3,
         endpoint: bool = True,
@@ -1135,7 +1157,8 @@ class _BaseMeasurement2D(BaseMeasurements):
         sampling : float
             Sampling of grid points along the line [Å].
         width : float, optional
-            The interpolation will be averaged across a perpendicular distance equal to this width.
+            The interpolation will be averaged across a perpendicular distance equal to
+            this width.
         order : int, optional
             The spline interpolation order.
         endpoint : bool
@@ -1163,18 +1186,18 @@ class _BaseMeasurement2D(BaseMeasurements):
 
     def show(
         self,
-        ax: Axes = None,
+        ax: Optional[Axes] = None,
         cbar: bool = False,
-        cmap: str = None,
-        vmin: float = None,
-        vmax: float = None,
+        cmap: Optional[str] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
         power: float = 1.0,
         common_color_scale: bool = False,
         explode: bool | Sequence[int] = (),
         overlay: bool | Sequence[int] = (),
-        figsize: tuple[int, int] = None,
+        figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
-        units: str = None,
+        units: Optional[str] = None,
         interact: bool = False,
         display: bool = True,
         **kwargs,
@@ -1254,17 +1277,20 @@ class _BaseMeasurement2D(BaseMeasurements):
 
 class Images(_BaseMeasurement2D):
     """
-    A collection of 2D measurements such as HRTEM or STEM-ADF images. May be used to represent a reconstructed phase.
+    A collection of 2D measurements such as HRTEM or STEM-ADF images. May be used to
+    represent a reconstructed phase.
 
     Parameters
     ----------
     array : np.ndarray
-        2D or greater array containing data of type `float` or ´complex´. The second-to-last and last
+        2D or greater array containing data of type `float` or `complex`. The
+        second-to-last and last
         dimensions are the image `y`- and `x`-axis, respectively.
     sampling : two float
         Lateral sampling of images in `x` and `y` [Å].
     ensemble_axes_metadata : list of AxisMetadata, optional
-        List of metadata associated with the ensemble axes. The length and item order must match the ensemble axes.
+        List of metadata associated with the ensemble axes. The length and item order
+        must match the ensemble axes.
     metadata : dict, optional
         A dictionary defining measurement metadata.
     """
@@ -1273,8 +1299,8 @@ class Images(_BaseMeasurement2D):
         self,
         array: da.core.Array | np.array,
         sampling: float | tuple[float, float],
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: Dict = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[Dict] = None,
     ):
         if np.isscalar(sampling):
             sampling = (float(sampling),) * 2
@@ -1292,9 +1318,9 @@ class Images(_BaseMeasurement2D):
     @classmethod
     def from_array_and_metadata(
         cls,
-        array: np.ndarray,
+        array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
-        metadata: dict = None,
+        metadata: Optional[dict] = None,
     ) -> "Images":
         """
         Creates an image from a given array and metadata.
@@ -1466,8 +1492,8 @@ class Images(_BaseMeasurement2D):
 
     def interpolate(
         self,
-        sampling: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
         method: str = "fft",
         boundary: str = "periodic",
         order: int = 3,
@@ -1630,7 +1656,7 @@ class Images(_BaseMeasurement2D):
         rms_power: float,
         max_frequency: float = 500.0,
         num_components: int = 200,
-        seed: int = None,
+        seed: Optional[int] = None,
     ):
         """
         Apply scan noise to images.
@@ -1701,9 +1727,9 @@ class _BaseMeasurement1D(BaseMeasurements):
     def __init__(
         self,
         array: np.ndarray,
-        sampling: float = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        sampling: Optional[float] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         self._sampling = sampling
 
@@ -1719,7 +1745,10 @@ class _BaseMeasurement1D(BaseMeasurements):
 
     @classmethod
     def from_array_and_metadata(
-        cls, array: np.ndarray, axes_metadata: list[AxisMetadata], metadata: dict = None
+        cls,
+        array: np.ndarray,
+        axes_metadata: list[AxisMetadata],
+        metadata: Optional[dict] = None,
     ) -> "BaseMeasurementsSubclass":
         """
         Creates line profile(s) from a given array and metadata.
@@ -1849,8 +1878,8 @@ class _BaseMeasurement1D(BaseMeasurements):
 
     def interpolate(
         self,
-        sampling: float = None,
-        gpts: int = None,
+        sampling: Optional[float] = None,
+        gpts: Optional[int] = None,
         order: int = 3,
         endpoint: bool = False,
     ) -> BaseMeasurementsSubclass:
@@ -1909,13 +1938,13 @@ class _BaseMeasurement1D(BaseMeasurements):
 
     def show(
         self,
-        ax: Axes = None,
+        ax: Optional[Axes] = None,
         common_scale: bool = True,
         explode: bool | Sequence[int] = False,
-        overlay: bool | Sequence[int] = None,
-        figsize: tuple[int, int] = None,
+        overlay: Optional[bool | Sequence[int]] = None,
+        figsize: Optional[tuple[int, int]] = None,
         title: str = True,
-        units: str = None,
+        units: Optional[str] = None,
         legend: bool = False,
         interact: bool = False,
         display: bool = True,
@@ -2006,9 +2035,9 @@ class RealSpaceLineProfiles(_BaseMeasurement1D):
     def __init__(
         self,
         array: np.ndarray,
-        sampling: float = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        sampling: Optional[float] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         super().__init__(
             array=array,
@@ -2083,9 +2112,9 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
     def __init__(
         self,
         array: np.ndarray,
-        sampling: float = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        sampling: Optional[float] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         super().__init__(
             array=array,
@@ -2286,32 +2315,38 @@ def _interpolate_bilinear(x, v, u, vw, uw):
 
 
 def _diffraction_pattern_resampling_gpts(
-    old_sampling: float | tuple[float, float],
+    old_sampling: tuple[float, float],
     old_gpts: tuple[int, int],
-    sampling: float | tuple[float, float],
-    gpts: tuple[int, int] = None,
+    sampling: str | float | tuple[float, float],
+    gpts: Optional[tuple[int, int]] = None,
     adjust_sampling: bool = True,
 ):
     if gpts is None:
         if sampling == "uniform":
-            sampling = (max(old_sampling),) * 2
+            validated_sampling = (max(old_sampling),) * 2
 
-        elif not isinstance(sampling, str) and np.isscalar(sampling):
-            sampling = (sampling,) * 2
+        elif isinstance(sampling, float):
+            validated_sampling = (sampling,) * 2
+        else:
+            raise ValueError("Invalid sampling.")
 
-        adjusted_sampling, gpts = adjusted_gpts(sampling, old_sampling, old_gpts)
+        assert isinstance(validated_sampling, tuple)
+
+        adjusted_sampling, gpts = adjusted_gpts(
+            validated_sampling, old_sampling, old_gpts
+        )
 
         if adjust_sampling:
-            sampling = adjusted_sampling
+            validated_sampling = adjusted_sampling
     else:
         if np.isscalar(gpts):
             gpts = (gpts,) * 2
 
-        sampling = tuple(
+        validated_sampling = tuple(
             d * old_n / new_n for d, old_n, new_n in zip(sampling, old_gpts, gpts)
         )
 
-    return gpts, sampling
+    return gpts, validated_sampling
 
 
 class DiffractionPatterns(_BaseMeasurement2D):
@@ -2339,8 +2374,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         array: np.ndarray | da.core.Array,
         sampling: float | tuple[float, float],
         fftshift: bool = False,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         if np.isscalar(sampling):
             sampling = (float(sampling),) * 2
@@ -2367,7 +2402,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         cls,
         array: np.ndarray,
         axes_metadata: list[AxisMetadata],
-        metadata: dict = None,
+        metadata: Optional[dict] = None,
     ):
         """
         Creates diffraction pattern(s) from a given array and metadata.
@@ -2517,12 +2552,12 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def index_diffraction_spots(
         self,
         cell: Cell | float | tuple[float, float, float],
-        sg_max: float = None,
-        g_max: float = None,
-        orientation_matrices: np.ndarray = None,
-        radius: float = None,
+        sg_max: Optional[float] = None,
+        g_max: Optional[float] = None,
+        orientation_matrices: Optional[np.ndarray] = None,
+        radius: Optional[float] = None,
         centering: str = "P",
-        energy: float = None,
+        energy: Optional[float] = None,
     ) -> IndexedDiffractionPatterns:
         """
         Indexes the Bragg reflections (diffraction spots) by their Miller indices.
@@ -2549,7 +2584,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         energy : float, optional
             The energy of the electrons [keV]. The default is the energy stored in the metadata.
 
-        Returns
+        Return
         -------
         indexed_patterns : IndexedDiffractionPatterns
             The indexed diffraction pattern(s).
@@ -2785,8 +2820,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def interpolate(
         self,
-        sampling: str | float | tuple[float, float] = None,
-        gpts: tuple[int, int] = None,
+        sampling: Optional[str | float | tuple[float, float]] = None,
+        gpts: Optional[tuple[int, int]] = None,
     ):
         """
         Interpolate diffraction pattern(s) producing equivalent pattern(s) with a different sampling.
@@ -2872,10 +2907,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def poisson_noise(
         self,
-        dose_per_area: float = None,
-        total_dose: float = None,
+        dose_per_area: Optional[float] = None,
+        total_dose: Optional[float] = None,
         samples: int = 1,
-        seed: int = None,
+        seed: Optional[int] = None,
     ):
         """
         Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided 'total_dose' (per measurement
@@ -2975,7 +3010,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         nbins_radial: int,
         nbins_azimuthal: int,
         inner: float = 0.0,
-        outer: float = None,
+        outer: Optional[float] = None,
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
     ):
@@ -3068,7 +3103,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         )
 
     def radial_binning(
-        self, step_size: float = 1.0, inner: float = 0.0, outer: float = None
+        self, step_size: float = 1.0, inner: float = 0.0, outer: Optional[float] = None
     ) -> PolarMeasurements:
         """
         Create polar measurement(s) from the diffraction pattern(s) by binning the measurements in annular regions. This
@@ -3263,7 +3298,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return array * block
 
-    def bandlimit(self, inner: float, outer: float) -> "DiffractionPatterns":
+    def bandlimit(self, inner: float=0., outer: float = np.inf) -> "DiffractionPatterns":
         """
         Bandlimit diffraction pattern(s) by setting everything outside an annulus defined by two radial angles to
         zero.
@@ -3308,9 +3343,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def crop(
         self,
-        max_angle: float = None,
-        max_frequency: float = None,
-        gpts: tuple[int, int] = None,
+        max_angle: Optional[float] = None,
+        max_frequency: Optional[float] = None,
+        gpts: Optional[tuple[int, int]] = None,
     ) -> DiffractionPatterns:
         """
         Crop the diffraction patterns such that they only include spatial frequencies (scattering angles) up to a given
@@ -3400,7 +3435,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
     def azimuthal_average(
         self,
-        max_angle: float = None,
+        max_angle: Optional[float] = None,
         radial_sampling: float = 1.0,
         weighting_function: str = "step",
         width: float = 1.0,
@@ -3491,7 +3526,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return fsc
 
     def block_direct(
-        self, radius: float = None, margin: bool = None
+        self, radius: Optional[float] = None, margin: Optional[bool] = None
     ) -> DiffractionPatterns:
         """
         Block the direct beam by setting the pixels of the zeroth-order Bragg reflection (non-scattered beam) to zero.
@@ -3603,8 +3638,8 @@ class PolarMeasurements(BaseMeasurements):
         azimuthal_sampling: float,
         radial_offset: float = 0.0,
         azimuthal_offset: float = 0.0,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         self._radial_sampling = radial_sampling
         self._azimuthal_sampling = azimuthal_sampling
@@ -3622,7 +3657,7 @@ class PolarMeasurements(BaseMeasurements):
         cls,
         array: np.ndarray,
         axes_metadata: list[AxisMetadata],
-        metadata: dict = None,
+        metadata: Optional[dict] = None,
     ) -> "PolarMeasurements":
         """
         Creates polar measurements(s) from a given array and metadata.
@@ -3737,9 +3772,9 @@ class PolarMeasurements(BaseMeasurements):
 
     def integrate(
         self,
-        radial_limits: tuple[float, float] = None,
-        azimuthal_limits: tuple[float, float] = None,
-        detector_regions: int | Sequence[int] = None,
+        radial_limits: Optional[tuple[float, float]] = None,
+        azimuthal_limits: Optional[tuple[float, float]] = None,
+        detector_regions: Optional[int | Sequence[int]] = None,
     ) -> Images | RealSpaceLineProfiles:
         """
         Integrate polar regions to produce an image or line profiles.
@@ -3972,19 +4007,19 @@ class PolarMeasurements(BaseMeasurements):
 
     def show(
         self,
-        ax: Axes = None,
+        ax: Optional[Axes] = None,
         gpts: int | tuple[int, int] = (512, 512),
         cbar: bool = False,
-        cmap: str = None,
-        vmin: float = None,
-        vmax: float = None,
+        cmap: Optional[str] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
         power: float = 1.0,
         common_color_scale: bool = False,
         explode: bool | Sequence[bool] = (),
         overlay: bool | Sequence[int] = (),
-        figsize: tuple[int, int] = None,
+        figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
-        units: str = None,
+        units: Optional[str] = None,
         interact: bool = False,
         display: bool = True,
     ) -> Visualization:
@@ -4154,11 +4189,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     def __init__(
         self,
-        array: np.ndarray,
+        array: da.core.Array | np.ndarray,
         miller_indices: np.ndarray,
         reciprocal_lattice_vectors: np.ndarray,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         if isinstance(reciprocal_lattice_vectors, Cell):
             reciprocal_lattice_vectors = np.array(reciprocal_lattice_vectors)
@@ -4407,7 +4442,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             metadata=self._metadata,
         )
 
-    def crop(self, max_angle: float = None, k_max: float = None):
+    def crop(self, max_angle: Optional[float] = None, k_max: Optional[float] = None):
         """
         Crop the indexed diffraction patterns such that they only include spots with spatial frequencies
         (scattering angles) up to a given limit.
@@ -4451,7 +4486,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             metadata=self._metadata,
         )
 
-    def normalize_to_spot(self, spot: tuple[int, int, int] = None):
+    def normalize_to_spot(self, spot: Optional[tuple[int, int, int]] = None):
         """
         Normalize the intensity of the diffraction spots.
 
@@ -4601,19 +4636,19 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     def show(
         self,
-        ax: Axes = None,
+        ax: Optional[Axes] = None,
         cbar: bool = False,
-        cmap: str = None,
-        vmin: float = None,
-        vmax: float = None,
+        cmap: Optional[str] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
         power: float = 1.0,
         common_color_scale: bool = False,
         scale: float = 0.5,
         explode: bool | Sequence[bool] = (),
         overlay: bool | Sequence[bool] = (),
-        figsize: tuple[int, int] = None,
+        figsize: Optional[tuple[int, int]] = None,
         title: bool | str = True,
-        units: str = None,
+        units: Optional[str] = None,
         interact: bool = False,
         display: bool = True,
         **kwargs,

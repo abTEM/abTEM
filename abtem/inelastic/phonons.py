@@ -234,7 +234,12 @@ def ensure_all_values_are_tuples(
 
 
 AtomProperties = Union[
-    float, dict[str, float], dict[str, tuple[float, ...]], Sequence[float]
+    float,
+    np.ndarray,
+    dict[str, float],
+    dict[str, tuple[float, ...]],
+    dict[str, np.ndarray],
+    Sequence[float],
 ]
 
 
@@ -501,7 +506,6 @@ class FrozenPhonons(BaseFrozenPhonons):
     def _from_partitioned_args_func(cls, *args, **kwargs):
         args = unpack_blockwise_args(args)
         atoms, seed = args[0]
-
         new = cls(atoms=atoms, seed=seed, num_configs=len(seed), **kwargs)
         new = _wrap_with_array(new, len(new.ensemble_shape))
         return new
@@ -694,7 +698,6 @@ class AtomsEnsemble(BaseFrozenPhonons):
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("trajectory", "ensemble_shape"))
         kwargs["cell"] = self.cell.array
-
         kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)
         return partial(self._from_partition_args_func, **kwargs)
 

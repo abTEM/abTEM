@@ -419,6 +419,28 @@ class Grid(CopyMixin, EqualityMixin):
 
         return gpts
 
+    @property
+    def _valid_extent(self) -> tuple[float, ...]:
+        if self.extent is None:
+            raise GridUndefinedError("Grid extent is not defined")
+        return self.extent
+
+    @property
+    def _valid_gpts(self) -> tuple[int, ...]:
+        if self.gpts is None:
+            raise GridUndefinedError("Grid gpts is not defined")
+        return self.gpts
+
+    @property
+    def _valid_sampling(self) -> tuple[float, ...]:
+        if self.sampling is None:
+            raise GridUndefinedError("Grid sampling is not defined")
+        return self.sampling
+
+
+class BaseHasGridMixin:
+    pass
+
 
 class HasGridMixin:
     """
@@ -470,7 +492,7 @@ class HasGridMixin:
         return self.grid.reciprocal_space_sampling
 
 
-class HasGrid2DMixin:
+class HasGrid2DMixin(HasGridMixin):
     _grid: Grid
 
     @property
