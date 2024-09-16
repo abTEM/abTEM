@@ -1,15 +1,16 @@
-"""Module for describing the detection of transmitted waves and different detector types."""
+"""Module for describing the detection of transmitted waves and different detector
+types."""
 
 from __future__ import annotations
 
 from abc import abstractmethod
 from copy import copy
 from functools import partial
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING, Any, Callable, Optional, Type, TypeVar
 
 import numpy as np
 
-from abtem.array import ArrayObjectSubclass
+from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, LinearAxis, RealSpaceAxis, ReciprocalSpaceAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks
@@ -20,6 +21,7 @@ from abtem.core.utils import get_dtype
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    MeasurementsEnsemble,
     PolarMeasurements,
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
@@ -28,17 +30,16 @@ from abtem.measurements import (
     _scan_shape,
     _scanned_measurement_type,
 )
-from abtem.transform import ArrayObjectTransform
+from abtem.transform import WavesTransform, WavesType, ArrayObjectTransform
 from abtem.visualize.visualizations import discrete_cmap
 
 if TYPE_CHECKING:
+    from abtem.measurements import BaseMeasurements
     from abtem.waves import BaseWaves, Waves
-
-# pylint: disable=W0237
 
 
 def validate_detectors(
-    detectors: BaseDetector | list[BaseDetector], waves: BaseWaves = None
+    detectors: BaseDetector | list[BaseDetector], waves: Optional[BaseWaves] = None
 ) -> list[BaseDetector]:
     """
     Validate that a variable is a list of detectors.
@@ -60,7 +61,7 @@ def validate_detectors(
     TypeError
         If `detectors` is not a BaseDetector or a list of BaseDetector.
     """
-    if hasattr(detectors, "detect"):
+    if isinstance(detectors, BaseDetector):
         detectors = [detectors]
 
     elif detectors is None:
@@ -87,33 +88,36 @@ class BaseDetector(ArrayObjectTransform):
     Parameters
     ----------
     to_cpu : bool, optional
-       If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-       otherwise the data stays on the respective devices. Default is True.
+       If True, copy the measurement data from the calculation device to CPU memory
+       after applying the detector, otherwise the data stays on the respective devices.
+       Default is True.
     url : str, optional
-       If this parameter is set the measurement data is saved at the specified location, typically a path to a
-       local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-       the data stays in memory.
+       If this parameter is set the measurement data is saved at the specified location,
+       typically a path to a local file. A URL can also include a protocol specifier
+       like s3:// for remote data. If not set (default) the data stays in memory.
     """
 
-    def __init__(self, to_cpu: bool = True, url: str = None):
+    def __init__(self, to_cpu: bool = True, url: Optional[str] = None):
         self._to_cpu = to_cpu
         self._url = url
 
     @property
-    def url(self):
+    def url(self) -> Optional[str]:
         """The storage location of the measurement data."""
         return self._url
 
     @property
-    def to_cpu(self):
+    def to_cpu(self) -> bool:
         """The measurements are copied to host memory."""
         return self._to_cpu
 
     @property
-    def _default_ensemble_chunks(self):
+    def _default_ensemble_chunks(self) -> Chunks:
         return ()
 
-    def _partition_args(self, chunks: Chunks = None, lazy: bool = True):
+    def _partition_args(
+        self, chunks: Optional[Chunks] = None, lazy: bool = True
+    ) -> tuple[Any, ...]:
         return ()
 
     @classmethod
@@ -121,13 +125,14 @@ class BaseDetector(ArrayObjectTransform):
         detector = cls(**kwargs)
         return _wrap_with_array(detector)
 
-    def _from_partitioned_args(self):
+    def _from_partitioned_args(self) -> Callable:
         kwargs = self._copy_kwargs()
         return partial(self._from_partition_args_func, **kwargs)
 
-    def _out_meta(self, waves: Waves) -> np.ndarray:
+    def _out_meta(self, waves: WavesType) -> tuple[np.ndarray, ...]:
         """
-        The meta describing the measurement array created when detecting the given waves.
+        The meta describing the measurement array created when detecting the given
+        waves.
 
         Parameters
         ----------
@@ -146,7 +151,9 @@ class BaseDetector(ArrayObjectTransform):
             xp = get_array_module(waves.device)
             return (xp.array((), dtype=self._out_dtype(waves)[0]),)
 
-    def detect(self, waves: Waves) -> ArrayObjectSubclass:
+    def detect(
+        self, waves: WavesType
+    ) -> Waves | tuple[Waves, ...]:
         """
         Detect the given waves producing a measurement.
 
@@ -159,12 +166,16 @@ class BaseDetector(ArrayObjectTransform):
         -------
         measurement : BaseMeasurements
         """
-        return self._apply(waves)
+        measurements = self._apply(waves)
+        # if not isinstance(measurements, (Waves, BaseMeasurements)):
+        #    raise RuntimeError("Detector must return a measurement.")
+        return measurements
 
     @abstractmethod
     def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
         """
-        The outer limits of the detected scattering angles in x and y [mrad] for the given waves.
+        The outer limits of the detected scattering angles in x and y [mrad] for the
+        given waves.
 
         Parameters
         ----------
@@ -179,8 +190,8 @@ class BaseDetector(ArrayObjectTransform):
 
 class AnnularDetector(BaseDetector):
     """
-    The annular detector integrates the intensity of the detected wave functions between an inner and outer radial
-    integration limits, i.e. over an annulus.
+    The annular detector integrates the intensity of the detected wave functions between
+    an inner and outer radial integration limits, i.e. over an annulus.
 
     Parameters
     ----------
@@ -191,12 +202,14 @@ class AnnularDetector(BaseDetector):
     offset: two float, optional
         Center offset of the annular integration region [mrad].
     to_cpu : bool, optional
-        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-        otherwise the data stays on the respective devices. Default is True.
+        If True, copy the measurement data from the calculation device to CPU memory
+        after applying the detector, otherwise the data stays on the respective devices.
+        Default is True.
     url : str, optional
-        If this parameter is set the measurement data is saved at the specified location, typically a path to a
-        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-        the data stays in memory.
+        If this parameter is set the measurement data is saved at the specified
+        location, typically a path to a local file. A URL can also include a protocol
+        specifier like s3:// for remote data. If not set (default) the data stays in
+        memory.
     """
 
     def __init__(
@@ -205,7 +218,7 @@ class AnnularDetector(BaseDetector):
         outer: float,
         offset: tuple[float, float] = (0.0, 0.0),
         to_cpu: bool = True,
-        url: str = None,
+        url: Optional[str] = None,
     ):
         self._inner = inner
         self._outer = outer
@@ -235,7 +248,7 @@ class AnnularDetector(BaseDetector):
         """Center offset of the annular integration region [mrad]."""
         return self._offset
 
-    def _out_metadata(self, array_object):
+    def _out_metadata(self, array_object: WavesType) -> tuple[dict]:
         metadata = super()._out_metadata(array_object)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
@@ -255,7 +268,7 @@ class AnnularDetector(BaseDetector):
         return inner, outer
 
     def _out_ensemble_axes_metadata(
-        self, waves: BaseWaves
+        self, waves: WavesType
     ) -> tuple[list[AxisMetadata]]:
         source = _scan_axes(waves)
         scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
@@ -264,10 +277,10 @@ class AnnularDetector(BaseDetector):
         ]
         return (ensemble_axes_metadata + scan_axes_metadata,)
 
-    def _out_base_axes_metadata(self, waves: BaseWaves) -> tuple[list[AxisMetadata]]:
+    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
         return ([],)
 
-    def _out_ensemble_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
+    def _out_ensemble_shape(self, waves: WavesType) -> tuple[tuple[int, ...], ...]:
         ensemble_shapes = super()._out_ensemble_shape(waves)
 
         if len(_scan_shape(waves)) == 0:
@@ -275,18 +288,18 @@ class AnnularDetector(BaseDetector):
 
         return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
 
-    def _out_base_shape(self, waves: BaseWaves) -> tuple[tuple[int, ...]]:
+    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
         return (_scan_shape(waves),)
 
-    def _out_dtype(self, waves: BaseWaves) -> tuple[np.dtype.base]:
+    def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
 
     def _out_type(
-        self, waves: BaseWaves
-    ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images]]:
+        self, waves: WavesType
+    ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
         return (_scanned_measurement_type(waves),)
 
-    def _calculate_new_array(self, waves: Waves):
+    def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
         """
         Detect the given waves producing diffraction patterns.
 
@@ -314,9 +327,11 @@ class AnnularDetector(BaseDetector):
         if self.to_cpu and hasattr(measurement, "to_cpu"):
             measurement = measurement.to_cpu()
 
-        return measurement.array
+        return measurement._eager_array
 
-    def detect(self, waves: Waves) -> Images:
+    def detect(
+        self, waves: Waves
+    ) -> RealSpaceLineProfiles | Images | MeasurementsEnsemble:
         """
         Detect the given waves producing images.
 
@@ -327,9 +342,13 @@ class AnnularDetector(BaseDetector):
 
         Returns
         -------
-        measurement : Images
+        measurement : Images or RealSpaceLineProfiles
         """
-        return self._apply(waves)
+        measurements = super().detect(waves)
+        assert isinstance(
+            measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
+        )
+        return measurements
 
     def _get_detector_region_array(
         self, waves: BaseWaves, fftshift: bool = True
@@ -346,6 +365,7 @@ class AnnularDetector(BaseDetector):
             offset=self.offset,
             return_indices=False,
         )
+        assert isinstance(array, np.ndarray)
         return array >= 0
 
     def get_detector_region(self, waves: BaseWaves, fftshift: bool = True):
@@ -357,8 +377,8 @@ class AnnularDetector(BaseDetector):
         waves : BaseWaves
             The waves to derive the annular detector region from.
         fftshift : bool, optional
-            If True, the zero-frequency of the detector region if shifted to the center of the array, otherwise the
-            center is at (0, 0).
+            If True, the zero-frequency of the detector region if shifted to the center
+            of the array, otherwise the center is at (0, 0).
 
         Returns
         -------
@@ -366,7 +386,11 @@ class AnnularDetector(BaseDetector):
         """
 
         array = self._get_detector_region_array(waves, fftshift=fftshift)
-        metadata = {"energy": waves.energy, "label": "detector efficiency", "units": "%"}
+        metadata = {
+            "energy": waves.energy,
+            "label": "detector efficiency",
+            "units": "%",
+        }
         diffraction_patterns = DiffractionPatterns(
             array, metadata=metadata, sampling=waves.reciprocal_space_sampling
         )
@@ -377,11 +401,11 @@ class _AbstractRadialDetector(BaseDetector):
     def __init__(
         self,
         inner: float,
-        outer: float,
-        rotation: float,
-        offset: tuple[float, float],
+        outer: Optional[float] = None,
+        rotation: float = 0.0,
+        offset: tuple[float, float] = (0.0, 0.0),
         to_cpu: bool = True,
-        url: str = None,
+        url: Optional[str] = None,
     ):
         self._inner = inner
         self._outer = outer
@@ -399,7 +423,7 @@ class _AbstractRadialDetector(BaseDetector):
         self._inner = value
 
     @property
-    def outer(self) -> float:
+    def outer(self) -> Optional[float]:
         """Outer integration limit [mrad]."""
         return self._outer
 
@@ -432,23 +456,23 @@ class _AbstractRadialDetector(BaseDetector):
     def nbins_azimuthal(self):
         """Spacing between the azimuthal detector bins [mrad]."""
 
-    def _out_dtype(self, waves: Waves) -> np.dtype.base:
+    def _out_dtype(self, waves: ArrayObject) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
 
-    def _out_base_shape(self, waves: Waves) -> tuple[tuple[int, int]]:
+    def _out_base_shape(self, waves: ArrayObject) -> tuple[tuple[int, int]]:
         self._match_waves(waves)
         return ((self.nbins_radial, self.nbins_azimuthal),)
 
-    def _out_type(self, waves: Waves) -> tuple[Type[PolarMeasurements]]:
+    def _out_type(self, waves: ArrayObject) -> tuple[Type[PolarMeasurements]]:
         return (PolarMeasurements,)
 
-    def _out_metadata(self, waves: Waves) -> tuple[dict]:
+    def _out_metadata(self, waves: ArrayObject) -> tuple[dict]:
         metadata = super()._out_metadata(waves)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return (metadata,)
 
-    def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata]]:
+    def _out_base_axes_metadata(self, waves: ArrayObject) -> tuple[list[AxisMetadata]]:
         return (
             [
                 LinearAxis(
@@ -481,7 +505,7 @@ class _AbstractRadialDetector(BaseDetector):
 
         return inner, outer
 
-    def _calculate_new_array(self, waves: Waves):
+    def _calculate_new_array(self, waves: ArrayObject) -> np.ndarray:
         """
         Detect the given waves producing polar measurements.
 
@@ -510,9 +534,9 @@ class _AbstractRadialDetector(BaseDetector):
         if self.to_cpu:
             measurement = measurement.to_cpu()
 
-        return measurement.array
+        return measurement._eager_array
 
-    def _match_waves(self, waves):
+    def _match_waves(self, waves: ArrayObject) -> None:
         if self.outer is None:
             self._outer = min(waves.cutoff_angles)
 
@@ -529,9 +553,11 @@ class _AbstractRadialDetector(BaseDetector):
         -------
         measurement : PolarMeasurements
         """
-        return self._apply(waves)
+        measurements = super().detect(waves)
+        assert isinstance(measurements, PolarMeasurements)
+        return measurements
 
-    def get_detector_regions(self, waves: BaseWaves = None):
+    def get_detector_regions(self, waves: Optional[BaseWaves] = None):
         """
         Get the polar detector regions as a polar measurement.
 
@@ -548,7 +574,11 @@ class _AbstractRadialDetector(BaseDetector):
         bins = np.arange(0, self.nbins_radial * self.nbins_azimuthal)
         bins = bins.reshape((self.nbins_radial, self.nbins_azimuthal))
 
-        metadata = copy(waves.metadata)
+        if waves is not None:
+            metadata = copy(waves.metadata)
+        else:
+            metadata = {}
+
         metadata.update({"label": "detector regions", "units": ""})
 
         polar_measurements = PolarMeasurements(
@@ -564,10 +594,10 @@ class _AbstractRadialDetector(BaseDetector):
 
     def show(
         self,
-        waves: BaseWaves = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[int, int] = None,
-        energy: float = None,
+        waves: Optional[BaseWaves] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        energy: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -613,20 +643,23 @@ class _AbstractRadialDetector(BaseDetector):
             if gpts is None:
                 gpts = 1024
 
-            if not hasattr(gpts, "__len__"):
+            if not isinstance(gpts, tuple):
+                assert isinstance(gpts, int)
                 gpts = (gpts,) * 2
 
             if sampling is None:
+                assert isinstance(self.outer, float)
                 angular_sampling = (
-                    self.outer / gpts[0] * 2 * 1.1,
-                    self.outer / gpts[1] * 2 * 1.1,
+                    self.outer / float(gpts[0] * 2 * 1.1),
+                    self.outer / float(gpts[1] * 2 * 1.1),
                 )
                 reciprocal_space_sampling = (
                     angular_sampling[0] / (energy2wavelength(energy) * 1e3),
                     angular_sampling[1] / (energy2wavelength(energy) * 1e3),
                 )
             else:
-                if not hasattr(sampling, "__len__"):
+                if not isinstance(sampling, tuple):
+                    assert isinstance(sampling, float)
                     sampling = (sampling,) * 2
 
                 reciprocal_space_sampling = (
@@ -637,6 +670,9 @@ class _AbstractRadialDetector(BaseDetector):
                     reciprocal_space_sampling[0] * energy2wavelength(energy) * 1e3,
                     reciprocal_space_sampling[1] * energy2wavelength(energy) * 1e3,
                 )
+
+            if self.outer is None:
+                raise ValueError("provide the outer limit of the detector")
 
             regions = _polar_detector_bins(
                 gpts=gpts,
@@ -650,8 +686,9 @@ class _AbstractRadialDetector(BaseDetector):
                 offset=(0.0, 0.0),
                 return_indices=False,
             )
+            assert isinstance(regions, np.ndarray)
 
-            regions = regions.astype(np.float32)
+            regions = regions.astype(get_dtype(complex=False))
             regions[..., regions < 0] = np.nan
 
             diffraction_patterns = DiffractionPatterns(
@@ -686,8 +723,8 @@ class _AbstractRadialDetector(BaseDetector):
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
     """
-    The flexible annular detector allows choosing the integration limits after running the simulation by binning the
-    intensity in annular integration regions.
+    The flexible annular detector allows choosing the integration limits after running
+    the simulation by binning the intensity in annular integration regions.
 
     Parameters
     ----------
@@ -698,11 +735,13 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
     outer : float, optional
         Outer integration limit of the bins [mrad].
     to_cpu : bool, optional
-        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-        otherwise the data stays on the respective devices. Default is True.
+        If True, copy the measurement data from the calculation device to CPU memory
+        after applying the detector, otherwise the data stays on the respective
+        devices. Default is True.
     url : str, optional
-        If this parameter is set the measurement data is saved at the specified location, typically a path to a
-        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+        If this parameter is set the measurement data is saved at the specified
+        location, typically a path to a local file. A URL can also include a
+        protocol specifier like s3:// for remote data. If not set (default)
         the data stays in memory.
     """
 
@@ -710,9 +749,9 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         self,
         step_size: float = 1.0,
         inner: float = 0.0,
-        outer: float = None,
+        outer: Optional[float] = None,
         to_cpu: bool = True,
-        url: str = None,
+        url: Optional[str] = None,
     ):
         self._step_size = step_size
         super().__init__(
@@ -756,9 +795,9 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
 
 class SegmentedDetector(_AbstractRadialDetector):
     """
-    The segmented detector covers an annular angular range, and is partitioned into several integration regions
-    divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)
-    imaging.
+    The segmented detector covers an annular angular range, and is partitioned into
+    several integration regions divided to radial and angular segments. This can be
+    used for simulating differential phase contrast (DPC) imaging.
 
     Parameters
     ----------
@@ -775,12 +814,14 @@ class SegmentedDetector(_AbstractRadialDetector):
     offset : two float
         Offset of the bins from the origin in `x` and `y` [mrad].
     to_cpu : bool, optional
-        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-        otherwise the data stays on the respective devices. Default is True.
+        If True, copy the measurement data from the calculation device to CPU memory
+        after applying the detector, otherwise the data stays on the respective devices.
+        Default is True.
     url : str, optional
-        If this parameter is set the measurement data is saved at the specified location, typically a path to a
-        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-        the data stays in memory.
+        If this parameter is set the measurement data is saved at the specified
+        location,typically a path to a local file. A URL can also include a protocol
+        specifier like s3:// for remote data. If not set (default) the data stays in
+        memory.
     """
 
     def __init__(
@@ -792,7 +833,7 @@ class SegmentedDetector(_AbstractRadialDetector):
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
         to_cpu: bool = False,
-        url: str = None,
+        url: Optional[str] = None,
     ):
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
@@ -832,48 +873,55 @@ class SegmentedDetector(_AbstractRadialDetector):
         return self._nbins_azimuthal
 
     @nbins_azimuthal.setter
-    def nbins_azimuthal(self, value: float):
+    def nbins_azimuthal(self, value: int):
         self._nbins_azimuthal = value
 
 
 class PixelatedDetector(BaseDetector):
     """
-    The pixelated detector records the intensity of the Fourier-transformed exit wave function, i.e. the diffraction
-    patterns. This may be used for example for simulating 4D-STEM.
+    The pixelated detector records the intensity of the Fourier-transformed exit wave
+    function, i.e. the diffraction patterns. This may be used for example for simulating
+    4D-STEM.
 
     Parameters
     ----------
     max_angle : float or {'cutoff', 'valid', 'full'}
-        The diffraction patterns will be detected up to this angle [mrad]. If str, it must be one of:
+        The diffraction patterns will be detected up to this angle [mrad].
+        If str, it must be one of:
             ``cutoff`` :
-                The maximum scattering angle will be the cutoff of the antialiasing aperture.
+                The maximum scattering angle will be the cutoff of the antialiasing
+                aperture.
             ``valid`` :
-                The maximum scattering angle will be the largest rectangle that fits inside the circular antialiasing
-                aperture (default).
+                The maximum scattering angle will be the largest rectangle that fits
+                inside the circular antialiasing aperture (default).
             ``full`` :
-                Diffraction patterns will not be cropped and will include angles outside the antialiasing aperture.
+                Diffraction patterns will not be cropped and will include angles outside
+                the antialiasing aperture.
     resample : str or False
-        If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular
-        sampling.
+        If 'uniform', the diffraction patterns from rectangular cells will be ¨
+        downsampled to a uniform angular sampling.
     reciprocal_space : bool, optional
-        If True (default), the diffraction pattern intensities are detected, otherwise the probe intensities are
+        If True (default), the diffraction pattern intensities are detected, otherwise
+        the probe intensities are
         detected as images.
     to_cpu : bool, optional
-        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
+        If True, copy the measurement data from the calculation device to CPU memory
+        after applying the detector,
         otherwise the data stays on the respective devices. Default is True.
     url : str, optional
-        If this parameter is set the measurement data is saved at the specified location, typically a path to a
-        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-        the data stays in memory.
+        If this parameter is set the measurement data is saved at the specified
+        location, typically a path to a local file. A URL can also include a protocol
+        specifier like s3:// for remote data. If not set (default) the data stays in
+        memory.
     """
 
     def __init__(
         self,
         max_angle: str | float = "valid",
-        resample: bool = False,
+        resample: str | bool = False,
         reciprocal_space: bool = True,
         to_cpu: bool = True,
-        url: str = None,
+        url: Optional[str] = None,
     ):
         self._resample = resample
         self._max_angle = max_angle
@@ -895,7 +943,7 @@ class PixelatedDetector(BaseDetector):
         """How to resample the detected diffraction patterns."""
         return self._resample
 
-    def angular_limits(self, waves: Waves) -> tuple[float, float]:
+    def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
         if isinstance(self.max_angle, str):
             if self.max_angle == "valid":
                 cutoff = waves.rectangle_cutoff_angles
@@ -916,7 +964,11 @@ class PixelatedDetector(BaseDetector):
             gpts = waves._gpts_within_angle(self.max_angle)
 
             _, sampling = _diffraction_pattern_resampling_gpts(
-                sampling, gpts, self.resample, gpts=None, adjust_sampling=False
+                old_sampling=sampling,
+                old_gpts=gpts,
+                sampling=self.resample,
+                gpts=None,
+                adjust_sampling=False,
             )
 
             if self.max_angle and sampling[0] == sampling[1]:
@@ -926,17 +978,17 @@ class PixelatedDetector(BaseDetector):
             sampling = waves.reciprocal_space_sampling
         else:
             sampling = waves.reciprocal_space_sampling
-            gpts = waves.gpts
+            gpts = waves._valid_gpts
 
         return sampling, gpts
 
-    def _out_base_shape(self, waves: Waves) -> tuple[tuple[int, int]]:
+    def _out_base_shape(self, waves: ArrayObject) -> tuple[tuple[int, int]]:
         return (self._new_sampling_and_gpts(waves)[1],)
 
-    def _out_dtype(self, waves: Waves) -> tuple[np.dtype.base]:
+    def _out_dtype(self, waves: ArrayObject) -> tuple[np.dtype]:
         return (get_dtype(complex=False),)
 
-    def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata]]:
+    def _out_base_axes_metadata(self, waves: ArrayObject) -> tuple[list[AxisMetadata]]:
         if self.reciprocal_space:
             sampling, gpts = self._new_sampling_and_gpts(waves)
 
@@ -963,24 +1015,30 @@ class PixelatedDetector(BaseDetector):
         else:
             return (
                 [
-                    RealSpaceAxis(label="x", sampling=waves.sampling[0], units="Å"),
-                    RealSpaceAxis(label="y", sampling=waves.sampling[1], units="Å"),
+                    RealSpaceAxis(
+                        label="x", sampling=waves._valid_sampling[0], units="Å"
+                    ),
+                    RealSpaceAxis(
+                        label="y", sampling=waves._valid_sampling[1], units="Å"
+                    ),
                 ],
             )
 
-    def _out_type(self, waves: Waves) -> tuple[Type[DiffractionPatterns | Images]]:
+    def _out_type(
+        self, waves: ArrayObject
+    ) -> tuple[Type[DiffractionPatterns | Images]]:
         if self.reciprocal_space:
             return (DiffractionPatterns,)
         else:
             return (Images,)
 
-    def _out_metadata(self, waves: Waves) -> tuple[dict]:
+    def _out_metadata(self, waves: ArrayObject) -> tuple[dict]:
         metadata = super()._out_metadata(waves)[0]
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return (metadata,)
 
-    def _calculate_new_array(self, waves: Waves) -> np.ndarray:
+    def _calculate_new_array(self, waves: ArrayObject) -> np.ndarray:
         """
         Detect the given waves producing diffraction patterns.
 
@@ -993,6 +1051,8 @@ class PixelatedDetector(BaseDetector):
         -------
         measurement : DiffractionPatterns
         """
+        measurements: Images | DiffractionPatterns
+
         if self.reciprocal_space:
             measurements = waves.diffraction_patterns(
                 max_angle=self.max_angle, parity="same"
@@ -1002,12 +1062,13 @@ class PixelatedDetector(BaseDetector):
             measurements = waves.intensity()
 
         if self._resample:
-            measurements = measurements.interpolate(self._resample)
+            assert isinstance(self._resample, (float, tuple))
+            measurements = measurements.interpolate(sampling=self._resample)
 
         if self.to_cpu:
             measurements = measurements.to_cpu()
 
-        return measurements.array
+        return measurements._eager_array
 
     def detect(self, waves: Waves) -> DiffractionPatterns:
         """
@@ -1022,7 +1083,9 @@ class PixelatedDetector(BaseDetector):
         -------
         measurement : DiffractionPatterns
         """
-        return self._apply(waves)
+        measurements = super().detect(waves)
+        assert isinstance(measurements, DiffractionPatterns)
+        return measurements
 
 
 class WavesDetector(BaseDetector):
@@ -1032,34 +1095,35 @@ class WavesDetector(BaseDetector):
     Parameters
     ----------
     to_cpu : bool, optional
-       If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-       otherwise the data stays on the respective devices. Default is True.
+       If True, copy the measurement data from the calculation device to CPU memory
+       after applying the detector, otherwise the data stays on the respective devices.
+       Default is True.
     url : str, optional
-       If this parameter is set the measurement data is saved at the specified location, typically a path to a
-       local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-       the data stays in memory.
+       If this parameter is set the measurement data is saved at the specified location,
+       typically a path to a local file. A URL can also include a protocol specifier
+       like s3:// for remote data. If not set (default) the data stays in memory.
     """
 
-    def __init__(self, to_cpu: bool = False, url: str = None):
+    def __init__(self, to_cpu: bool = False, url: Optional[str] = None):
         super().__init__(to_cpu=to_cpu, url=url)
 
-    def _out_type(self, waves: Waves) -> Type[Waves]:
-        from abtem.waves import Waves  # pylint: disable=C0415
+    def _out_type(self, waves: ArrayObject) -> tuple[Type[Waves]]:
+        from abtem.waves import Waves
 
         return (Waves,)
 
-    def _out_metadata(self, waves: Waves) -> dict:
+    def _out_metadata(self, waves: ArrayObject) -> tuple[dict]:
         metadata = super()._out_metadata(array_object=waves)[0]
         metadata["reciprocal_space"] = False
         return (metadata,)
 
-    def _calculate_new_array(self, waves: Waves) -> np.ndarray:
+    def _calculate_new_array(self, waves: ArrayObject) -> np.ndarray:
         waves = waves.ensure_real_space()
 
         if self.to_cpu:
             waves = waves.to_cpu()
 
-        return waves.array
+        return waves._eager_array
 
     def detect(self, waves: Waves) -> Waves:
         """
@@ -1074,8 +1138,8 @@ class WavesDetector(BaseDetector):
         -------
         measurement : Waves
         """
-        waves = self._apply(waves)
-        return waves
+        measurements = super().detect(waves)
+        return measurements
 
-    def angular_limits(self, waves: Waves) -> tuple[float, float]:
+    def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
         return 0.0, min(waves.full_cutoff_angles)
