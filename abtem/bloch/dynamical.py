@@ -824,14 +824,14 @@ def calculate_structure_matrix(
     gmh = hkl_selected[None] - hkl_selected[:, None]
     gmh = gmh.reshape(-1, 3)
 
-    A = raveled_hkl_to_hkl(structure_factor, hkl, gmh, gpts)
-    A = A.reshape((len(hkl_selected),) * 2)
-
-    # structure_factor = {
-    #    (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
-    # }
-    # A = np.array([structure_factor.get((h, k, l), 0.0) for h, k, l in gmh])
+    # A = raveled_hkl_to_hkl(structure_factor, hkl, gmh, gpts)
     # A = A.reshape((len(hkl_selected),) * 2)
+
+    structure_factor = {
+       (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
+    }
+    A = np.array([structure_factor.get((h, k, l), 0.0) for h, k, l in gmh])
+    A = A.reshape((len(hkl_selected),) * 2)
 
     assert np.allclose(A, A.conj().T)
 

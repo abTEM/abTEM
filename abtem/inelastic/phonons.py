@@ -247,7 +247,7 @@ def validate_per_atom_property(
     atoms: Atoms,
     props: AtomProperties,
     return_array: bool = False,
-) -> np.ndarray | dict[str, np.ndarray]:
+) -> np.ndarray | dict[str, np.ndarray] | dict[int, np.ndarray]:
     atomic_numbers = np.unique(atoms.numbers)
     unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
 
@@ -260,6 +260,15 @@ def validate_per_atom_property(
         }
 
     elif isinstance(props, dict):
+        
+        if all(isinstance(key, Number) for key in props.keys()):
+            props = {chemical_symbols[key]: value for key, value in props.items()}
+        elif not all(isinstance(key, str) for key in props.keys()):
+            raise RuntimeError(
+                "Keys in the properties dictionary must be either all "
+                "atomic numbers or all chemical symbols."
+            )
+
         if not set(unique_symbols) == set(props.keys()):
             raise RuntimeError("Property must be provided for all atomic species.")
 
@@ -397,10 +406,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         self,
         atoms: Atoms,
         num_configs: int,
-        sigmas: float
-        | dict[str, float]
-        | dict[str, tuple[float, ...]]
-        | Sequence[float],
+        sigmas: (
+            float | dict[str, float] | dict[str, tuple[float, ...]] | Sequence[float]
+        ),
         directions: str = "xyz",
         ensemble_mean: bool = True,
         seed: Optional[int | tuple[int, ...]] = None,
