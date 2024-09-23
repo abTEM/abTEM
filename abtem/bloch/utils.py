@@ -88,11 +88,32 @@ def get_shortest_g_vec_length(cell: Cell) -> float:
         Length of the shortest reciprocal space vector [1/Å].
     """
     coefficients = [-1, 0, 1]
-    reciprocal_cell = np.array(cell.reciprocal())
     combinations = generate_linear_combinations(
-        reciprocal_cell, coefficients, exclude_zero=True
+        reciprocal_cell(cell), coefficients, exclude_zero=True
     )
     return np.min(np.linalg.norm(combinations, axis=1))
+
+
+def cell_bounds(cell: np.ndarray | Cell):
+    cell = np.array(cell)
+    origin = np.zeros(3)
+    vertices = np.array(
+        [
+            origin,
+            cell[0],
+            cell[1],
+            cell[2],
+            cell[0] + cell[1],
+            cell[0] + cell[2],
+            cell[1] + cell[2],
+            cell[0] + cell[1] + cell[2],
+        ]
+    )
+
+    min_bounds = np.min(vertices, axis=0)
+    max_bounds = np.max(vertices, axis=0)
+
+    return max_bounds - min_bounds
 
 
 def reciprocal_space_gpts(
@@ -104,7 +125,7 @@ def reciprocal_space_gpts(
 
     # assert len(g_max) == 3
 
-    dk = np.linalg.norm(reciprocal_cell(cell), axis=1)
+    dk = 1 / cell_bounds(cell)
 
     gpts = (
         int(np.ceil(g_max / dk[0])) * 2 + 1,
@@ -247,12 +268,11 @@ def filter_reciprocal_space_vectors(
     np.ndarray
         Mask for the reciprocal space vectors.
     """
-    g = hkl @ cell.reciprocal()
+    g = hkl @ reciprocal_cell(cell)
     g_length = np.linalg.norm(g, axis=-1)
 
     if orientation_matrices is None:
         mask = np.abs(excitation_errors(g, energy, use_wave_eq=False)) <= sg_max
-
     else:
         if len(orientation_matrices.shape) == 2:
             orientation_matrices = orientation_matrices[None]
@@ -266,7 +286,7 @@ def filter_reciprocal_space_vectors(
 
         mask = np.zeros(len(g), dtype=bool)
 
-        fast_filter_excitation_errors(
+        mask = fast_filter_excitation_errors(
             mask, g, orientation_matrices, energy2wavelength(energy), sg_max
         )
 
@@ -285,7 +305,7 @@ def ravel_hkl(hkl: np.ndarray, gpts: tuple[int, int, int]) -> np.ndarray:
     return np.ravel_multi_index(multi_index, gpts)
 
 
-def raveled_hkl_to_hkl(
+def retrieve_structure_factor_values(
     array: np.ndarray,
     hkl_source: np.ndarray,
     hkl_destination: np.ndarray,
@@ -323,7 +343,9 @@ def raveled_hkl_to_hkl(
         array = cp.asnumpy(array)
 
     df = pd.Series(array, index=hkl_source)
-    array = df.get(hkl_destination, default=0.0).to_numpy()  # type: ignore
+    array = df.loc[hkl_destination].to_numpy()
+
+    # get(hkl_destination, default=0.0).to_numpy()  # type: ignore
 
     if convert_to_numpy:
         array = cp.asarray(array)

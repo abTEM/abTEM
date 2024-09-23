@@ -1,5 +1,7 @@
 {
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
-    "python.docstringFormat": "numpy"
+    "python.docstringFormat": "numpy",
+    "mypy.runUsingActiveInterpreter": true,
+    "mypy.explicitPackageBases": true,
 }

@@ -233,6 +233,10 @@ def ensure_all_values_are_tuples(
     return all(isinstance(value, tuple) for value in props.values())
 
 
+def all_keys_are_ints(props: dict[str, float | int]) -> TypeGuard[dict[int, float]]:
+    return all(isinstance(key, int) for key in props.keys())
+
+
 AtomProperties = Union[
     float,
     np.ndarray,
@@ -261,16 +265,17 @@ def validate_per_atom_property(
 
     elif isinstance(props, dict):
         
-        if all(isinstance(key, Number) for key in props.keys()):
-            props = {chemical_symbols[key]: value for key, value in props.items()}
+        if all_keys_are_ints(props):
+            validated_props = {chemical_symbols[key]: value for key, value in props.items()}
         elif not all(isinstance(key, str) for key in props.keys()):
             raise RuntimeError(
                 "Keys in the properties dictionary must be either all "
                 "atomic numbers or all chemical symbols."
             )
 
-        if not set(unique_symbols) == set(props.keys()):
-            raise RuntimeError("Property must be provided for all atomic species.")
+        if not set(unique_symbols).issubset(set(props.keys())):
+            raise RuntimeError("Property must be provided for all atomic species."
+                f" symbols: {unique_symbols}, keys: {props.keys()}")
 
         if ensure_all_values_are_tuples(props):
             first_attr = next(iter(props.values()))

@@ -22,18 +22,14 @@ from abtem.bloch.utils import (
     filter_reciprocal_space_vectors,
     get_reflection_condition,
     make_hkl_grid,
-    raveled_hkl_to_hkl,
     reciprocal_cell,
     reciprocal_space_gpts,
+    retrieve_structure_factor_values,
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis, TiltAxis
 from abtem.core.backend import cp, get_array_module, validate_device
-from abtem.core.chunks import (
-    Chunks,
-    equal_sized_chunks,
-    validate_chunks,
-)
+from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.constants import kappa
 from abtem.core.diagnostics import TqdmWrapper
@@ -97,12 +93,7 @@ def calculate_scattering_factors(
 
     parametrization = validate_parametrization(parametrization)
 
-    # Z_unique, Z_inverse = np.unique(atoms.numbers, return_inverse=True)
-    # g_unique, g_inverse = np.unique(g, return_inverse=True)
-
     Z_unique = np.unique(atoms.numbers)
-
-    # f_e_uniq = np.zeros((Z_unique.size, g_unique.size), dtype=get_dtype(complex=True))
 
     scattering_factors = {Z: parametrization.scattering_factor(Z) for Z in Z_unique}
 
@@ -130,22 +121,8 @@ def calculate_scattering_factors(
         raise ValueError("cutoff must be 'taper' or 'hard'")
 
     f_e *= cutoff_array
+
     return f_e
-
-    # for idx, Z in enumerate(Z_unique):
-    #     if atomic_thermal_sigmas is not None:
-    #         s = atomic_thermal_sigmas[idx]
-    #         DWF = np.exp(-0.5 * s**2 * g_unique**2 * (2 * np.pi) ** 2)
-    #     else:
-    #         DWF = 1.0
-
-    #     scattering_factor =
-
-    #     f_e_uniq[idx, :] = scattering_factor(g_unique**2) * DWF
-
-    #     f_e_uniq[idx, :] *= cutoff
-
-    # return f_e_uniq[np.ix_(Z_inverse, g_inverse)]
 
 
 def calculate_structure_factors(
@@ -178,9 +155,20 @@ def calculate_structure_factors(
         is a hard cutoff.
     device : {'cpu', 'gpu'}
         Device to use for calculations. Can be 'cpu' or 'gpu'.
+
+    Returns
+    -------
+    np.ndarray
+        The structure factors.
     """
-    positions = atoms.get_scaled_positions()
+
+    new_cell = atoms.cell.copy().complete()
+    positions = np.linalg.solve(new_cell.T, atoms.positions.T).T
+
     g = np.linalg.norm(calculate_g_vec(hkl, atoms.cell), axis=1)
+
+    # print(g.sum())
+    # assert g.sum() == 1605730.691505297
 
     f_e = calculate_scattering_factors(
         g=g,
@@ -198,12 +186,14 @@ def calculate_structure_factors(
     positions = xp.asarray(positions, dtype=get_dtype(complex=False))
     hkl = xp.asarray(hkl.T, get_dtype(complex=False))
 
-    struct_factors = xp.sum(
-        f_e * xp.exp(2.0j * np.pi * positions[:] @ hkl),
-        axis=0,
+    struct_factors = (
+        xp.sum(
+            f_e * xp.exp(2.0j * np.pi * positions @ hkl),
+            axis=0,
+        )
+        / atoms.cell.volume
     )
 
-    struct_factors /= atoms.cell.volume
     return struct_factors
 
 
@@ -355,7 +345,7 @@ class BaseStructureFactor(metaclass=ABCMeta):
         pass
 
 
-class StructureFactor(BaseStructureFactor):
+class StructureFactor(BaseStructureFactor, CopyMixin):
     """The StructureFactors class calculates the structure factors for a given set of
     atoms and parametrization.
 
@@ -397,10 +387,12 @@ class StructureFactor(BaseStructureFactor):
 
         self._occupancy = validate_per_atom_property(atoms, occupancy)
 
+        self._centering = centering
+
         hkl = make_hkl_grid(atoms.cell, g_max)
 
-        if centering.lower() != "p":
-            hkl = hkl[get_reflection_condition(hkl, centering)]
+        if self._centering.lower() != "p":
+            hkl = hkl[get_reflection_condition(hkl, self._centering)]
 
         self._hkl = hkl
 
@@ -424,6 +416,12 @@ class StructureFactor(BaseStructureFactor):
     @property
     def hkl(self):
         return self._hkl
+        # hkl = make_hkl_grid(self._atoms.cell, self._g_max)
+
+        # if self._centering.lower() != "p":
+        #     hkl = hkl[get_reflection_condition(hkl, self._centering)]
+
+        # return hkl
 
     @property
     def cell(self):
@@ -489,7 +487,9 @@ class StructureFactor(BaseStructureFactor):
                 device=self._device,
             )
 
-        return StructureFactorArray(array, self.hkl, self.atoms.cell, self.g_max)
+        return StructureFactorArray(
+            array, self.hkl.copy(), self.atoms.cell.copy(), self.g_max
+        )
 
     def get_potential_3d(self, lazy: bool = True) -> np.ndarray:
         """Calculate the 3D potential from the structure factors.
@@ -606,7 +606,7 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         return reciprocal_space_gpts(self.cell, self.g_max)
 
     def to_dict(self) -> dict:
-        return {(h, k, l): value for (h, k, l), value in zip(self.hkl, self.array)}  # noqa: E741
+        return {(h, k, l): value for (h, k, l), value in zip(self.hkl, self.array)}
 
     def to_3d_array(self) -> np.ndarray:
         """Convert the 1D structure factors to 3D structure factors.
@@ -817,23 +817,21 @@ def calculate_structure_matrix(
     xp = get_array_module(structure_factor)
 
     g = xp.asarray(calculate_g_vec(hkl_selected, cell))
-
     Mii = calculate_M_matrix(hkl_selected, cell, energy)
+
     hkl_selected = np.asarray(hkl_selected)
 
     gmh = hkl_selected[None] - hkl_selected[:, None]
     gmh = gmh.reshape(-1, 3)
 
-    # A = raveled_hkl_to_hkl(structure_factor, hkl, gmh, gpts)
-    # A = A.reshape((len(hkl_selected),) * 2)
-
-    structure_factor = {
-       (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
-    }
-    A = np.array([structure_factor.get((h, k, l), 0.0) for h, k, l in gmh])
+    A = retrieve_structure_factor_values(structure_factor, hkl, gmh, gpts)
     A = A.reshape((len(hkl_selected),) * 2)
 
-    assert np.allclose(A, A.conj().T)
+    # structure_factor_dict = {
+    #     (h, k, l): value for (h, k, l), value in zip(hkl, structure_factor)
+    # }
+    # A = np.array([structure_factor_dict[(h, k, l)] for h, k, l in gmh])
+    # A = A.reshape((len(hkl_selected),) * 2)
 
     prefactor = energy2sigma(energy) / (kappa * energy2wavelength(energy) * np.pi)
 
@@ -883,6 +881,7 @@ def calculate_dynamical_scattering(
     Mii = xp.asarray(calculate_M_matrix(hkl, cell, energy))
 
     v, C = xp.linalg.eigh(structure_matrix)
+    # v, C = scipy.linalg.eigh(structure_matrix)
 
     gamma = v * energy2wavelength(energy) / 2.0
 
@@ -1151,7 +1150,7 @@ class BlochWaves:
 
         self._hkl_mask = filter_reciprocal_space_vectors(
             hkl=structure_factor.hkl,
-            cell=self._cell,
+            cell=cell,
             energy=energy,
             sg_max=sg_max,
             g_max=self._g_max,
@@ -1394,7 +1393,7 @@ class BlochWaves:
         """
 
         ensemble_axes_metadata: list[AxisMetadata]
-        if isinstance(thicknesses, float):
+        if isinstance(thicknesses, (int, float)):
             thicknesses = [float(thicknesses)]
             ensemble_axes_metadata = []
         else:
@@ -1577,11 +1576,29 @@ class BlochWaves:
             The rotated Bloch waves ensemble.
         """
 
-        if not any(isinstance(arg, Iterable) for arg in args[1::2]):
+        ensemble = False
+        for axes, rotation in zip(args[::2], args[1::2]):
+            if isinstance(rotation, Iterable):
+                rotation = np.array(rotation)
+                if rotation.ndim == 1 and len(axes) > 1:
+                    assert len(axes) == len(rotation)
+                elif rotation.ndim == 1:
+                    ensemble = True
+                elif rotation.ndim == 2:
+                    assert len(axes) == rotation.shape[1]
+                    ensemble = True
+                else:
+                    raise ValueError(
+                        "The rotation must be given as a sequence of angles or a "
+                        "sequence of sequences of angles"
+                    )
+
+        if not ensemble:
             orientation_matrix = np.eye(3)
+
             for axes, rotation in zip(args[::2], args[1::2]):
                 R = Rotation.from_euler(axes, rotation, degrees=degrees).as_matrix()
-                orientation_matrix = orientation_matrix @ R
+                orientation_matrix = R @ orientation_matrix
 
             bloch = BlochWaves(
                 structure_factor=self.structure_factor,
@@ -2065,4 +2082,5 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             },
         )
 
+        return result
         return result

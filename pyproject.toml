@@ -2,9 +2,21 @@
 requires = ["setuptools >= 40.6.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.black]
+line-length = 88
+
 [tool.ruff]
-fix = true
-line-length = 88  # Default line length for black
+fix = false
+line-length = 88
 
 [tool.ruff.lint]
-select = ["I", "E", "F", "W"]
+select = [
+    "I", 
+    "E", 
+    "F", 
+    "W",
+    "F821",
+    #"ANN001",  # Missing type annotation for function argument
+    #"ANN002",  # Missing type annotation for function return
+    #"ANN003",  # Missing type annotation for variable
+]
