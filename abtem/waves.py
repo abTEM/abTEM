@@ -626,12 +626,13 @@ class Waves(BaseWaves, ArrayObject):
         waves_in_reciprocal_space : Waves
             The wave functions in reciprocal space.
         """
+        xp = get_array_module(self.array)
 
         if self.reciprocal_space:
             return self
 
         d = self._copy_kwargs(exclude=("array",))
-        d["array"] = fft2(self.array, overwrite_x=overwrite_x)
+        d["array"] = fft2(xp.fft.ifftshift(self.array), overwrite_x=overwrite_x)
         d["reciprocal_space"] = True
         return self.__class__(**d)
 
@@ -837,7 +838,7 @@ class Waves(BaseWaves, ArrayObject):
         if normalize:
             array = array / float(np.prod(array.shape[-2:]))
 
-        array = fft2(array, overwrite_x=False)
+        array = fft2(xp.fft.ifftshift(array), overwrite_x=False)
 
         if array.shape[-2:] != new_gpts:
             array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
