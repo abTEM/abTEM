@@ -4,7 +4,8 @@ import itertools
 from typing import Optional, Sequence
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore
+from ase import Atoms
 from ase.cell import Cell
 from numba import njit  # type: ignore
 
@@ -30,7 +31,8 @@ def reciprocal_cell(cell: np.ndarray | Cell) -> np.ndarray:
 
 
 def calculate_g_vec(hkl: np.ndarray, cell: np.ndarray | Cell) -> np.ndarray:
-    return hkl @ reciprocal_cell(cell)
+    g_vec: np.ndarray = hkl @ reciprocal_cell(cell)
+    return g_vec
 
 
 def calculate_g_vec_length(hkl: np.ndarray, cell: np.ndarray | Cell) -> np.ndarray:
@@ -94,7 +96,7 @@ def get_shortest_g_vec_length(cell: Cell) -> float:
     return np.min(np.linalg.norm(combinations, axis=1))
 
 
-def cell_bounds(cell: np.ndarray | Cell):
+def cell_bounds(cell: np.ndarray | Cell) -> np.ndarray:
     cell = np.array(cell)
     origin = np.zeros(3)
     vertices = np.array(
@@ -120,11 +122,6 @@ def reciprocal_space_gpts(
     cell: np.ndarray | Cell,
     g_max: float,
 ) -> tuple[int, int, int]:
-    # if isinstance(g_max, Number):
-    #    g_max = (g_max,) * 3
-
-    # assert len(g_max) == 3
-
     dk = 1 / cell_bounds(cell)
 
     gpts = (
@@ -185,7 +182,7 @@ def excitation_errors(
     return sg
 
 
-def get_reflection_condition(hkl: np.ndarray, centering: str):
+def get_reflection_condition(hkl: np.ndarray, centering: str) -> np.ndarray:
     """
     Returns a boolean mask indicating which reflections satisfy the reflection condition
     based on the given lattice centering.
@@ -209,19 +206,25 @@ def get_reflection_condition(hkl: np.ndarray, centering: str):
     elif centering.lower() == "i":
         return hkl.sum(axis=1) % 2 == 0
     elif centering.lower() == "a":
-        return (hkl[1:].sum(axis=1) % 2 == 0).all(axis=1)
+        return (hkl[:, [1, 2]].sum(axis=1) % 2 == 0).all(axis=1)
     elif centering.lower() == "b":
-        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
+        return (hkl[:, [0, 2]].sum(axis=1) % 2 == 0).all(axis=1)
     elif centering.lower() == "c":
-        return (hkl[:-1].sum(axis=1) % 2 == 0).all(axis=1)
+        return (hkl[:, [0, 1]].sum(axis=1) % 2 == 0).all(axis=1)
     elif centering.lower() == "p":
         return np.ones(len(hkl), dtype=bool)
     else:
-        raise ValueError()
+        raise ValueError("Invalid crystal centering type.")
 
 
-@njit(nogil=True, error_model="numpy")
-def fast_filter_excitation_errors(mask, g, orientation_matrices, wavelength, sg_max):
+@njit(nogil=True)
+def fast_filter_excitation_errors(
+    mask: np.ndarray,
+    g: np.ndarray,
+    orientation_matrices: np.ndarray,
+    wavelength: float,
+    sg_max: float,
+) -> None:
     g_length_2 = (g**2).sum(axis=-1)
 
     b = 0.5 * wavelength * g_length_2
@@ -289,7 +292,7 @@ def filter_reciprocal_space_vectors(
         fast_filter_excitation_errors(
             mask, g, orientation_matrices, energy2wavelength(energy), sg_max
         )
-    
+
     mask *= get_reflection_condition(hkl, centering)
 
     mask *= g_length <= g_max
@@ -345,9 +348,194 @@ def retrieve_structure_factor_values(
     df = pd.Series(array, index=hkl_source)
     array = df.loc[hkl_destination].to_numpy()
 
-    # get(hkl_destination, default=0.0).to_numpy()  # type: ignore
-
     if convert_to_numpy:
         array = cp.asarray(array)
 
     return array
+
+
+def are_vectors_orthogonal(v1: np.ndarray, v2: np.ndarray, tol: float = 1e-9) -> bool:
+    """
+    Check if two vectors are orthogonal within a given tolerance.
+
+    Parameters:
+    ----------
+    v1 : np.ndarray
+        The first vector.
+    v2 : np.ndarray
+        The second vector.
+    tol : float
+        The tolerance for floating-point comparison.
+
+    Returns:
+    --------
+    bool
+        True if the vectors are orthogonal within the given tolerance, False otherwise.
+    """
+    dot_product = np.dot(v1, v2)
+    return bool(np.isclose(dot_product, 0, atol=tol))
+
+
+def check_orthogonality(vectors: np.ndarray, tol: float = 1e-9) -> bool:
+    """
+    Check if three vectors are pairwise orthogonal within a given tolerance.
+
+    Parameters:
+    ----------
+    vectors : np.ndarray
+        A 2D array where each row is a vector.
+    tol : float
+        The tolerance for floating-point comparison.
+
+    Returns:
+    --------
+    bool
+        True if all pairs of vectors are orthogonal within the given tolerance, False otherwise.
+    """
+    if vectors.shape[1] != 3:
+        raise ValueError("Each vector must be 3-dimensional.")
+
+    num_vectors = vectors.shape[0]
+    for i in range(num_vectors):
+        for j in range(i + 1, num_vectors):
+            if not are_vectors_orthogonal(vectors[i], vectors[j], tol):
+                return False
+    return True
+
+
+def relative_positions_for_centering() -> dict[str, np.ndarray]:
+    """
+    Returns the relative positions for each lattice centering type.
+
+    Returns:
+    --------
+    dict
+        A dictionary where the keys are the centering types and the values are the
+        relative positions.
+    """
+    return {
+        "F": np.array(
+            [
+                [0.0, 0.5, 0.5],
+                [0.5, 0.0, 0.5],
+                [0.5, 0.5, 0.0],
+            ]
+        ),
+        "I": np.array(
+            [
+                [0.5, 0.5, 0.5],
+            ]
+        ),
+        "A": np.array(
+            [
+                [0.5, 0.0, 0.0],
+            ]
+        ),
+        "B": np.array(
+            [
+                [0.0, 0.5, 0.0],
+            ]
+        ),
+        "C": np.array(
+            [
+                [0.0, 0.0, 0.5],
+            ]
+        ),
+        "P": np.zeros((0, 3)),
+    }
+
+
+def all_positions_have_relative_periodic_pair(
+    positions: np.ndarray, relative_positions: np.ndarray
+) -> bool:
+    """
+    Check if all positions have a relative periodic pair.
+
+    Parameters:
+    ----------
+    positions : np.ndarray
+        The positions to check.
+    relative_positions : np.ndarray
+        The possible relative shifts of each position.
+
+    Returns:
+    --------
+    bool
+        True if all positions have a relative periodic pair, False otherwise.
+    """
+    basis_size = len(positions) / (len(relative_positions) + 1)
+
+    if not np.isclose(basis_size, np.round(basis_size), atol=1e-6):
+        return False
+
+    basis_size = int(basis_size)
+
+    num_match_total = 0
+    for position in positions:
+        shifted_position = (position + relative_positions) % 1.0
+        position_is_close = np.isclose(shifted_position[None] - positions[:, None], 0.0)
+        num_match_total += position_is_close.all(axis=2).sum()
+
+    if num_match_total >= len(relative_positions) * len(positions):
+        return True
+    else:
+        return False
+
+
+def auto_detect_centering(
+    atoms: Atoms, centerings_to_check: Optional[set] = None
+) -> str:
+    """
+    Automatically detect the lattice centering of a crystal structure.
+
+    Parameters:
+    ----------
+    atoms : Atoms
+        The crystal structure.
+    centerings_to_check : set, optional
+        The centering types to check. If None, all centering types are checked.
+
+    Returns:
+    --------
+    str
+        The detected lattice centering type.
+    """
+    if centerings_to_check is None:
+        centerings_to_check = set(relative_positions_for_centering().keys())
+
+    if "P" in centerings_to_check:
+        centerings_to_check.remove("P")
+
+    if not check_orthogonality(atoms.cell):
+        centerings_to_check.remove("F")
+        centerings_to_check.remove("I")
+
+    if not check_orthogonality(atoms.cell[[0, 1]]):
+        centerings_to_check.remove("A")
+
+    if not check_orthogonality(atoms.cell[[0, 2]]):
+        centerings_to_check.remove("B")
+
+    if not check_orthogonality(atoms.cell[[1, 2]]):
+        centerings_to_check.remove("C")
+
+    positions = atoms.get_scaled_positions()
+    relative_positions = relative_positions_for_centering()
+    for number in np.unique(atoms.numbers):
+        centerings_to_check = {
+            centering
+            for centering in centerings_to_check
+            if all_positions_have_relative_periodic_pair(
+                positions[atoms.numbers == number], relative_positions[centering]
+            )
+        }
+
+    if len(centerings_to_check) == 1:
+        return next(iter(centerings_to_check))
+    elif len(centerings_to_check) == 0:
+        return "P"
+    else:
+        raise RuntimeError(
+            "Something went wrong with the centering detection. Set the"
+            " centering manually."
+        )

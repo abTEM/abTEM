@@ -25,7 +25,7 @@ b = [
 th13 = 5.37
 
 
-def expm(a):
+def expm(a: np.ndarray) -> np.ndarray:
     """Compute the matrix exponential.
 
     Parameters
@@ -97,7 +97,14 @@ def expm(a):
 
 
 @cp.fuse
-def _expm_inner(E, A, A2, A4, A6, b):
+def _expm_inner(
+    E: np.ndarray,
+    A: np.ndarray,
+    A2: np.ndarray,
+    A4: np.ndarray,
+    A6: np.ndarray,
+    b: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     u1 = b[13] * A6 + b[11] * A4 + b[9] * A2
     u2 = b[7] * A6 + b[5] * A4 + b[3] * A2 + b[1] * E
 

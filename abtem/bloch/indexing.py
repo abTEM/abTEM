@@ -55,7 +55,9 @@ def estimate_necessary_excitation_error(energy: float, k_max: float) -> float:
     return sg
 
 
-def validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> Cell:
+def validate_cell(
+    cell: Atoms | Cell | np.ndarray | float | tuple[float, float, float],
+) -> Cell:
     """
     Validate the cell input.
 
@@ -72,7 +74,7 @@ def validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> Ce
     if isinstance(cell, Atoms):
         validated_cell = cell.cell
 
-    elif np.isscalar(cell):
+    elif isinstance(cell, float):
         validated_cell = np.diag([cell] * 3)
 
     elif isinstance(cell, tuple):
@@ -90,11 +92,11 @@ def validate_cell(cell: Atoms | Cell | float | tuple[float, float, float]) -> Ce
     return Cell(validated_cell)
 
 
-def prefix_indices(shape):
-    return tuple(
-        np.arange(n)[(slice(None),) + (None,) * (len(shape) - i)]
-        for i, n in enumerate(shape)
-    )
+# def prefix_indices(shape):
+#     return tuple(
+#         np.arange(n)[(slice(None),) + (None,) * (len(shape) - i)]
+#         for i, n in enumerate(shape)
+#     )
 
 
 def overlapping_spots_mask(nm: np.ndarray, sg: np.ndarray) -> np.ndarray:
@@ -112,7 +114,7 @@ def overlapping_spots_mask(nm: np.ndarray, sg: np.ndarray) -> np.ndarray:
             indices = i + (indices,)
         mask[indices] = True
 
-    mask = mask[prefix_indices(mask.shape[:-1]) + (order_reverse,)]
+    mask = mask[..., order_reverse]
     return mask
 
 
@@ -137,7 +139,22 @@ def create_ellipse(a: int, b: int) -> np.ndarray:
     return x**2 / b**2 + y**2 / a**2 <= 1
 
 
-def antialiased_disk(r, sampling):
+def antialiased_disk(r: float, sampling: tuple[float, float]) -> np.ndarray:
+    """
+    Create an array representing disk with antialiased edges.
+
+    Parameters:
+    ----------
+    r : float
+        The radius of the disk.
+    sampling : two float
+        The sampling rate of the array in the x and y directions. Units are arbitrary.
+
+    Returns:
+    --------
+    np.ndarray
+        A 2D array representing the disk.
+    """
     gpts = 2 * int(np.ceil(r / sampling[0])) + 1, 2 * int(np.ceil(r / sampling[1])) + 1
     alpha, phi = polar_spatial_frequencies(
         gpts, (1 / (sampling[0] * gpts[0]), 1 / (sampling[1] * gpts[1]))
@@ -157,23 +174,22 @@ def integrate_ellipse_around_pixels(
     nm: np.ndarray,
     r: float,
     sampling: tuple[float, float],
-    priority=None,
+    priority: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-        Integrate an ellipse around pixels in an array.
+    Integrate an ellipse around pixels in an array.
 
-        Parameters:
-        ----------
-        array : np.ndarray
-            The input array containing diffraction spot intensities.
-        nm : np.ndarray
-            The pixel coordinates of the diffraction spots.
-    r
+    Parameters:
+    ----------
+    array : np.ndarray
+        The input array containing diffraction spot intensities.
+    nm : np.ndarray
+        The pixel coordinates of the diffraction spots.
 
-        Returns:
-        --------
-        np.ndarray
-            The integrated intensities around the pixels.
+    Returns:
+    --------
+    np.ndarray
+        The integrated intensities around the pixels.
     """
     weights = antialiased_disk(r, sampling)
     a, b = weights.shape[0] // 2, weights.shape[1] // 2
@@ -183,24 +199,19 @@ def integrate_ellipse_around_pixels(
 
     assert len(nm.shape) == 2 and nm.shape[1] == 2
 
-    order = np.argsort(priority, axis=-1)
+    if priority is None:
+        order = np.arange(nm.shape[-2])
+    else:
+        order = nm[np.argsort(priority, axis=-1)]
+
     for i, (nmx, nmy) in enumerate(nm[order]):
         x_slice = slice(max(0, nmx - a), min(array.shape[-2], nmx + a + 1))
         y_slice = slice(max(0, nmy - b), min(array.shape[-1], nmy + b + 1))
 
-        # print(x_slice, y_slice)
-
-        # nms = nm[..., i, :] - offsets[(None,) * len(nm.shape[:-2])]
-        # nms = nms[
-        #    (nms >= 0).all(-1)
-        #    * (nms[..., 0] < array.shape[-2])
-        #    * (nms[..., 1] < array.shape[-1])
-        # ]
         weights_slice_x = slice(a - (nmx - x_slice.start), a + (x_slice.stop - nmx))
         weights_slice_y = slice(b - (nmy - y_slice.start), b + (y_slice.stop - nmy))
         cropped_weigths = weights[weights_slice_x, weights_slice_y]
 
-        # selected_indices = prefix_indices(array.shape[:-2]) + (nms[:, 0], nms[:, 1])
         integrated_intensity = (
             masked_array[..., x_slice, y_slice] * cropped_weigths
         ).sum((-2, -1))
@@ -309,23 +320,3 @@ def miller_to_miller_bravais(hkl: tuple[int, int, int]) -> tuple[int, int, int, 
     L = l
 
     return H, K, I, L
-
-
-def check_translation_symmetry(
-    atoms: Atoms, translation: np.ndarray, tol: float = 1e-12
-):
-    positions = atoms.get_scaled_positions()
-    shifted_positions = positions + translation
-
-    differences = shifted_positions[None] - positions[:, None]
-    differences[differences > 0.5] = 1.0 - differences[differences > 0.5]
-    distances = np.linalg.norm(differences, axis=-1)
-
-    matching_index = np.argmin(distances, axis=1)
-
-    min_distances = distances[matching_index, range(len(distances))]
-
-    has_symmetry = np.all(
-        (min_distances < tol) * (atoms.numbers == atoms.numbers[matching_index])
-    )
-    return has_symmetry
