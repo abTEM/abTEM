@@ -286,10 +286,10 @@ def filter_reciprocal_space_vectors(
 
         mask = np.zeros(len(g), dtype=bool)
 
-        mask = fast_filter_excitation_errors(
+        fast_filter_excitation_errors(
             mask, g, orientation_matrices, energy2wavelength(energy), sg_max
         )
-
+    
     mask *= get_reflection_condition(hkl, centering)
 
     mask *= g_length <= g_max

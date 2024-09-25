@@ -47,12 +47,7 @@ from abtem.core.grid import (
     spatial_frequencies,
 )
 from abtem.core.units import get_conversion_factor
-from abtem.core.utils import (
-    CopyMixin,
-    EqualityMixin,
-    is_broadcastable,
-    label_to_index,
-)
+from abtem.core.utils import CopyMixin, EqualityMixin, is_broadcastable, label_to_index
 from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.visualizations import Visualization
@@ -3298,7 +3293,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         return array * block
 
-    def bandlimit(self, inner: float=0., outer: float = np.inf) -> "DiffractionPatterns":
+    def bandlimit(
+        self, inner: float = 0.0, outer: float = np.inf
+    ) -> "DiffractionPatterns":
         """
         Bandlimit diffraction pattern(s) by setting everything outside an annulus defined by two radial angles to
         zero.
@@ -4094,7 +4091,7 @@ class PolarMeasurements(BaseMeasurements):
         )
 
 
-# @jit(nopython=True, nogil=True, fastmath=True)
+@jit(nopython=True, nogil=True, fastmath=True)
 def calculate_max_reciprocal_space_vector(hkl, reciprocal_lattice_vectors):
     k_max = 0.0
     for i in range(len(hkl)):
@@ -4140,7 +4137,7 @@ def reciprocal_lattice_vector_lengths(hkl, reciprocal_lattice_vectors):
     )
 
 
-# @jit(nopython=True, nogil=True)
+@jit(nopython=True, nogil=True)
 def _reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max):
     for i in range(len(hkl)):  # pylint: disable=not-an-iterable
         lengths = (
@@ -4158,8 +4155,6 @@ def _reciprocal_lattice_vector_mask(mask, hkl, reciprocal_lattice_vectors, k_max
             mask[i] = new_mask
         else:
             mask[i] = new_mask.any()
-
-    return mask
 
 
 class IndexedDiffractionPatterns(BaseMeasurements):
@@ -4468,7 +4463,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
         mask = np.zeros(len(self.miller_indices), dtype=bool)
 
-        mask = _reciprocal_lattice_vector_mask(
+        _reciprocal_lattice_vector_mask(
             mask,
             self.miller_indices.astype(self.reciprocal_lattice_vectors.dtype),
             self.reciprocal_lattice_vectors,
