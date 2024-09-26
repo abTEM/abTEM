@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from typing import Optional, Sequence
 
 import numpy as np
@@ -416,6 +417,7 @@ def relative_positions_for_centering() -> dict[str, np.ndarray]:
     return {
         "F": np.array(
             [
+                [0.0, 0.0, 0.0],
                 [0.0, 0.5, 0.5],
                 [0.5, 0.0, 0.5],
                 [0.5, 0.5, 0.0],
@@ -423,26 +425,38 @@ def relative_positions_for_centering() -> dict[str, np.ndarray]:
         ),
         "I": np.array(
             [
+                [0.0, 0.0, 0.0],
                 [0.5, 0.5, 0.5],
             ]
         ),
         "A": np.array(
             [
+                [0.0, 0.0, 0.0],
                 [0.5, 0.0, 0.0],
             ]
         ),
         "B": np.array(
             [
+                [0.0, 0.0, 0.0],
                 [0.0, 0.5, 0.0],
             ]
         ),
         "C": np.array(
             [
+                [0.0, 0.0, 0.0],
                 [0.0, 0.0, 0.5],
             ]
         ),
-        "P": np.zeros((0, 3)),
+        "P": np.array([[0.0, 0.0, 0.0]]),
     }
+
+
+def wrapped_is_close(a, b):
+    differences = (a[None] - b[:, None]) % 1.0
+    is_close_to_zero = np.isclose(differences, 0.0)
+    is_close_to_one = np.isclose(differences, 1.0)
+    position_is_close = is_close_to_zero | is_close_to_one
+    return position_is_close
 
 
 def all_positions_have_relative_periodic_pair(
@@ -463,17 +477,15 @@ def all_positions_have_relative_periodic_pair(
     bool
         True if all positions have a relative periodic pair, False otherwise.
     """
-    basis_size = len(positions) / (len(relative_positions) + 1)
+    basis_size = len(positions) / (len(relative_positions))
 
     if not np.isclose(basis_size, np.round(basis_size), atol=1e-6):
         return False
 
-    basis_size = int(basis_size)
-
     num_match_total = 0
     for position in positions:
         shifted_position = (position + relative_positions) % 1.0
-        position_is_close = np.isclose(shifted_position[None] - positions[:, None], 0.0)
+        position_is_close = wrapped_is_close(shifted_position, positions)
         num_match_total += position_is_close.all(axis=2).sum()
 
     if num_match_total >= len(relative_positions) * len(positions):
@@ -521,6 +533,7 @@ def auto_detect_centering(
 
     positions = atoms.get_scaled_positions()
     relative_positions = relative_positions_for_centering()
+
     for number in np.unique(atoms.numbers):
         centerings_to_check = {
             centering
@@ -535,7 +548,8 @@ def auto_detect_centering(
     elif len(centerings_to_check) == 0:
         return "P"
     else:
-        raise RuntimeError(
-            "Something went wrong with the centering detection. Set the"
-            " centering manually."
+        warnings.warn(
+            "Something went wrong with the centering detection"
+            " using primitive. Set manually to mute warning."
         )
+        return "P"

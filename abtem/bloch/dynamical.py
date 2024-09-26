@@ -168,9 +168,6 @@ def calculate_structure_factors(
 
     g = np.linalg.norm(calculate_g_vec(hkl, atoms.cell), axis=1)
 
-    # print(g.sum())
-    # assert g.sum() == 1605730.691505297
-
     f_e = calculate_scattering_factors(
         g=g,
         atoms=atoms,
@@ -189,7 +186,7 @@ def calculate_structure_factors(
 
     struct_factors = (
         xp.sum(
-            f_e * xp.exp(2.0j * np.pi * positions @ hkl),
+            f_e * xp.exp(-2.0j * np.pi * positions @ hkl),
             axis=0,
         )
         / atoms.cell.volume
@@ -254,21 +251,22 @@ def structure_factor_to_potential(
 
 def equal_slice_thicknesses(
     num_gpts_z: int, slice_thickness: float, depth: float
-) -> tuple[np.ndarray, tuple[int, ...]]:
+) -> tuple[tuple[float, ...], tuple[int, ...]]:
     dz = depth / num_gpts_z
     n_slices = int(np.ceil(depth / slice_thickness))
     n_per_slice = equal_sized_chunks(num_items=num_gpts_z, num_chunks=n_slices)
-    slice_thicknesses = np.array(n_per_slice) * dz
+    slice_thicknesses = tuple(n * dz for n in n_per_slice)
     return slice_thicknesses, n_per_slice
 
 
 def slice_potential(
     potential_3d: np.ndarray,
     slice_chunks: tuple[int, ...],
-    slice_thicknesses: Sequence[float],
+    slice_thicknesses: tuple[float, ...],
     gpts: Optional[tuple[int, int]] = None,
     rollaxis: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
+
     num_slices = len(slice_chunks)
     assert num_slices == len(slice_thicknesses)
     assert sum(slice_chunks) == potential_3d.shape[-1]
@@ -672,7 +670,7 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
 
     def get_projected_potential(
         self,
-        slice_thickness: Optional[float | Sequence[float]] = None,
+        slice_thickness: Optional[float | Sequence[float]] = 0.5,
         sampling: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         lazy: bool = True,
@@ -713,15 +711,16 @@ class StructureFactorArray(BaseStructureFactor, ArrayObject):
         sampling_z = depth / potential_3d.shape[-1]
 
         if slice_thickness is None:
-            validated_slice_thickness = sampling_z
-        elif isinstance(slice_thickness, float):
+            slice_thickness = min(1.0, depth)
+
+        if isinstance(slice_thickness, float):
             validated_slice_thickness, slice_chunks = equal_slice_thicknesses(
                 num_gpts_z=potential_3d.shape[-1],
                 slice_thickness=slice_thickness,
                 depth=depth,
             )
         else:
-            validated_slice_thickness = slice_thickness
+            validated_slice_thickness = tuple(slice_thickness)
 
         if gpts is None:
             validated_gpts = potential_3d.shape[:2]
@@ -1115,10 +1114,29 @@ def exctinction_distances(
 AllowedRotations = Union[BaseDistribution, np.ndarray, Number]
 
 
+def allowed_chars(s: str, allowed_chars: str) -> bool:
+    """
+    Check if the string `s` only contains characters from `allowed_chars`.
+
+    Parameters:
+    ----------
+    s : str
+        The string to check.
+    allowed_chars : str
+        A string containing all allowed characters.
+
+    Returns:
+    --------
+    bool
+        True if `s` only contains characters from `allowed_chars`, False otherwise.
+    """
+    return all(char in allowed_chars for char in s)
+
+
 def is_valid_rotation_axes(
     args: tuple[str | AllowedRotations, ...],
 ) -> TypeGuard[tuple[str, ...]]:
-    return all(arg in ("x", "y", "z") for arg in args)
+    return all(isinstance(arg, str) and allowed_chars(arg, "xyz") for arg in args)
 
 
 def is_valid_rotations(
@@ -1130,7 +1148,6 @@ def is_valid_rotations(
 def validate_rotations(
     args: tuple[str | AllowedRotations, ...],
 ) -> tuple[tuple[str, ...], tuple[AllowedRotations, ...]]:
-    # Extract axes and rotations
     axes = args[::2]
     rotations = args[1::2]
 
