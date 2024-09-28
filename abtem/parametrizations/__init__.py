@@ -14,7 +14,6 @@ from scipy.optimize import least_squares
 
 from abtem.array import concatenate
 from abtem.core.axes import OrdinalAxis
-from abtem.core.config import config
 from abtem.core.constants import kappa
 from abtem.core.utils import EqualityMixin, get_dtype
 from abtem.measurements import RealSpaceLineProfiles, ReciprocalSpaceLineProfiles
@@ -31,7 +30,7 @@ def validate_sigmas(sigmas: float | dict) -> dict:
         sigmas = {}
     elif isinstance(sigmas, Number):
         sigmas = {
-            chemical_symbol: sigmas for chemical_symbol in chemical_symbols.keys()
+            chemical_symbol: sigmas for chemical_symbol in chemical_symbols
         }
 
     if not isinstance(sigmas, dict):

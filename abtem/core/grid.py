@@ -601,6 +601,12 @@ def spatial_frequencies(
         return out
 
 
+def real_space_grid(gpts, extent, xp=np):
+    out = tuple(xp.linspace(0, L, n, endpoint=False) for n, L in zip(gpts, extent))
+    return xp.meshgrid(*out, indexing="ij")
+
+
+
 def polar_spatial_frequencies(
     gpts: tuple[int, ...],
     sampling: tuple[float, ...],

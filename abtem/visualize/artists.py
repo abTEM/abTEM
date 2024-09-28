@@ -203,7 +203,8 @@ class LinesArtist(Artist1D):
 
         if label is None and measurement.ensemble_shape:
             labels = []
-            for axis in measurement.ensemble_axes_metadata:
+            for n, axis in zip(measurement.shape, measurement.ensemble_axes_metadata):
+                axis = axis.to_ordinal_axis(n)
                 labels.append([l.format_title(".3g") for l in axis])
 
             labels = list(itertools.product(*labels))

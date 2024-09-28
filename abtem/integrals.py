@@ -451,7 +451,6 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
-        fourier_space: bool = False,
     ):
         xp = get_array_module(device)
         if len(atoms) == 0:
@@ -477,8 +476,8 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
             temp_array *= scattering_factor / sinc(gpts, sampling, device)
 
-            if not fourier_space:
-                temp_array = ifft2(temp_array, overwrite_x=True).real
+            #if not fourier_space:
+            temp_array = ifft2(temp_array, overwrite_x=True).real
 
             array += temp_array
 

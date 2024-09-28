@@ -251,7 +251,7 @@ def validate_per_atom_property(
     atoms: Atoms,
     props: AtomProperties,
     return_array: bool = False,
-) -> np.ndarray | dict[str, np.ndarray] | dict[int, np.ndarray]:
+) -> np.ndarray | dict[str, np.ndarray]:
     atomic_numbers = np.unique(atoms.numbers)
     unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
 
@@ -264,9 +264,10 @@ def validate_per_atom_property(
         }
 
     elif isinstance(props, dict):
-        
         if all_keys_are_ints(props):
-            validated_props = {chemical_symbols[key]: value for key, value in props.items()}
+            validated_props = {
+                chemical_symbols[key]: value for key, value in props.items()
+            }
         elif not all(isinstance(key, str) for key in props.keys()):
             raise RuntimeError(
                 "Keys in the properties dictionary must be either all "
@@ -274,8 +275,10 @@ def validate_per_atom_property(
             )
 
         if not set(unique_symbols).issubset(set(props.keys())):
-            raise RuntimeError("Property must be provided for all atomic species."
-                f" symbols: {unique_symbols}, keys: {props.keys()}")
+            raise RuntimeError(
+                "Property must be provided for all atomic species."
+                f" symbols: {unique_symbols}, keys: {props.keys()}"
+            )
 
         if ensure_all_values_are_tuples(props):
             first_attr = next(iter(props.values()))
@@ -288,7 +291,6 @@ def validate_per_atom_property(
         }
 
     elif isinstance(props, (list, tuple, np.ndarray)):
-        print(props)
         validated_props = np.array(props, dtype=dtype)
         if len(props) != len(atoms):
             raise RuntimeError("Property must be provided for all atoms.")
@@ -310,13 +312,16 @@ def validate_sigmas(
     Parameters
     ----------
     atoms : Atoms
-        The atomic structure which standard deviations of displacement are to be validated.
+        The atomic structure which standard deviations of displacement are to be 
+        validated.
     sigmas : float, dict[str, float] or Sequence[float]
         It can be either:
 
         - a single float value specifying the standard deviation for all atoms,
-        - a dictionary mapping each atom's symbol or atomic number to a corresponding standard deviation,
-        - a sequence of float values providing the standard deviation for each atom individually.
+        - a dictionary mapping each atom's symbol or atomic number to a corresponding
+          standard deviation,
+        - a sequence of float values providing the standard deviation for each atom
+          individually.
 
         For anisotropic displacements, either three values for each atom or for each
         element must be provided.
@@ -334,7 +339,8 @@ def validate_sigmas(
         If the type of `sigmas` is not float, dict, or list.
     RuntimeError
         If the length of `sigmas` does not match the length of `atoms`, or
-        three values for each atom or each element are not given for anisotropic displacements.
+        three values for each atom or each element are not given for anisotropic
+        displacements.
     """
 
     validated_sigmas = validate_per_atom_property(

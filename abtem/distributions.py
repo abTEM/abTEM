@@ -376,8 +376,8 @@ def gaussian(
 
 
 def validate_distribution(
-    distribution: BaseDistribution | tuple | list | np.ndarray | Number | str,
-) -> BaseDistribution | Number | str:
+    distribution: BaseDistribution | tuple | list | np.ndarray | Number,
+) -> BaseDistribution | Number:
     """
     Parameters
     ----------
@@ -400,7 +400,7 @@ def validate_distribution(
     ValueError
         If the input distribution is not a valid distribution or .
     """
-    if isinstance(distribution, (BaseDistribution, Number, str)):
+    if isinstance(distribution, (BaseDistribution, Number)):
         return distribution
 
     elif isinstance(distribution, np.ndarray) and len(distribution.shape) == 0:

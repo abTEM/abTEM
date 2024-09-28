@@ -255,13 +255,20 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         )
 
     @property
+    def cutoff_frequencies(self) -> tuple[float, float]:
+        """Spatial frequencies at the antialias cutoff [1/Å]."""
+        return (
+            self.antialias_cutoff_gpts[0] // 2 * self.reciprocal_space_sampling[0],
+            self.antialias_cutoff_gpts[1] // 2 * self.reciprocal_space_sampling[1],
+        )
+
+    @property
     def angular_sampling(self) -> tuple[float, float]:
         """Reciprocal-space sampling in units of scattering angles [mrad]."""
         self.accelerator.check_is_defined()
-        fourier_space_sampling = self.reciprocal_space_sampling
         return (
-            fourier_space_sampling[0] * self.wavelength * 1e3,
-            fourier_space_sampling[1] * self.wavelength * 1e3,
+            self.reciprocal_space_sampling[0] * self.wavelength * 1e3,
+            self.reciprocal_space_sampling[1] * self.wavelength * 1e3,
         )
 
     def _angular_grid(self):

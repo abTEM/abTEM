@@ -58,7 +58,7 @@ def energy2wavelength(energy: float) -> float:
         Relativistic de Broglie wavelength [Å].
     """
 
-    return (
+    return float(
         units._hplanck
         * units._c
         / np.sqrt(energy * (2 * units._me * units._c**2 / units._e + energy))
@@ -81,7 +81,7 @@ def energy2sigma(energy: float) -> float:
     float
         Interaction parameter [1 / (Å * eV)].
     """
-    return (
+    return float(
         2
         * np.pi
         * energy2mass(energy)

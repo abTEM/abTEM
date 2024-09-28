@@ -542,7 +542,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             Transformed atoms.
         """
         atoms = self.frozen_phonons.atoms
-
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
 
@@ -570,8 +569,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return atoms
 
     def _prepare_atoms(self):
+
         atoms = self.get_transformed_atoms()
 
+        
         if self.integrator.finite:
             cutoffs = self._cutoffs()
             margins = max(cutoffs) if len(cutoffs) else 0.0
@@ -580,7 +581,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
-            atoms.wrap()
+            atoms.wrap(eps=0.)
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
