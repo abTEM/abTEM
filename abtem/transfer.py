@@ -443,6 +443,11 @@ class Bullseye(BaseAperture):
         )
 
     @property
+    def soft(self) -> bool:
+        """True if the aperture has a soft edge."""
+        return False
+
+    @property
     def num_spokes(self) -> int:
         """Number of spokes."""
         return self._spoke_num
@@ -530,6 +535,11 @@ class Vortex(BaseAperture):
         )
 
     @property
+    def soft(self) -> bool:
+        """True if the aperture has a soft edge."""
+        return False
+    
+    @property
     def quantum_number(self) -> int:
         """Quantum number of vortex beam."""
         return self._quantum_number
@@ -543,8 +553,8 @@ class Vortex(BaseAperture):
         semiangle_cutoff = self.semiangle_cutoff / 1e3
 
         array = alpha < semiangle_cutoff
+        print(phi.min(), phi.max())
         array = array * np.exp(1j * phi * self.quantum_number)
-
         return array
 
 
@@ -582,7 +592,6 @@ class Zernike(BaseAperture):
     ):
         self._center_hole_cutoff = center_hole_cutoff
         self._phase_shift = phase_shift
-
         super().__init__(
             energy=energy,
             semiangle_cutoff=semiangle_cutoff,
@@ -596,6 +605,11 @@ class Zernike(BaseAperture):
         """Cutoff semiangle of aperture hole."""
         return self._center_hole_cutoff
 
+    @property
+    def soft(self) -> bool:
+        """True if the aperture has a soft edge."""
+        return False
+    
     @property
     def phase_shift(self) -> float:
         """Phase shift of Zernike film."""
