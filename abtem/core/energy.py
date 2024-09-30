@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, TypeVar, cast
 
 import numpy as np
 from ase import units  # type: ignore
@@ -93,9 +93,12 @@ def energy2sigma(energy: float) -> float:
     )
 
 
+T = TypeVar("T", bound=tuple[float, ...])
+
+
 def reciprocal_space_sampling_to_angular_sampling(
-    reciprocal_space_sampling: tuple[float, float], energy: float
-) -> tuple[float, float]:
+    reciprocal_space_sampling: T, energy: float
+) -> T:
     """
     Convert reciprocal space sampling in 1/Å to angular sampling in mrad.
 
@@ -112,10 +115,9 @@ def reciprocal_space_sampling_to_angular_sampling(
         Angular sampling [mrad].
     """
     wavelength = energy2wavelength(energy)
-    return (
-        reciprocal_space_sampling[0] * wavelength * 1e3,
-        reciprocal_space_sampling[1] * wavelength * 1e3,
-    )
+    angular_sampling = tuple(d * 1e3 * wavelength for d in reciprocal_space_sampling)
+    angular_sampling = cast(T, angular_sampling)
+    return angular_sampling
 
 
 class EnergyUndefinedError(Exception):
