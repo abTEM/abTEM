@@ -4,7 +4,6 @@ import strategies as abtem_st
 from ase import Atoms
 from hypothesis import assume, given, reproduce_failure
 from hypothesis import strategies as st
-import ipdb
 import abtem
 from abtem.bloch.utils import (
     auto_detect_centering,
@@ -106,14 +105,13 @@ def test_potential_from_structure_factor(
     )
 
     structure_factor_potential = structure_factor_potential.project().compute(
-        progress_bar=False
     )
-    potential = potential.build(lazy=lazy).project().compute(progress_bar=False)
+    potential = potential.build(lazy=lazy).project().compute()
 
     array1 = structure_factor_potential.array
     array2 = potential.array
     array1 -= array1.min()
     array2 -= array2.min()
-
+    
     error = np.abs(array2 - array1).sum() / array1.sum() * 100
     assert error < 2.5
