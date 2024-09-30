@@ -128,7 +128,6 @@ class BaseTransferFunction(
         from abtem.measurements import DiffractionPatterns
 
         if self.sampling is None or max_angle is not None:
-            print(max_angle)
             if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
                 max_angle = self._max_semiangle_cutoff
 
@@ -393,8 +392,7 @@ class Aperture(BaseAperture):
             return xp.ones_like(alpha)
 
         semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
-
-        print(alpha.shape, semiangle_cutoff.shape)
+        
         if (
             self.soft
             and self.grid.check_is_defined(False)
@@ -922,7 +920,7 @@ class _HasAberrations(HasAcceleratorMixin):
                         )
                     C30 = self._aberration_coefficients["C30"]
                     assert isinstance(C30, SupportsFloat)
-                    value = scherzer_defocus(C30, self._valid_energy)
+                    value = scherzer_defocus(float(C30), self._valid_energy)
 
             if isinstance(value, str):
                 raise ValueError("string values only allowed for defocus")
