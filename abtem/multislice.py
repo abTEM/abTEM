@@ -32,7 +32,7 @@ from abtem.potentials.iam import (
     BasePotential,
     PotentialArray,
     TransmissionFunction,
-    _validate_potential,
+    validate_potential,
 )
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
@@ -796,9 +796,9 @@ def transition_potential_multislice_and_detect(
 
                     for i, detector in enumerate(detectors):
                         new_measurement = detector.detect(scattered_waves).sum((0,))
-                        measurements[i].array[measurement_index] += (
-                            new_measurement.array[(None,) * len(measurement_index)]
-                        )
+                        measurements[i].array[
+                            measurement_index
+                        ] += new_measurement.array[(None,) * len(measurement_index)]
 
                     # np.exp((potential.thickness - depth) / 700)
 
@@ -936,7 +936,7 @@ class MultisliceTransform(ArrayObjectTransform):
         if multislice_func is None:
             multislice_func = multislice_and_detect
 
-        potential = _validate_potential(potential)
+        potential = validate_potential(potential)
 
         self._potential = potential
 

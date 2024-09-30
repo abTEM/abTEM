@@ -48,7 +48,7 @@ from abtem.detectors import (
 )
 from abtem.measurements import BaseMeasurements
 from abtem.multislice import allocate_multislice_measurements, multislice_and_detect
-from abtem.potentials.iam import BasePotential, _validate_potential
+from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
 from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF
@@ -1443,7 +1443,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             except GridUndefinedError:
                 raise ValueError("Provide a potential or provide 'extent' and 'gpts'.")
         else:
-            potential = _validate_potential(potential)
+            potential = validate_potential(potential)
             self.grid.match(potential)
             self._grid = potential.grid
 

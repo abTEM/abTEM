@@ -237,7 +237,7 @@ class BasePotential(BaseField, metaclass=ABCMeta):
         ]
 
 
-def _validate_potential(
+def validate_potential(
     potential: Atoms | BasePotential, waves: Optional[BaseWaves] = None
 ) -> BasePotential:
     if isinstance(potential, (Atoms, BaseFrozenPhonons)):
@@ -572,7 +572,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         atoms = self.get_transformed_atoms()
 
-        
         if self.integrator.finite:
             cutoffs = self._cutoffs()
             margins = max(cutoffs) if len(cutoffs) else 0.0
@@ -581,7 +580,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
-            atoms.wrap(eps=0.)
+            atoms.wrap(eps=0.0)
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)

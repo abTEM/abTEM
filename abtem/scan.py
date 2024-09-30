@@ -20,7 +20,7 @@ from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
 from abtem.core.utils import get_dtype, itemset
-from abtem.potentials.iam import BasePotential, _validate_potential
+from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.transfer import nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
 from abtem.visualize.visualizations import Visualization
@@ -359,7 +359,7 @@ def validate_coordinate(
     if fractional and potential is None:
         raise ValueError("provide potential for fractional coordinates")
     elif fractional and potential is not None:
-        potential = _validate_potential(potential)
+        potential = validate_potential(potential)
 
         if isinstance(potential, BasePotential):
             extent = potential._valid_extent
@@ -815,11 +815,11 @@ class GridScan(HasGrid2DMixin, BaseScan):
 
         if self._start is not None and self._end is not None:
             extent = (self._end[0] - self._start[0], self._end[1] - self._start[1])
-            if all(d <= 0. for d in extent):
+            if all(d <= 0.0 for d in extent):
                 raise ValueError(f"scan extent must be positive, got {extent}")
         else:
             extent = None
-        
+
         self._grid = Grid(
             extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint
         )
