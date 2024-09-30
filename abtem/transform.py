@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 from abc import ABCMeta, abstractmethod
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Any, Generic, Iterator, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Iterator, Mapping, Optional, TypeVar
 
 import dask.array as da
 import numpy as np
@@ -40,7 +40,7 @@ else:
     ArrayObjectTypeAlt = TypeVar("ArrayObjectTypeAlt", bound="ArrayObject")
     Waves = object
 
-#if TYPE_CHECKING:
+# if TYPE_CHECKING:
 #     from abtem.array import ArrayObject, ArrayObjectType, ArrayObjectTypeAlt
 #    from abtem.waves import Waves
 WavesType = TypeVar("WavesType", bound=Waves)
@@ -211,7 +211,7 @@ class ArrayObjectTransform(
 
         return CompositeArrayObjectTransform(transforms)
 
-    def _out_axes_metadata(self, array_object: ArrayObjectType):
+    def _out_axes_metadata(self, array_object: ArrayObjectType) -> tuple[list[AxisMetadata], ...]:
         return (
             [
                 *self._out_ensemble_axes_metadata(array_object)[0],
@@ -241,7 +241,7 @@ class ArrayObjectTransform(
         return transform_args, transform_symbols
 
     @staticmethod
-    def _extract(array, index):
+    def _extract(array: np.ndarray, index: int) -> np.ndarray:
         try:
             array = array.item()[index]
         except AttributeError:
@@ -326,7 +326,6 @@ class ArrayObjectTransform(
             new_array, axes_metadata=axes_metadata, metadata=metadata
         )
 
-        
         return new_array_object
 
     @abstractmethod
@@ -341,10 +340,10 @@ class ArrayObjectTransform(
         new_array = self._calculate_new_array(array_object)
 
         if self._num_outputs > 1:
-            #assert isinstance(new_array, tuple)
+            # assert isinstance(new_array, tuple)
             return self._pack_multiple_outputs(array_object, new_array)
         else:
-            #assert isinstance(new_array, np.ndarray)
+            # assert isinstance(new_array, np.ndarray)
             return self._pack_single_output(array_object, new_array)
 
 
@@ -365,14 +364,18 @@ class EnsembleTransform(
     def _validate_distribution(distribution):
         return validate_distribution(distribution)
 
-    def _validate_ensemble_axes_metadata(self, ensemble_axes_metadata):
+    def _validate_ensemble_axes_metadata(
+        self, ensemble_axes_metadata: list[AxisMetadata]
+    ) -> list[AxisMetadata]:
         if isinstance(ensemble_axes_metadata, AxisMetadata):
             ensemble_axes_metadata = [ensemble_axes_metadata]
 
         assert len(ensemble_axes_metadata) == len(self.ensemble_shape)
         return ensemble_axes_metadata
 
-    def _get_axes_metadata_from_distributions(self, **kwargs):
+    def _get_axes_metadata_from_distributions(
+        self, **kwargs: Mapping[str, BaseDistribution]
+    ) -> list[AxisMetadata]:
         ensemble_axes_metadata = []
         for name, value in kwargs.items():
             assert name in self._distributions
@@ -380,7 +383,7 @@ class EnsembleTransform(
             if isinstance(distribution, BaseDistribution):
                 ensemble_axes_metadata += [
                     ParameterAxis(
-                        values=distribution,
+                        values=tuple(distribution),
                         _ensemble_mean=distribution.ensemble_mean,
                         **value,
                     )
@@ -390,11 +393,11 @@ class EnsembleTransform(
 
 
 class WavesTransform(EnsembleTransform[WavesType, ArrayObjectType]):
-    def __init__(self, distributions=()):
+    def __init__(self, distributions: tuple[str, ...] = ()):
         super().__init__(distributions=distributions)
 
     @property
-    def distributions(self):
+    def distributions(self) -> tuple[str, ...]:
         return self._distributions
 
     @abstractmethod
@@ -409,7 +412,7 @@ class WavesTransform(EnsembleTransform[WavesType, ArrayObjectType]):
 
 
 class WavesToWavesTransform(WavesTransform[Waves, Waves]):
-    def __init__(self, distributions=()):
+    def __init__(self, distributions: tuple[str, ...] = ()):
         super().__init__(distributions=distributions)
 
     @abstractmethod
@@ -419,8 +422,8 @@ class WavesToWavesTransform(WavesTransform[Waves, Waves]):
     def _out_type(self, array_object: Waves) -> tuple[type[Waves], ...]:
         return (array_object.__class__,)
 
-    def apply(self, waves: Waves) -> Waves:
-        transformed_waves = super().apply(waves)
+    def apply(self, waves: Waves, max_batch: int | str = "auto") -> Waves:
+        transformed_waves = waves.apply_transform(self, max_batch=max_batch)
         if TYPE_CHECKING:
             assert isinstance(transformed_waves, Waves)
         return transformed_waves
@@ -446,6 +449,7 @@ class TransformFromFunc(WavesTransform):
 
 def join_tuples(tuples: tuple[tuple[Any, ...], ...]) -> tuple[Any, ...]:
     return tuple(item for subtuple in tuples for item in subtuple)
+
 
 class CompositeArrayObjectTransform(ArrayObjectTransform):
     """
@@ -613,7 +617,9 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
     @property
     def _default_ensemble_chunks(self) -> Chunks:
-        chunks = tuple(transform._default_ensemble_chunks for transform in self.transforms)
+        chunks = tuple(
+            transform._default_ensemble_chunks for transform in self.transforms
+        )
         chunks_tuples = tuple(c if isinstance(c, tuple) else (c,) for c in chunks)
         return join_tuples(chunks_tuples)
 
