@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from numbers import Number
-from typing import Callable, Iterator, Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence, SupportsFloat
 
 import dask.array as da
 import numpy as np
@@ -20,6 +20,10 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """
     Base object for defining distributions of simulation parameters.
     """
+
+    @abstractmethod
+    def __neg__(self) -> BaseDistribution:
+        """Return the negated distribution."""
 
     def __len__(self) -> int:
         return self.shape[0]
@@ -248,7 +252,7 @@ class MultidimensionalDistribution(BaseDistribution):
 
 
 def from_values(
-    values: Sequence[Number],
+    values: Sequence[SupportsFloat],
     weights: np.ndarray | None = None,
     ensemble_mean: bool = False,
 ) -> DistributionFromValues:
@@ -376,8 +380,8 @@ def gaussian(
 
 
 def validate_distribution(
-    distribution: BaseDistribution | tuple | list | np.ndarray | Number,
-) -> BaseDistribution | Number:
+    distribution: BaseDistribution | tuple | list | np.ndarray | SupportsFloat,
+) -> BaseDistribution | float:
     """
     Parameters
     ----------
@@ -400,7 +404,7 @@ def validate_distribution(
     ValueError
         If the input distribution is not a valid distribution or .
     """
-    if isinstance(distribution, (BaseDistribution, Number)):
+    if isinstance(distribution, (BaseDistribution, Number, str)):
         return distribution
 
     elif isinstance(distribution, np.ndarray) and len(distribution.shape) == 0:
@@ -414,7 +418,8 @@ def validate_distribution(
         )
     else:
         raise ValueError(
-            f"value {distribution} is not a single number or could not be converted to a valid distribution"
+            f"value {distribution} is not a single number or could not be converted to",
+            "a valid distribution",
         )
 
 
