@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import copy
-import re
 from abc import abstractmethod
 from collections import defaultdict
 from functools import reduce
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping, Optional, SupportsFloat
 
 import numpy as np
 
@@ -21,7 +20,7 @@ from abtem.core.energy import (
     reciprocal_space_sampling_to_angular_sampling,
 )
 from abtem.core.fft import fft_crop
-from abtem.core.grid import Grid, HasGridMixin, polar_spatial_frequencies
+from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.distributions import (
     BaseDistribution,
@@ -32,20 +31,22 @@ from abtem.measurements import ReciprocalSpaceLineProfiles
 from abtem.transform import ReciprocalSpaceMultiplication
 
 if TYPE_CHECKING:
-    from abtem.waves import BaseWaves
+    from abtem.measurements import DiffractionPatterns, Images
+    from abtem.visualize import Visualization
+    from abtem.waves import BaseWaves, Waves
 
 
 class BaseTransferFunction(
-    ReciprocalSpaceMultiplication, HasAcceleratorMixin, HasGridMixin
+    ReciprocalSpaceMultiplication, HasAcceleratorMixin, HasGrid2DMixin
 ):
     """Base class for transfer functions."""
 
     def __init__(
         self,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
         distributions: tuple[str, ...] = (),
     ):
         self._accelerator = Accelerator(energy=energy)
@@ -53,24 +54,27 @@ class BaseTransferFunction(
         super().__init__(distributions=distributions)
 
     @abstractmethod
-    def _evaluate_from_angular_grid(self, alpha, phi):
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
         pass
 
     @property
     def angular_sampling(self) -> tuple[float, float]:
         """The sampling in scattering angles of the transfer function [mrad]."""
-
         return reciprocal_space_sampling_to_angular_sampling(
-            self.reciprocal_space_sampling, self.energy
+            self.reciprocal_space_sampling, self._valid_energy
         )
 
-    def _angular_grid(self, device) -> tuple[np.ndarray, np.ndarray]:
+    def _angular_grid(self, device: str) -> tuple[np.ndarray, np.ndarray]:
         xp = get_array_module(device)
-        alpha, phi = polar_spatial_frequencies(self.gpts, self.sampling, xp=xp)
+        alpha, phi = polar_spatial_frequencies(
+            self._valid_gpts, self._valid_sampling, xp=xp
+        )
         alpha *= self.wavelength
         return alpha, phi
 
-    def _evaluate_kernel(self, waves: BaseWaves = None) -> np.ndarray:
+    def _evaluate_kernel(self, waves: Optional[BaseWaves] = None) -> np.ndarray:
         """
         Evaluate the array to be multiplied with the waves in reciprocal space.
 
@@ -99,21 +103,21 @@ class BaseTransferFunction(
 
     def to_diffraction_patterns(
         self,
-        max_angle: float = None,
-        gpts: int | tuple[int, int] = None,
-    ):
+        max_angle: Optional[float] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+    ) -> DiffractionPatterns:
         """Converts the transfer function instance to DiffractionPatterns.
 
         Parameters
         ----------
         max_angle : float, optional
             The maximum diffraction angle in radians. If not provided, the maximum angle
-            will be determined based on the `self._max_semiangle_cutoff` attribute of the instance.
-            If neither `max_angle` nor `self._max_semiangle_cutoff` is available, a `RuntimeError`
-            will be raised.
+            will be determined based on the `self._max_semiangle_cutoff` attribute of
+            the instance. If neither `max_angle` nor `self._max_semiangle_cutoff` is
+            available, a `RuntimeError` will be raised.
         gpts : int | tuple[int, int], optional
-            The number of grid points in reciprocal space for performing Fourier Transform.
-            If not provided, a default value of 128 will be used.
+            The number of grid points in reciprocal space for performing Fourier
+            Transform. If not provided, a default value of 128 will be used.
 
         Returns
         -------
@@ -123,7 +127,8 @@ class BaseTransferFunction(
         """
         from abtem.measurements import DiffractionPatterns
 
-        if (self.sampling is None) or (max_angle is not None):
+        if self.sampling is None or max_angle is not None:
+            print(max_angle)
             if max_angle is None and hasattr(self, "_max_semiangle_cutoff"):
                 max_angle = self._max_semiangle_cutoff
 
@@ -152,8 +157,8 @@ class BaseTransferFunction(
         )
         return diffraction_patterns
 
-    def show(self, **kwargs):
-        return self.to_diffraction_patterns().show(**kwargs)
+    def show(self, max_angle: float, **kwargs: Any) -> Visualization:
+        return self.to_diffraction_patterns(max_angle=max_angle).show(**kwargs)
 
 
 class BaseAperture(BaseTransferFunction):
@@ -161,11 +166,11 @@ class BaseAperture(BaseTransferFunction):
 
     def __init__(
         self,
-        semiangle_cutoff: float | BaseDistribution = None,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        semiangle_cutoff: float | BaseDistribution = np.inf,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
         distributions: tuple[str, ...] = (),
     ):
         self._semiangle_cutoff = semiangle_cutoff
@@ -178,7 +183,7 @@ class BaseAperture(BaseTransferFunction):
         )
 
     @property
-    def metadata(self):
+    def metadata(self) -> dict:
         metadata = {}
         if not isinstance(self.semiangle_cutoff, BaseDistribution):
             metadata["semiangle_cutoff"] = self.semiangle_cutoff
@@ -189,7 +194,7 @@ class BaseAperture(BaseTransferFunction):
         return []
 
     @property
-    def _max_semiangle_cutoff(self):
+    def _max_semiangle_cutoff(self) -> float:
         if isinstance(self.semiangle_cutoff, BaseDistribution):
             return max(self.semiangle_cutoff.values)
         else:
@@ -197,35 +202,36 @@ class BaseAperture(BaseTransferFunction):
 
     @property
     def nyquist_sampling(self) -> float:
-        """Nyquist sampling corresponding to the semiangle cutoff of the aperture [Å]."""
+        """Nyquist sampling corresponding to the semiangle cutoff of the
+        aperture [Å]."""
         return 1 / (4 * self._max_semiangle_cutoff / self.wavelength * 1e-3)
 
     @property
-    def semiangle_cutoff(self):
+    def semiangle_cutoff(self) -> float | BaseDistribution:
         """Semiangle cutoff of the aperture [mrad]."""
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    def semiangle_cutoff(self, semiangle_cutoff: float | BaseDistribution):
+    def semiangle_cutoff(self, semiangle_cutoff: float | BaseDistribution) -> None:
         self._semiangle_cutoff = semiangle_cutoff
 
-    def _cropped_aperture(self):
+    def _cropped_aperture(self) -> BaseAperture:
         if self._max_semiangle_cutoff == np.inf:
             return self
 
         gpts = (
-            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[0])) + 3,
-            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[1])) + 3,
+            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[0] + 1)),
+            int(2 * np.ceil(self._max_semiangle_cutoff / self.angular_sampling[1] + 1)),
         )
 
         cropped_aperture = self.copy()
         cropped_aperture.gpts = gpts
         return cropped_aperture
 
-    def _evaluate_from_cropped(self, gpts: tuple[int, int]):
+    def _evaluate_from_cropped(self, waves: Waves) -> np.ndarray:
         cropped = self._cropped_aperture()
-        array = cropped._evaluate()
-        array = fft_crop(array, gpts)
+        array = cropped._evaluate_kernel(waves)
+        array = fft_crop(array, waves._valid_gpts)
         return array
 
 
@@ -234,7 +240,7 @@ def soft_aperture(
     phi: np.ndarray,
     semiangle_cutoff: float | np.ndarray,
     angular_sampling: tuple[float, float],
-):
+) -> np.ndarray:
     """
     Calculates an array with a disk of ones and a soft edge.
 
@@ -245,8 +251,9 @@ def soft_aperture(
     phi : 2D array
         Array of azimuthal angles [rad].
     semiangle_cutoff : float or 1D array
-        Semiangle cutoff(s) of the aperture(s). If given as an array, a 3D array is returned where the first dimension
-        represents a different aperture for each item in the array of semiangle cutoffs.
+        Semiangle cutoff(s) of the aperture(s). If given as an array, a 3D array is
+        returned where the first dimension represents a different aperture for each
+        item in the array of semiangle cutoffs.
     angular_sampling : tuple of float
         Reciprocal-space sampling in units of scattering angles [mrad].
 
@@ -256,13 +263,16 @@ def soft_aperture(
     """
     xp = get_array_module(alpha)
 
-    semiangle_cutoff = xp.array(semiangle_cutoff, dtype=get_dtype(complex=False))
+    semiangle_cutoff_array = xp.array(semiangle_cutoff, dtype=get_dtype(complex=False))
 
     base_ndims = len(alpha.shape)
 
-    semiangle_cutoff, alpha = expand_dims_to_broadcast(semiangle_cutoff, alpha)
+    semiangle_cutoff_array, alpha = expand_dims_to_broadcast(
+        semiangle_cutoff_array, alpha
+    )
+
     semiangle_cutoff, phi = expand_dims_to_broadcast(
-        semiangle_cutoff, phi, match_dims=((-2, -1), (-2, -1))
+        semiangle_cutoff_array, phi, match_dims=((-2, -1), (-2, -1))
     )
 
     angular_sampling = xp.array(angular_sampling, dtype=get_dtype(complex=False)) * 1e-3
@@ -286,7 +296,9 @@ def soft_aperture(
     return array
 
 
-def hard_aperture(alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution):
+def hard_aperture(
+    alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution
+) -> np.ndarray:
     """
     Calculates an array with a disk of ones and a soft edge.
 
@@ -295,8 +307,9 @@ def hard_aperture(alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution)
     alpha : 2D array
         Array of radial angles [mrad].
     semiangle_cutoff : float or 1D array
-        Semiangle cutoff(s) of the aperture(s). If given as an array, a 3D array is returned where the first dimension
-        represents a different aperture for each item in the array of semiangle cutoffs.
+        Semiangle cutoff(s) of the aperture(s). If given as an array, a 3D array is
+        returned where the first dimension represents a different aperture for each
+        item in the array of semiangle cutoffs.
 
     Returns
     -------
@@ -308,41 +321,44 @@ def hard_aperture(alpha: np.ndarray, semiangle_cutoff: float | BaseDistribution)
 
 class Aperture(BaseAperture):
     """
-    A circular aperture cutting off the wave function at a specified angle, employed in both STEM and HRTEM.
-    The abrupt cutoff may be softened by tapering it.
+    A circular aperture cutting off the wave function at a specified angle, employed in
+    both STEM and HRTEM. The abrupt cutoff may be softened by tapering it.
 
     Parameters
     ----------
     semiangle_cutoff : float or BaseDistribution
-        The cutoff semiangle of the aperture [mrad]. Alternatively, a distribution of angles may be provided.
+        The cutoff semiangle of the aperture [mrad]. Alternatively, a distribution of
+        angles may be provided.
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
     """
 
     def __init__(
         self,
         semiangle_cutoff: float | BaseDistribution,
         soft: bool = True,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
     ):
-        semiangle_cutoff = validate_distribution(semiangle_cutoff)
+        validated_semiangle_cutoff = validate_distribution(semiangle_cutoff)
         self._soft = soft
 
         super().__init__(
             distributions=("semiangle_cutoff",),
             energy=energy,
-            semiangle_cutoff=semiangle_cutoff,
+            semiangle_cutoff=validated_semiangle_cutoff,
             extent=extent,
             gpts=gpts,
             sampling=sampling,
@@ -350,12 +366,12 @@ class Aperture(BaseAperture):
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        ensemble_axes_metadata = []
+        ensemble_axes_metadata: list[AxisMetadata] = []
         if isinstance(self.semiangle_cutoff, BaseDistribution):
-            ensemble_axes_metadata += [
+            ensemble_axes_metadata = [
                 ParameterAxis(
                     label="semiangle_cutoff",
-                    values=self.semiangle_cutoff,
+                    values=tuple(self.semiangle_cutoff),
                     units="mrad",
                     tex_label="$\\alpha_{cut}$",
                     _ensemble_mean=self.semiangle_cutoff.ensemble_mean,
@@ -370,7 +386,7 @@ class Aperture(BaseAperture):
 
     def _evaluate_from_angular_grid(
         self, alpha: np.ndarray, phi: np.ndarray
-    ) -> np.ndarray | float:
+    ) -> np.ndarray:
         xp = get_array_module(alpha)
 
         if self.semiangle_cutoff == xp.inf:
@@ -378,6 +394,7 @@ class Aperture(BaseAperture):
 
         semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
 
+        print(alpha.shape, semiangle_cutoff.shape)
         if (
             self.soft
             and self.grid.check_is_defined(False)
@@ -411,11 +428,13 @@ class Bullseye(BaseAperture):
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
     """
 
     def __init__(
@@ -425,10 +444,10 @@ class Bullseye(BaseAperture):
         num_rings: int,
         ring_width: float,
         semiangle_cutoff: float,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
     ):
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
@@ -473,7 +492,10 @@ class Bullseye(BaseAperture):
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
 
-        semiangle_cutoff = self.semiangle_cutoff / 1e3
+        semiangle_cutoff = self.semiangle_cutoff
+        assert isinstance(semiangle_cutoff, SupportsFloat)
+
+        semiangle_cutoff = semiangle_cutoff / 1e3
 
         array = alpha < semiangle_cutoff
 
@@ -509,21 +531,23 @@ class Vortex(BaseAperture):
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
     """
 
     def __init__(
         self,
         quantum_number: int,
         semiangle_cutoff: float,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
     ):
         self._quantum_number = quantum_number
         super().__init__(
@@ -538,7 +562,7 @@ class Vortex(BaseAperture):
     def soft(self) -> bool:
         """True if the aperture has a soft edge."""
         return False
-    
+
     @property
     def quantum_number(self) -> int:
         """Quantum number of vortex beam."""
@@ -550,10 +574,11 @@ class Vortex(BaseAperture):
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
 
-        semiangle_cutoff = self.semiangle_cutoff / 1e3
+        semiangle_cutoff = self.semiangle_cutoff
+        assert isinstance(semiangle_cutoff, SupportsFloat)
+        semiangle_cutoff = semiangle_cutoff / 1e3
 
         array = alpha < semiangle_cutoff
-        print(phi.min(), phi.max())
         array = array * np.exp(1j * phi * self.quantum_number)
         return array
 
@@ -573,11 +598,13 @@ class Zernike(BaseAperture):
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
     """
 
     def __init__(
@@ -585,10 +612,10 @@ class Zernike(BaseAperture):
         center_hole_cutoff: float,
         phase_shift: float,
         semiangle_cutoff: float,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
     ):
         self._center_hole_cutoff = center_hole_cutoff
         self._phase_shift = phase_shift
@@ -609,7 +636,7 @@ class Zernike(BaseAperture):
     def soft(self) -> bool:
         """True if the aperture has a soft edge."""
         return False
-    
+
     @property
     def phase_shift(self) -> float:
         """Phase shift of Zernike film."""
@@ -620,8 +647,10 @@ class Zernike(BaseAperture):
     ) -> np.ndarray:
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
+        semiangle_cutoff = self.semiangle_cutoff
+        assert isinstance(semiangle_cutoff, SupportsFloat)
 
-        semiangle_cutoff = self.semiangle_cutoff / 1e3
+        semiangle_cutoff = semiangle_cutoff / 1e3
         center_hole_cutoff = self.center_hole_cutoff / 1e3
         phase_shift = self.phase_shift
 
@@ -638,30 +667,34 @@ class Zernike(BaseAperture):
 
 class TemporalEnvelope(BaseTransferFunction):
     """
-    Envelope function for simulating partial temporal coherence in the quasi-coherent approximation.
+    Envelope function for simulating partial temporal coherence in the quasi-coherent
+    approximation.
 
     Parameters
     ----------
     focal_spread: float or 1D array or BaseDistribution
-        The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å].
+        The standard deviation of the focal spread due to chromatic aberration and lens
+        current instability [Å].
         Alternatively, a distribution of values may be provided.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
     """
 
     def __init__(
         self,
         focal_spread: float | BaseDistribution,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
     ):
         self._accelerator = Accelerator(energy=energy)
         self._focal_spread = validate_distribution(focal_spread)
@@ -674,12 +707,12 @@ class TemporalEnvelope(BaseTransferFunction):
         )
 
     @property
-    def focal_spread(self):
+    def focal_spread(self) -> float | BaseDistribution:
         """The standard deviation of the focal spread [Å]."""
         return self._focal_spread
 
     @focal_spread.setter
-    def focal_spread(self, value):
+    def focal_spread(self, value: float | BaseDistribution) -> None:
         self._focal_spread = validate_distribution(value)
 
     @property
@@ -706,116 +739,119 @@ class TemporalEnvelope(BaseTransferFunction):
         return array
 
 
-def _aberration_property(name, key):
-    def _getter(self):
-        try:
-            return getattr(self, name)[key]
-        except KeyError:
-            return 0.0
-
-    def _setter(self, value):
-        value = validate_distribution(value)
-        getattr(self, name)[key] = value
-
-    return property(_getter, _setter)
+def symbol_to_tex_symbol(symbol: str) -> str:
+    return symbol.replace("C", "C_{").replace("phi", "\\phi_{") + "}"
 
 
-class _HasAberrations:
-    _aberration_coefficients: dict
+polar_aliases = {
+    "defocus": "C10",
+    "Cs": "C30",
+    "C5": "C50",
+    "astigmatism": "C12",
+    "astigmatism_angle": "phi12",
+    "astigmatism3": "C32",
+    "astigmatism3_angle": "phi32",
+    "astigmatism5": "C52",
+    "astigmatism5_angle": "phi52",
+    "coma": "C21",
+    "coma_angle": "phi21",
+    "coma4": "C41",
+    "coma4_angle": "phi41",
+    "trefoil": "C23",
+    "trefoil_angle": "phi23",
+    "trefoil4": "C43",
+    "trefoil4_angle": "phi43",
+    "quadrafoil": "C34",
+    "quadrafoil_angle": "phi34",
+    "quadrafoil5": "C54",
+    "quadrafoil5_angle": "phi54",
+    "pentafoil": "C45",
+    "pentafoil_angle": "phi45",
+    "hexafoil": "C56",
+    "hexafoil_angle": "phi56",
+}
 
-    C10: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C10"
-    )
-    C12: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C12"
-    )
-    phi12: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi12"
-    )
-    C21: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C21"
-    )
-    phi21: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi21"
-    )
-    C23: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C23"
-    )
-    phi23: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi23"
-    )
-    C30: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C30"
-    )
-    C32: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C32"
-    )
-    phi32: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi32"
-    )
-    C34: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C34"
-    )
-    phi34: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi34"
-    )
-    C41: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C41"
-    )
-    phi41: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi41"
-    )
-    C43: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C43"
-    )
-    phi43: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi43"
-    )
-    C45: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C45"
-    )
-    phi45: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi45"
-    )
-    C50: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C50"
-    )
-    C52: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C52"
-    )
-    phi52: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi52"
-    )
-    C54: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C54"
-    )
-    phi54: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi54"
-    )
-    C56: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C56"
-    )
-    phi56: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi56"
-    )
-    astigmatism: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C12"
-    )
-    astigmatism_angle: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi12"
-    )
-    coma: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C21"
-    )
-    coma_angle: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "phi21"
-    )
-    Cs: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C30"
-    )
-    C5: float | BaseDistribution = _aberration_property(
-        "_aberration_coefficients", "C5"
-    )
+polar_symbols = {value: key for key, value in polar_aliases.items()}
+
+
+class _HasAberrations(HasAcceleratorMixin):
+    C10: float | BaseDistribution
+    C12: float | BaseDistribution
+    phi12: float | BaseDistribution
+    C21: float | BaseDistribution
+    phi21: float | BaseDistribution
+    C23: float | BaseDistribution
+    phi23: float | BaseDistribution
+    C30: float | BaseDistribution
+    C32: float | BaseDistribution
+    phi32: float | BaseDistribution
+    C34: float | BaseDistribution
+    phi34: float | BaseDistribution
+    C41: float | BaseDistribution
+    phi41: float | BaseDistribution
+    C43: float | BaseDistribution
+    phi43: float | BaseDistribution
+    C45: float | BaseDistribution
+    phi45: float | BaseDistribution
+    C50: float | BaseDistribution
+    C52: float | BaseDistribution
+    phi52: float | BaseDistribution
+    C54: float | BaseDistribution
+    phi54: float | BaseDistribution
+    C56: float | BaseDistribution
+    phi56: float | BaseDistribution
+    Cs: float | BaseDistribution
+    C5: float | BaseDistribution
+    astigmatism: float | BaseDistribution
+    astigmatism_angle: float | BaseDistribution
+    astigmatism3: float | BaseDistribution
+    astigmatism3_angle: float | BaseDistribution
+    astigmatism5: float | BaseDistribution
+    astigmatism5_angle: float | BaseDistribution
+    coma: float | BaseDistribution
+    coma_angle: float | BaseDistribution
+    coma4: float | BaseDistribution
+    coma4_angle: float | BaseDistribution
+    trefoil: float | BaseDistribution
+    trefoil_angle: float | BaseDistribution
+    trefoil4: float | BaseDistribution
+    trefoil4_angle: float | BaseDistribution
+    quadrafoil: float | BaseDistribution
+    quadrafoil_angle: float | BaseDistribution
+    quadrafoil5: float | BaseDistribution
+    quadrafoil5_angle: float | BaseDistribution
+    pentafoil: float | BaseDistribution
+    pentafoil_angle: float | BaseDistribution
+    hexafoil: float | BaseDistribution
+    hexafoil_angle: float | BaseDistribution
+
+    def __init__(self, *args, **kwargs):
+        self._aberration_coefficients = {
+            symbol: 0.0 for symbol in polar_symbols.keys()
+        }
+        super().__init__(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> float | BaseDistribution:
+        name = polar_aliases.get(name, name)
+
+        if name not in polar_symbols:
+            raise AttributeError(
+                f"'{self.__class__.__name__}' object has no attribute '{name}'"
+            )
+
+        return self._aberration_coefficients.get(name, 0.0)
+
+    def __setattr__(self, name: str, value: float | BaseDistribution) -> None:
+        if name == "defocus":
+            super().__setattr__(name, value)
+            return
+
+        name = polar_aliases.get(name, name)
+
+        if name in polar_symbols:
+            self._aberration_coefficients[name] = validate_distribution(value)
+        else:
+            super().__setattr__(name, value)
 
     @property
     def defocus(self) -> float | BaseDistribution:
@@ -823,20 +859,10 @@ class _HasAberrations:
         return -self.C10
 
     @defocus.setter
-    def defocus(self, value: float | BaseDistribution):
+    def defocus(self, value: float | BaseDistribution) -> None:
         self.C10 = -value
 
-    @classmethod
-    def _coefficient_symbols(cls):
-        return tuple(var for var in dir(cls) if re.fullmatch("C[0-9][0-9]", var))
-
-    @classmethod
-    def _angular_symbols(cls):
-        return tuple(
-            var for var in dir(_HasAberrations) if re.fullmatch("phi[0-9][0-9]", var)
-        )
-
-    def _nonzero_coefficients(self, symbols):
+    def _nonzero_coefficients(self, symbols: tuple[str, ...]) -> bool:
         for symbol in symbols:
             if not np.isscalar(self._aberration_coefficients[symbol]):
                 return True
@@ -846,74 +872,24 @@ class _HasAberrations:
 
         return False
 
-    @classmethod
-    def _symbols(cls):
-        return cls._coefficient_symbols() + cls._angular_symbols()
-
-    @staticmethod
-    def _aliases():
-        return {
-            "defocus": "C10",
-            "Cs": "C30",
-            "C5": "C50",
-            "astigmatism": "C12",
-            "astigmatism_angle": "phi12",
-            "astigmatism3": "C32",
-            "astigmatism3_angle": "phi32",
-            "astigmatism5": "C52",
-            "astigmatism5_angle": "phi52",
-            "coma": "C21",
-            "coma_angle": "phi21",
-            "coma4": "C41",
-            "coma4_angle": "phi41",
-            "trefoil": "C23",
-            "trefoil_angle": "phi23",
-            "trefoil4": "C43",
-            "trefoil4_angle": "phi43",
-            "quadrafoil": "C34",
-            "quadrafoil_angle": "phi34",
-            "quadrafoil5": "C54",
-            "quadrafoil5_angle": "phi54",
-            "pentafoil": "C45",
-            "pentafoil_angle": "phi45",
-            "hexafoil": "C56",
-            "hexafoil_angle": "phi56",
-        }
-
-    def _default_aberration_coefficients(self):
-        return {symbol: 0.0 for symbol in self._symbols()}
-
-    @staticmethod
-    def _check_is_valid_aberrations(aberrations):
-        for key in aberrations.keys():
-            if (key not in polar_symbols) and (key not in polar_aliases.keys()):
-                raise ValueError("{} not a recognized phase aberration".format(key))
-
     @property
     def _phase_aberrations_ensemble_axes_metadata(self) -> list[AxisMetadata]:
-        axes_metadata = []
+        axes_metadata: list[AxisMetadata] = []
         for parameter_name, value in self._aberration_coefficients.items():
             if isinstance(value, BaseDistribution):
-                m = re.search(r"\d", parameter_name).start()
-
-                if parameter_name[:m] == "phi":
-                    _tex_label = f"$\\phi_{{{parameter_name[m:]}}}$"
-                else:
-                    _tex_label = f"${parameter_name[:m]}_{{{parameter_name[m:]}}}$"
-
                 axes_metadata += [
                     ParameterAxis(
                         label=parameter_name,
                         values=tuple(value.values),
                         units="Å",
                         _ensemble_mean=value.ensemble_mean,
-                        tex_label=_tex_label,
+                        tex_label=symbol_to_tex_symbol(parameter_name),
                     )
                 ]
         return axes_metadata
 
     @property
-    def aberration_coefficients(self) -> dict[str, float | BaseDistribution]:
+    def aberration_coefficients(self) -> Mapping[str, float | BaseDistribution]:
         """The aberration coefficients as a dictionary."""
         return copy.deepcopy(self._aberration_coefficients)
 
@@ -927,8 +903,8 @@ class _HasAberrations:
             return True
 
     def set_aberrations(
-        self, aberration_coefficients: dict[str, float | BaseDistribution]
-    ):
+        self, aberration_coefficients: Mapping[str, str | float | BaseDistribution]
+    ) -> None:
         """
         Set the phase of the phase aberration.
 
@@ -937,64 +913,83 @@ class _HasAberrations:
         aberration_coefficients : dict
             Mapping from aberration symbols to their corresponding values.
         """
-
-        for symbol, value in aberration_coefficients.items():
-            value = validate_distribution(value)
-
-            if symbol in self._symbols():
-                self._aberration_coefficients[symbol] = value
-
-            elif symbol in self._aliases().keys():
-                self._aberration_coefficients[self._aliases()[symbol]] = value
-
-            else:
-                raise ValueError("{} not a recognized parameter".format(symbol))
-
         for symbol, value in aberration_coefficients.items():
             if symbol in ("defocus", "C10"):
-                value = validate_distribution(value)
-
                 if isinstance(value, str) and value.lower() == "scherzer":
                     if self.energy is None:
                         raise RuntimeError(
                             "energy undefined, Scherzer defocus cannot be evaluated"
                         )
+                    C30 = self._aberration_coefficients["C30"]
+                    assert isinstance(C30, SupportsFloat)
+                    value = scherzer_defocus(C30, self._valid_energy)
 
-                    value = scherzer_defocus(
-                        self._aberration_coefficients["C30"], self.energy
-                    )
+            if isinstance(value, str):
+                raise ValueError("string values only allowed for defocus")
 
-                if symbol == "defocus":
-                    value = -value
+            value = validate_distribution(value)
 
-                self._aberration_coefficients["C10"] = value
+            setattr(self, symbol, value)
 
+        #     if not isinstance(value, str):
+        #         value = validate_distribution(value)
 
-polar_symbols = _HasAberrations._symbols()
+        #     if symbol in polar_symbols:
+        #         self._aberration_coefficients[symbol] = value
 
-polar_aliases = _HasAberrations._aliases()
+        #     elif symbol in polar_aliases:
+        #         self._aberration_coefficients[self._aliases()[symbol]] = value
+
+        #     else:
+        #         raise ValueError("{} not a recognized parameter".format(symbol))
+
+        # for symbol, value in aberration_coefficients.items():
+        #     if symbol in ("defocus", "C10"):
+        #         if isinstance(value, str) and value.lower() == "scherzer":
+        #             if self._valid_energy is None:
+        #                 raise RuntimeError(
+        #                     "energy undefined, Scherzer defocus cannot be evaluated"
+        #                 )
+
+        #             value = scherzer_defocus(
+        #                 self._aberration_coefficients["C30"], self._valid_energy
+        #             )
+        #         elif isinstance(value, str):
+        #             raise ValueError(
+        #                 f"String values for defocus must be 'Scherzer', got {value}"
+        #             )
+
+        #         value = validate_distribution(value)
+
+        #         if symbol == "defocus":
+        #             value = -value
+
+        #         self._aberration_coefficients["C10"] = value
 
 
 class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     """
-    Envelope function for simulating partial spatial coherence in the quasi-coherent approximation.
+    Envelope function for simulating partial spatial coherence in the quasi-coherent
+    approximation.
 
     Parameters
     ----------
     angular_spread: float or 1D array or BaseDistribution
-        The standard deviation of the angular deviations due to source size [mrad]. Alternatively, a distribution of
-        standard deviations may be provided.
+        The standard deviation of the angular deviations due to source size [mrad].
+        Alternatively, a distribution of standard deviations may be provided.
     aberration_coefficients: dict, optional
-        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
-        [Å] and angles should be given in [radian].
+        Mapping from aberration symbols to their corresponding values. All aberration
+        magnitudes should be given in [Å] and angles should be given in [radian].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
     """
@@ -1002,15 +997,18 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
     def __init__(
         self,
         angular_spread: float | BaseDistribution,
-        aberration_coefficients: dict = None,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
-        **kwargs,
+        aberration_coefficients: Optional[
+            Mapping[str, str | float | BaseDistribution]
+        ] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        **kwargs: str | float | BaseDistribution,
     ):
+        distributions = tuple(polar_symbols.keys()) + ("angular_spread",)
         super().__init__(
-            distributions=polar_symbols + ("angular_spread",),
+            distributions=distributions,
             energy=energy,
             extent=extent,
             gpts=gpts,
@@ -1018,7 +1016,6 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
         )
 
         self._angular_spread = validate_distribution(angular_spread)
-        self._aberration_coefficients = self._default_aberration_coefficients()
 
         aberration_coefficients = (
             {} if aberration_coefficients is None else aberration_coefficients
@@ -1037,12 +1034,13 @@ class SpatialEnvelope(BaseTransferFunction, _HasAberrations):
         return ensemble_axes_metadata
 
     @property
-    def angular_spread(self):
-        """The standard deviation of the angular deviations due to source size [mrad]."""
+    def angular_spread(self) -> float | BaseDistribution:
+        """The standard deviation of the angular deviations due to source size
+        [mrad]."""
         return self._angular_spread
 
     @angular_spread.setter
-    def angular_spread(self, value):
+    def angular_spread(self, value: float | BaseDistribution) -> None:
         self._angular_spread = value
 
     def _evaluate_from_angular_grid(
@@ -1167,31 +1165,35 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
     Parameters
     ----------
     aberration_coefficients: dict, optional
-        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
-        [Å] and angles should be given in [radian].
+        Mapping from aberration symbols to their corresponding values. All aberration
+        magnitudes should be given in [Å] and angles should be given in [radian].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be
+        ignored.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
     """
 
     def __init__(
         self,
-        aberration_coefficients: dict[str, float | BaseDistribution] = None,
+        aberration_coefficients: Optional[
+            Mapping[str, str | float | BaseDistribution]
+        ] = None,
         energy: Optional[float] = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
-        **kwargs,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        **kwargs: Any,
     ):
         super().__init__(
-            distributions=polar_symbols,
+            distributions=tuple(polar_symbols.keys()),
             energy=energy,
             extent=extent,
             gpts=gpts,
@@ -1203,11 +1205,10 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         )
 
         aberration_coefficients = {**aberration_coefficients, **kwargs}
-        self._aberration_coefficients = self._default_aberration_coefficients()
         self.set_aberrations(aberration_coefficients)
 
     @property
-    def ensemble_axes_metadata(self):
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return self._phase_aberrations_ensemble_axes_metadata
 
     @property
@@ -1216,7 +1217,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
         return -self._aberration_coefficients["C10"]
 
     @defocus.setter
-    def defocus(self, value: float | BaseDistribution):
+    def defocus(self, value: float | BaseDistribution) -> None:
         self.C10 = -value
 
     def _evaluate_from_angular_grid(
@@ -1229,11 +1230,13 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
                 self.ensemble_shape + alpha.shape, dtype=get_dtype(complex=True)
             )
 
-        parameters, weights = _unpack_distributions(
+        parameter_values, weights = _unpack_distributions(
             *tuple(self.aberration_coefficients.values()), shape=alpha.shape, xp=xp
         )
 
-        parameters = dict(zip(polar_symbols, parameters))
+        parameters = {
+            symbol: value for symbol, value in zip(polar_symbols, parameter_values)
+        }
 
         axis = tuple(range(0, len(self.ensemble_shape)))
         alpha = xp.expand_dims(alpha, axis=axis)
@@ -1316,13 +1319,14 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
 
 class CTF(_HasAberrations, BaseAperture):
     """
-    The contrast transfer function (CTF) describes the aberrations of the objective lens in HRTEM and specifies how
-    the condenser system shapes the probe in STEM.
+    The contrast transfer function (CTF) describes the aberrations of the objective lens
+    in HRTEM and specifies how the condenser system shapes the probe in STEM.
 
     abTEM implements phase aberrations up to 5th order using polar coefficients.
     See Eq. 2.22 in the reference [1]_.
 
-    Cartesian coefficients can be converted to polar using the utility function `abtem.transfer.cartesian2polar`.
+    Cartesian coefficients can be converted to polar using the utility function
+    `abtem.transfer.cartesian2polar`.
 
     Partial coherence is included as envelopes in the quasi-coherent approximation.
     See Chapter 3.2 in reference [1]_.
@@ -1330,38 +1334,43 @@ class CTF(_HasAberrations, BaseAperture):
     Parameters
     ----------
     semiangle_cutoff: float, optional
-        The semiangle cutoff describes the sharp reciprocal-space cutoff due to the objective aperture [mrad]
-        (default is no cutoff).
+        The semiangle cutoff describes the sharp reciprocal-space cutoff due to the
+        objective aperture [mrad] (default is no cutoff).
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     focal_spread: float, optional
-        The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å]
-        (default is 0).
+        The standard deviation of the focal spread due to chromatic aberration and lens
+        current instability [Å] (default is 0).
     angular_spread: float, optional
-        The standard deviation of the angular deviations due to source size [Å] (default is 0).
+        The standard deviation of the angular deviations due to source size [Å]
+        (default is 0).
     aberration_coefficients: dict, optional
-        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
-        [Å] and angles should be given in [radian].
+        Mapping from aberration symbols to their corresponding values. All aberration
+        magnitudes should be given in [Å] and angles should be given in [radian].
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
     flip_phase : bool, optional
-        Changes the sign of all negative parts of the CTF to positive (following doi:10.1016/j.ultramic.2008.03.004)
-        (default is False).
+        Changes the sign of all negative parts of the CTF to positive
+        (following doi:10.1016/j.ultramic.2008.03.004) (default is False).
     wiener_snr : float, optional
-        Applies a Wiener filter to the CTF (following doi:10.1016/j.ultramic.2008.03.004) with a given SNR value.
-        If no value is given, the default value of 0.0 means that no filter is applied.
+        Applies a Wiener filter to the CTF(following doi:10.1016/j.ultramic.2008.03.004)
+        with a given SNR value. If no value is given, the default value of 0.0 means
+        that no filter is applied.
     kwargs : dict, optional
         Optionally provide the aberration coefficients as keyword arguments.
 
     References
     ----------
-    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
+    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.).
+       Springer.
 
     """
 
@@ -1371,20 +1380,25 @@ class CTF(_HasAberrations, BaseAperture):
         soft: bool = True,
         focal_spread: float | BaseDistribution = 0.0,
         angular_spread: float | BaseDistribution = 0.0,
-        aberration_coefficients: dict[str, float | BaseDistribution] = None,
-        energy: float = None,
-        extent: float | tuple[float, float] = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        aberration_coefficients: Optional[
+            Mapping[str, float | BaseDistribution]
+        ] = None,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
         flip_phase: bool = False,
         wiener_snr: float = 0.0,
-        **kwargs,
+        **kwargs: Any,
     ):
-        distributions = polar_symbols + (
+        distributions = (
+            *tuple(polar_symbols.keys()),
             "angular_spread",
             "focal_spread",
             "semiangle_cutoff",
         )
+
+        semiangle_cutoff = validate_distribution(semiangle_cutoff)
 
         super().__init__(
             distributions=distributions,
@@ -1394,9 +1408,6 @@ class CTF(_HasAberrations, BaseAperture):
             gpts=gpts,
             sampling=sampling,
         )
-
-        self._aberration_coefficients = self._default_aberration_coefficients()
-
         aberration_coefficients = (
             {} if aberration_coefficients is None else aberration_coefficients
         )
@@ -1405,37 +1416,36 @@ class CTF(_HasAberrations, BaseAperture):
 
         self._angular_spread = validate_distribution(angular_spread)
         self._focal_spread = validate_distribution(focal_spread)
-        self._semiangle_cutoff = validate_distribution(semiangle_cutoff)
+
         self._soft = soft
         self._flip_phase = flip_phase
         self._wiener_snr = wiener_snr
 
     @property
-    def aberration_coefficients(self):
-        return self._aberration_coefficients
-
-    @property
-    def scherzer_defocus(self):
+    def scherzer_defocus(self) -> float:
         """The Scherzer defocus [Å]."""
-        self.accelerator.check_is_defined()
 
         if self.Cs == 0.0:
-            raise ValueError()
+            raise ValueError("Cs must be defined to calculate Scherzer defocus")
 
-        return scherzer_defocus(self.Cs, self.energy)
+        Cs = self.Cs
+        assert isinstance(Cs, SupportsFloat)
+        return scherzer_defocus(Cs, self._valid_energy)
 
     @property
-    def crossover_angle(self):
+    def crossover_angle(self) -> float:
         """The first zero-crossing of the phase at Scherzer defocus [mrad]."""
-        return 1e3 * energy2wavelength(self.energy) / self.point_resolution
+        return 1e3 * energy2wavelength(self._valid_energy) / self.point_resolution
 
     @property
-    def point_resolution(self):
+    def point_resolution(self) -> float:
         """The Scherzer point resolution [Å]."""
-        return point_resolution(self.Cs, self.energy)
+        Cs = self.Cs
+        assert isinstance(Cs, SupportsFloat)
+        return point_resolution(Cs, self._valid_energy)
 
     @property
-    def _aberrations(self):
+    def _aberrations(self) -> Aberrations:
         return Aberrations(
             aberration_coefficients=self.aberration_coefficients,
             energy=self.energy,
@@ -1444,7 +1454,7 @@ class CTF(_HasAberrations, BaseAperture):
         )
 
     @property
-    def _aperture(self):
+    def _aperture(self) -> Aperture:
         return Aperture(
             semiangle_cutoff=self.semiangle_cutoff,
             soft=self._soft,
@@ -1454,7 +1464,7 @@ class CTF(_HasAberrations, BaseAperture):
         )
 
     @property
-    def _spatial_envelope(self):
+    def _spatial_envelope(self) -> SpatialEnvelope:
         return SpatialEnvelope(
             aberration_coefficients=self.aberration_coefficients,
             angular_spread=self.angular_spread,
@@ -1462,14 +1472,14 @@ class CTF(_HasAberrations, BaseAperture):
         )
 
     @property
-    def _temporal_envelope(self):
+    def _temporal_envelope(self) -> TemporalEnvelope:
         return TemporalEnvelope(
             focal_spread=self.focal_spread,
             energy=self.energy,
         )
 
     @property
-    def ensemble_axes_metadata(self):
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return (
             self._spatial_envelope.ensemble_axes_metadata
             + self._temporal_envelope.ensemble_axes_metadata
@@ -1487,7 +1497,7 @@ class CTF(_HasAberrations, BaseAperture):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    def semiangle_cutoff(self, value: float):
+    def semiangle_cutoff(self, value: float) -> None:
         self._semiangle_cutoff = value
 
     @property
@@ -1496,25 +1506,27 @@ class CTF(_HasAberrations, BaseAperture):
         return self._focal_spread
 
     @focal_spread.setter
-    def focal_spread(self, value: float):
+    def focal_spread(self, value: float) -> None:
         self._focal_spread = value
 
     @property
     def angular_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the angular deviations due to source size [mrad]."""
+        """The standard deviation of the angular deviations due to source size
+        [mrad]."""
         return self._angular_spread
 
     @angular_spread.setter
-    def angular_spread(self, value: float):
+    def angular_spread(self, value: float) -> None:
         self._angular_spread = value
 
     @property
     def flip_phase(self) -> bool:
-        """If true the signs of all negative parts of the CTF are changed to positive."""
+        """If true the signs of all negative parts of the CTF are changed to
+        positive."""
         return self._flip_phase
 
     @flip_phase.setter
-    def flip_phase(self, value: bool):
+    def flip_phase(self, value: bool) -> None:
         self._flip_phase = value
 
     @property
@@ -1523,11 +1535,16 @@ class CTF(_HasAberrations, BaseAperture):
         return self._wiener_snr
 
     @wiener_snr.setter
-    def wiener_snr(self, value: float):
+    def wiener_snr(self, value: float) -> None:
         self._wiener_snr = value
 
-    def _evaluate_to_match(self, component, alpha, phi):
-        expanded_axes = ()
+    def _evaluate_to_match(
+        self,
+        component: Aberrations | Aperture | SpatialEnvelope | TemporalEnvelope,
+        alpha: np.ndarray,
+        phi: np.ndarray,
+    ) -> np.ndarray:
+        expanded_axes: tuple[int, ...] = ()
         for i, axis_metadata in enumerate(self.ensemble_axes_metadata):
             expand = all([a != axis_metadata for a in component.ensemble_axes_metadata])
             if expand:
@@ -1537,7 +1554,9 @@ class CTF(_HasAberrations, BaseAperture):
 
         return np.expand_dims(array, expanded_axes)
 
-    def _evaluate_from_angular_grid(self, alpha, phi, keep_all: bool = False):
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray, keep_all: bool = False
+    ) -> np.ndarray:
         match_dims = tuple(range(-len(alpha.shape), 0))
 
         array = self._aberrations._evaluate_from_angular_grid(alpha, phi)
@@ -1588,7 +1607,7 @@ class CTF(_HasAberrations, BaseAperture):
 
     def to_point_spread_functions(
         self, gpts: int | tuple[int, int], extent: float | tuple[float, float]
-    ):
+    ) -> Images:
         from abtem.waves import Probe
 
         return (
@@ -1600,31 +1619,33 @@ class CTF(_HasAberrations, BaseAperture):
     def profiles(
         self,
         gpts: int = 1000,
-        max_angle: float = None,
-        phi: float = 0.0,
-    ):
+        max_angle: Optional[float] = None,
+        phi: float | np.ndarray = 0.0,
+    ) -> ReciprocalSpaceLineProfiles:
         """
-        Calculate radial line profiles for each included component (phase aberrations, aperture, temporal and spatial
-        envelopes) of the contrast transfer function.
+        Calculate radial line profiles for each included component (phase aberrations,
+        aperture, temporal and spatial envelopes) of the contrast transfer function.
 
         Parameters
         ----------
         gpts: int
             Number of grid points along the line profiles.
         max_angle : float
-            The maximum scattering angle included in the radial line profiles [mrad]. The default is 1.5 times the
-            semiangle cutoff or 50 mrad if no semiangle cutoff is set.
+            The maximum scattering angle included in the radial line profiles [mrad].
+            The default is 1.5 times the semiangle cutoff or 50 mrad if no semiangle
+            cutoff is set.
         phi : float
             The azimuthal angle of the radial line profiles [rad]. Default is 0.
 
         Returns
         -------
         ctf_profiles : ReciprocalSpaceLineProfiles
-            Ensemble of reciprocal space line profiles. The first ensemble dimension represents the different
+            Ensemble of reciprocal space line profiles. The first ensemble dimension
+            represents the different
         """
         if max_angle is None:
             if self.semiangle_cutoff == np.inf:
-                max_angle = 50
+                max_angle = 50.0
             else:
                 max_angle = self._max_semiangle_cutoff * 1.6
 
@@ -1633,12 +1654,10 @@ class CTF(_HasAberrations, BaseAperture):
         sampling = max_angle / (gpts - 1) / (self.wavelength * 1e3)
         alpha = np.linspace(0, max_angle * 1e-3, gpts).astype(get_dtype(complex=False))
 
-        # TODO : implement different complex representations
+        phi = np.array(phi)
 
         components = dict()
-
         components["ctf"] = self._evaluate_to_match(self._aberrations, alpha, phi).imag
-        # components["ctf"] = convert_complex(components["ctf"], method=complex_representation)
 
         if self._spatial_envelope.angular_spread != 0.0:
             components["spatial envelope"] = self._evaluate_to_match(
@@ -1654,15 +1673,15 @@ class CTF(_HasAberrations, BaseAperture):
             components["aperture"] = self._evaluate_to_match(self._aperture, alpha, phi)
 
         components["ctf"] = reduce(lambda x, y: x * y, tuple(components.values()))
-        ensemble_axes_metadata = self.ensemble_axes_metadata
 
+        ensemble_axes_metadata: list[AxisMetadata] = self.ensemble_axes_metadata
         if len(components) > 1:
             profiles = np.stack(
                 np.broadcast_arrays(*list(components.values())),
                 axis=-2,
             )
 
-            component_metadata = [
+            component_metadata: list[AxisMetadata] = [
                 OrdinalAxis(
                     label="",
                     values=tuple(components.keys()),
@@ -1728,7 +1747,7 @@ def point_resolution(Cs: float, energy: float) -> float:
     return (energy2wavelength(energy) ** 3 * np.abs(Cs) / 6) ** (1 / 4)
 
 
-def polar2cartesian(polar):
+def polar2cartesian(polar: dict) -> dict:
     """
     Convert between polar and Cartesian aberration coefficients.
 
@@ -1770,7 +1789,7 @@ def polar2cartesian(polar):
     return cartesian
 
 
-def cartesian2polar(cartesian):
+def cartesian2polar(cartesian: dict) -> dict:
     """
     Convert between Cartesian and polar aberration coefficients.
 
