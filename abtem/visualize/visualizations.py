@@ -161,6 +161,7 @@ class Visualization:
         title: str = None,
         xlim: tuple[float, float] = None,
         ylim: tuple[float, float] = None,
+        convert_complex: str = "none",
         **kwargs,
     ):
         self._measurement = measurement.to_cpu().compute()
@@ -228,7 +229,7 @@ class Visualization:
 
         self._indices = ()
 
-        self._complex_conversion = "none"
+        self._complex_conversion = convert_complex
         self._autoscale = config.get("visualize.autoscale", False)
         self._column_titles = []
         self._row_titles = []
