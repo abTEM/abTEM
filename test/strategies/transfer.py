@@ -2,14 +2,15 @@ import hypothesis.strategies as st
 
 from abtem import distributions
 from abtem.transfer import (
-    polar_symbols,
+    CTF,
     Aberrations,
     Aperture,
-    TemporalEnvelope,
     SpatialEnvelope,
-    CTF,
+    TemporalEnvelope,
+    polar_symbols,
 )
 from abtem.transform import CompositeArrayObjectTransform
+
 from . import core as core_st
 from . import scan as scan_st
 
@@ -37,7 +38,9 @@ def parameter(draw, min_value=-100, max_value=100, allow_distribution=True):
 @st.composite
 def aberrations(draw, allow_distribution=True):
     n = draw(st.integers(min_value=0, max_value=2))
-    symbols = draw(st.permutations(polar_symbols).map(lambda x: x[:n]))
+    p = tuple(polar_symbols.keys())
+
+    symbols = draw(st.permutations(p).map(lambda x: x[:n]))
 
     parameters = {}
     for symbol in symbols:
@@ -72,7 +75,7 @@ def spatial_envelope(draw, allow_distribution=True):
             parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)
         ),
         energy=draw(core_st.energy()),
-        **draw(aberrations()).aberration_coefficients
+        **draw(aberrations()).aberration_coefficients,
     )
 
 
@@ -96,7 +99,6 @@ def composite_wave_transform(draw, allow_distribution=True):
 
 @st.composite
 def ctf(draw, allow_distribution=True, partial_coherence=True):
-
     if partial_coherence:
         angular_spread = draw(
             parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)
@@ -117,5 +119,5 @@ def ctf(draw, allow_distribution=True, partial_coherence=True):
         ),
         angular_spread=angular_spread,
         focal_spread=focal_spread,
-        energy=draw(core_st.energy())
+        energy=draw(core_st.energy()),
     )
