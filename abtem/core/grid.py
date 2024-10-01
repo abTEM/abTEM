@@ -437,6 +437,9 @@ class Grid(CopyMixin, EqualityMixin):
             raise GridUndefinedError("Grid sampling is not defined")
         return self.sampling
 
+    def spatial_frequencies(self):
+        return spatial_frequencies(self.gpts, self.sampling, False)
+
 
 class BaseHasGridMixin:
     pass
@@ -604,7 +607,6 @@ def spatial_frequencies(
 def real_space_grid(gpts, extent, xp=np):
     out = tuple(xp.linspace(0, L, n, endpoint=False) for n, L in zip(gpts, extent))
     return xp.meshgrid(*out, indexing="ij")
-
 
 
 def polar_spatial_frequencies(
