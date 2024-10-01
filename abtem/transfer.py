@@ -392,7 +392,7 @@ class Aperture(BaseAperture):
             return xp.ones_like(alpha)
 
         semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
-        
+
         if (
             self.soft
             and self.grid.check_is_defined(False)
@@ -824,9 +824,7 @@ class _HasAberrations(HasAcceleratorMixin):
     hexafoil_angle: float | BaseDistribution
 
     def __init__(self, *args, **kwargs):
-        self._aberration_coefficients = {
-            symbol: 0.0 for symbol in polar_symbols.keys()
-        }
+        self._aberration_coefficients = {symbol: 0.0 for symbol in polar_symbols.keys()}
         super().__init__(*args, **kwargs)
 
     def __getattr__(self, name: str) -> float | BaseDistribution:
