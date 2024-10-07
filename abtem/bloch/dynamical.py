@@ -1466,6 +1466,7 @@ class BlochWaves:
     def _calculate_array(
         self, thicknesses: np.ndarray, lazy: bool = True
     ) -> np.ndarray | da.core.Array:
+        assert isinstance(thicknesses, np.ndarray)
         hkl = self.hkl
 
         A = self.calculate_structure_matrix(lazy=lazy)
@@ -1506,7 +1507,6 @@ class BlochWaves:
         thicknesses: float | Sequence[float],
         return_complex: bool = False,
         lazy: bool = True,
-        merge_tol: Optional[float] = None,
     ) -> IndexedDiffractionPatterns:
         """Calculate the dynamical diffraction patterns for a given set of thicknesses.
 
@@ -1529,17 +1529,16 @@ class BlochWaves:
         IndexedDiffractionPatterns
             The dynamical diffraction patterns.
         """
-
-        array = self._calculate_array(thicknesses, lazy=lazy)
-
         ensemble_axes_metadata: list[AxisMetadata]
         if isinstance(thicknesses, (int, float)):
-            thicknesses = [float(thicknesses)]
             ensemble_axes_metadata = []
         else:
             ensemble_axes_metadata = [
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
+
+        thicknesses = np.array(thicknesses, dtype=get_dtype())
+        array = self._calculate_array(thicknesses, lazy=lazy)
 
         reciprocal_lattice_vectors = reciprocal_cell(self.cell)
 
@@ -2198,12 +2197,13 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             pbar = config.get("local_diagnostics.task_level_progress", False)
 
         if isinstance(thicknesses, (float, int)):
-            thicknesses = [thicknesses]
             ensemble_axes_metadata = []
         else:
             ensemble_axes_metadata = [
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
+
+        thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         array: np.ndarray | da.core.Array
         if lazy:
