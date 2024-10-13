@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from typing import Optional
 
 import dask.array as da
 import numpy as np
@@ -76,7 +77,7 @@ def coordinate_grid(
     return np.meshgrid(*coordinates, indexing="ij")
 
 
-def vector_potential_3d(
+def atomic_vector_potential_3d(
     extent: tuple[float, float, float],
     gpts: tuple[int, int, int],
     origin: tuple[float, float, float],
@@ -92,16 +93,14 @@ def vector_potential_3d(
 
     a = radial_prefactor_a(r_interp, parameters)
 
-    r_vec = np.stack([x, y, z], -1)
+    r_vec = np.stack([x, y, z], axis=0)
+    m_cross_r = np.cross(magnetic_moment, r_vec, axis=0)
 
-    m_cross_r = np.cross(magnetic_moment, r_vec, axis=-1)
-
-    field = a(r)[..., None] * m_cross_r
-
+    field = a(r)[None] * m_cross_r
     return field
 
 
-def magnetic_field_3d(
+def atomic_magnetic_field_3d(
     extent: tuple[float, float, float],
     gpts: tuple[int, int, int],
     origin: tuple[float, float, float],
@@ -115,19 +114,51 @@ def magnetic_field_3d(
     x, y, z = coordinate_grid(extent, gpts, origin, endpoint=False)
 
     r = np.sqrt(x**2 + y**2 + z**2)
-    r_vec = np.stack([x, y, z], -1)
+    r_vec = np.stack([x, y, z])
 
     r_interp = np.linspace(0, cutoff, 100)
     b1 = radial_prefactor_b1(r_interp, parameters)
     b2 = radial_prefactor_b2(r_interp, parameters)
 
-    mr = np.sum(r_vec * magnetic_moment[None, None, None], axis=-1)
+    mr = np.sum(r_vec * magnetic_moment[:, None, None, None], axis=0)
 
     B = (
-        b1(r)[..., None] * r_vec * mr[..., None]
-        + b2(r)[..., None] * magnetic_moment[None, None, None]
+        b1(r)[None] * r_vec * mr[None]
+        + b2(r)[None] * magnetic_moment[:, None, None, None]
     )
     return B
+
+
+def _superpose_field_3d(atoms, gpts, atom_field_func, parameters=None, cutoff=None):
+    array = np.zeros((3,) + gpts)
+    if cutoff is None:
+        cutoff = 6.0
+
+    if parameters is None:
+        parameters = LyonParametrization().parameters
+
+    for position, symbol, magnetic_moment in zip(
+        atoms.positions, atoms.symbols, atoms.get_array("magnetic_moments")
+    ):
+        extent = atoms.cell.array.diagonal()
+        array += atom_field_func(
+            extent=extent,
+            gpts=gpts,
+            origin=position,
+            magnetic_moment=magnetic_moment,
+            parameters=parameters[symbol],
+            cutoff=cutoff,
+        )
+
+    return array
+
+
+def magnetic_field_3d(atoms, gpts, cutoff=6.0):
+    return _superpose_field_3d(atoms, gpts, atomic_magnetic_field_3d, cutoff=cutoff)
+
+
+def vector_potential_3d(atoms, gpts, cutoff=6.0):
+    return _superpose_field_3d(atoms, gpts, atomic_vector_potential_3d, cutoff=cutoff)
 
 
 def radial_cutoff(func, tolerance=1e-3):
@@ -292,7 +323,7 @@ def interpolate_quasi_dipole_vector_field_projections(
 
         Ix = tables[0, j] - tables[0, i]
         Iy = Ix.T
-        Iz = tables[0, j] - tables[0, i]
+        Iz = tables[1, j] - tables[1, i]
 
         A[0] = magnetic_moment[1] * Iz - magnetic_moment[2] * Iy
         A[1] = magnetic_moment[2] * Ix - magnetic_moment[0] * Iz
@@ -387,8 +418,16 @@ class QuasiDipoleProjections:
 
         array = np.zeros((3,) + gpts, dtype=np.float32)
         for number in np.unique(atoms.numbers):
-            positions = positions[atoms.numbers == number]
+            mask = atoms.numbers == number
+
+            positions = atoms.positions[mask]
+            magnetic_moments = atoms.get_array("magnetic_moments")[mask]
             symbol = chemical_symbols[number]
+
+            if symbol not in self._parametrization.parameters:
+                if not np.allclose(magnetic_moments, 0):
+                    raise ValueError(f"Symbol {symbol} is not in the parametrization.")
+                continue
 
             integral_limits = self._slice_limits(symbol)
             tables = self.get_integral_table(symbol)
@@ -545,12 +584,12 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: float | tuple[float, ...] = None,
-        extent: float | tuple[float, float] = None,
-        sampling: float | tuple[float, float] = None,
-        exit_planes: int | tuple[int, ...] = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         super().__init__(
             array=array,
@@ -561,6 +600,13 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+    def from_array_and_metadata(
+        self,
+        array: np.ndarray | da.core.Array,
+        metadata: dict,
+    ) -> MagneticFieldArray:
+        raise NotImplementedError
 
 
 class VectorPotentialArray(BaseMagneticField, FieldArray):
@@ -569,12 +615,12 @@ class VectorPotentialArray(BaseMagneticField, FieldArray):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: float | tuple[float, ...] = None,
-        extent: float | tuple[float, float] = None,
-        sampling: float | tuple[float, float] = None,
-        exit_planes: int | tuple[int, ...] = None,
-        ensemble_axes_metadata: list[AxisMetadata] = None,
-        metadata: dict = None,
+        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
     ):
         super().__init__(
             array=array,
@@ -586,25 +632,32 @@ class VectorPotentialArray(BaseMagneticField, FieldArray):
             metadata=metadata,
         )
 
+    def from_array_and_metadata(
+        self,
+        array: np.ndarray | da.core.Array,
+        metadata: dict,
+    ) -> VectorPotentialArray:
+        raise NotImplementedError
+
 
 class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
     _exclude_from_copy = ("parametrization",)
 
     def __init__(
         self,
-        atoms: Atoms | BaseFrozenPhonons = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        atoms: Optional[Atoms | BaseFrozenPhonons] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
         slice_thickness: float | tuple[float, ...] = 1,
         parametrization: str = "lyon",
-        exit_planes: int | tuple[int, ...] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: str
         | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
-        box: tuple[float, float, float] = None,
+        box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
         integrator=None,
-        device: str = None,
+        device: Optional[str] = None,
     ):
         if integrator is None:
             integrator = QuasiDipoleMagneticFieldProjections(
@@ -632,22 +685,22 @@ class VectorPotential(_FieldBuilderFromAtoms, BaseMagneticField):
 
     def __init__(
         self,
-        atoms: Atoms | BaseFrozenPhonons = None,
-        gpts: int | tuple[int, int] = None,
-        sampling: float | tuple[float, float] = None,
+        atoms: Optional[Atoms | BaseFrozenPhonons] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
         slice_thickness: float | tuple[float, ...] = 1,
         parametrization: str = "lyon",
-        exit_planes: int | tuple[int, ...] = None,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: str
         | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
-        box: tuple[float, float, float] = None,
+        box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
         integrator=None,
-        device: str = None,
+        device: Optional[str] = None,
     ):
         if integrator is None:
-            integrator = QuasiDipoleVectorFieldProjections(
+            integrator = QuasiDipoleVectorPotentialProjections(
                 parametrization=parametrization
             )
 
