@@ -422,7 +422,7 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
             sigma = self.parametrization.sigmas[symbol]
             f = f * xp.exp(
                 -xp.asarray(k2, dtype=get_dtype(complex=False))
-                * (xp.pi * sigma / xp.sqrt(3 / 2)) ** 2
+                * (xp.pi * sigma / xp.sqrt(1 / 2)) ** 2
             )
 
         return f
@@ -820,7 +820,6 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 sigma = (
                     self._parametrization.sigmas[symbol]
                     / np.array(sampling)
-                    / np.sqrt(3)
                 )
                 temp = get_ndimage_module(temp).gaussian_filter(
                     temp, sigma=sigma, mode="wrap"

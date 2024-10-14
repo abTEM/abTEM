@@ -312,7 +312,7 @@ def validate_sigmas(
     Parameters
     ----------
     atoms : Atoms
-        The atomic structure which standard deviations of displacement are to be 
+        The atomic structure which standard deviations of displacement are to be
         validated.
     sigmas : float, dict[str, float] or Sequence[float]
         It can be either:
@@ -514,7 +514,7 @@ class FrozenPhonons(BaseFrozenPhonons):
             for axis in self._axes:
                 atoms.positions[:, axis] += sigmas[:, axis] * r[:, axis]
         else:
-            r = rng.normal(size=(len(atoms), 3)) / np.sqrt(3)
+            r = rng.normal(size=(len(atoms), 3))
 
             for axis in self._axes:
                 atoms.positions[:, axis] += sigmas * r[:, axis]
@@ -723,18 +723,16 @@ class AtomsEnsemble(BaseFrozenPhonons):
     def randomize(self, atoms: Atoms) -> Atoms:
         return atoms
 
+    def mean_squared_deviations(self) -> np.ndarray:
+        """
+        Squared deviation of the positions of each atom in each direction.
+        """
+        positions = np.stack([atoms.positions for atoms in self.trajectory])
+        return ((positions - positions.mean(0)) ** 2).mean(0)
+
     def standard_deviations(self) -> np.ndarray:
         """
         Standard deviation of the positions of each atom in each direction.
         """
-        ensemble_positions = [atoms.positions for atoms in self._trajectory]
-
-        num_atoms = len(ensemble_positions[0])
-        if not all(len(positions) == num_atoms for positions in ensemble_positions):
-            raise RuntimeError()
-
-        mean_positions = np.mean(ensemble_positions, axis=0)
-        squared_deviations = [
-            (atoms.positions - mean_positions) ** 2 for atoms in self._trajectory
-        ]
-        return np.sqrt(np.sum(squared_deviations, axis=0) / (len(self) - 1))
+        positions = np.stack([atoms.positions for atoms in self.trajectory])
+        return (positions - positions.mean(0)).std()
