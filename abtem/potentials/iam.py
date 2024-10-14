@@ -294,8 +294,8 @@ class _FieldBuilder(BaseField):
         self,
         array_object: Type[FieldArray],
         slice_thickness: float | tuple[float, ...],
-        exit_planes: int | tuple[int, ...],
         cell: np.ndarray | Cell,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         box: Optional[tuple[float, float, float]] = None,
@@ -405,7 +405,6 @@ class _FieldBuilder(BaseField):
         potential_array : PotentialArray
             The built potential as an array.
         """
-
         lazy = _validate_lazy(lazy)
 
         self.grid.check_is_defined()
@@ -461,7 +460,6 @@ class _FieldBuilder(BaseField):
             else:
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
                     array[j] = slic.array[0]
-
         potential = self._array_object(
             array,
             sampling=self._valid_sampling,
@@ -569,7 +567,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         return atoms
 
     def _prepare_atoms(self):
-
         atoms = self.get_transformed_atoms()
 
         if self.integrator.finite:
@@ -881,6 +878,8 @@ class FieldArray(BaseField, ArrayObject):
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
+        # assert len(array.shape) == self._base_dims
+
         self._slice_thickness = _validate_slice_thickness(
             slice_thickness, num_slices=array.shape[-self._base_dims]
         )
@@ -966,6 +965,12 @@ class FieldArray(BaseField, ArrayObject):
         if isinstance(items, (Number, slice)):
             items = (items,)
 
+        if not len(items) <= len(self.ensemble_shape) + 1:
+            raise IndexError(
+                f"Too many indices for potential array with {len(self.ensemble_shape)}"
+                "ensemble axes. Only slice indices and ensemble indices are allowed."
+            )
+
         ensemble_items = items[: len(self.ensemble_shape)]
         slic_items = items[len(self.ensemble_shape) :]
 
@@ -980,6 +985,7 @@ class FieldArray(BaseField, ArrayObject):
         padded_items = (slice(None),) * len(potential_array.ensemble_shape) + slic_items
 
         array = potential_array._array[padded_items]
+
         slice_thickness = np.array(potential_array.slice_thickness)[slic_items]
 
         if len(array.shape) < len(potential_array.shape):
@@ -1031,12 +1037,10 @@ class FieldArray(BaseField, ArrayObject):
 
     def to_images(self):
         """Convert slices of the potential to a stack of images."""
-        metadata = {"label": "potential", "units": "eV / e"}
-
         return Images(
             array=self._array,
             sampling=(self.sampling[0], self.sampling[1]),
-            metadata=metadata,
+            metadata=self.metadata,
             ensemble_axes_metadata=self.axes_metadata[:-2],
         )
 
@@ -1049,7 +1053,6 @@ class FieldArray(BaseField, ArrayObject):
         images : Images
             One or more images of the projected potential(s).
         """
-        metadata = {"label": "potential", "units": "eV / e"}
         array = self.array.sum(-self._base_dims)
         # array -= array.min((-2, -1), keepdims=True)
 
@@ -1059,9 +1062,9 @@ class FieldArray(BaseField, ArrayObject):
 
         return Images(
             array=array,
-            sampling=self.sampling,
+            sampling=self._valid_sampling,
             ensemble_axes_metadata=ensemble_axes_metadata,
-            metadata=metadata,
+            metadata=self.metadata,
         )
 
 
@@ -1106,6 +1109,10 @@ class PotentialArray(BasePotential, FieldArray):
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
+        if metadata is None:
+            metadata = {}
+        metadata = {"label": "potential", "units": "eV / e", **metadata}
+
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,
