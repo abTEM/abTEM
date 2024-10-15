@@ -1439,7 +1439,7 @@ class Images(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     def crop(
-        self, extent: tuple[float, float], offset: tuple[float, float] = (0.0, 0.0)
+        self, extent: tuple[float, float], offset: tuple[float, float] = (0.0, 0.0), centered: bool = False
     ):
         """
         Crop images to a smaller extent.
@@ -1456,6 +1456,16 @@ class Images(_BaseMeasurement2D):
         cropped_images : Images
             The cropped images.
         """
+        if centered and offset == (0.0, 0.0):
+            offset = (
+                self.extent[0] / 2 - extent[0] / 2,
+                self.extent[1] / 2 - extent[1] / 2,
+            )
+        elif centered:
+            raise ValueError("Offset is not used when centered is True.")
+        
+        if extent[0] > self.extent[0] or extent[1] > self.extent[1]:
+            raise ValueError("Extent must be smaller than the original extent.")
 
         offset = (
             int(np.round(self.base_shape[0] * offset[0] / self.extent[0])),
@@ -3145,7 +3155,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return xp.sum(array * bins, axis=(-2, -1))
 
     def integrate_radial(
-        self, inner: float, outer: float, offset: tuple[float, float] = (0.0, 0.0)
+        self, inner: float, outer: float=None, offset: tuple[float, float] = (0.0, 0.0)
     ) -> Images:
         """
         Create images by integrating the diffraction patterns over an annulus defined by an inner and outer integration
@@ -3187,6 +3197,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
             assert isinstance(measurements, Images)
 
             return measurements
+
+        if outer is None:
+            outer = min(self.max_angles)
 
         self._check_integration_limits(inner, outer)
 
