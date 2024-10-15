@@ -1118,7 +1118,8 @@ class PotentialArray(BasePotential, FieldArray):
 
     @staticmethod
     def _transmission_function(array, energy):
-        sigma = np.array(energy2sigma(energy), dtype=get_dtype())
+        xp = get_array_module(array)
+        sigma = xp.array(energy2sigma(energy), dtype=get_dtype())
         array = complex_exponential(sigma * array)
         return array
 
