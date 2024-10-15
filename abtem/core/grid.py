@@ -641,6 +641,19 @@ def polar_spatial_frequencies(
     return k, phi
 
 
+def coordinate_grid(
+    extent: tuple[float, ...],
+    gpts: tuple[int, ...],
+    origin: tuple[float, ...],
+    endpoint: bool = True,
+) -> np.ndarray:
+    coordinates = [
+        np.linspace(0, r, n, endpoint=endpoint) - o
+        for r, n, o in zip(extent, gpts, origin)
+    ]
+    return np.meshgrid(*coordinates, indexing="ij")
+
+
 def disk_meshgrid(r: int) -> np.ndarray:
     """
     Return all indices inside a disk with a given radius.

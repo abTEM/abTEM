@@ -4,7 +4,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R  # type: ignore
 
 from abtem.atoms import plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
@@ -122,10 +122,10 @@ class _GPAWMagnetics(_FieldBuilder):
         if not assume_colinear:
             raise NotImplementedError("Non-collinear calculations not supported.")
 
-        self.calculators = calculators
         self.gridrefinement = gridrefinement
 
         assert isinstance(calculators, GPAW)
+        self._calculators = calculators
 
         atoms = calculators.atoms
 
@@ -175,17 +175,22 @@ class _GPAWMagnetics(_FieldBuilder):
     def base_axes_metadata(self):
         pass
 
+    @property
+    def plane(self):
+        assert isinstance(self._plane, str)
+        return self._plane
+
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         if last_slice is None:
             last_slice = self.num_slices
 
         if self._quantity == "vector_potential":
             array = get_vector_potential_from_gpaw(
-                self.calculators, gridrefinement=self.gridrefinement
+                self._calculators, gridrefinement=self.gridrefinement
             )
         elif self._quantity == "magnetic_field":
             array = get_magnetic_field_from_gpaw(
-                self.calculators, gridrefinement=self.gridrefinement
+                self._calculators, gridrefinement=self.gridrefinement
             )
         else:
             raise ValueError(f"Unknown quantity: {self._quantity}")
@@ -202,7 +207,7 @@ class _GPAWMagnetics(_FieldBuilder):
         slice_shape = (3,) + self._valid_gpts
 
         if self._projection == "real_space":
-            depth = self.calculators.atoms.cell[2, 2]
+            depth = self._calculators.atoms.cell[2, 2]
             pixels_per_slice = (slice_thicknesses / depth * array.shape[-1]).astype(int)
 
             dz = slice_thicknesses.sum() / array.shape[-1]

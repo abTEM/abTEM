@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Optional
+from typing import Callable, Optional, TYPE_CHECKING
 
 import dask.array as da
 import numpy as np
 from ase import Atoms, units
 from ase.data import chemical_symbols
-from numba import jit
-from scipy.integrate import trapezoid
-from scipy.interpolate import interp1d
-from scipy.optimize import brentq
+from numba import jit  # type: ignore
+from scipy.integrate import trapezoid  # type: ignore
+from scipy.interpolate import interp1d  # type: ignore
+from scipy.optimize import brentq  # type: ignore
 
+from abtem.core.grid import coordinate_grid
 from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessAxis
 from abtem.core.energy import energy2sigma
 from abtem.inelastic.phonons import BaseFrozenPhonons
@@ -23,10 +24,13 @@ from abtem.potentials.iam import (
     _FieldBuilderFromAtoms,
 )
 
+if TYPE_CHECKING:
+    from abtem.potentials.iam import PotentialArray
+
 CUTOFF = 4.25
 
 
-def radial_prefactor_a(r, parameters):
+def radial_prefactor_a(r: np.ndarray, parameters: np.ndarray) -> Callable:
     r = r[:, None]
     a = parameters[None, :, 0]
     b = parameters[None, :, 1]
@@ -34,11 +38,11 @@ def radial_prefactor_a(r, parameters):
     a = a / (r**ni + b)
     a = a.sum(-1)
     a = a * cutoff_taper(r[:, 0], np.max(r), 0.85)
-    a = interp1d(r[:, 0], a, fill_value=0.0, bounds_error=False)
-    return a
+    func = interp1d(r[:, 0], a, fill_value=0.0, bounds_error=False)
+    return func
 
 
-def radial_prefactor_b1(r, parameters):
+def radial_prefactor_b1(r: np.ndarray, parameters: np.ndarray) -> Callable:
     r = r[:, None]
     a = parameters[None, :, 0]
     b = parameters[None, :, 1]
@@ -46,11 +50,11 @@ def radial_prefactor_b1(r, parameters):
     b1 = a * ni * r ** (ni - 2) / (r**ni + b) ** 2
     b1 = b1.sum(-1)
     b1 = b1 * cutoff_taper(r[:, 0], np.max(r), 0.85)
-    b1 = interp1d(r[:, 0], b1, fill_value=0.0, bounds_error=False)
-    return b1
+    func = interp1d(r[:, 0], b1, fill_value=0.0, bounds_error=False)
+    return func
 
 
-def radial_prefactor_b2(r, parameters):
+def radial_prefactor_b2(r: np.ndarray, parameters: np.ndarray) -> Callable:
     r = r[:, None]
     a = parameters[None, :, 0]
     b = parameters[None, :, 1]
@@ -58,26 +62,14 @@ def radial_prefactor_b2(r, parameters):
     b2 = a * (2 * b - (ni - 2) * r**ni) / (r**ni + b) ** 2
     b2 = b2.sum(-1)
     b2 = b2 * cutoff_taper(r[:, 0], np.max(r), 0.85)
-    b2 = interp1d(r[:, 0], b2, fill_value=0.0, bounds_error=False)
-    return b2
+    func = interp1d(r[:, 0], b2, fill_value=0.0, bounds_error=False)
+    return func
 
 
-def unit_vector_from_angles(theta, phi):
+def unit_vector_from_angles(theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
     R = np.sin(theta)
     m = np.array([R * np.cos(phi), R * np.sin(phi), np.sqrt(1 - R**2)]).T
     return m
-
-
-def coordinate_grid(
-    extent: tuple[float, ...],
-    gpts: tuple[int, ...],
-    origin: tuple[float, ...],
-    endpoint=True,
-):
-    coordinates = ()
-    for r, n, o in zip(extent, gpts, origin):
-        coordinates += (np.linspace(0, r, n, endpoint=endpoint) - o,)
-    return np.meshgrid(*coordinates, indexing="ij")
 
 
 def atomic_vector_potential_3d(
@@ -87,7 +79,7 @@ def atomic_vector_potential_3d(
     magnetic_moment: np.ndarray,
     parameters: np.ndarray,
     cutoff: float,
-):
+) -> np.ndarray:
     x, y, z = coordinate_grid(extent, gpts, origin, endpoint=False)
     parameters = np.array(parameters)
     r = np.sqrt(x**2 + y**2 + z**2)
@@ -132,7 +124,13 @@ def atomic_magnetic_field_3d(
     return B
 
 
-def _superpose_field_3d(atoms, gpts, atom_field_func, parameters=None, cutoff=None):
+def _superpose_field_3d(
+    atoms: Atoms,
+    gpts: tuple[int, int, int],
+    atom_field_func: Callable,
+    parameters: Optional[dict] = None,
+    cutoff: Optional[float] = None,
+) -> np.ndarray:
     array = np.zeros((3,) + gpts)
     if cutoff is None:
         cutoff = 6.0
@@ -156,15 +154,15 @@ def _superpose_field_3d(atoms, gpts, atom_field_func, parameters=None, cutoff=No
     return array
 
 
-def magnetic_field_3d(atoms, gpts, cutoff=6.0):
+def magnetic_field_3d(atoms: Atoms, gpts: tuple[int, int, int], cutoff: float = 6.0):
     return _superpose_field_3d(atoms, gpts, atomic_magnetic_field_3d, cutoff=cutoff)
 
 
-def vector_potential_3d(atoms, gpts, cutoff=6.0):
+def vector_potential_3d(atoms: Atoms, gpts: tuple[int, int, int], cutoff: float = 6.0):
     return _superpose_field_3d(atoms, gpts, atomic_vector_potential_3d, cutoff=cutoff)
 
 
-def radial_cutoff(func, tolerance=1e-3):
+def radial_cutoff(func: Callable, tolerance: float = 1e-3):
     return brentq(lambda x: func(x) - tolerance, a=1e-3, b=1e3)
 
 
@@ -183,8 +181,8 @@ def rotate_points_2d(points, phi):
     return points
 
 
-def cartesian2polar_3d(v: np.ndarray) -> List[float]:
-    r = np.linalg.norm(v)
+def cartesian2polar_3d(v: np.ndarray) -> tuple[float, float, float]:
+    r = float(np.linalg.norm(v))
     theta = np.arccos(v[2] / r)
     xy_magnitude = np.linalg.norm(v[:2])
     if xy_magnitude > 0.0:
@@ -192,7 +190,7 @@ def cartesian2polar_3d(v: np.ndarray) -> List[float]:
     else:
         phi = 0.0
 
-    return [r, theta, phi]
+    return r, theta, phi
 
 
 def symmetric_arange(cutoff: float, sampling: float) -> np.ndarray:
@@ -354,7 +352,7 @@ class QuasiDipoleProjections:
         self._slice_thickness = slice_thickness
         self._sampling = sampling
         self._interpolation_func = interpolation_func
-        self._tables = {}
+        self._tables: dict[str, np.ndarray] = {}
 
     @property
     def slice_thickness(self):
@@ -408,7 +406,7 @@ class QuasiDipoleProjections:
         a: float,
         b: float,
         gpts: tuple[int, int],
-        sampling: [float, float],
+        sampling: tuple[float, float],
         device: str = "cpu",
     ):
         if len(atoms) == 0:
@@ -468,7 +466,7 @@ class QuasiDipoleMagneticFieldProjections(QuasiDipoleProjections):
             slice_thickness=slice_thickness,
         )
 
-    def _calculate_integral_table(self, symbol):
+    def _calculate_integral_table(self, symbol: str) -> np.ndarray:
         r = np.linspace(0, self.cutoff(symbol), 100)
         parameters = np.array(self.parametrization.parameters[symbol])
         b1_radial = radial_prefactor_b1(r, parameters)
@@ -679,7 +677,7 @@ class VectorPotentialArray(BaseVectorPotential, FieldArray):
     ) -> VectorPotentialArray:
         raise NotImplementedError
 
-    def adjust_coulomb_potential(self, potential_array, energy: float):
+    def adjust_coulomb_potential(self, potential_array: PotentialArray, energy: float):
         # kg * s−2 * A−1 * Å * Å
         # kg * m2 * s−1
         # A * s
@@ -698,7 +696,7 @@ class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
 
     def __init__(
         self,
-        atoms: Optional[Atoms | BaseFrozenPhonons] = None,
+        atoms: Atoms | BaseFrozenPhonons,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         slice_thickness: float | tuple[float, ...] = 1,
@@ -738,7 +736,7 @@ class VectorPotential(_FieldBuilderFromAtoms, BaseMagneticField):
 
     def __init__(
         self,
-        atoms: Optional[Atoms | BaseFrozenPhonons] = None,
+        atoms: Atoms | BaseFrozenPhonons,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         slice_thickness: float | tuple[float, ...] = 1,

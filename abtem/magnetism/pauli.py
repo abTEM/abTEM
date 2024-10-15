@@ -1,4 +1,6 @@
-import numba
+from __future__ import annotations
+
+import numba  # type: ignore
 import numpy as np
 from numba import prange
 
@@ -127,5 +129,7 @@ def apply_A_xy_dot_nabla_xy(A, wave_functions, sampling):
     result = A[0] * grad_x + A[1] * grad_y
 
     return result
+
+
 
 
