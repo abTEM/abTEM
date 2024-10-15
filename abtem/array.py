@@ -509,10 +509,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if axis.label == name:
                 data = axis.coordinates(n)
                 axes_metadata_index = i
-
-        if data is None:
-            raise RuntimeError()
-
+        
         if axes_metadata_index is not None and broadcastable:
             return np.array(data)[
                 (
