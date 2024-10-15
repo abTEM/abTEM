@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import Sequence
+from typing import Optional, Sequence, SupportsFloat
 
 import numpy as np
 from ase import Atoms
@@ -15,7 +15,8 @@ from abtem.core.utils import EqualityMixin, label_to_index
 
 def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarray:
     """
-    Calculates slice thicknesses to match the spacing between the crystal planes of a given collection of atoms.
+    Calculates slice thicknesses to match the spacing between the crystal planes of a
+    given collection of atoms.
 
     Parameters
     ----------
@@ -41,30 +42,35 @@ def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarra
 
 def _validate_slice_thickness(
     slice_thickness: float | Sequence[float],
-    thickness: float = None,
-    num_slices: int = None,
+    thickness: Optional[float] = None,
+    num_slices: Optional[int] = None,
 ) -> tuple[float, ...]:
-    if np.isscalar(slice_thickness):
+    if isinstance(slice_thickness, SupportsFloat):
         if thickness is not None:
             thickness = float(thickness)
             n = float(np.ceil(thickness / slice_thickness))
-            slice_thickness = (thickness / n,) * int(n)
+            validated_slice_thickness = (thickness / n,) * int(n)
         elif num_slices is not None:
-            slice_thickness = (slice_thickness,) * num_slices
+            validated_slice_thickness = (float(slice_thickness),) * num_slices
         else:
-            raise RuntimeError()
+            raise RuntimeError("Either thickness or num_slices must be given.")
     else:
-        slice_thickness = tuple(float(d) for d in slice_thickness)
+        validated_slice_thickness = tuple(float(d) for d in slice_thickness)
 
     if thickness is not None:
-        if not np.isclose(np.sum(slice_thickness), thickness):
-            raise RuntimeError()
+        if not np.isclose(np.sum(validated_slice_thickness), thickness):
+            raise RuntimeError(
+                f"Sum of slice thicknesses must be equal to the depth of the cell. "
+                f"Slice thicknesses: {np.sum(slice_thickness)}, thickness: {thickness}"
+            )
 
     if num_slices is not None:
-        if len(slice_thickness) != num_slices:
-            raise RuntimeError()
+        if len(validated_slice_thickness) != num_slices:
+            raise RuntimeError(
+                "Number of slice thicknesses must match the number of slices."
+            )
 
-    return slice_thickness
+    return validated_slice_thickness
 
 
 def slice_limits(slice_thickness) -> list[tuple[float, float]]:
@@ -77,7 +83,25 @@ def slice_limits(slice_thickness) -> list[tuple[float, float]]:
     return limits
 
 
-def _unpack_item(item: int | slice, num_items):
+def _unpack_item(item: int | slice, num_items: int) -> tuple[int, int]:
+    """
+    Unpacks an item to a first and last index.
+
+    Parameters
+    ----------
+    item : int or slice
+        The item to unpack.
+    num_items : int
+        The number of items.
+
+    Returns
+    -------
+    first_index : int
+        The first index.
+    last_index : int
+        The last index.
+    """
+
     if isinstance(item, int):
         first_index = item
         last_index = first_index + 1
@@ -85,12 +109,9 @@ def _unpack_item(item: int | slice, num_items):
         first_index = 0 if item.start is None else item.start
         last_index = num_items if item.stop is None else item.stop
     else:
-        raise RuntimeError()
+        raise RuntimeError("item must be an int or a slice")
 
-    if last_index is None:
-        last_index = num_items
-    else:
-        last_index = min(last_index, num_items)
+    last_index = min(last_index, num_items)
 
     if first_index >= last_index:
         raise IndexError
@@ -100,18 +121,21 @@ def _unpack_item(item: int | slice, num_items):
 
 class BaseSlicedAtoms(EqualityMixin):
     """
-    Base class for sliced atoms used for grouping each atom in an ASE atoms object into a collection of slices along
-    the z-direction.
+    Base class for sliced atoms used for grouping each atom in an ASE atoms object into
+    a collection of slices along the z-direction.
 
     Parameters
     ----------
     atoms: Atoms
         The atoms to be sliced. Must have an orthgonal cell.
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
-        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
-        supercell. The slice thickness may be given as a sequence of values for each slice, in which case an error will
-        be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
+        Thickness of the potential slices in the propagation direction in [Å]
+        (default is 0.5 Å).
+        If given as a float, the number of slices is calculated by dividing the slice
+        thickness into the `z`-height of
+        supercell. The slice thickness may be given as a sequence of values for each
+        slice, in which case an error will be thrown if the sum of slice thicknesses
+        is not equal to the height of the atoms.
     """
 
     def __init__(self, atoms: Atoms, slice_thickness: float | Sequence[float] | str):
@@ -160,12 +184,16 @@ class BaseSlicedAtoms(EqualityMixin):
         """Raises an error if index is greater than the number of slices."""
         if index >= self.num_slices:
             raise RuntimeError(
-                f"Slice index {index} too large for sliced atoms with {self.num_slices} slices"
+                f"Slice index {index} too large for sliced atoms with {self.num_slices}"
+                f"slices"
             )
 
     @abstractmethod
     def get_atoms_in_slices(
-        self, first_slice: int, last_slice: int = None, atomic_number: int = None
+        self,
+        first_slice: int,
+        last_slice: Optional[int] = None,
+        atomic_number: Optional[int] = None,
     ) -> Atoms:
         """
         Get the atoms between two slice indices.
@@ -185,7 +213,10 @@ class BaseSlicedAtoms(EqualityMixin):
         """
 
     def generate_atoms_in_slices(
-        self, first_slice: int = 0, last_slice: int = None, atomic_number: int = None
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        atomic_number: Optional[int] = None,
     ):
         """
         Generate atoms in slices.
@@ -237,10 +268,13 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
     atoms: Atoms
         The atoms to be sliced. Must have an orthgonal cell.
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
-        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
-        supercell. The slice thickness may be given as a sequence of values for each slice, in which case an error will
-        be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
+        Thickness of the potential slices in the propagation direction in [Å]
+        (default is 0.5 Å).
+        If given as a float, the number of slices is calculated by dividing the slice
+        thickness into the `z`-height of
+        supercell. The slice thickness may be given as a sequence of values for each
+        slice, in which case an error will be thrown if the sum of slice thicknesses is
+        not equal to the height of the atoms.
     """
 
     def __init__(
@@ -264,7 +298,10 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
         ]
 
     def get_atoms_in_slices(
-        self, first_slice: int, last_slice: int = None, atomic_number: int = None
+        self,
+        first_slice: int,
+        last_slice: Optional[int] = None,
+        atomic_number: Optional[int] = None,
     ) -> Atoms:
         if last_slice is None:
             last_slice = first_slice
@@ -294,10 +331,13 @@ class SlicedAtoms(BaseSlicedAtoms):
     atoms: Atoms
         The atoms to be sliced. Must have an orthgonal cell.
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
-        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
-        supercell. The slice thickness may be given as a sequence of values for each slice, in which case an error will
-        be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
+        Thickness of the potential slices in the propagation direction in [Å]
+        (default is 0.5 Å).
+        If given as a float, the number of slices is calculated by dividing the slice
+        thickness into the `z`-height of
+        supercell. The slice thickness may be given as a sequence of values for each
+        slice, in which case an error will be thrown if the sum of slice thicknesses is
+        not equal to the height of the atoms.
     xy_padding : float, optional
         Padding of the atoms in x and y included in each of the slices [Å].
     z_padding : float, optional
@@ -316,7 +356,10 @@ class SlicedAtoms(BaseSlicedAtoms):
         self._z_padding = z_padding
 
     def get_atoms_in_slices(
-        self, first_slice: int, last_slice: int = None, atomic_number: int = None
+        self,
+        first_slice: int,
+        last_slice: Optional[int] = None,
+        atomic_number: Optional[int] = None,
     ) -> Atoms:
         if last_slice is None:
             last_slice = first_slice
