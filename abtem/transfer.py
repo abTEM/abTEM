@@ -546,8 +546,10 @@ class Vortex(BaseAperture):
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
+        soft: bool = False,
     ):
         self._quantum_number = quantum_number
+        self._soft = soft
         super().__init__(
             energy=energy,
             semiangle_cutoff=semiangle_cutoff,
@@ -559,7 +561,7 @@ class Vortex(BaseAperture):
     @property
     def soft(self) -> bool:
         """True if the aperture has a soft edge."""
-        return False
+        return self._soft
 
     @property
     def quantum_number(self) -> int:
@@ -575,8 +577,12 @@ class Vortex(BaseAperture):
         semiangle_cutoff = self.semiangle_cutoff
         assert isinstance(semiangle_cutoff, SupportsFloat)
         semiangle_cutoff = semiangle_cutoff / 1e3
-
-        array = alpha < semiangle_cutoff
+        if self._soft:
+            array = soft_aperture(
+                alpha, phi, semiangle_cutoff, self.angular_sampling
+            )
+        else:
+            array = alpha < semiangle_cutoff
         array = array * np.exp(1j * phi * self.quantum_number)
         return array
 
