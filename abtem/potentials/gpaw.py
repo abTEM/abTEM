@@ -17,6 +17,7 @@ from ase import Atoms, units
 from ase.data import atomic_numbers, chemical_symbols
 from scipy.interpolate import interp1d
 
+from abtem.atoms import plane_to_axes
 from abtem.core.axes import AxisMetadata
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
@@ -103,47 +104,6 @@ class _DummyGPAW:
 
         return cls.from_gpaw(calc)
 
-        # with Reader(path) as reader:
-        #     atoms = read_atoms(reader.atoms)
-        #
-        #     from gpaw.calculator import GPAW
-        #
-        #     parameters = copy.copy(GPAW.default_parameters)
-        #     parameters.update(reader.parameters.asdict())
-        #
-        #     setup_mode = parameters["mode"]
-        #     setup_xc = parameters["xc"]
-        #
-        #     if isinstance(setup_xc, dict) and "setup_name" in setup_xc:
-        #         setup_xc = setup_xc["setup_name"]
-        #
-        #     assert isinstance(setup_xc, str)
-        #
-        #     density = reader.density.density * units.Bohr**3
-        #     gd = GridDescriptor(
-        #         N_c=density.shape[-3:],
-        #         cell_cv=atoms.get_cell() / Bohr,
-        #         comm=SerialCommunicator(),
-        #     )
-        #
-        #     setups = _get_gpaw_setups(atoms, setup_mode, setup_xc)
-        #
-        #     D_asp = unpack_atomic_matrices(
-        #         reader.density.atomic_density_matrices, setups
-        #     )
-        #
-        #     hamiltonian = reader.hamiltonian
-        #
-        # kwargs = {
-        #     "setup_mode": setup_mode,
-        #     "setup_xc": setup_xc,
-        #     "nt_sG": density,
-        #     "gd": gd,
-        #     "D_asp": D_asp,
-        #     "atoms": atoms,
-        # }
-        # return cls(**kwargs)
-
     @classmethod
     def from_generic(cls, calculator, lazy: bool = True):
         if isinstance(calculator, str):
@@ -224,21 +184,28 @@ def _generate_slices(
     atoms,
     gpts,
     slice_thickness,
+    plane="xy",
     first_slice=0,
     last_slice=None,
 ):
     potential_generators = []
     for i, interpolator in enumerate(interpolators):
         parametrization = _DummyParametrization(interpolator)
-
         potential = Potential(
             gpts=gpts,
             atoms=atoms[i : i + 1],
             parametrization=parametrization,
             slice_thickness=slice_thickness,
             projection="finite",
+            plane=plane,
         )
         potential_generators.append(potential.generate_slices())
+
+    if potential.plane != "xy":
+        axes = plane_to_axes(potential.plane)
+        valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
+    #else:
+    #    atoms = ewald_potential.frozen_phonons.atoms
 
     transformed_atoms = potential.get_transformed_atoms()
 
@@ -247,9 +214,11 @@ def _generate_slices(
     else:
         transform_valence_potential = True
 
+    transform_valence_potential = False
+
     if last_slice is None:
         last_slice = len(potential)
-
+    
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
 
@@ -472,7 +441,7 @@ class GPAWPotential(_PotentialBuilder):
             parametrization=ewald_parametrization,
             slice_thickness=self.slice_thickness,
             projection="finite",
-            integral_method="quadrature",
+            # integral_method="quadrature",
             plane=self.plane,
             box=self.box,
             origin=self.origin,
@@ -534,16 +503,18 @@ class GPAWPotential(_PotentialBuilder):
         interpolators = get_core_correction_interpolators(
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001
         )
+        
+        #calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
+        #calc.initialize(random_atoms)
 
-        # calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
-        # calc.initialize(random_atoms)
-
-        # ewald_potential = self._get_ewald_potential()
-        #
+        #ewald_potential = self._get_ewald_potential()
+        
         # array = self._get_all_electron_density()
+        # array = calculator.valence_potential
 
         for slic in _generate_slices(
             interpolators,
+            plane=self.plane,
             valence_potential=calculator.valence_potential,
             atoms=random_atoms,
             gpts=self.gpts,
