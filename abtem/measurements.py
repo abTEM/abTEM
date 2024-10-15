@@ -24,7 +24,7 @@ import numpy as np
 from ase import Atom
 from ase.cell import Cell
 from matplotlib.axes import Axes
-from numba import jit, prange  # type: ignore
+from numba import jit  # type: ignore
 
 from abtem.array import ArrayObject, stack
 from abtem.core import config
@@ -55,12 +55,10 @@ from abtem.visualize.widgets import ImageGUI, LinesGUI, ScatterGUI
 
 interpolate_bilinear_cuda: Optional[Callable] = None
 sum_run_length_encoded: Optional[Callable] = None
+sum_run_length_encoded_cuda: Optional[Callable] = None
 if cp is not None:
     from abtem.core._cuda import interpolate_bilinear as interpolate_bilinear_cuda
     from abtem.core._cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
-else:
-    sum_run_length_encoded_cuda = None
-    interpolate_bilinear_cuda = None
 
 xr: Optional[ModuleType] = None
 try:
