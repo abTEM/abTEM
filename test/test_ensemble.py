@@ -132,7 +132,7 @@ def test_apply_waves_transform(data, ensemble, lazy):
     ensemble = data.draw(ensemble())
     waves = data.draw(abtem_st.probe(allow_distribution=False)).build(lazy=lazy)
 
-    ensemble_shape = ensemble._out_ensemble_shape(waves)
+    ensemble_shape = ensemble._out_ensemble_shape(waves)[0]
     waves = ensemble.apply(waves)
 
     assert waves.shape[:-2] == ensemble_shape
