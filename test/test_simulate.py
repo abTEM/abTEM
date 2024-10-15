@@ -147,7 +147,14 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
     if isinstance(scan, CustomScan) and isinstance(detector, AnnularDetector):
         return
 
-    measurement_shape = detector._out_shape(probe)
+    try:
+        measurement_shape = detector._out_shape(probe)[0]
+    except RuntimeError as e:
+        if str(e) == "annular detector requires a scan axis":
+            measurement_shape = ()
+        else:
+            raise
+            
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 
     if isinstance(scan, CustomScan) and scan.shape == (1,):
@@ -168,13 +175,13 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
     #     print(measurement.shape)
     #     raise
 
-    assert measurement.dtype == detector._out_dtype(probe)
-    assert type(measurement) == detector._out_type(probe.build(scan))
+    assert measurement.dtype == detector._out_dtype(probe)[0]
+    assert type(measurement) == detector._out_type(probe.build(scan))[0]
 
     if not isinstance(detector, AnnularDetector):
         assert measurement.base_axes_metadata == detector._out_base_axes_metadata(
             probe.build(scan)
-        )
+        )[0]
 
 
 # # @given(data=st.data(),

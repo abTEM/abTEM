@@ -30,12 +30,14 @@ except ImportError:
 try:
     import cupyx  # type: ignore
 except ImportError:
+    assert cp is None
     cupyx = None
 
 
 try:
-    import cupyx.ndimage as cupyx  # type: ignore
+    import cupyx.scipy.ndimage as cupyx_ndimage  # type: ignore
 except ImportError:
+    assert cupyx is None
     cupyx_ndimage = None
 
 

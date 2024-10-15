@@ -181,7 +181,7 @@ def test_prism_scan(
         or isinstance(detector, WavesDetector)
     )
     scan.match_probe(probe)
-    measurement_shape = detector._out_shape(probe)
+    measurement_shape = detector._out_shape(probe)[0]
 
     measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=lazy)
 
@@ -192,7 +192,7 @@ def test_prism_scan(
         + scan.ensemble_shape
         + measurement_shape
     )
-    assert measurement.dtype == detector._out_dtype(probe)
+    assert measurement.dtype == detector._out_dtype(probe)[0]
 
     # measurement = measurement.compute()
     # assert (

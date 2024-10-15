@@ -18,6 +18,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
 from abtem.core.units import units_type
 from abtem.core.utils import get_dtype
+from abtem.core.fft import fft_interpolate
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -30,7 +31,7 @@ from abtem.measurements import (
     _scan_shape,
     _scanned_measurement_type,
 )
-from abtem.transform import WavesTransform, WavesType, ArrayObjectTransform
+from abtem.transform import ArrayObjectTransform, WavesTransform, WavesType
 from abtem.visualize.visualizations import discrete_cmap
 
 if TYPE_CHECKING:
@@ -151,9 +152,7 @@ class BaseDetector(ArrayObjectTransform):
             xp = get_array_module(waves.device)
             return (xp.array((), dtype=self._out_dtype(waves)[0]),)
 
-    def detect(
-        self, waves: WavesType
-    ) -> Waves | tuple[Waves, ...]:
+    def detect(self, waves: WavesType) -> Waves | tuple[Waves, ...]:
         """
         Detect the given waves producing a measurement.
 
@@ -284,7 +283,8 @@ class AnnularDetector(BaseDetector):
         ensemble_shapes = super()._out_ensemble_shape(waves)
 
         if len(_scan_shape(waves)) == 0:
-            raise RuntimeError("annular detector requires a scan axis")
+            return ((),)
+            # raise RuntimeError("annular detector requires a scan axis")
 
         return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
 
@@ -1104,12 +1104,21 @@ class WavesDetector(BaseDetector):
        like s3:// for remote data. If not set (default) the data stays in memory.
     """
 
-    def __init__(self, to_cpu: bool = False, url: Optional[str] = None):
+    def __init__(
+        self,
+        gpts: Optional[tuple[int, int]] = None,
+        to_cpu: bool = False,
+        url: Optional[str] = None,
+    ):
+        self._gpts = gpts
         super().__init__(to_cpu=to_cpu, url=url)
 
     def _out_type(self, waves: ArrayObject) -> tuple[Type[Waves]]:
         from abtem.waves import Waves
-
+        return (Waves,)
+    
+    def _out_type(self, waves: ArrayObject) -> tuple[Type[Waves]]:
+        from abtem.waves import Waves
         return (Waves,)
 
     def _out_metadata(self, waves: ArrayObject) -> tuple[dict]:
@@ -1123,7 +1132,12 @@ class WavesDetector(BaseDetector):
         if self.to_cpu:
             waves = waves.to_cpu()
 
-        return waves._eager_array
+        if self._gpts is not None:
+            array = fft_interpolate(waves.array, new_shape=array.shape[:-2] + self._gpts)
+        else:
+            array = waves.array
+        
+        return array
 
     def detect(self, waves: Waves) -> Waves:
         """

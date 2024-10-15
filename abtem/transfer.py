@@ -1307,7 +1307,7 @@ class Aberrations(BaseTransferFunction, _HasAberrations):
             )
 
         dtype = get_dtype(complex=False)
-        array *= np.array(2 * xp.pi / self.wavelength, dtype=dtype)
+        array *= xp.array(2 * xp.pi / self.wavelength, dtype=dtype)
         array = complex_exponential(-array)
 
         if cp is not None:

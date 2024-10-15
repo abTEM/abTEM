@@ -1132,10 +1132,12 @@ def reduce_plane_wave_expansion(values, plane_waves):
 
 
 def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
-    x = np.linspace(0, extent[0], gpts[0], endpoint=False)
-    y = np.linspace(0, extent[1], gpts[1], endpoint=False)
-    z = np.array(thicknesses)
 
+    xp = get_array_module(amplitudes)
+    x = xp.linspace(0, extent[0], gpts[0], endpoint=False)
+    y = xp.linspace(0, extent[1], gpts[1], endpoint=False)
+    z = xp.array(thicknesses)
+    
     basis = plane_wave_basis(g_vec, x, y, z)
     wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
     return wave_functions
@@ -1466,6 +1468,7 @@ class BlochWaves:
     def _calculate_array(
         self, thicknesses: np.ndarray, lazy: bool = True
     ) -> np.ndarray | da.core.Array:
+        assert isinstance(thicknesses, np.ndarray)
         hkl = self.hkl
 
         A = self.calculate_structure_matrix(lazy=lazy)
@@ -1506,7 +1509,6 @@ class BlochWaves:
         thicknesses: float | Sequence[float],
         return_complex: bool = False,
         lazy: bool = True,
-        merge_tol: Optional[float] = None,
     ) -> IndexedDiffractionPatterns:
         """Calculate the dynamical diffraction patterns for a given set of thicknesses.
 
@@ -1529,17 +1531,16 @@ class BlochWaves:
         IndexedDiffractionPatterns
             The dynamical diffraction patterns.
         """
-
-        array = self._calculate_array(thicknesses, lazy=lazy)
-
         ensemble_axes_metadata: list[AxisMetadata]
         if isinstance(thicknesses, (int, float)):
-            thicknesses = [float(thicknesses)]
             ensemble_axes_metadata = []
         else:
             ensemble_axes_metadata = [
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
+
+        thicknesses = np.array(thicknesses, dtype=get_dtype())
+        array = self._calculate_array(thicknesses, lazy=lazy)
 
         reciprocal_lattice_vectors = reciprocal_cell(self.cell)
 
@@ -1565,6 +1566,12 @@ class BlochWaves:
 
     @staticmethod
     def _calculate_exit_waves(amplitudes, g_vec, x, y, z):
+        xp = get_array_module(amplitudes)
+        g_vec = xp.asarray(g_vec)
+        x = xp.asarray(x)
+        y = xp.asarray(y)
+        z = xp.asarray(z)
+
         basis = plane_wave_basis(g_vec, x, y, z)
 
         if not z.ndim:
@@ -1671,7 +1678,7 @@ class BlochWaves:
 
         ensemble_axes_metadata: list[AxisMetadata] = []
 
-        if isinstance(thicknesses, np.ndarray):
+        if isinstance(thicknesses, np.ndarray) and thicknesses.ndim > 0:
             ensemble_axes_metadata = [
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
@@ -2198,12 +2205,13 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             pbar = config.get("local_diagnostics.task_level_progress", False)
 
         if isinstance(thicknesses, (float, int)):
-            thicknesses = [thicknesses]
             ensemble_axes_metadata = []
         else:
             ensemble_axes_metadata = [
                 ThicknessAxis(label="z", units="Å", values=tuple(thicknesses))
             ]
+
+        thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         array: np.ndarray | da.core.Array
         if lazy:
