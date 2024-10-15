@@ -55,6 +55,37 @@ def _spatial_frequencies_squared(shape, cell: Cell):
     return kx**2 + ky**2 + kz**2
 
 
+def curl_fourier(vector_field: np.ndarray, cell: Cell) -> np.ndarray:
+    """
+    Calculate the curl of a vector field in 3D using Fourier-space differentiation.
+
+    Parameters
+    ----------
+    vector_field : np.ndarray
+        Array representing a vector field of dimension 3.
+    cell : ase.cell.Cell
+        ASE `Cell` object defining the region of space where the vector field is defined.
+
+    Returns
+    -------
+    curl : np.ndarray
+        Array representing the curl of the vector field.
+    """
+
+    F_hat = np.fft.fftn(vector_field, axes=(-3, -2, -1))
+
+    shape = vector_field.shape[1:]
+    kx, ky, kz = _spatial_frequencies(shape, cell)
+
+    curl_x_hat = 2 * np.pi * 1.0j * (ky * F_hat[2] - kz * F_hat[1])
+    curl_y_hat = 2 * np.pi * 1.0j * (kz * F_hat[0] - kx * F_hat[2])
+    curl_z_hat = 2 * np.pi * 1.0j * (kx * F_hat[1] - ky * F_hat[0])
+
+    curl_hat = np.stack((curl_x_hat, curl_y_hat, curl_z_hat))
+    curl = np.fft.ifftn(curl_hat, axes=(-3, -2, -1)).real
+    return curl
+
+
 def integrate_gradient_fourier(
     array: np.ndarray, cell: Cell, in_space: str = "real", out_space: str = "real"
 ) -> np.ndarray:
@@ -79,16 +110,16 @@ def integrate_gradient_fourier(
     """
 
     if in_space == "real":
-        array = np.fft.fftn(array)
+        array = np.fft.fftn(array, axes=(-3, -2, -1))
 
-    k2 = _spatial_frequencies_squared(array.shape, cell)
+    k2 = _spatial_frequencies_squared(array.shape[-3:], cell)
 
-    k2 = 2**2 * np.pi**2 * k2
+    k2 = -2**2 * np.pi**2 * k2
     k2[0, 0, 0] = 1.0
     array /= k2
 
     if out_space == "real":
-        array = np.fft.ifftn(array).real
+        array = np.fft.ifftn(array, axes=(-3, -2, -1)).real
 
     return array
 
@@ -259,7 +290,7 @@ def _generate_slices(
         charge, atoms, ewald_potential.integrator.parametrization.width
     )
 
-    potential = (
+    potential = -(
         integrate_gradient_fourier(
             charge, atoms.cell, in_space="fourier", out_space="real"
         )
