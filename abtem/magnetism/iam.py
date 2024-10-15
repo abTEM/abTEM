@@ -5,7 +5,7 @@ from typing import Optional
 
 import dask.array as da
 import numpy as np
-from ase import Atoms
+from ase import Atoms, units
 from ase.data import chemical_symbols
 from numba import jit
 from scipy.integrate import trapezoid
@@ -13,6 +13,7 @@ from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 
 from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessAxis
+from abtem.core.energy import energy2sigma
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
@@ -21,6 +22,8 @@ from abtem.potentials.iam import (
     FieldArray,
     _FieldBuilderFromAtoms,
 )
+
+CUTOFF = 4.25
 
 
 def radial_prefactor_a(r, parameters):
@@ -340,7 +343,7 @@ class QuasiDipoleProjections:
         interpolation_func,
         parametrization: str = "lyon",
         # cutoff_tolerance: float = 1e-3,
-        cutoff: float = 4.0,
+        cutoff: float = CUTOFF,
         integration_steps: float = 0.01,
         sampling: float = 0.1,
         slice_thickness: float = 0.1,
@@ -451,7 +454,7 @@ class QuasiDipoleMagneticFieldProjections(QuasiDipoleProjections):
         self,
         parametrization: str = "lyon",
         # cutoff_tolerance: float = 1e-3,
-        cutoff: float = 4.0,
+        cutoff: float = CUTOFF,
         integration_steps: float = 0.01,
         sampling: float = 0.1,
         slice_thickness: float = 0.1,
@@ -508,7 +511,7 @@ class QuasiDipoleVectorPotentialProjections(QuasiDipoleProjections):
         self,
         parametrization: str = "lyon",
         # cutoff_tolerance: float = 1e-3,
-        cutoff: float = 4.0,
+        cutoff: float = CUTOFF,
         integration_steps: float = 0.01,
         sampling: float = 0.1,
         slice_thickness: float = 0.1,
@@ -566,8 +569,35 @@ class BaseMagneticField(BaseField):
                 label="z", values=tuple(np.cumsum(self.slice_thickness)), units="Å"
             ),
             OrdinalAxis(
-                label="Field component",
                 values=("Bx", "By", "Bz"),
+            ),
+            RealSpaceAxis(
+                label="x", sampling=self.sampling[0], units="Å", endpoint=False
+            ),
+            RealSpaceAxis(
+                label="y", sampling=self.sampling[1], units="Å", endpoint=False
+            ),
+        ]
+
+
+class BaseVectorPotential(BaseField):
+    @property
+    def base_shape(self):
+        """Shape of the base axes of the potential."""
+        return (
+            self.num_slices,
+            3,
+        ) + self.gpts
+
+    @property
+    def base_axes_metadata(self):
+        """List of AxisMetadata for the base axes."""
+        return [
+            ThicknessAxis(
+                label="z", values=tuple(np.cumsum(self.slice_thickness)), units="Å"
+            ),
+            OrdinalAxis(
+                values=("Ax", "Ay", "Az"),
             ),
             RealSpaceAxis(
                 label="x", sampling=self.sampling[0], units="Å", endpoint=False
@@ -591,6 +621,9 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
+        if metadata is None:
+            metadata = {}
+        metadata = {"label": "magnetic field", "units": "T", **metadata}
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,
@@ -601,15 +634,17 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
             metadata=metadata,
         )
 
+    @classmethod
     def from_array_and_metadata(
-        self,
+        cls,
         array: np.ndarray | da.core.Array,
+        axes_metadata: list[AxisMetadata],
         metadata: dict,
     ) -> MagneticFieldArray:
         raise NotImplementedError
 
 
-class VectorPotentialArray(BaseMagneticField, FieldArray):
+class VectorPotentialArray(BaseVectorPotential, FieldArray):
     _base_dims = 4
 
     def __init__(
@@ -622,6 +657,9 @@ class VectorPotentialArray(BaseMagneticField, FieldArray):
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ):
+        if metadata is None:
+            metadata = {}
+        metadata = {"label": "vector potential", "units": "ÅT", **metadata}
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,
@@ -632,12 +670,27 @@ class VectorPotentialArray(BaseMagneticField, FieldArray):
             metadata=metadata,
         )
 
+    @classmethod
     def from_array_and_metadata(
-        self,
+        cls,
         array: np.ndarray | da.core.Array,
+        axes_metadata: list[AxisMetadata],
         metadata: dict,
     ) -> VectorPotentialArray:
         raise NotImplementedError
+
+    def adjust_coulomb_potential(self, potential_array, energy: float):
+        # kg * s−2 * A−1 * Å * Å
+        # kg * m2 * s−1
+        # A * s
+        # A * s * kg-1 * m-2 * s
+        # kg-1 * s2 * A * m-2
+
+        e_over_hbar = units._e / (units._hplanck / (2 * np.pi)) * 1e-10
+        unit_conversion = e_over_hbar / energy2sigma(energy) * 1e-10
+        adjusted_potential = potential_array.copy()
+        adjusted_potential.array[:] -= self.array[:, 2] * unit_conversion
+        return adjusted_potential
 
 
 class MagneticField(_FieldBuilderFromAtoms, BaseMagneticField):
