@@ -1,5 +1,8 @@
 """Main abTEM module."""
 
+import importlib
+import sys
+
 from abtem import distributions, transfer
 from abtem._version import __version__
 from abtem.array import concatenate, from_zarr, stack
@@ -23,13 +26,21 @@ from abtem.measurements import (
     ReciprocalSpaceLineProfiles,
 )
 from abtem.potentials.charge_density import ChargeDensityPotential
-from abtem.potentials.gpaw import GPAWPotential
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.transfer import CTF, Aperture, SpatialEnvelope, TemporalEnvelope
 from abtem.visualize.visualizations import show_atoms
 from abtem.waves import PlaneWave, Probe, Waves
+
+
+def _dynamic_import_gpaw():
+    module_name = "abtem.potentials.gpaw"
+    class_name = "GPAWPotential"
+    module = importlib.import_module(module_name)
+    setattr(sys.modules[__name__], class_name, getattr(module, class_name))
+
+_dynamic_import_gpaw()
 
 __all__ = [
     "__version__",
