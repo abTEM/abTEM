@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import threading
 import warnings
@@ -8,7 +10,6 @@ import yaml
 from dask.config import canonical_name, collect, update
 
 no_default = "__no_default__"
-
 
 if "ABTEM_CONFIG" in os.environ:
     PATH = os.environ["ABTEM_CONFIG"]
