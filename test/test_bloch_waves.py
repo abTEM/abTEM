@@ -93,7 +93,7 @@ def test_potential_from_structure_factor(
     )
 
     parametrization = abtem.parametrizations.LobatoParametrization(
-        sigmas=thermal_sigma * np.sqrt(3.0)
+        sigmas=thermal_sigma
     )
 
     potential = abtem.Potential(

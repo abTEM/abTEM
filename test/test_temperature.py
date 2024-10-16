@@ -45,10 +45,11 @@ def test_frozen_phonons_as_ensembles(data, frozen_phonons, lazy):
 
 
 def test_sigmas():
-    atoms = ase.build.bulk("Au", cubic=True) * (5, 5, 5)
+    atoms = ase.build.bulk("Au", cubic=True) * (2, 2, 2)
 
-    frozen_phonons = FrozenPhonons(atoms, num_configs=100, sigmas=.1, seed=100, directions="xyz")
+    frozen_phonons = FrozenPhonons(atoms, num_configs=1000, sigmas=.1, seed=None, directions="xyz")
 
-    ensemble = frozen_phonons.to_atoms_ensemble()
+    positions = np.stack([atoms.positions for atoms in frozen_phonons.to_atoms_ensemble().trajectory])
+    positions = positions - positions.mean(axis=0)
 
-    assert np.abs(np.linalg.norm(ensemble.standard_deviations(), axis=1).mean() - .1) < .001
+    assert np.abs(positions.std() - .1) < .001
