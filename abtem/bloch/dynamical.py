@@ -948,31 +948,6 @@ def calculate_dynamical_scattering(
     return array
 
 
-# def merge_spots():
-#     g_vec = self.g_vec
-#     clusters = fcluster(
-#         linkage(pdist(g_vec[:, :2]), method="complete"),
-#         merge_tol,
-#         criterion="distance",
-#     )
-
-#     thicknesses = xp.asarray(thicknesses)
-#     new_array = xp.zeros_like(array, shape=array.shape[:-1] + (clusters.max(),))
-#     new_hkl = np.zeros_like(hkl, shape=(clusters.max(), 3))
-#     for i, cluster in enumerate(label_to_index(clusters, min_label=1)):
-
-#         # new_array[:, i] = (array[:, cluster] * xp.exp(-2 * np.pi * 1.0j
-#               * g_vec[i, 2] * thicknesses)[:, None])[:, 0]
-#         new_array[:, i] = array[:, cluster].sum(-1)
-
-#         j = np.argmin(np.abs(excitation_errors(g_vec[cluster], self.energy)))
-
-#         new_hkl[i] = hkl[cluster][j]
-
-#     array = new_array
-#     hkl = new_hkl
-
-
 def expm(A: np.ndarray) -> np.ndarray:
     """Calculate the matrix exponential of a given array.
 
@@ -1522,10 +1497,7 @@ class BlochWaves:
         lazy : bool
             If True, the calculation is done lazily using dask. If False,
             the calculation is done eagerly.
-        merge_tol : float
-            The merge tolerance for merging overlapping diffraction spots.
-            Default is None, which means no merging is done.
-
+        
         Returns
         -------
         IndexedDiffractionPatterns
@@ -2055,7 +2027,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses: Sequence[float],
         return_complex: bool,
         pbar: bool,
-        merge_tol: float = np.inf,
         hkl_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         if hkl_mask is None:
@@ -2100,7 +2071,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             diffraction_patterns = bw.calculate_diffraction_patterns(
                 thicknesses,
                 return_complex=return_complex,
-                merge_tol=merge_tol,
                 lazy=False,
             )
 
@@ -2118,7 +2088,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         hkl_mask: np.ndarray,
         thicknesses: Sequence[float],
         return_complex: bool,
-        merge_tol: float,
         pbar: bool,
     ) -> np.ndarray:
         unpacked_block: BlochwaveEnsemble = block.item()
@@ -2126,7 +2095,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         array = unpacked_block._calculate_diffraction_intensities(
             thicknesses=thicknesses,
             return_complex=return_complex,
-            merge_tol=merge_tol,
             pbar=pbar,
             hkl_mask=hkl_mask,
         )
@@ -2137,7 +2105,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         self,
         thicknesses: Sequence[float],
         return_complex: bool,
-        merge_tol: float,
         pbar: bool,
     ) -> tuple[da.core.Array, np.ndarray]:
         blocks = self.ensemble_blocks(1)
@@ -2163,7 +2130,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             new_axes={out_ind[-2]: shape[-2], out_ind[-1]: shape[-1]},
             thicknesses=thicknesses,
             return_complex=return_complex,
-            merge_tol=merge_tol,
             pbar=pbar,
             concatenate=True,
             meta=xp.zeros(shape, dtype=get_dtype(complex=return_complex)),
@@ -2176,7 +2142,6 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         return_complex: bool = False,
         lazy: bool = True,
         pbar: Optional[bool] = None,
-        merge_tol: float = 1e-12,
     ) -> IndexedDiffractionPatterns:
         """Calculate the dynamical diffraction patterns of the ensemble for a given set
         of thicknesses.
@@ -2218,14 +2183,12 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             array, hkl_mask = self._lazy_calculate_diffraction_patterns(
                 thicknesses=thicknesses,
                 return_complex=return_complex,
-                merge_tol=merge_tol,
                 pbar=pbar,
             )
         else:
             array = self._calculate_diffraction_intensities(
                 thicknesses=thicknesses,
                 return_complex=return_complex,
-                merge_tol=merge_tol,
                 pbar=pbar,
             )
             hkl_mask = self.get_ensemble_hkl_mask()
