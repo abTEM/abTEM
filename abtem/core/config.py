@@ -6,7 +6,7 @@ import warnings
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Union
 
-import yaml
+import yaml  # type: ignore
 from dask.config import canonical_name, collect, update
 
 no_default = "__no_default__"

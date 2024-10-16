@@ -124,17 +124,11 @@ def validate_units(
         return units
 
     if units_type[units] == "real_space":
-        if units is None:
-            units = config.get("visualize.real_space_units", "Angstrom")
-
         if units == "Angstrom":
             units = "Å"
 
         return units
     elif units_type[units] == "reciprocal_space":
-        if units is None:
-            units = config.get("visualize.reciprocal_space_units", "Angstrom")
-
         if units == "Angstrom":
             units = "1/Å"
 
