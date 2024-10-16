@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import Optional, Sequence, SupportsFloat
+from typing import Any, Optional, Sequence, SupportsFloat, TypeGuard, Iterable
 
 import numpy as np
 from ase import Atoms
@@ -40,21 +40,48 @@ def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarra
     return slice_thickness
 
 
+def is_number(value: Any) -> TypeGuard[int | float | np.ndarray]:
+    """
+    Check if the value is a number, including a NumPy array with a single element,
+    an integer, or a float.
+
+    Parameters
+    ----------
+    value : Any
+        The value to check.
+
+    Returns
+    -------
+    bool
+        True if the value is a number, False otherwise.
+    """
+    if isinstance(value, (int, float)):
+        return True
+    elif isinstance(value, np.ndarray) and value.size == 1:
+        return isinstance(value.item(), (int, float))
+    else:
+        return False
+
+
 def _validate_slice_thickness(
     slice_thickness: float | Sequence[float],
     thickness: Optional[float] = None,
     num_slices: Optional[int] = None,
 ) -> tuple[float, ...]:
-    if isinstance(slice_thickness, SupportsFloat):
+    if is_number(slice_thickness):
         if thickness is not None:
             thickness = float(thickness)
             n = float(np.ceil(thickness / slice_thickness))
             validated_slice_thickness = (thickness / n,) * int(n)
         elif num_slices is not None:
+            print(
+                slice_thickness,
+                type(slice_thickness),
+            )
             validated_slice_thickness = (float(slice_thickness),) * num_slices
         else:
             raise RuntimeError("Either thickness or num_slices must be given.")
-    else:
+    elif isinstance(slice_thickness, Iterable):
         validated_slice_thickness = tuple(float(d) for d in slice_thickness)
 
     if thickness is not None:
