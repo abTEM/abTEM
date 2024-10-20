@@ -41,9 +41,6 @@ class TqdmWrapper:
 
         if tqdm is not None and enabled:
             self._pbar = tqdm(*args, **kwargs)
-        else:
-            if enabled:
-                warnings.warn("displaying task level progress require tqdm installed")
 
     @property
     def pbar(self):
