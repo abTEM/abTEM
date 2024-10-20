@@ -28,7 +28,7 @@ from abtem.core.energy import (
     relativistic_mass_correction,
 )
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
-from abtem.core.grid import Grid, HasGridMixin, polar_spatial_frequencies
+from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import CopyMixin
 from abtem.measurements import _polar_detector_bins
 
@@ -424,7 +424,7 @@ class SubshellTransitions(BaseTransitionCollection):
         )
 
 
-class BaseTransitionPotential(HasAcceleratorMixin, HasGridMixin, CopyMixin):
+class BaseTransitionPotential(HasAcceleratorMixin, HasGrid2DMixin, CopyMixin):
     def __init__(
         self, Z, extent, gpts, sampling, energy, double_channel: bool = True, **kwargs
     ):
