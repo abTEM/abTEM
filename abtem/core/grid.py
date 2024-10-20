@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from types import ModuleType
-from typing import Callable, Iterable, Optional, Sequence, TypeVar
+from typing import Callable, Generic, Iterable, Optional, Sequence, TypeVar
 
 import dask.array as da
 import numpy as np
@@ -194,7 +194,7 @@ class Grid(CopyMixin, EqualityMixin):
         return self._extent
 
     @extent.setter
-    def extent(self, extent: float | Sequence[float]):
+    def extent(self, extent: float | Sequence[float] | None):
         if extent is not None:
             if (
                 self._lock_extent
@@ -317,15 +317,12 @@ class Grid(CopyMixin, EqualityMixin):
         elif self.gpts is None:
             is_defined = False
 
-        elif self.gpts is None:
-            is_defined = False
-
         if raise_error and not is_defined:
             raise GridUndefinedError("grid is not defined")
 
         return is_defined
 
-    def match(self, other: Grid | HasGridMixin, check_match: bool = False):
+    def match(self, other: Grid | HasGrid2DMixin, check_match: bool = False):
         """
         Set the parameters of this grid to match another grid.
 
@@ -366,7 +363,7 @@ class Grid(CopyMixin, EqualityMixin):
         ):
             self.sampling = other.sampling
 
-    def check_match(self, other: Grid | HasGridMixin):
+    def check_match(self, other: Grid | HasGrid2DMixin):
         """
         Raise error if the grid of another object is different from this object.
 
@@ -441,62 +438,63 @@ class Grid(CopyMixin, EqualityMixin):
         return spatial_frequencies(self.gpts, self.sampling, False)
 
 
-class BaseHasGridMixin:
-    pass
+# class HasGridMixin:
+#     """
+#     Mixin class for objects that have a Grid.
+#     """
+
+#     _grid: Grid
+
+#     @property
+#     def grid(self) -> Grid:
+#         """Simulation grid."""
+#         return self._grid
+
+#     def match_grid(self, other: HasGridMixin, check_match: bool = False):
+#         """Match the grid to another object with a Grid."""
+#         self.grid.match(other, check_match=check_match)
+#         return self
+
+#     @property
+#     def extent(self) -> tuple[float, ...] | None:
+#         """Extent of grid for each dimension in Ångstrom."""
+#         return self.grid.extent
+
+#     @extent.setter
+#     def extent(self, extent: tuple[float, ...] | None):
+#         self.grid.extent = extent
+
+#     @property
+#     def gpts(self) -> tuple[int, ...] | None:
+#         """Number of grid points for each dimension."""
+#         return self.grid.gpts
+
+#     @gpts.setter
+#     def gpts(self, gpts: tuple[int, ...]):
+#         self.grid.gpts = gpts
+
+#     @property
+#     def sampling(self) -> tuple[float, ...] | None:
+#         """Grid sampling for each dimension in Ångstrom per grid point."""
+#         return self.grid.sampling
+
+#     @sampling.setter
+#     def sampling(self, sampling: tuple[float, ...]):
+#         self.grid.sampling = sampling
+
+#     @property
+#     def reciprocal_space_sampling(self) -> tuple[float, ...]:
+#         """Reciprocal-space sampling in reciprocal Ångstrom."""
+#         return self.grid.reciprocal_space_sampling
 
 
-class HasGridMixin:
-    """
-    Mixin class for objects that have a Grid.
-    """
-
+class HasGrid2DMixin:
     _grid: Grid
 
-    @property
-    def grid(self) -> Grid:
-        """Simulation grid."""
-        return self._grid
-
-    def match_grid(self, other: HasGridMixin, check_match: bool = False):
+    def match_grid(self, other: HasGrid2DMixin, check_match: bool = False):
         """Match the grid to another object with a Grid."""
         self.grid.match(other, check_match=check_match)
         return self
-
-    @property
-    def extent(self) -> tuple[float, ...] | None:
-        """Extent of grid for each dimension in Ångstrom."""
-        return self.grid.extent
-
-    @extent.setter
-    def extent(self, extent: tuple[float, ...] | None):
-        self.grid.extent = extent
-
-    @property
-    def gpts(self) -> tuple[int, ...] | None:
-        """Number of grid points for each dimension."""
-        return self.grid.gpts
-
-    @gpts.setter
-    def gpts(self, gpts: tuple[int, ...]):
-        self.grid.gpts = gpts
-
-    @property
-    def sampling(self) -> tuple[float, ...] | None:
-        """Grid sampling for each dimension in Ångstrom per grid point."""
-        return self.grid.sampling
-
-    @sampling.setter
-    def sampling(self, sampling: tuple[float, ...]):
-        self.grid.sampling = sampling
-
-    @property
-    def reciprocal_space_sampling(self) -> tuple[float, ...]:
-        """Reciprocal-space sampling in reciprocal Ångstrom."""
-        return self.grid.reciprocal_space_sampling
-
-
-class HasGrid2DMixin(HasGridMixin):
-    _grid: Grid
 
     @property
     def grid(self) -> Grid:
@@ -646,7 +644,7 @@ def coordinate_grid(
     gpts: tuple[int, ...],
     origin: tuple[float, ...],
     endpoint: bool = True,
-) -> np.ndarray:
+) -> tuple[np.ndarray, ...]:
     coordinates = [
         np.linspace(0, r, n, endpoint=endpoint) - o
         for r, n, o in zip(extent, gpts, origin)
