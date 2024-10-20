@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
-import scipy.ndimage
-from numba import njit, stencil
+import scipy.ndimage  # type: ignore
+from numba import njit, stencil  # type: ignore
 
 from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma
@@ -14,6 +14,7 @@ from abtem.potentials.iam import TransmissionFunction
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
     from abtem.waves import Waves
+
 
 fd_coefficients = {
     2: [1.0, -2.0, 1.0],
@@ -133,7 +134,7 @@ fd_coefficients = {
 
 
 def _build_matrix(offsets: list[int]):
-    import sympy
+    import sympy  # type: ignore
 
     """Constructs the equation system matrix for the finite difference coefficients"""
     A = [([1 for _ in offsets])]
@@ -143,7 +144,7 @@ def _build_matrix(offsets: list[int]):
 
 
 def _build_rhs(offsets: list[int], deriv: int):
-    import sympy
+    import sympy  # type: ignore
 
     """The right hand side of the equation system matrix"""
     b = [0 for _ in offsets]
@@ -152,7 +153,7 @@ def _build_rhs(offsets: list[int], deriv: int):
 
 
 def _calculate_finite_difference_coefficient(derivative: int, accuracy: int = 2):
-    import sympy
+    import sympy  # type: ignore
 
     num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
     num_side = num_central // 2
@@ -247,17 +248,12 @@ class LaplaceOperator:
         prefactor = 1.0j * wavelength * thickness / (4 * np.pi) / np.prod(sampling)
         return _laplace_operator_stencil(self._accuracy, prefactor, mode="wrap")
 
-    def get_stencil(self, waves: Waves, thickness: float) -> callable:
+    def get_stencil(self, waves: Waves, thickness: float) -> Callable:
         key = (
             waves.wavelength,
             waves.sampling,
             thickness,
         )
-
-        # tilt_axes = _get_tilt_axes(waves)
-        # tilt_axes_metadata = [waves.ensemble_axes_metadata[i] for i in tilt_axes]
-        # if tilt_axes:
-        #    key += (copy.deepcopy(tilt_axes_metadata),)
 
         if key == self._key:
             return self._stencil
@@ -285,7 +281,7 @@ class NotConvergedError(Exception):
 def _multislice_exponential_series(
     waves,
     transmission_function,
-    laplace: callable,
+    laplace: Callable,
     tolerance: float = 1e-16,
     max_terms: int = 300,
 ):
@@ -329,9 +325,9 @@ def _multislice_exponential_series(
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
-    laplace: callable,
+    laplace: LaplaceOperator,
     tolerance: float = 1e-16,
-    max_terms: int = np.inf,
+    max_terms: int = 300,
 ):
     if max_terms < 1:
         raise ValueError()
@@ -344,11 +340,13 @@ def multislice_step(
 
     else:
         transmission_function = potential_slice.transmission_function(
-            energy=waves.energy
+            energy=waves._valid_energy
         )
 
     thickness = potential_slice.thickness
-    transmission_function = 1.0j * potential_slice.array[0] * energy2sigma(waves.energy)
+    transmission_function = (
+        1.0j * potential_slice.array[0] * energy2sigma(waves._valid_energy)
+    )
 
     # waves = transmission_function.transmit(waves)
 
