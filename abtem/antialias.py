@@ -9,7 +9,7 @@ import numpy as np
 from abtem.core import config
 from abtem.core.backend import get_array_module
 from abtem.core.fft import fft2_convolve
-from abtem.core.grid import HasGridMixin, spatial_frequencies
+from abtem.core.grid import HasGrid2DMixin, spatial_frequencies
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ def antialias_aperture(
     return array
 
 
-class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
+class AntialiasAperture(HasGrid2DMixin, CopyMixin, EqualityMixin):
     def __init__(
         self,
     ):

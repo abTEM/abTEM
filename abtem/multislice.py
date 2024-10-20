@@ -1,16 +1,16 @@
 """Module for running the multislice algorithm."""
-
 from __future__ import annotations
 
 import copy
 from bisect import bisect_left
 from functools import partial
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import Atoms
 
-from abtem.antialias import AntialiasAperture, antialias_aperture
+from abtem.antialias import AntialiasAperture
+from abtem.antialias import antialias_aperture
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
@@ -19,27 +19,29 @@ from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
-from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
+from abtem.core.fft import fft2_convolve, CachedFFTWConvolution
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast
-from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
-from abtem.finite_difference import LaplaceOperator
-from abtem.finite_difference import multislice_step as realspace_multislice_step
-from abtem.inelastic.core_loss import BaseTransitionPotential
+from abtem.detectors import BaseDetector, _validate_detectors, WavesDetector
+from abtem.inelastic.core_loss import (
+    BaseTransitionPotential,
+)
 from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurements
 from abtem.potentials.iam import (
     BasePotential,
-    PotentialArray,
     TransmissionFunction,
-    validate_potential,
+    PotentialArray,
+    _validate_potential,
 )
+from abtem.finite_difference import LaplaceOperator
+from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
-    from abtem.waves import BaseWaves, Waves
+    from abtem.waves import Waves
 
 
 def _fresnel_propagator_array(
@@ -69,10 +71,9 @@ def _apply_tilt_to_fresnel_propagator_array(
     xp = get_array_module(array)
     tilt = xp.array(tilt)
 
-    squeeze = False
+    remove_first_dim = False
     if tilt.shape == (2,):
-        squeeze = True
-        tilt = tilt[None]
+        remove_first_dim = True
 
     kx, ky = spatial_frequencies(array.shape[-2:], sampling, xp=xp)
     kx, ky = kx[None, :, None], ky[None, None]
@@ -83,11 +84,11 @@ def _apply_tilt_to_fresnel_propagator_array(
         -ky * xp.tan(tilt[:, 1, None, None] / 1e3) * thickness * 2 * np.pi
     )
 
-    tilt, array = expand_dims_to_broadcast(tilt, array, match_dims=((-2, -1), (-2, -1)))
+    tilt, array = expand_dims_to_broadcast(tilt, array, match_dims=[(-2, -1), (-2, -1)])
 
     array = tilt * array
 
-    if squeeze:
+    if remove_first_dim:
         array = array[0]
 
     return array
@@ -105,21 +106,6 @@ class FresnelPropagator:
         self._cached_fftw_convolution = CachedFFTWConvolution()
 
     def get_array(self, waves: Waves, thickness: float) -> np.ndarray:
-        """
-        Get the Fresnel propagator as an array for the given wave functions and thickness.
-
-        Parameters
-        ----------
-        waves : Waves
-            The wave functions to propagate.
-        thickness : float
-            Distance in free space to propagate [Å].
-
-        Returns
-        -------
-        array : np.ndarray
-            The Fresnel propagator as an array.
-        """
         key = (
             waves.gpts,
             waves.sampling,
@@ -169,12 +155,13 @@ class FresnelPropagator:
         xp = get_array_module(waves.device)
 
         tilt_axes = _get_tilt_axes(waves)
+
         if not tilt_axes:
             return array
 
-        for axis in reversed(waves.ensemble_axes_metadata):
+        for axis in waves.ensemble_axes_metadata:
             if hasattr(axis, "tilt"):
-                tilt = xp.asarray(axis.tilt)
+                tilt = xp.array(axis.tilt)
                 array = _apply_tilt_to_fresnel_propagator_array(
                     array, sampling=waves.sampling, tilt=tilt, thickness=thickness
                 )
@@ -222,61 +209,37 @@ class FresnelPropagator:
         return waves
 
 
-def allocate_measurement(
-    waves: BaseWaves,
+def _allocate_measurement(
+    waves: Waves,
     detector: BaseDetector,
     extra_ensemble_axes_shape: tuple[int, ...],
     extra_ensemble_axes_metadata: list[AxisMetadata],
 ) -> BaseMeasurements | Waves:
-    """
-    Allocate a measurement matching the given wave functions and detector.
+    xp = get_array_module(detector._out_meta(waves))
 
-    Parameters
-    ----------
-    waves : BaseWaves
-        The wave functions to derive the allocated measurement from.
-    detector : BaseDetector
-        The detector to derive the allocated measurement from.
-    extra_ensemble_axes_shape : tuple of int, optional
-        The shape of additional ensemble axes not in the waves.
-    extra_ensemble_axes_metadata : list of AxisMetadata
-        The axes metadata of additional ensemble axes not in the waves.
+    measurement_type = detector._out_type(waves)
 
-    Returns
-    -------
-    allocated_measurement : BaseMeasurements or Waves
-        The allocated measurement
-    """
-    xp = get_array_module(detector._out_meta(waves)[0])
+    axes_metadata = detector._out_axes_metadata(waves)
 
-    measurement_type = detector._out_type(waves)[0]
+    shape = detector._out_shape(waves)
 
-    axes_metadata = detector._out_axes_metadata(waves)[0]
-
-    shape = detector._out_shape(waves)[0]
-    #
     if extra_ensemble_axes_shape is not None:
         assert len(extra_ensemble_axes_shape) == len(extra_ensemble_axes_shape)
         shape = extra_ensemble_axes_shape + shape
         axes_metadata = extra_ensemble_axes_metadata + axes_metadata
 
-    metadata = detector._out_metadata(waves)[0]
+    metadata = detector._out_metadata(waves)
 
-    array = xp.zeros(shape, dtype=detector._out_dtype(waves)[0])
+    array = xp.zeros(shape, dtype=detector._out_dtype(waves))
 
-    out_measuerement = measurement_type.from_array_and_metadata(
+    return measurement_type.from_array_and_metadata(
         array=array, axes_metadata=axes_metadata, metadata=metadata
     )
-    # ssss
-
-    return out_measuerement
 
 
-def _potential_ensemble_shape_and_metadata(
-    potential: BasePotential,
-) -> tuple[tuple[int, ...], list[AxisMetadata]]:
+def _potential_ensemble_shape_and_metadata(potential):
     if potential is None:
-        return (), []
+        return ()
 
     extra_ensemble_axes_shape = potential.ensemble_shape
     extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
@@ -324,7 +287,7 @@ def allocate_multislice_measurements(
     measurements = []
     for detector in detectors:
         measurements.append(
-            allocate_measurement(
+            _allocate_measurement(
                 waves, detector, extra_ensemble_axes_shape, extra_ensemble_axes_metadata
             )
         )
@@ -459,7 +422,7 @@ def multislice_and_detect(
     pbar: bool = False,
     method: str = "conventional",
     **kwargs,
-) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
+) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
@@ -484,8 +447,7 @@ def multislice_and_detect(
         Exit waves or detected measurements or lists of measurements.
     """
     waves = waves.ensure_real_space()
-    detectors = validate_detectors(detectors)
-    waves = waves.copy()
+    detectors = _validate_detectors(detectors)
 
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
@@ -534,9 +496,7 @@ def multislice_and_detect(
 
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
-    pbar = TqdmWrapper(
-        enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
-    )
+    pbar = TqdmWrapper(enabled=pbar, total=int(n_slices), leave=False)
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
@@ -585,8 +545,6 @@ def multislice_and_detect(
             for detector in detectors
         ]
 
-    # measurements[0] += potential.num_slices
-
     pbar.close_if_exists()
 
     return measurements
@@ -604,7 +562,7 @@ def transition_potential_multislice_and_detect(
     conjugate: bool = False,
     transpose: bool = False,
     pbar=None,
-) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
+) -> list[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
@@ -698,7 +656,7 @@ def transition_potential_multislice_and_detect(
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
 
-    pbar = TqdmWrapper(enabled=pbar, total=n_slices, leave=False, desc="multislice")
+    pbar = TqdmWrapper(enabled=pbar, total=n_slices, leave=False)
 
     for (
         potential_index,
@@ -716,7 +674,7 @@ def transition_potential_multislice_and_detect(
         for scatter_index, potential_slice in enumerate(
             potential_configuration.generate_slices()
         ):
-            waves = conventional_multislice_step(
+            waves = multislice_step(
                 waves,
                 potential_slice,
                 propagator,
@@ -764,7 +722,7 @@ def transition_potential_multislice_and_detect(
                             first_slice=scatter_index + 1
                         )
                     ):
-                        scattered_waves = conventional_multislice_step(
+                        scattered_waves = multislice_step(
                             scattered_waves,
                             inner_potential_slice,
                             propagator,
@@ -918,16 +876,12 @@ class MultisliceTransform(ArrayObjectTransform):
         If True, use the complex conjugate of the transmission function (default is False).
     transpose : bool, optional
         If True, reverse the order of propagation and transmission (default is False).
-    multislice_func : callable, optional
-        The multislice function defining the multislice algorithm used (default is :func:`.multislice_and_detect`).
-    **multislice_func_kwargs
-        Additional keyword arguments passed to the multislice function.
     """
 
     def __init__(
         self,
         potential: BasePotential,
-        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
         conjugate: bool = False,
         transpose: bool = False,
         multislice_func: callable = None,
@@ -936,15 +890,15 @@ class MultisliceTransform(ArrayObjectTransform):
         if multislice_func is None:
             multislice_func = multislice_and_detect
 
-        potential = validate_potential(potential)
+        potential = _validate_potential(potential)
 
         self._potential = potential
 
-        detectors = validate_detectors(detectors)
+        detectors = _validate_detectors(detectors)
 
-        if "pbar" not in multislice_func_kwargs:
+        if not "pbar" in multislice_func_kwargs.keys():
             multislice_func_kwargs["pbar"] = config.get(
-                "diagnostics.task_progress", False
+                "local_diagnostics.task_level_progress", False
             )
 
         self._detectors = detectors
@@ -955,7 +909,6 @@ class MultisliceTransform(ArrayObjectTransform):
 
     @property
     def multislice_func(self) -> callable:
-        """The multislice function defining the multislice algorithm used."""
         return self._multislice_func
 
     @property
@@ -986,85 +939,56 @@ class MultisliceTransform(ArrayObjectTransform):
     def _default_ensemble_chunks(self):
         chunks = self._potential._default_ensemble_chunks
         num_exit_planes = len(self._potential.exit_planes)
-        if num_exit_planes > 1:
-            chunks = chunks + (num_exit_planes,)
+        chunks = chunks + (num_exit_planes,)
         return chunks
 
     @property
     def ensemble_axes_metadata(self):
         ensemble_axes_metadata = self.potential.ensemble_axes_metadata
+        exit_planes_metadata = self.potential._get_exit_planes_axes_metadata()
 
-        if len(self.potential.exit_planes) > 1:
-            exit_planes_metadata = [self.potential._get_exit_planes_axes_metadata()]
-        else:
-            exit_planes_metadata = []
-
-        # if len(self.potential.exit_planes) == 1:
-        #    exit_planes_metadata._squeeze = True
+        if len(self.potential.exit_planes) == 1:
+            exit_planes_metadata._squeeze = True
 
         ensemble_axes_metadata = [
             *ensemble_axes_metadata,
-            *exit_planes_metadata,
+            exit_planes_metadata,
         ]
         return ensemble_axes_metadata
 
     @property
     def ensemble_shape(self):
         ensemble_shape = self._potential.ensemble_shape
-        if len(self._potential.exit_planes) > 1:
-            ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
+        ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
         return ensemble_shape
 
-    def _out_metadata(self, waves: BaseWaves):
-        return tuple(detector._out_metadata(waves)[0] for detector in self.detectors)
+    def _out_metadata(self, waves, index: bool = 0):
+        return self.detectors[index]._out_metadata(waves)
 
-    def _out_dtype(self, waves: BaseWaves):
-        return tuple(detector._out_dtype(waves)[0] for detector in self.detectors)
+    def _out_dtype(self, waves, index: bool = 0):
+        return self.detectors[index]._out_dtype(waves)
 
-    def _out_meta(self, waves: BaseWaves):
-        return tuple(detector._out_meta(waves)[0] for detector in self.detectors)
+    def _out_meta(self, waves, index: bool = 0):
+        return self.detectors[index]._out_meta(waves)
 
-    def _out_type(self, waves: BaseWaves):
-        return tuple(detector._out_type(waves)[0] for detector in self.detectors)
+    def _out_type(self, waves, index: bool = 0):
+        return self.detectors[index]._out_type(waves)
 
-    def _out_ensemble_shape(self, waves: BaseWaves):
-        shape = tuple(
-            self.ensemble_shape + detector._out_ensemble_shape(waves)[0]
-            for detector in self.detectors
-        )
-        return shape
-
-    def _out_base_shape(self, waves: BaseWaves):
-        base_shape = tuple(
-            detector._out_base_shape(waves)[0] for detector in self.detectors
-        )
-        return base_shape
-
-    def _out_base_axes_metadata(self, waves: BaseWaves):
-        return tuple(
-            detector._out_base_axes_metadata(waves)[0] for detector in self.detectors
+    def _out_ensemble_shape(self, waves, index: bool = 0):
+        return self.ensemble_shape + self.detectors[index]._out_ensemble_shape(
+            waves, index=index
         )
 
-    def _out_ensemble_axes_metadata(self, waves: BaseWaves):
-        if len(self.potential.exit_planes) > 1:
-            potential_axes_metadata = self.potential.ensemble_axes_metadata + [
-                self.potential._get_exit_planes_axes_metadata()
-            ]
-        else:
-            potential_axes_metadata = self.potential.ensemble_axes_metadata
+    def _out_base_shape(self, waves, index: bool = 0):
+        return self.detectors[index]._out_base_shape(waves)
 
-        ensemble_axes_metadata = tuple(
-            potential_axes_metadata + detector._out_ensemble_axes_metadata(waves)[0]
-            for detector in self.detectors
-        )
+    def _out_base_axes_metadata(self, waves, index: bool = 0):
+        return self.detectors[index]._out_base_axes_metadata(waves)
 
-        return ensemble_axes_metadata
-
-    def _partition_args(self, chunks: int = 1, lazy: bool = True):
-        chunks = validate_chunks(self.ensemble_shape, chunks)
-        if len(self._potential.exit_planes) > 1:
-            chunks = chunks[:-1]
-
+    # def _validate_ensemble_chunks(self, chunks: Chunks, limit: Union[str, int] = "auto"):
+    #
+    def _partition_args(self, chunks=1, lazy: bool = True):
+        chunks = validate_chunks(self.ensemble_shape, chunks)[:-1]
         args = self._potential._partition_args(chunks=chunks, lazy=lazy)
         if len(self._potential.ensemble_shape) > 0:
             args = (args[0][..., None],)
@@ -1082,7 +1006,7 @@ class MultisliceTransform(ArrayObjectTransform):
         multislice = _wrap_with_array(multislice)
         return multislice
 
-    def _from_partitioned_args(self):
+    def _from_partitioned_args(self, *args, **kwargs):
         potential_partial = self._potential._from_partitioned_args()
         return partial(
             self._multislice_transform_member,
@@ -1094,7 +1018,7 @@ class MultisliceTransform(ArrayObjectTransform):
             **self._multislice_func_kwargs,
         )
 
-    def _calculate_new_array(self, waves: Waves):
+    def _calculate_new_array(self, waves):
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,
@@ -1103,31 +1027,18 @@ class MultisliceTransform(ArrayObjectTransform):
             transpose=self.transpose,
             **self._multislice_func_kwargs,
         )
-        arrays = tuple(measurement.array for measurement in measurements)
+
+        if self._potential.num_exit_planes == 1:
+            index = (*((slice(None),) * (len(self.ensemble_shape) - 1)), None)
+        else:
+            index = ()
+
+        arrays = tuple(measurement.array[index] for measurement in measurements)
 
         if len(arrays) == 1:
             arrays = arrays[0]
 
         return arrays
-
-    def apply(
-        self, waves: Waves
-    ) -> Waves | BaseMeasurements | tuple[Waves, BaseMeasurements, ...]:
-        """
-        Run the multislice algorithm on the given wave functions. An output is returned for each detector.
-
-        Parameters
-        ----------
-        waves : Waves
-            The wave functions to run the multislice algorithm on.
-
-        Returns
-        -------
-        waves : tuple of Waves and BaseMeasurements
-            The wave functions after running the multislice algorithm.
-        """
-
-        return self._apply(waves)
 
     # def apply(self, waves: Waves):
     #     if "transition_potentials" in self._multislice_func_kwargs.keys():
