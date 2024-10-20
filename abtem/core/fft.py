@@ -524,7 +524,8 @@ def fft_interpolate(
     elif normalization == "amplitude":
         pass
     else:
-        raise ValueError(f"Normalization [{normalization}] not recognized.")
+        pass
+        #raise ValueError(f"Normalization [{normalization}] not recognized.")
 
     # elif normalization != "intensity":
     #    raise ValueError()
