@@ -139,8 +139,8 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
 
 
 def _get_dims_to_broadcast(
-    arr1: np.ndarray,
-    arr2: np.ndarray,
+    arr1: np.ndarray | da.core.Array,
+    arr2: np.ndarray | da.core.Array,
     match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
     if match_dims is None:
@@ -251,7 +251,7 @@ def expand_dims_to_broadcast(
     arr2: np.ndarray | da.core.Array,
     match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
     broadcast: bool = False,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray | da.core.Array, np.ndarray | da.core.Array]:
     """
     Expand the dimensions of two arrays to make them broadcastable.
 
@@ -262,10 +262,11 @@ def expand_dims_to_broadcast(
     arr2 : np.ndarray
         The second array.
     match_dims : list, optional
-        A list of two tuples, each containing the dimensions that should match (i.e. not be broadcasted) between the two
-         arrays.
+        A list of two tuples, each containing the dimensions that should match (i.e. not
+        be broadcasted) between the two arrays.
     broadcast : bool, optional
-        If True, broadcast the arrays to the same shape, otherwise only expand the dimensions. Defaults to False.
+        If True, broadcast the arrays to the same shape, otherwise only expand the
+        dimensions. Defaults to False.
 
     Returns
     -------
