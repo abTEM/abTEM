@@ -127,11 +127,11 @@ class AxisMetadata:
     def format_coordinates(self, n: Optional[int] = None):
         return "-"
 
-    def __eq__(self, other: AxisMetadata):
+    def __eq__(self, other: object) -> bool:
         return safe_equality(self, other)
 
-    def coordinates(self, n: int) -> np.ndarray:
-        return np.arange(n)
+    def coordinates(self, n: int) -> tuple:
+        return tuple(np.arange(n))
 
     def format_type(self):
         return self.__class__.__name__
@@ -139,7 +139,7 @@ class AxisMetadata:
     def format_label(self, units: Optional[str] = None):
         return format_label(self, units=units)
 
-    def format_title(self, *args: Any, **kwargs: dict) -> str:
+    def format_title(self, *args: Any, **kwargs: Any) -> str:
         return f"{self.label}"
 
     def item_metadata(self, item, metadata=None):
@@ -217,14 +217,14 @@ class LinearAxis(AxisMetadata):
 
         coordinates = self.coordinates(n)
         if n > 3:
-            coordinates_str = [f"{coord:.2f}" for coord in coordinates[[0, 1, -1]]]
+            coordinates_str = [f"{coordinates[i]:.2f}" for i in (0, 1, -1)]
             return f"{coordinates_str[0]} {coordinates_str[1]} ... {coordinates_str[2]}"
         else:
             return " ".join([f"{coord:.2f}" for coord in coordinates])
 
-    def coordinates(self, n: int) -> np.ndarray:
-        return np.linspace(
-            self.offset, self.offset + self.sampling * n, n, endpoint=False
+    def coordinates(self, n: int) -> tuple[float, ...]:
+        return tuple(
+            np.linspace(self.offset, self.offset + self.sampling * n, n, endpoint=False)
         )
 
     def to_ordinal_axis(self, n):
