@@ -38,7 +38,7 @@ from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_ch
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.grid import Grid, HasGrid2DMixin, HasGridMixin
+from abtem.core.grid import Grid, HasGrid2DMixin
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 from abtem.inelastic.phonons import (
     AtomsEnsemble,
@@ -1395,7 +1395,7 @@ class CrystalPotential(_PotentialBuilder):
     def potential_unit(self) -> BasePotential:
         return self._potential_unit
 
-    @HasGridMixin.gpts.setter
+    @HasGrid2DMixin.gpts.setter
     def gpts(self, gpts):
         if not (
             (gpts[0] % self.repetitions[0] == 0)
@@ -1410,7 +1410,7 @@ class CrystalPotential(_PotentialBuilder):
             gpts[1] // self._repetitions[1],
         )
 
-    @HasGridMixin.sampling.setter
+    @HasGrid2DMixin.sampling.setter
     def sampling(self, sampling):
         self.sampling = sampling
         self._potential_unit.sampling = sampling
