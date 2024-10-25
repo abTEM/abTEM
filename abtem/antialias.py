@@ -28,7 +28,8 @@ def antialias_aperture(
     gpts : two int, optional
         Number of grid points in `x` and `y` describing the antialiasing aperture.
     sampling : two float, optional
-        Reciprocal-space sampling in `x` and `y` of the antialiasing aperture. Units are arbitrary.
+        Reciprocal-space sampling in `x` and `y` of the antialiasing aperture. Units
+        are arbitrary.
 
     Returns
     -------
@@ -83,5 +84,6 @@ class AntialiasAperture(HasGrid2DMixin, CopyMixin, EqualityMixin):
         kernel = self.get_array(x)
         kernel = kernel[(None,) * (len(x.shape) - 2)]
 
-        x._array = fft2_convolve(x._array, kernel, overwrite_x=in_place)
+        new_array = fft2_convolve(x.array, kernel, overwrite_x=in_place)
+        x._array = new_array
         return x
