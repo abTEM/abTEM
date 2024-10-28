@@ -7,7 +7,7 @@ from abc import abstractmethod
 from copy import copy
 from functools import partial
 from numbers import Number
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import dask.array as da
 import numpy as np
@@ -115,7 +115,10 @@ def _antialias_cutoff_gpts(
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
-    """Base class of all wave functions. Documented in the subclasses."""
+    """Base class of all wave functions.
+
+    Documented in the subclasses.
+    """
 
     @property
     @abstractmethod
@@ -168,10 +171,8 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     @property
     def antialias_cutoff_gpts(self) -> tuple[int, int]:
-        """
-        The number of grid points along the x and y direction in the simulation grid at
-        the antialiasing cutoff scattering angle.
-        """
+        """The number of grid points along the x and y direction in the simulation grid
+        at the antialiasing cutoff scattering angle."""
         if "adjusted_antialias_cutoff_gpts" in self.metadata:
             n = min(
                 self.metadata["adjusted_antialias_cutoff_gpts"][0], self._valid_gpts[0]
@@ -184,10 +185,9 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     @property
     def antialias_valid_gpts(self) -> tuple[int, int]:
-        """
-        The number of grid points along the x and y direction in the simulation grid for
-        the largest rectangle that fits within antialiasing cutoff scattering angle.
-        """
+        """The number of grid points along the x and y direction in the simulation grid
+        for the largest rectangle that fits within antialiasing cutoff scattering
+        angle."""
         cutoff_gpts = self.antialias_cutoff_gpts
         valid_gpts = (
             safe_floor_int(cutoff_gpts[0] / np.sqrt(2)),
@@ -337,14 +337,13 @@ class _WavesNormalization(WavesToWavesTransform):
 
 
 class Waves(BaseWaves, ArrayObject):
-    """
-    Waves define a batch of arbitrary 2D wave functions defined by a complex array.
+    """Waves define a batch of arbitrary 2D wave functions defined by a complex array.
 
     Parameters
     ----------
     array : array
-        Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the wave
-        function `y`- and `x`-axes, respectively.
+        Complex array defining one or more 2D wave functions. The second-to-last and
+        last dimensions are the wave function `y`- and `x`-axes, respectively.
     energy : float
         Electron energy [eV].
     extent : one or two float
@@ -352,13 +351,14 @@ class Waves(BaseWaves, ArrayObject):
     sampling : one or two float
         Sampling of wave functions in `x` and `y` [Å].
     reciprocal_space : bool, optional
-        If True, the wave functions are assumed to be represented in reciprocal space instead of real space (default is
-        False).
+        If True, the wave functions are assumed to be represented in reciprocal space
+        instead of real space (default is False).
     ensemble_axes_metadata : list of AxesMetadata
-        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with
+        the shape of the array.
     metadata : dict
-        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
-        from the waves.
+        A dictionary defining wave function metadata. All items will be added to the
+        metadata of measurements derived from the waves.
     """
 
     _base_dims = 2
@@ -395,10 +395,8 @@ class Waves(BaseWaves, ArrayObject):
 
     @property
     def base_tilt(self) -> tuple[float, float]:
-        """
-        The base small-angle beam tilt (i.e. the beam tilt not associated with an ensemble axis) applied to the Fresnel
-        propagator [mrad].
-        """
+        """The base small-angle beam tilt (i.e. the beam tilt not associated with an
+        ensemble axis) applied to the Fresnel propagator [mrad]."""
         return (
             self.metadata.get("base_tilt_x", 0.0),
             self.metadata.get("base_tilt_y", 0.0),
@@ -422,20 +420,20 @@ class Waves(BaseWaves, ArrayObject):
         axes_metadata: list[AxisMetadata],
         metadata: Optional[dict] = None,
     ) -> Waves:
-        """
-        Creates wave functions from a given array and metadata.
+        """Creates wave functions from a given array and metadata.
 
         Parameters
         ----------
         array : array
-            Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the wave
-            function `y`- and `x`-axis, respectively.
+            Complex array defining one or more 2D wave functions. The second-to-last and
+            last dimensions are the wave function `y`- and `x`-axis, respectively.
         axes_metadata : list of AxesMetadata
-            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
-            axes must be RealSpaceAxis.
+            Axis metadata for each axis. The axis metadata must be compatible with the
+            shape of the array. The last two axes must be RealSpaceAxis.
         metadata :
-            A dictionary defining wave function metadata. All items will be added to the metadata of measurements
-            derived from the waves. The metadata must contain the electron energy [eV].
+            A dictionary defining wave function metadata. All items will be added to the
+            metadata of measurements derived from the waves. The metadata must contain
+            the electron energy [eV].
 
         Returns
         -------
@@ -471,18 +469,19 @@ class Waves(BaseWaves, ArrayObject):
         out_space: str = "in_space",
         in_place: bool = False,
     ) -> Waves:
-        """
-        Convolve the wave-function array with a given array.
+        """Convolve the wave-function array with a given array.
 
         Parameters
         ----------
         kernel : np.ndarray
             Array to be convolved with.
         axes_metadata : list of AxisMetadata, optional
-            Metadata for the resulting convolved array. Needed only if the given array has more than two dimensions.
+            Metadata for the resulting convolved array. Needed only if the given array
+            has more than two dimensions.
         out_space : str, optional
-            Space in which the convolved array is represented. Options are 'reciprocal_space' and 'real_space' (default
-            is the space of the wave functions).
+            Space in which the convolved array is represented. Options are
+            'reciprocal_space' and 'real_space' (default is the space of the
+            wave functions).
         in_place : bool, optional
             If True, the array representing the waves may be modified in-place.
 
@@ -536,14 +535,14 @@ class Waves(BaseWaves, ArrayObject):
         return waves.__class__(**d)
 
     def normalize(self, space: str = "reciprocal", in_place: bool = False) -> Waves:
-        """
-        Normalize the wave functions in real or reciprocal space.
+        """Normalize the wave functions in real or reciprocal space.
 
         Parameters
         ----------
         space : str
-            Should be one of 'real' or 'reciprocal' (default is 'reciprocal'). Defines whether the wave function should
-            be normalized such that the intensity sums to one in real or reciprocal space.
+            Should be one of 'real' or 'reciprocal' (default is 'reciprocal'). Defines
+            whether the wave function should be normalized such that the intensity sums
+            to one in real or reciprocal space.
         in_place : bool, optional
             If True, the array representing the waves may be modified in-place.
 
@@ -556,15 +555,15 @@ class Waves(BaseWaves, ArrayObject):
         return transform.apply(self)
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
-        """
-        Tile the wave functions. Can only be applied in real space.
+        """Tile the wave functions. Can only be applied in real space.
 
         Parameters
         ----------
         repetitions : two int
             The number of repetitions of the wave functions along the `x`- and `y`-axes.
         renormalize : bool, optional
-            If True, preserve the total intensity of the wave function (default is False).
+            If True, preserve the total intensity of the wave function
+            (default is False).
 
         Returns
         -------
@@ -596,13 +595,14 @@ class Waves(BaseWaves, ArrayObject):
         return self.__class__(**kwargs)
 
     def ensure_reciprocal_space(self, overwrite_x: bool = False) -> Waves:
-        """
-        Transform to reciprocal space if the wave functions are represented in real space.
+        """Transform to reciprocal space if the wave functions are represented in real
+        space.
 
         Parameters
         ----------
         overwrite_x : bool, optional
-            If True, modify the array in place; otherwise a copy is created (default is False).
+            If True, modify the array in place; otherwise a copy is created
+            (default is False).
 
         Returns
         -------
@@ -619,13 +619,14 @@ class Waves(BaseWaves, ArrayObject):
         return self.__class__(**d)
 
     def ensure_real_space(self, overwrite_x: bool = False) -> Waves:
-        """
-        Transform to real space if the wave functions are represented in reciprocal space.
+        """Transform to real space if the wave functions are represented in reciprocal
+        space.
 
         Parameters
         ----------
         overwrite_x : bool, optional
-            If True, modify the array in place; otherwise a copy is created (default is False).
+            If True, modify the array in place; otherwise a copy is created
+            (default is False).
 
         Returns
         -------
@@ -643,8 +644,7 @@ class Waves(BaseWaves, ArrayObject):
         return waves
 
     def phase_shift(self, amount: float) -> Waves:
-        """
-        Shift the phase of the wave functions.
+        """Shift the phase of the wave functions.
 
         Parameters
         ----------
@@ -667,8 +667,7 @@ class Waves(BaseWaves, ArrayObject):
         return self.__class__(**d)
 
     def to_images(self, convert_complex: Optional[str] = None) -> Images:
-        """
-        The complex array of the wave functions at the image plane.
+        """The complex array of the wave functions at the image plane.
 
         Returns
         -------
@@ -698,8 +697,7 @@ class Waves(BaseWaves, ArrayObject):
             )
 
     def intensity(self) -> Images:
-        """
-        Calculate the intensity of the wave functions.
+        """Calculate the intensity of the wave functions.
 
         Returns
         -------
@@ -709,8 +707,7 @@ class Waves(BaseWaves, ArrayObject):
         return self.to_images(convert_complex="intensity")
 
     def phase(self) -> Images:
-        """
-        Calculate the phase of the wave functions.
+        """Calculate the phase of the wave functions.
 
         Returns
         -------
@@ -720,8 +717,7 @@ class Waves(BaseWaves, ArrayObject):
         return self.to_images(convert_complex="phase")
 
     def real(self) -> Images:
-        """
-        Calculate the real part of the wave functions.
+        """Calculate the real part of the wave functions.
 
         Returns
         -------
@@ -731,8 +727,7 @@ class Waves(BaseWaves, ArrayObject):
         return self.to_images(convert_complex="real")
 
     def imag(self) -> Images:
-        """
-        Calculate the imaginary part of the wave functions.
+        """Calculate the imaginary part of the wave functions.
 
         Returns
         -------
@@ -747,8 +742,7 @@ class Waves(BaseWaves, ArrayObject):
         gpts: Optional[tuple[int, int]] = None,
         normalization: str = "values",
     ) -> Waves:
-        """
-        Downsample the wave functions to a lower maximum scattering angle.
+        """Downsample the wave functions to a lower maximum scattering angle.
 
         Parameters
         ----------
@@ -759,17 +753,20 @@ class Waves(BaseWaves, ArrayObject):
                     Downsample to the antialias cutoff scattering angle (default).
 
                 ``valid`` :
-                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the
-                    antialias cutoff scattering angle.
+                    Downsample to the largest rectangle that fits inside the circle with
+                    a radius defined by the antialias cutoff scattering angle.
 
                 float :
-                    Downsample to a maximum scattering angle specified by a float [mrad].
+                    Downsample to a maximum scattering angle specified by a float
+                    [mrad].
 
         gpts : two int, optional
-            Number of grid points of the wave functions after downsampling. If given, `max_angle` is not used.
+            Number of grid points of the wave functions after downsampling.
+            If given, `max_angle` is not used.
 
         normalization : {'values', 'amplitude'}
-            The normalization parameter determines the preserved quantity after normalization.
+            The normalization parameter determines the preserved quantity after
+            normalization.
 
                 ``values`` :
                     The pixel-wise values of the wave function are preserved (default).
@@ -835,7 +832,7 @@ class Waves(BaseWaves, ArrayObject):
 
     def diffraction_patterns(
         self,
-        max_angle: str | float = "cutoff",
+        max_angle: Optional[str | float] = "cutoff",
         # max_frequency: str | float = None,
         block_direct: bool | float = False,
         fftshift: bool = True,
@@ -843,8 +840,7 @@ class Waves(BaseWaves, ArrayObject):
         return_complex: bool = False,
         renormalize: bool = True,
     ) -> DiffractionPatterns:
-        """
-        Calculate the intensity of the wave functions at the diffraction plane.
+        """Calculate the intensity of the wave functions at the diffraction plane.
 
         Parameters
         ----------
@@ -855,29 +851,34 @@ class Waves(BaseWaves, ArrayObject):
                     Downsample to the antialias cutoff scattering angle (default).
 
                 ``valid`` :
-                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the
-                    antialias cutoff scattering angle.
+                    Downsample to the largest rectangle that fits inside the circle with
+                    a radius defined by the antialias cutoff scattering angle.
 
                 ``full`` :
-                    The diffraction patterns are not cropped, and hence the antialiased region is included.
+                    The diffraction patterns are not cropped, and hence the antialiased
+                    region is included.
 
                 float :
-                    Downsample to a maximum scattering angle specified by a float [mrad].
+                    Downsample to a maximum scattering angle specified by a float
+                    [mrad].
 
         block_direct : bool or float, optional
-            If True the direct beam is masked (default is False). If given as a float, masks up to that scattering
-            angle [mrad].
+            If True the direct beam is masked (default is False). If given as a float,
+            masks up to that scattering angle [mrad].
         fftshift : bool, optional
-            If False, do not shift the direct beam to the center of the diffraction patterns (default is True).
+            If False, do not shift the direct beam to the center of the diffraction
+            patterns (default is True).
         parity : {'same', 'even', 'odd', 'none'}
-            The parity of the shape of the diffraction patterns. Default is 'odd', so that the shape of the diffraction
-            pattern is odd with the zero at the middle.
+            The parity of the shape of the diffraction patterns. Default is 'odd', so
+            that the shape of the diffraction pattern is odd with the zero at the
+            middle.
         renormalize : bool, optional
-            If true and the wave function intensities were normalized to sum to the number of pixels in real space, i.e.
-            the default normalization of a plane wave, the intensities are to sum to one in reciprocal space.
+            If true and the wave function intensities were normalized to sum to the
+            number of pixels in real space, i.e. the default normalization of a plane
+            wave, the intensities are to sum to one in reciprocal space.
         return_complex : bool
-            If True, return complex-valued diffraction patterns (i.e. the wave function in reciprocal space)
-            (default is False).
+            If True, return complex-valued diffraction patterns (i.e. the wave function
+            in reciprocal space) (default is False).
 
         Returns
         -------
@@ -947,19 +948,20 @@ class Waves(BaseWaves, ArrayObject):
     def apply_ctf(
         self, ctf: Optional[CTF] = None, max_batch: int | str = "auto", **kwargs: Any
     ) -> Waves:
-        """
-        Apply the aberrations and apertures of a contrast transfer function to the wave functions.
+        """Apply the aberrations and apertures of a contrast transfer function to the
+        wave functions.
 
         Parameters
         ----------
         ctf : CTF, optional
             Contrast transfer function to be applied.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            The number of wave functions in each chunk of the Dask array. If 'auto'
+            (default), the batch size is automatically chosen based on the abtem user
+            configuration settings "dask.chunk-size" and "dask.chunk-size-gpu".
         kwargs :
-            Provide the parameters of the contrast transfer function as keyword arguments (see :class:`.CTF`).
+            Provide the parameters of the contrast transfer function as keyword
+            arguments (see :class:`.CTF`).
 
         Returns
         -------
@@ -1037,8 +1039,7 @@ class Waves(BaseWaves, ArrayObject):
         potential: Atoms | BasePotential,
         detectors: Optional[BaseDetector | Sequence[BaseDetector]] = None,
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
-        """
-        Propagate and transmit wave function through the provided potential using the
+        """Propagate and transmit wave function through the provided potential using the
         multislice algorithm. When detector(s) are given, output will be the
         corresponding measurement.
 
@@ -1079,8 +1080,8 @@ class Waves(BaseWaves, ArrayObject):
         detectors: Optional[BaseDetector | Sequence[BaseDetector]] = None,
         max_batch: int | str = "auto",
     ) -> Waves | BaseMeasurements | ComputableList[Waves | BaseMeasurements]:
-        """
-        Run the multislice algorithm from probe wave functions over the provided scan.
+        """Run the multislice algorithm from probe wave functions over the provided
+        scan.
 
         Parameters
         ----------
@@ -1122,8 +1123,7 @@ class Waves(BaseWaves, ArrayObject):
         return measurements
 
     def show(self, convert_complex: str = "intensity", **kwargs) -> Visualization:
-        """
-        Show the wave-function intensities.
+        """Show the wave-function intensities.
 
         kwargs :
             Keyword arguments for `abtem.measurements.Images.show`.
@@ -1331,8 +1331,8 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
 
 class PlaneWave(_WavesBuilder):
-    """
-    Represents electron probe wave functions for simulating experiments with a plane-wave probe, such as HRTEM and SAED.
+    """Represents electron probe wave functions for simulating experiments with a plane-
+    wave probe, such as HRTEM and SAED.
 
     Parameters
     ----------
@@ -1432,8 +1432,7 @@ class PlaneWave(_WavesBuilder):
         lazy: Optional[bool] = None,
         max_batch: int | str = "auto",
     ) -> Waves:
-        """
-        Build plane-wave wave functions.
+        """Build plane-wave wave functions.
 
         Parameters
         ----------
@@ -1468,9 +1467,8 @@ class PlaneWave(_WavesBuilder):
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
     ) -> BaseMeasurements | Waves | ComputableList[BaseMeasurements | Waves]:
-        """
-        Run the multislice algorithm, after building the plane-wave wave function as needed. The grid of the wave
-        functions will be set to the grid of the potential.
+        """Run the multislice algorithm, after building the plane-wave wave function as
+        needed. The grid of the wave functions will be set to the grid of the potential.
 
         Parameters
         ----------
@@ -1512,9 +1510,8 @@ class PlaneWave(_WavesBuilder):
 
 
 class Probe(_WavesBuilder):
-    """
-    Represents electron-probe wave functions for simulating experiments with a convergent beam,
-    such as CBED and STEM.
+    """Represents electron-probe wave functions for simulating experiments with a
+    convergent beam, such as CBED and STEM.
 
     Parameters
     ----------
@@ -1753,8 +1750,7 @@ class Probe(_WavesBuilder):
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
     ) -> Waves:
-        """
-        Build probe wave functions at the provided positions.
+        """Build probe wave functions at the provided positions.
 
         Parameters
         ----------
@@ -1783,8 +1779,8 @@ class Probe(_WavesBuilder):
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
-        """
-        Run the multislice algorithm for probe wave functions at the provided positions.
+        """Run the multislice algorithm for probe wave functions at the provided
+        positions.
 
         Parameters
         ----------
@@ -1906,8 +1902,8 @@ class Probe(_WavesBuilder):
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
-        """
-        Run the multislice algorithm from probe wave functions over the provided scan.
+        """Run the multislice algorithm from probe wave functions over the provided
+        scan.
 
         Parameters
         ----------
@@ -1976,8 +1972,7 @@ class Probe(_WavesBuilder):
         return intersect0, intersect1
 
     def profiles(self, angle: float = 0.0) -> RealSpaceLineProfiles:
-        """
-        Create a line profile through the center of the probe.
+        """Create a line profile through the center of the probe.
 
         Parameters
         ----------
@@ -1998,8 +1993,7 @@ class Probe(_WavesBuilder):
         return measurement.interpolate_line(point1, point2)
 
     def show(self, convert_complex: str = "intensity", **kwargs) -> Visualization:
-        """
-        Show the intensity of the probe wave function.
+        """Show the intensity of the probe wave function.
 
         Parameters
         ----------
