@@ -9,7 +9,6 @@ from numba import njit, stencil  # type: ignore
 
 from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma
-from abtem.potentials.iam import TransmissionFunction
 
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
@@ -279,12 +278,12 @@ class NotConvergedError(Exception):
 
 
 def _multislice_exponential_series(
-    waves,
-    transmission_function,
+    waves: np.ndarray,
+    transmission_function: np.ndarray,
     laplace: Callable,
     tolerance: float = 1e-16,
     max_terms: int = 300,
-):
+) -> np.ndarray:
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
@@ -303,7 +302,8 @@ def _multislice_exponential_series(
             raise DivergedError()
     else:
         raise NotConvergedError(
-            f"series did not converge to a tolerance of {tolerance} in {max_terms} terms"
+            f"series did not converge to a tolerance of {tolerance} in {max_terms}"
+            "terms"
         )
     return waves
 
@@ -328,32 +328,36 @@ def multislice_step(
     laplace: LaplaceOperator,
     tolerance: float = 1e-16,
     max_terms: int = 300,
-):
+) -> Waves:
     if max_terms < 1:
         raise ValueError()
 
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
 
-    if isinstance(potential_slice, TransmissionFunction):
-        transmission_function = potential_slice
+    # if isinstance(potential_slice, TransmissionFunction):
+    #     transmission_function = potential_slice
 
-    else:
-        transmission_function = potential_slice.transmission_function(
-            energy=waves._valid_energy
-        )
+    # else:
+    #     transmission_function = potential_slice.transmission_function(
+    #         energy=waves._valid_energy
+    #     )
 
     thickness = potential_slice.thickness
-    transmission_function = (
+    transmission_function_array = (
         1.0j * potential_slice.array[0] * energy2sigma(waves._valid_energy)
     )
 
     # waves = transmission_function.transmit(waves)
 
-    laplace = laplace.get_stencil(waves, thickness)
+    laplace_stencil = laplace.get_stencil(waves, thickness)
 
     waves._array = _multislice_exponential_series(
-        waves._array, transmission_function, laplace, tolerance, max_terms
+        waves._eager_array,
+        transmission_function_array,
+        laplace_stencil,
+        tolerance,
+        max_terms,
     )
     return waves
 
@@ -424,7 +428,8 @@ def multislice_step(
 #     #     #     raise DivergedError()
 #     # # else:
 #     # #     raise NotConvergedError(
-#     # #         f"series did not converge to a tolerance of {tolerance} in {max_terms} terms"
+#     # #         f"series did not converge to a tolerance of {tolerance} in {max_terms}
+# terms"
 #     # #     )
 #     #
 #     # return waves

@@ -427,7 +427,6 @@ def _multiple_rechunk_reduce(
     pad_amounts = _tuple_from_index_value_pairs(
         chunked_axis, (window_margin[chunked_axis],) * 2, nochunks_axis, (0, 0)
     )
-    print(pad_amounts)
     s_matrix_array = s_matrix_array._pad(pad_amounts)
 
     chunk_size = window_margin[chunked_axis]
@@ -442,7 +441,6 @@ def _multiple_rechunk_reduce(
         nochunks_axis,
         (s_matrix_array.shape[-2:][nochunks_axis],),
     )
-    print(partitions, s_matrix_array.sampling, s_matrix_array.shape)
 
     chunk_extents = tuple(
         tuple(((cc[0]) * d, (cc[1]) * d) for cc in c)
