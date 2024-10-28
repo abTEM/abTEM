@@ -13,7 +13,6 @@ from numba import jit
 from scipy.interpolate import interp1d
 from scipy.special import sph_harm, spherical_jn
 
-from abtem.measurements import Images, RealSpaceLineProfiles
 from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import copy_to_device, get_array_module
@@ -30,7 +29,7 @@ from abtem.core.energy import (
 from abtem.core.fft import fft2, fft2_convolve, fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import CopyMixin
-from abtem.measurements import _polar_detector_bins
+from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -349,7 +348,7 @@ class SubshellTransitions(BaseTransitionCollection):
     @property
     def lprimes(self):
         min_new_l = max(self.l - self.order, 0)
-        return np.arange(min_new_l, self.l + self.order + 1)
+        return range(min_new_l, self.l + self.order + 1)
 
     def get_bound_wave_function(self):
         wave_functions = calculate_bound_radial_wavefunction(
@@ -367,13 +366,13 @@ class SubshellTransitions(BaseTransitionCollection):
         return wave_functions
 
     def get_transition_quantum_numbers(self):
-        bound_states = [(self.n, self.l, ml) for ml in np.arange(-self.l, self.l + 1)]
+        bound_states = [(self.n, self.l, ml) for ml in range(-self.l, self.l + 1)]
 
         excited_states = []
         for lprime in self.lprimes:
-            for mlprime in np.arange(-lprime, lprime + 1):
+            for mlprime in range(-lprime, lprime + 1):
                 excited_states.append((None, lprime, mlprime))
-
+        
         transitions = []
         for bound_state, excited_state in itertools.product(
             bound_states, excited_states
@@ -386,14 +385,14 @@ class SubshellTransitions(BaseTransitionCollection):
         bound_state = self.get_bound_wave_function()
         bound_states = [
             AtomicWaveFunction(bound_state, ml)
-            for ml in np.arange(-bound_state.l, bound_state.l + 1)
+            for ml in range(-bound_state.l, bound_state.l + 1)
         ]
 
         excited_states = self.get_excited_wave_functions()
         excited_states = [
             AtomicWaveFunction(radial, ml)
             for radial in excited_states
-            for ml in np.arange(-radial.l, radial.l + 1)
+            for ml in range(-radial.l, radial.l + 1)
         ]
 
         transitions = []
@@ -455,6 +454,7 @@ class TransitionPotential(BaseTransitionPotential):
         energy: float = None,
         double_channel: bool = True,
     ):
+
         self._Z = Z
         self._orbital_filling_factor = orbital_filling_factor
         self._transitions = transitions
@@ -485,6 +485,8 @@ class TransitionPotential(BaseTransitionPotential):
             f"{bound[1:]} → {excited[1:]}"
             for (bound, excited) in self.transition_quantum_numbers
         ]
+
+
         return [
             OrdinalAxis(
                 values=values,
@@ -545,6 +547,14 @@ class TransitionPotential(BaseTransitionPotential):
             for mlprimeprime in range(-lprimeprime, lprimeprime + 1):
                 if ml - mlprime - mlprimeprime != 0:
                     continue
+                
+                lprime = int(lprime)
+                lprimeprime = int(lprimeprime)
+                l = int(l)
+                mlprime = int(mlprime)
+                mlprimeprime = int(mlprimeprime)
+                ml = int(ml)
+
 
                 prefactor = (
                     np.sqrt(4 * np.pi)
@@ -587,7 +597,7 @@ class TransitionPotential(BaseTransitionPotential):
 
         return self.__class__(**kwargs)
 
-    def build(self):
+    def build(self) -> TransitionPotentialArray:
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
@@ -601,7 +611,7 @@ class TransitionPotential(BaseTransitionPotential):
 
             kz = k0 - kn
 
-            kxy, phi = polar_spatial_frequencies(self.gpts, self.sampling, dtype=float)
+            kxy, phi = polar_spatial_frequencies(self.gpts, self.sampling)
             k = np.sqrt(kxy**2 + kz**2)
             theta = np.pi - np.arctan(kxy / kz)
 
@@ -697,6 +707,9 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
 
         self._local_potential = self.local_potential(space="real").sum(0)
         self._threshold = None
+    
+    def from_array_and_metadata(self, array, metadata):
+        raise NotImplementedError
 
     def set_threshold(self, wave, threshold):
         local_potentials = self.local_potential(space="real")
