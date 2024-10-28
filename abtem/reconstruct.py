@@ -2,28 +2,27 @@
 from abc import ABCMeta, abstractmethod
 from copy import copy
 from functools import partial
-from typing import Union, Sequence, Mapping, Callable, Iterable
+from typing import Callable, Iterable, Mapping, Sequence, Union
 
 import numpy as np
 
 from abtem import stack
 
 # from tqdm.auto import tqdm
-
-from abtem.core.axes import ThicknessAxis, OrdinalAxis
+from abtem.core.axes import OrdinalAxis, ThicknessAxis
 from abtem.core.backend import (
+    asnumpy,
     copy_to_device,
     get_array_module,
-    get_scipy_module,
-    asnumpy,
     get_ndimage_module,
+    get_scipy_module,
 )
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2_convolve, fft_shift
 from abtem.measurements import DiffractionPatterns, Images, _scan_sampling
-from abtem.transfer import polar_symbols, polar_aliases
-from abtem.waves import Probe
 from abtem.multislice import FresnelPropagator
+from abtem.transfer import polar_aliases, polar_symbols
+from abtem.waves import Probe
 
 experimental_symbols = (
     "rotation_angle",
@@ -48,7 +47,7 @@ reconstruction_symbols = {
 
 
 class ProgressBar:
-    """Object to describe progress bar indicators for computations."""
+    r"""Object to describe progress bar indicators for computations."""
 
     def __init__(self, **kwargs):
         from tqdm.auto import tqdm
@@ -82,7 +81,7 @@ class ProgressBar:
 def _wrapped_indices_2D_window(
     center_position: np.ndarray, window_shape: Sequence[int], array_shape: Sequence[int]
 ):
-    """
+    r"""
     Computes periodic indices for a window_shape probe centered at center_position, in object of size array_shape.
 
     Parameters
@@ -132,7 +131,7 @@ def _propagate_array(
     overwrite: bool = False,
     xp=np,
 ):
-    """
+    r"""
     Propagates complex wave function array through free space distance dz.
 
     Simplified re-write of abtem.FresnelPropagator.propagate() to operate on arrays directly.
@@ -164,7 +163,7 @@ def _propagate_array(
 
 
 class AbstractPtychographicOperator(metaclass=ABCMeta):
-    """
+    r"""
     Base ptychographic operator class.
 
     Defines various common functions and properties for all subclasses to inherit,
@@ -173,7 +172,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @abstractmethod
     def preprocess(self):
-        """
+        r"""
         Abstract method all subclasses must define which does the following:
         - Pads CBED patterns to region of interest dimensions
         - Prepares initial guess for scanning positions
@@ -693,7 +692,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE overlap projection static method:
         .. math::
             \psi_{R_j}(r) = O_{R_j}(r) * P(r)
@@ -741,7 +740,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE fourier projection static method:
         .. math::
             \psi'_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi_{R_j}(u)] / |F[\psi_{R_j}(u)]|]
@@ -790,7 +789,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE objects and probes update static method:
         .. math::
             O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^*(r)}{\left(1-\alpha\right)|P(r)|^2 + \alpha|P(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
@@ -1614,7 +1613,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE overlap projection static method using the forward probe and electrostatic object
         .. math::
             \psi_{R_j}(r) = V_{R_j}(r) * P^{\mathrm{forward}}(r)
@@ -1670,7 +1669,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Simultaneous-PIE overlap projection static method:
         .. math:: 
             \psi_{R_j}(r) &= V_{R_j}(r) M_{R_j}(r)* P^{\mathrm{forward}}(r) \\
@@ -1732,7 +1731,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Simultaneous-PIE overlap projection static method using a common probe
         .. math:: 
             \psi_{R_j}(r) &= V_{R_j}(r) M_{R_j}(r)* P(r) \\
@@ -1790,7 +1789,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE fourier projection static method:
         .. math::
             \psi'_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi_{R_j}(u)] / |F[\psi_{R_j}(u)]|]
@@ -1835,7 +1834,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Simultaneous-PIE fourier projection static method:
         .. math:: 
             \psi'_{R_j}(r) &= F^{-1}[\sqrt{I_j(u)} F[\psi_{R_j}(u)] / |F[\psi_{R_j}(u)]|] \\
@@ -1901,7 +1900,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE objects and probes update static method:
         .. math::
             O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^*(r)}{\left(1-\alpha\right)|P(r)|^2 + \alpha|P(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
@@ -2020,7 +2019,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Simultaneous-PIE objects and probes update static method.
 
 
@@ -2198,7 +2197,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Simultaneous-PIE objects and probes update static method using a common probe.
 
 
@@ -2369,7 +2368,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE probe position correction method.
 
 
@@ -2431,7 +2430,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     def _fix_probe_center_of_mass(
         probes: Sequence[np.ndarray], center_of_mass: Callable, xp=np, **kwargs
     ):
-        """
+        r"""
         Simultaneous-PIE probe center correction method.
 
 
@@ -2613,7 +2612,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         parameters: Mapping[str, float] = None,
         **kwargs,
     ):
-        """
+        r"""
         Main reconstruction loop method to do the following:
         - Precompute the order of function calls using the SimultaneousPtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
@@ -2874,7 +2873,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         positions: np.ndarray,
         sse: np.ndarray,
     ):
-        """
+        r"""
         Method to format the reconstruction outputs as Measurement objects.
 
         Parameters
@@ -3003,7 +3002,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             self._preprocessed = False
 
     def preprocess(self):
-        """
+        r"""
         Preprocess method to do the following:
         - Pads CBED patterns to region of interest dimensions
         - Prepares initial guess for scanning positions
@@ -3133,7 +3132,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE overlap projection static method using a single probe:
         .. math::
             \psi^0_{R_j}(r) = O_{R_j}(r) * P^0(r)
@@ -3182,7 +3181,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Mixed-State-PIE overlap projection static method:
         .. math::
             \psi^k_{R_j}(r) = O_{R_j}(r) * P^k(r)
@@ -3233,7 +3232,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE fourier projection static method using a single probe:
         .. math::
             \psi'^0_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^0_{R_j}(u)] / |F[\psi^0_{R_j}(u)]|]
@@ -3275,7 +3274,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Mixed-State-PIE fourier projection static method:
         .. math::
             \psi'^k_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^k_{R_j}(u)] / \sqrt{\sum_k|F[\psi^k_{R_j}(u)]|^2}]
@@ -3327,7 +3326,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE objects and probes update static method using a single probe:
         .. math::
             O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^{0*}(r)}{\left(1-\alpha\right)|P^0(r)|^2 + \alpha|P^0(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
@@ -3432,7 +3431,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Mixed-State-PIE objects and probes update static method:
         .. math::
             O'_{R_j}(r)    &= O_{R_j}(r) + \frac{1}{\left(1-\alpha\right)\sum_k|P^k(r)|^2 + \alpha\sum_k|P^k(r)|_{\mathrm{max}}^2} \left(\sum_k P^{k*}\psi^{k'}_{R_j}(r) - \psi^k_{R_j}(r)\right) \\
@@ -3540,7 +3539,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Regularized-PIE probe position correction method.
 
 
@@ -3630,7 +3629,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         pre_probe_correction_update_steps: int = None,
         **kwargs,
     ):
-        """
+        r"""
         Precomputes the order in which functions will be called in the reconstruction loop.
         Additionally, prepares a summary of steps to be printed for reporting.
 
@@ -3759,7 +3758,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         functions_queue: Iterable = None,
         **kwargs,
     ):
-        """
+        r"""
         Main reconstruction loop method to do the following:
         - Precompute the order of function calls using the MixedStatePtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
@@ -4059,7 +4058,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
 
 class MultislicePtychographicOperator(AbstractPtychographicOperator):
-    """
+    r"""
     Multislice Ptychographic Iterative Engine (MS-PIE).
     Used to reconstruct _thick_ weak-phase objects using a set of measured far-field CBED patterns with the following array dimensions:
 
@@ -4295,7 +4294,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Multislice-PIE overlap projection static method:
         .. math::
             \psi^n_{R_j}(r) = O^n_{R_j}(r) * P^n(r)
@@ -4359,7 +4358,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Multislice-PIE fourier projection static method:
         .. math::
             \psi^{N'}_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^N_{R_j}(u)] / |F[\psi^N_{R_j}(u)]|]
@@ -4418,7 +4417,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Multislice-PIE objects and probes update static method:
 
         Parameters
@@ -4529,7 +4528,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         xp=np,
         **kwargs,
     ):
-        """
+        r"""
         Multislice-PIE probe position correction method using the last slice.
 
 
@@ -4585,7 +4584,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
     def _fix_probe_center_of_mass(
         probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
     ):
-        """
+        r"""
         Multislice-PIE probe center correction method.
 
 
@@ -4617,7 +4616,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         pre_probe_correction_update_steps: int = None,
         **kwargs,
     ):
-        """
+        r"""
         Precomputes the order in which functions will be called in the reconstruction loop.
         Additionally, prepares a summary of steps to be printed for reporting.
 
@@ -4695,7 +4694,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         functions_queue: Iterable = None,
         **kwargs,
     ):
-        """
+        r"""
         Main reconstruction loop method to do the following:
         - Precompute the order of function calls using the MultislicePtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
@@ -4959,7 +4958,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         sse: np.ndarray,
         slice_thicknesses: Sequence[float] = None,
     ):
-        """
+        r"""
         Method to format the reconstruction outputs as Measurement objects.
 
         Parameters
