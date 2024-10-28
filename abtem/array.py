@@ -87,7 +87,7 @@ except ImportError:
 
 
 def _to_hyperspy_axes_metadata(
-    axes_metadata: list[AxisMetadata], shape: tuple[int, ...]
+    axes_metadata: list[AxisMetadata], shape: int | tuple[int, ...]
 ):
     hyperspy_axes = []
 
@@ -112,7 +112,8 @@ def _to_hyperspy_axes_metadata(
                 hyperspy_axis["units"] = metadata.units
             else:
                 warnings.warn(
-                    f"Axis ({metadata.label}) not supported by hyperspy, some metadata will be lost."
+                    f"Axis ({metadata.label}) not supported by hyperspy, some metadata"
+                    f"will be lost."
                 )
         else:
             raise RuntimeError()
@@ -138,16 +139,16 @@ class ComputableList(list):
         Parameters
         ----------
         url : str
-            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
-            s3:// for remote data.
+            Location of the data, typically a path to a local file. A URL can also
+            include a protocol specifier like s3:// for remote data.
         compute : bool
             If true compute immediately; return dask.delayed.Delayed otherwise.
         overwrite : bool
-            If given array already exists, overwrite=False will cause an error, where overwrite=True will replace the
-            existing data.
+            If given array already exists, overwrite=False will cause an error, where
+            overwrite=True will replace the existing data.
         progress_bar : bool
-            Display a progress bar in the terminal or notebook during computation. The progress bar is only displayed
-            with a local scheduler.
+            Display a progress bar in the terminal or notebook during computation. The
+            progress bar is only displayed with a local scheduler.
         kwargs :
             Keyword arguments passed to `dask.array.to_zarr`.
         """
@@ -390,10 +391,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     array : ndarray
         Array representing the array object.
     ensemble_axes_metadata : list of AxesMetadata
-        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with
+        the shape of the array.
     metadata : dict
-        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
-        from the waves.
+        A dictionary defining wave function metadata. All items will be added to the
+        metadata of measurements derived from the waves.
     """
 
     _base_dims: int
@@ -403,6 +405,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         array: np.ndarray | da.core.Array,
         ensemble_axes_metadata: list[AxisMetadata] | None = None,
         metadata: dict | None = None,
+        **kwargs,
     ):
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
@@ -421,6 +424,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
 
         self._check_axes_metadata()
+
+        super().__init__(**kwargs)
 
     @property
     def base_dims(self) -> int:
@@ -466,15 +471,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def _check_axes_metadata(self) -> None:
         if len(self.shape) != len(self.axes_metadata):
             raise RuntimeError(
-                f"number of array dimensions ({len(self.shape)}) does not match number of axis metadata items "
-                f"({len(self.axes_metadata)})"
+                f"number of array dimensions ({len(self.shape)}) does not match number"
+                f"of axis metadata items ({len(self.axes_metadata)})"
             )
 
         for n, axis in zip(self.shape, self.axes_metadata):
             if isinstance(axis, OrdinalAxis) and len(axis) != n:
                 raise RuntimeError(
-                    f"number of values for ordinal axis ({len(axis)}), does not match size of dimension "
-                    f"({n})"
+                    f"number of values for ordinal axis ({len(axis)}), does not match"
+                    f"size of dimension ({n})"
                 )
 
     def _is_base_axis(self, axis: int | tuple[int, ...]) -> bool:
@@ -509,7 +514,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if axis.label == name:
                 data = axis.coordinates(n)
                 axes_metadata_index = i
-        
+
         if axes_metadata_index is not None and broadcastable:
             return np.array(data)[
                 (
@@ -617,9 +622,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     def _eager_array(self) -> np.ndarray:
         """Underlying eager array describing the array object."""
         #if self.is_lazy:
-        #    raise RuntimeError("array object is lazy")
-        #assert not isinstance(self.array, da.core.Array)
-        return self.array
+        #   raise RuntimeError("array object is lazy")
+        # assert not isinstance(self.array, da.core.Array)
+        array = self.array
+        # assert not isinstance(array, da.core.Array)
+        return array
 
     @property
     def dtype(self) -> np.dtype:
@@ -670,7 +677,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         keepdims : bool, opptional
-            If True, all ensemble axes are left in the result as dimensions with size one. Default is False.
+            If True, all ensemble axes are left in the result as dimensions with size
+            one. Default is False.
 
         Yields
         ------
@@ -692,11 +700,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         axis : int or tuple of ints, optional
-            Axis or axes along which a means are calculated. The default is to compute the mean of the flattened array.
-            If this is a tuple of ints, the mean is calculated over multiple axes. The indicated axes must be ensemble
-            axes.
+            Axis or axes along which a means are calculated. The default is to compute
+            the mean of the flattened array. If this is a tuple of ints, the mean is
+            calculated over multiple axes. The indicated axes must be ensemble axes.
         keepdims : bool, optional
-            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+            If True, the reduced axes are left in the result as dimensions with size
+            one. Default is False.
         split_every : int
             Only used for lazy arrays. See `dask.array.reductions`.
 
@@ -720,11 +729,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         axis : int or tuple of ints, optional
-            Axis or axes along which a sums are performed. The default is to compute the mean of the flattened array.
-            If this is a tuple of ints, the sum is performed over multiple axes. The indicated axes must be ensemble
-            axes.
+            Axis or axes along which a sums are performed. The default is to compute the
+            mean of the flattened array. If this is a tuple of ints, the sum is
+            performed over multiple axes. The indicated axes must be ensemble axes.
         keepdims : bool, optional
-            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+            If True, the reduced axes are left in the result as dimensions with size
+            one. Default is False.
         split_every : int
             Only used for lazy arrays. See `dask.array.reductions`.
 
@@ -749,11 +759,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         axis : int or tuple of ints, optional
-            Axis or axes along which a standard deviations are calculated. The default is to compute the mean of the
-            flattened array. If this is a tuple of ints, the standard deviations are calculated over multiple axes.
+            Axis or axes along which a standard deviations are calculated. The default
+            is to compute the mean of the flattened array. If this is a tuple of ints,
+            the standard deviations are calculated over multiple axes.
             The indicated axes must be ensemble axes.
         keepdims : bool, optional
-            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+            If True, the reduced axes are left in the result as dimensions with size
+            one. Default is False.
         split_every : int
             Only used for lazy arrays. See `dask.array.reductions`.
 
@@ -778,11 +790,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         axis : int or tuple of ints, optional
-            Axis or axes along which a minima are calculated. The default is to compute the mean of the flattened array.
-            If this is a tuple of ints, the minima are calculated over multiple axes. The indicated axes must be
-            ensemble axes.
+            Axis or axes along which a minima are calculated. The default is to compute
+            the mean of the flattened array. If this is a tuple of ints, the minima are
+            calculated over multiple axes. The indicated axes must be ensemble axes.
         keepdims : bool, optional
-            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+            If True, the reduced axes are left in the result as dimensions with size
+            one. Default is False.
         split_every : int
             Only used for lazy arrays. See `dask.array.reductions`.
 
@@ -807,11 +820,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         axis : int or tuple of ints, optional
-            Axis or axes along which a maxima are calculated. The default is to compute the mean of the flattened array.
-            If this is a tuple of ints, the maxima are calculated over multiple axes. The indicated axes must be
-            ensemble axes.
+            Axis or axes along which a maxima are calculated. The default is to compute
+            the mean of the flattened array. If this is a tuple of ints, the maxima are
+            calculated over multiple axes. The indicated axes must be ensemble axes.
         keepdims : bool, optional
-            If True, the reduced axes are left in the result as dimensions with size one. Default is False.
+            If True, the reduced axes are left in the result as dimensions with size
+            one. Default is False.
         split_every : int
             Only used for lazy arrays. See `dask.array.reductions`.
 
@@ -929,8 +943,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         elif not isinstance(items, tuple):
             raise NotImplementedError(
                 (
-                    "Indices must be integers or slices or a tuple of integers or slices or None, "
-                    f"not {type(items).__name__}."
+                    "Indices must be integers or slices or a tuple of integers or"
+                    "slices or None, not {type(items).__name__}."
                 )
             )
 
@@ -992,7 +1006,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         items : int or tuple of int or slice
             The array is indexed according to this.
         keepdims : bool, optional
-            If True, all ensemble axes are left in the result as dimensions with size one. Default is False.
+            If True, all ensemble axes are left in the result as dimensions with size
+            one. Default is False.
 
         Returns
         -------
@@ -1011,12 +1026,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         kwargs["metadata"] = {**self.metadata, **metadata}
         return kwargs
 
-    def __getitem__(self, items) -> ArrayObject:
+    def __getitem__(self: ArrayObjectType, items) -> ArrayObjectType:
         return self.__class__(**self.get_items(items))
 
     def expand_dims(
         self,
-        axis: Optional[tuple[int, ...]] = None,
+        axis: Optional[int | tuple[int, ...]] = None,
         axis_metadata: Optional[list[AxisMetadata]] = None,
     ) -> ArrayObject:
         """Expand the shape of the array object.
@@ -1166,7 +1181,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return output_value
 
-    def copy_to_device(self: ArrayObject, device: str) -> ArrayObject:
+    def copy_to_device(self: ArrayObjectType, device: str) -> ArrayObjectType:
         """Copy array to specified device.
 
         Parameters
@@ -1182,7 +1197,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return self.__class__(**kwargs)
 
-    def to_cpu(self: ArrayObject) -> ArrayObject:
+    def to_cpu(self: ArrayObjectType) -> ArrayObjectType:
         """Move the array to the host memory from an arbitrary source array."""
         return self.copy_to_device("cpu")
 
@@ -1198,13 +1213,13 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         url : str
-            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
-            s3:// for remote data.
+            Location of the data, typically a path to a local file. A URL can also
+            include a protocol specifier like s3:// for remote data.
         compute : bool
             If true compute immediately; return dask.delayed.Delayed otherwise.
         overwrite : bool
-            If given array already exists, overwrite=False will cause an error, where overwrite=True will replace the
-            existing data.
+            If given array already exists, overwrite=False will cause an error, where
+            overwrite=True will replace the existing data.
         kwargs :
             Keyword arguments passed to `dask.array.to_zarr`.
         """
@@ -1284,11 +1299,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         """Read wave functions from a hdf5 file.
 
         url : str
-            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
-            s3:// for remote data.
+            Location of the data, typically a path to a local file. A URL can also
+            include a protocol specifier like s3:// for remote data.
         chunks : tuple of ints or tuples of ints
-            Passed to dask.array.from_array(), allows setting the chunks on initialisation, if the chunking scheme in
-            the on-disc dataset is not optimal for the calculations to follow.
+            Passed to dask.array.from_array(), allows setting the chunks on
+            initialisation, if the chunking scheme in the on-disc dataset is not optimal
+            for the calculations to follow.
         """
         return from_zarr(url, chunks=chunks)
 
@@ -1349,8 +1365,9 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         transform : ArrayObjectTransform
             The array object transformation to apply.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
 
         Returns
@@ -1437,9 +1454,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             else:
                 return transform._pack_single_output(self, new_array)
         else:
-            
             eager_outputs = transform._apply(self)
-            
+
             if isinstance(eager_outputs, tuple):
                 return list(eager_outputs)
             else:
@@ -1475,8 +1491,8 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         Parameters
         ----------
         transpose : bool, optional
-            If True, transpose the base axes of the array before converting to a Hyperspy signal.
-            Default is True.
+            If True, transpose the base axes of the array before converting to a
+            Hyperspy signal. Default is True.
 
         Returns
         -------
@@ -1616,7 +1632,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
             ensemble_axes_metadata = np.zeros(chunk_shape, dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
-                #new_ensemble_axes_metadata = []
+                # new_ensemble_axes_metadata = []
 
                 # for i, axis in enumerate(self.ensemble_axes_metadata):
                 #     try:
@@ -1626,12 +1642,11 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
                 #     new_ensemble_axes_metadata.append(axis)
                 new_ensemble_axes_metadata = [
-                    axis[slic[i]] if hasattr(axis, '__getitem__') else axis.copy()
+                    axis[slic[i]] if hasattr(axis, "__getitem__") else axis.copy()
                     for i, axis in enumerate(self.ensemble_axes_metadata)
                 ]
 
                 itemset(ensemble_axes_metadata, index, new_ensemble_axes_metadata)
-
 
             # for index, slic in iterate_chunk_ranges(chunks):
             #     new_ensemble_axes_metadata = [
@@ -1754,10 +1769,12 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
     Parameters
     ----------
     url : str
-        Location of the data. A URL can include a protocol specifier like s3:// for remote data.
+        Location of the data. A URL can include a protocol specifier like s3:// for
+        remote data.
     chunks :  tuple of ints or tuples of ints
-        Passed to dask.array.from_array(), allows setting the chunks on initialisation, if the chunking scheme in the
-        on-disc dataset is not optimal for the calculations to follow.
+        Passed to dask.array.from_array(), allows setting the chunks on initialisation,
+        if the chunking scheme in the on-disc dataset is not optimal for the
+        calculations to follow.
 
     Returns
     -------
@@ -1814,13 +1831,16 @@ def validate_axis_metadata(
 
     elif not isinstance(axis_metadata, AxisMetadata):
         raise ValueError(
-            "axis_metadata must be a dict, sequence of strings or an AxisMetadata object."
+            "axis_metadata must be a dict, sequence of strings or an AxisMetadata"
+            "object."
         )
     elif isinstance(axis_metadata, OrdinalAxis):
         validated_axis_metadata = axis_metadata
     else:
-        raise ValueError("axis_metadata must be a dict, sequence of strings or an AxisMetadata object."
-        f" Not {type(axis_metadata).__name__}.")
+        raise ValueError(
+            "axis_metadata must be a dict, sequence of strings or an AxisMetadata"
+            f"object. Not {type(axis_metadata).__name__}."
+        )
 
     return validated_axis_metadata
 
