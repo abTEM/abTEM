@@ -46,8 +46,9 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
+from abtem.visualize.artists import LinesArtist
 from abtem.core.units import get_conversion_factor
-from abtem.core.utils import CopyMixin, EqualityMixin, is_broadcastable, label_to_index
+from abtem.core.utils import CopyMixin, EqualityMixin, is_broadcastable, label_to_index, normalize_axes
 from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.visualizations import Visualization
@@ -465,7 +466,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
         metadata: Optional[dict] = None,
-    ) -> ArrayObject:
+    ) -> BaseMeasurements:
         pass
 
     def reduce_ensemble(self) -> ArrayObject:
@@ -803,46 +804,52 @@ class MeasurementsEnsemble(BaseMeasurements):
         -------
         measurement_visualization_2d : VisualizationImshow
         """
-        # if not interact:
-        #     self.compute()
+        if not interact:
+            self.compute()
 
-        # scale_axis = self._scale_axis_from_metadata()
+        scale_axis = self._scale_axis_from_metadata()
 
-        # # base_axes_metadata = self._plot_base_axes_metadata(units)
+        # base_axes_metadata = self._plot_base_axes_metadata(units)
 
-        # array = self.array
+        array = self.array
 
-        # # raise RuntimeError("Cannot infer pixel area from metadata.")
+        # raise RuntimeError("Cannot infer pixel area from metadata.")
 
-        # #if display_axes != (-2, -1):
-        # #    array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
+        #if display_axes != (-2, -1):
+        #    array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
 
         # display_axes = normalize_axes(display_axes, self.shape)
 
-        # # base_axes_metadata = [self.axes_metadata[i] for i in display_axes]
-        # # ensemble_axes_metadata = [
-        # #     self.axes_metadata[i]
-        # #     for i in range(len(self.shape))
-        # #     if i not in display_axes
-        # # ]
+        # base_axes_metadata = [self.axes_metadata[i] for i in display_axes]
+        # ensemble_axes_metadata = [
+        #     self.axes_metadata[i]
+        #     for i in range(len(self.shape))
+        #     if i not in display_axes
+        # ]
 
-        # artist_type = LinesArtist
+        artist_type = LinesArtist
 
-        # visualization = Visualization(
-        #     self,
-        #     ax=ax,
-        #     artist_type=artist_type,
-        #     power=power,
-        #     common_scale=common_scale,
-        #     explode=explode,
-        #     overlay=overlay,
-        #     figsize=figsize,
-        #     interact=interact,
-        #     title=title,
-        #     **kwargs,
-        # )
+        visualization = Visualization(
+            measurement=self,
+            ax=ax,
+            artist_type=artist_type,
+            #power=power,
+            aspect=False,
+            share_x=True,
+            share_y=common_scale,
+            common_scale=common_scale,
+            explode=explode,
+            overlay=overlay,
+            figsize=figsize,
+            #interact=interact,
+            title=title,
+            **kwargs,
+        )
 
-        # return visualization
+        if common_scale is False and visualization._explode:
+            visualization.axes.set_sizes(padding=0.8)
+
+        return visualization
 
     # def show(
     #     self,
@@ -3192,8 +3199,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
                     label="Limits", values=tuple(zip(inners, outers)), units="mrad"
                 ),
             )
-            assert isinstance(measurements, Images)
-
             return measurements
 
         if outer is None:
