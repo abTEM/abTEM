@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 from ase import Atoms
 from ase.data import chemical_symbols
-from numba import jit
-from scipy import integrate
-from scipy.interpolate import interp1d
-from scipy.optimize import brentq
-from scipy.special import erf
+from numba import jit  # type: ignore
+from scipy import integrate  # type: ignore
+from scipy.interpolate import interp1d  # type: ignore
+from scipy.optimize import brentq  # type: ignore
+from scipy.special import erf  # type: ignore
 
 from abtem.core.backend import (
     cp,
@@ -42,14 +42,17 @@ if TYPE_CHECKING:
 
 
 class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
-    """Base class for projection integrator object used for calculating projection integrals of radial potentials.
+    """Base class for projection integrator object used for calculating projection
+    integrals of radial potentials.
 
     Parameters
     ----------
     periodic : bool
-        True indicates that the projection integrals are periodic perpendicular to the projection direction.
+        True indicates that the projection integrals are periodic perpendicular to the
+        projection direction.
     finite : bool
-        True indicates that the projection integrals are finite along the projection direction.
+        True indicates that the projection integrals are finite along the projection
+        direction.
     retain_data : bool, optional
         If True, intermediate calculations are kept.
     """
@@ -70,8 +73,9 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         device: str = "cpu",
     ) -> np.ndarray:
         """
-        Integrate radial potential between two limits at the given 2D positions on a grid. The integration limits are
-        only used when the integration method is finite.
+        Integrate radial potential between two limits at the given 2D positions on a
+        grid. The integration limits are only used when the integration method is
+        finite.
 
         Parameters
         ----------
@@ -82,26 +86,28 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
             ojection integrals along z for each position [Å]. The limit is given
             relative to the center of the radial function.
         b : np.ndarray
-            Upper integration limit of the projection integrals along z for each position [Å]. The limit is given
-            relative to the center of the radial function.
+            Upper integration limit of the projection integrals along z for each
+            position [Å]. The limit is given relative to the center of the radial
+            function.
         gpts : two int
             Number of grid points in `x` and `y` describing each slice of the potential.
         sampling : two float
             Sampling of the potential in `x` and `y` [1 / Å].
         device : str, optional
-            The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
-            configuration file.
+            The device used for calculating the potential, 'cpu' or 'gpu'. The default
+            is determined by the user configuration file.
         """
 
     @property
     def periodic(self) -> bool:
-        """True indicates that the created projection integrators are implemented only for periodic potentials."""
+        """True indicates that the created projection integrators are implemented only
+        for periodic potentials."""
         return self._periodic
 
     @property
     def finite(self) -> bool:
-        """True indicates that the created projection integrators are implemented only for infinite potential
-        projections."""
+        """True indicates that the created projection integrators are implemented only
+        for infinite potential projections."""
         return self._finite
 
     @abstractmethod
@@ -161,13 +167,16 @@ class GaussianProjectionIntegrals(FieldIntegrator):
     Parameters
     ----------
     parametrization : str or Parametrization, optional
-        The correction radial potential parametrization to integrate. Used for correcting the dependence of the
-        potential close to the nuclear core. Default is the Lobato parametrization.
+        The correction radial potential parametrization to integrate. Used for
+        correcting the dependence of the potential close to the nuclear core.
+        Default is the Lobato parametrization.
     gaussian_parametrization : str or Parametrization, optional
-        The Gaussian radial potential parametrization to integrate. Must be parametrization described by a superposition
-        of Gaussians. Default is the Peng parametrization.
+        The Gaussian radial potential parametrization to integrate. Must be
+        parametrization described by a superposition of Gaussians. Default is the Peng
+        parametrization.
     cutoff_tolerance : float, optional
-        The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. Default is 1e-3.
+        The error tolerance used for deciding the radial cutoff distance of the
+        potential [eV / e]. Default is 1e-3.
     """
 
     def __init__(
@@ -191,12 +200,14 @@ class GaussianProjectionIntegrals(FieldIntegrator):
 
     @property
     def cutoff_tolerance(self):
-        """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
+        """The error tolerance used for deciding the radial cutoff distance of the
+        potential [eV / e]."""
         return self._cutoff_tolerance
 
     @property
     def gaussian_parametrization(self):
-        """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
+        """The error tolerance used for deciding the radial cutoff distance of the
+        potential [eV / e]."""
         return self._gaussian_parametrization
 
     @property
@@ -289,13 +300,15 @@ def sinc(
     gpts: tuple[int, int], sampling: tuple[float, float], device: str = "cpu"
 ) -> np.ndarray:
     """
-    Returns an array representing a 2D sinc function centered at [0, 0]. The result is used to
-    compensate for the finite size of single pixels used for representing delta functions.
+    Returns an array representing a 2D sinc function centered at [0, 0]. The result is
+    used to compensate for the finite size of single pixels used for representing delta
+    functions.
 
     Parameters
     ----------
     gpts : two int
-        Number of grid points in the first and second dimension to evaluate the sinc over.
+        Number of grid points in the first and second dimension to evaluate the sinc
+        over.
     sampling : two float
         Size of the pixels of the grid determining the scale of the sinc.
     device : str
@@ -319,7 +332,7 @@ def sinc(
 def superpose_deltas(
     positions: np.ndarray,
     array: np.ndarray,
-    weights: np.ndarray = None,
+    weights: Optional[np.ndarray] = None,
     round_positions: bool = False,
 ) -> np.ndarray:
     """
@@ -328,14 +341,16 @@ def superpose_deltas(
     Parameters
     ----------
     positions : np.ndarray
-        Array of 2D positions as an nx2 array. The positions are given in units of pixels.
+        Array of 2D positions as an nx2 array. The positions are given in units of
+        pixels.
     array : np.ndarray
         The delta functions are added to this 2D array.
     weights : np.ndarray, optional
-        If given each delta function is weighted by the given factor. Must match the length of `positions`.
+        If given each delta function is weighted by the given factor. Must match the
+        length of `positions`.
     round_positions : bool, optional
-        If True, the delta function positions are rounded to the center of the nearest pixel, otherwise subpixel
-        precision is used.
+        If True, the delta function positions are rounded to the center of the nearest
+        pixel, otherwise subpixel precision is used.
 
     Returns
     -------
@@ -379,17 +394,20 @@ def superpose_deltas(
 
 class ScatteringFactorProjectionIntegrals(FieldIntegrator):
     """
-    A FieldIntegrator calculating infinite projections of radial potential parametrizations. The hybrid real and
-    reciprocal space method by Wouter Van den Broek et al. is used.
+    A FieldIntegrator calculating infinite projections of radial potential
+    parametrizations. The hybrid real and reciprocal space method by
+    Wouter Van den Broek et al. is used.
 
     Parameters
     ----------
     parametrization : str or Parametrization, optional
-        The radial potential parametrization to integrate. Default is the Lobato parametrization.
+        The radial potential parametrization to integrate. Default is the Lobato
+        parametrization.
 
     References
     ----------
-    W. Van den Broek et al. Ultramicroscopy, 158:89–97, 2015. doi:10.1016/j.ultramic.2015.07.005.
+    W. Van den Broek et al. Ultramicroscopy, 158:89-97, 2015.
+    doi:10.1016/j.ultramic.2015.07.005.
     """
 
     def __init__(self, parametrization: str | Parametrization = "lobato"):
@@ -524,16 +542,19 @@ def interpolate_radial_functions(
 
 class ProjectionIntegralTable:
     """
-    A ProjectionIntegrator calculating finite projections of radial potential parametrizations. An integral table
-    for each used to evaluate the projection integrals for each atom in a slice given p integral limits.
-    The projected potential evaluated along the
+    A ProjectionIntegrator calculating finite projections of radial potential
+    parametrizations. An integral table for each used to evaluate the projection
+    integrals for each atom in a slice given p integral limits. The projected potential
+    evaluated along the
 
     Parameters
     ----------
     radial_gpts : array
-        The points along a radial in the `xy`-plane where the projection integrals of the integral table are evaluated.
+        The points along a radial in the `xy`-plane where the projection integrals of
+        the integral table are evaluated.
     limits : array
-        The points along the projection direction where the projection integrals are evaluated.
+        The points along the projection direction where the projection integrals are
+        evaluated.
     """
 
     def __init__(self, radial_gpts: np.ndarray, limits: np.ndarray, values: np.ndarray):
@@ -563,7 +584,7 @@ class ProjectionIntegralTable:
         return f(b) - f(a)
 
 
-def optimize_cutoff(func: callable, tolerance: float, a: float, b: float) -> float:
+def optimize_cutoff(func: Callable, tolerance: float, a: float, b: float) -> float:
     """
     Calculate the point where a function becomes lower than a given tolerance within a given bracketing interval.
 
@@ -599,21 +620,27 @@ def cutoff_taper(radial_gpts, cutoff, taper):
 
 class QuadratureProjectionIntegrals(FieldIntegrator):
     """
-    Projection integration plan for calculating finite projection integrals based on Gaussian quadrature rule.
+    Projection integration plan for calculating finite projection integrals based on
+    Gaussian quadrature rule.
 
     Parameters
     ----------
     parametrization : str or Parametrization, optional
-        The potential parametrization describing the radial dependence of the potential. Default is 'lobato'.
+        The potential parametrization describing the radial dependence of the potential.
+        Default is 'lobato'.
     cutoff_tolerance : float, optional
-        The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. Default is 1e-3.
+        The error tolerance used for deciding the radial cutoff distance of the
+        potential [eV / e]. Default is 1e-3.
     taper : float, optional
-        The fraction from the cutoff of the radial distance from the core where the atomic potential starts tapering
+        The fraction from the cutoff of the radial distance from the core where the
+        atomic potential starts tapering
         to zero. Default is 0.85.
     integration_step : float, optional
-        The step size between integration limits used for calculating the integral table. Default is 0.02.
+        The step size between integration limits used for calculating the integral
+        table. Default is 0.02.
     quad_order : int, optional
-        Order of quadrature integration passed to scipy.integrate.fixed_quad. Default is 8.
+        Order of quadrature integration passed to scipy.integrate.fixed_quad.
+        Default is 8.
     """
 
     def __init__(
@@ -631,13 +658,14 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self._cutoff_tolerance = cutoff_tolerance
         self._inner_cutoff_factor = inner_cutoff_factor
         self._integration_step = integration_step
-        self._tables = {}
+        self._tables: dict[str, ProjectionIntegralTable] = {}
 
         super().__init__(periodic=False, finite=True)
 
     @property
     def parametrization(self):
-        """The potential parametrization describing the radial dependence of the potential."""
+        """The potential parametrization describing the radial dependence of the
+        potential."""
         return self._parametrization
 
     @property
@@ -651,12 +679,14 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
 
     @property
     def cutoff_tolerance(self) -> float:
-        """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
+        """The error tolerance used for deciding the radial cutoff distance of the
+        potential [eV / e]."""
         return self._cutoff_tolerance
 
     @property
     def integration_step(self) -> float:
-        """The step size between integration limits used for calculating the integral table."""
+        """The step size between integration limits used for calculating the integral
+        table."""
         return self._integration_step
 
     def cutoff(self, symbol: str) -> float:
@@ -741,7 +771,8 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         symbol : str
             Chemical symbol to build the integral table.
         inner_limit : float, optional
-            Smallest radius from the core at which to calculate the projection integral [Å].
+            Smallest radius from the core at which to calculate the projection integral
+            [Å].
 
         Returns
         -------
