@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from numbers import Number
+from typing import SupportsFloat
 
 import numpy as np
 from ase import Atoms
@@ -11,9 +12,9 @@ from ase.cell import Cell
 from scipy.cluster.hierarchy import fcluster, linkage  # type: ignore
 from scipy.spatial.distance import pdist  # type: ignore
 
-from abtem.core.utils import label_to_index
+from abtem.core.utils import is_scalar, label_to_index
 
-axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
+axis_mapping = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
 
 
 def euler_sequence(axes: str, convention: str) -> tuple[int, int, int, int]:
@@ -21,23 +22,26 @@ def euler_sequence(axes: str, convention: str) -> tuple[int, int, int, int]:
     Parameters
     ----------
     axes : str
-        Specifies the order of rotation axes. It should be a string representing a valid combination of the letters 'x',
-        'y', and 'z' in any order. For example, 'xyz' represents a sequence of rotations about the x-axis, y-axis,
-        and z-axis in that order.
+        Specifies the order of rotation axes. It should be a string representing a valid
+        combination of the letters 'x', 'y', and 'z' in any order. For example, 'xyz'
+        represents a sequence of rotations about the x-axis, y-axis, and z-axis in that
+        order.
     convention : str
-        Specifies the convention used for the Euler angles. It should be either 'intrinsic' or 'static' for rotations
-        applied to a fixed frame or 'extrinsic' or 'rotating' for rotations applied to a rotating frame.
+        Specifies the convention used for the Euler angles. It should be either
+        'intrinsic' or 'static' for rotations applied to a fixed frame or 'extrinsic' or
+        'rotating' for rotations applied to a rotating frame.
 
     Returns
     -------
     tuple
-        A tuple of four angles (theta1, theta2, theta3, phi) representing the Euler sequence specified by the given
-        axes and convention.
+        A tuple of four angles (theta1, theta2, theta3, phi) representing the Euler
+        sequence specified by the given axes and convention.
 
     Raises
     ------
     ValueError
-        If the given convention is not one of the valid options ('intrinsic', 'static', 'extrinsic', 'rotating').
+        If the given convention is not one of the valid options ('intrinsic', 'static',
+        'extrinsic', 'rotating').
 
     """
     if convention in ("intrinsic", "static"):
@@ -72,7 +76,8 @@ def euler_sequence(axes: str, convention: str) -> tuple[int, int, int, int]:
         }
     else:
         raise ValueError(
-            f"convention must be either 'intrinsic', 'static', 'extrinsic', or 'rotating', not {convention}."
+            f"convention must be either 'intrinsic', 'static', 'extrinsic', or"
+            f"rotating', not {convention}."
         )
 
     return sequences[axes]
@@ -98,7 +103,7 @@ def plane_to_axes(plane: str) -> tuple[int, ...]:
     return axes + (last_axis.pop(),)
 
 
-def is_cell_hexagonal(atoms: Atoms) -> bool:
+def is_cell_hexagonal(atoms: Atoms | Cell) -> bool:
     """
     Check whether the cell of given atoms is hexagonal.
 
@@ -157,14 +162,16 @@ def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
 
 def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     """
-    Check whether the cell of given atoms can be converted to a structure usable by abTEM.
+    Check whether the cell of given atoms can be converted to a structure usable by
+    abTEM.
 
     Parameters
     ----------
     atoms : ase.Atoms
         The atoms that should be checked.
     tol : float
-        Components of the lattice vectors whose magnitude is below this value are considered to be zero.
+        Components of the lattice vectors whose magnitude is below this value are
+        considered to be zero.
 
     Returns
     -------
@@ -187,15 +194,17 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
 
 def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     """
-    Standardize the cell of given atoms. The atoms are rotated so that one of the lattice vectors in the `xy`-plane
-    is aligned with the `x`-axis, and then all the lattice vectors are made positive.
+    Standardize the cell of given atoms. The atoms are rotated so that one of the
+    lattice vectors in the `xy`-plane is aligned with the `x`-axis, and then all the
+    lattice vectors are made positive.
 
     Parameters
     ----------
     atoms : ase.Atoms
         The atoms that should be standardized.
     tol : float
-        Components of the lattice vectors whose magnitude is below this value are considered to be zero.
+        Components of the lattice vectors whose magnitude is below this value are
+        considered to be zero.
 
     Returns
     -------
@@ -266,7 +275,8 @@ def rotation_matrix_to_euler(
     convention : str, optional
         Convention for rotation order. Default is "intrinsic".
     eps : float
-        Components of the rotation matrix whose magnitude is below this value are ignored.
+        Components of the rotation matrix whose magnitude is below this value are
+        ignored.
 
     Returns
     -------
@@ -391,8 +401,8 @@ def decompose_affine_transform(
     Returns
     -------
     decomposition : {(3,), (3,), (3,)} tuple
-        Decomposition of the affine transformation into a tuple of length 3 whose items are arrays of dimension 3
-        representing rotation, scale and shear.
+        Decomposition of the affine transformation into a tuple of length 3 whose items
+        are arrays of dimension 3 representing rotation, scale and shear.
     """
     ZS = np.linalg.cholesky(np.dot(affine_transform.T, affine_transform)).T
 
@@ -418,22 +428,25 @@ def pretty_print_transform(decomposed: tuple[np.ndarray, np.ndarray, np.ndarray]
     Parameters
     ----------
     decomposed : tuple of np.ndarray
-        Tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.
+        Tuple of length 3 whose items are arrays of dimension 3 representing rotation,
+        scale and shear.
     """
     euler_angles = decomposed[0] / np.pi * 180
     strains = (decomposed[1] - 1) * 100
     shear = (decomposed[2]) * 100
     print(
         (
-            f"Euler angles (degrees): \t x = {euler_angles[0]:.3f}, \t y = {euler_angles[1]:.3f}, "
-            f"\t z = {euler_angles[2]:.3f}"
+            f"Euler angles (degrees): \t x = {euler_angles[0]:.3f}, "
+            f"\t y = {euler_angles[1]:.3f}, \t z = {euler_angles[2]:.3f}"
         )
     )
     print(
-        f"Normal strains (percent): \t x = {strains[0]:.3f}, \t y = {strains[1]:.3f}, \t z = {strains[2]:.3f}"
+        f"Normal strains (percent): \t x = {strains[0]:.3f}, \t y = {strains[1]:.3f}, "
+        f"\t z = {strains[2]:.3f}"
     )
     print(
-        f"Shear strains (percent): \t xy = {shear[0]:.3f}, \t xz = {shear[1]:.3f}, \t xz = {shear[2]:.3f}"
+        f"Shear strains (percent): \t xy = {shear[0]:.3f}, \t xz = {shear[1]:.3f},"
+        f"\t xz = {shear[2]:.3f}"
     )
 
 
@@ -446,7 +459,8 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     atoms : ase.Atoms
         Atoms to merge.
     tol : float
-        Atoms closer to each other than this value are merged if they have identical atomic numbers.
+        Atoms closer to each other than this value are merged if they have identical
+        atomic numbers.
 
     Returns
     -------
@@ -525,7 +539,8 @@ def shrink_cell(
     repetitions : tuple
         Integer number of repetitions in `x` and `y` directions to be checked.
     tol : float
-        Repetitions with a mismatch smaller than this value are considered to be repeated.
+        Repetitions with a mismatch smaller than this value are considered to be
+        repeated.
 
     Returns
     -------
@@ -556,10 +571,11 @@ def shrink_cell(
 
 
 def rotation_matrix_from_plane(
-    plane: str | tuple[tuple[float, float, float] | tuple[float, float, float]] = "xy",
+    plane: str | tuple[tuple[float, float, float], tuple[float, float, float]] = "xy",
 ) -> np.ndarray:
     """
-    Give the rotation matrix corresponding to a rotation from a given plane to the `xy` plane.
+    Give the rotation matrix corresponding to a rotation from a given plane to the `xy`
+    plane.
 
     Parameters
     ----------
@@ -572,18 +588,15 @@ def rotation_matrix_from_plane(
         Rotation matrix of dimension 3x3.
     """
     if isinstance(plane, str):
-        axes = plane_to_axes(plane)
-        x_vector, y_vector = axes
-    else:
-        assert isinstance(plane, tuple)
         assert len(plane) == 2
-        x_vector, y_vector = plane
-
-    if isinstance(x_vector, str):
-        x_vector = np.array(axis_mapping[x_vector])
-
-    if isinstance(y_vector, str):
-        y_vector = np.array(axis_mapping[y_vector])
+        x_vector = np.array(axis_mapping[plane[0]])
+        y_vector = np.array(axis_mapping[plane[1]])
+    elif isinstance(plane, tuple):
+        assert len(plane) == 2
+        x_vector = np.array(plane[0])
+        y_vector = np.array(plane[1])
+    else:
+        raise ValueError()
 
     old_x_vector = np.array([1.0, 0.0, 0.0])
     old_y_vector = np.array([0.0, 1.0, 0.0])
@@ -621,13 +634,15 @@ def rotate_atoms(
     """
     atoms = atoms.copy()
 
-    if isinstance(angles, Number):
+    if is_scalar(angles):
         padded_angles = (float(angles), 0.0, 0.0)
     else:
         assert isinstance(angles, tuple)
-        padded_angles = tuple(
-            float(angles[i]) if i < len(angles) else 0.0 for i in range(3)
-        )
+        assert len(angles) == 3
+        padded_angles = (float(angles[0]), float(angles[1]), float(angles[2]))
+        # padded_angles = tuple(
+        #     float(angles[i]) if i < len(angles) else 0.0 for i in range(3)
+        # )
 
     assert isinstance(padded_angles, tuple) and len(padded_angles) == 3
 
@@ -686,7 +701,8 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
     atoms : ase.Atoms
         Atoms to be inverted.
     axis : int
-        Integer representing the Cartesian axis (0 is `x`, 1 is `y`, and the default 2 is `z`).
+        Integer representing the Cartesian axis (0 is `x`, 1 is `y`, and the default 2
+        is `z`).
 
     Returns
     -------
@@ -704,7 +720,8 @@ def best_orthogonal_cell(
     eps: float = 1e-12,
 ) -> np.ndarray:
     """
-    Find the closest orthogonal cell for a given cell given a maximum number of repetitions in all directions.
+    Find the closest orthogonal cell for a given cell given a maximum number of
+    repetitions in all directions.
 
     Parameters
     ----------
@@ -786,46 +803,55 @@ def orthogonalize_cell(
     tolerance: float = 0.01,
 ):
     """
-    Make the cell of the given atoms orthogonal. This is accomplished by repeating the cell until lattice vectors
-    are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
-    structure is repeated by a given maximum number, the remaining difference is made up by applying strain.
+    Make the cell of the given atoms orthogonal. This is accomplished by repeating the
+    cell until lattice vectors are close to the three principal Cartesian directions.
+    If the structure is not exactly orthogonal after the structure is repeated by a
+    given maximum number, the remaining difference is made up by applying strain.
 
     Parameters
     ----------
     atoms : ase.Atoms
         The non-orthogonal atoms.
     max_repetitions : int
-        The maximum number of repetitions allowed. Increase this to allow more repetitions and hence less strain.
+        The maximum number of repetitions allowed. Increase this to allow more
+        repetitions and hence less strain.
     return_transform : bool
-        If true, return the transformations that were applied to make the atoms orthogonal.
+        If true, return the transformations that were applied to make the atoms
+        orthogonal.
     allow_transform : bool
-        If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
-        plane : str or two tuples of three float, optional
-        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
-        perpendicular to the propagation direction. If given as a string, it must be a concatenation of two of `x`, `y`
-        and `z`; the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
-        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
-        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        If false no transformation is applied to make the cell orthogonal, hence a
+        non-orthogonal cell may be returned.
     plane : str or two tuples of three float, optional
-        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
-        perpendicular to the propagation direction. If given as a string, it must be a concatenation of two of `x`, `y`
-        and `z`; the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
-        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
-        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The plane relative to the provided atoms mapped to `xy` plane of the potential,
+        i.e. provided plane is perpendicular to the propagation direction. If given as a
+        string, it must be a concatenation of two of `x`, `y` and `z`; the default value
+        'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped
+        to the `x` and `y` directions of the potential, respectively. The length of the
+        vectors has no influence. If the vectors are not perpendicular, the second
+        vector is rotated in the plane to become perpendicular to the first. Providing a
+        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+    plane : str or two tuples of three float, optional
+        The plane relative to the provided atoms mapped to `xy` plane of the potential,
+        i.e. provided plane is perpendicular to the propagation direction. If given as a
+        string, it must be a concatenation of two of `x`, `y` and `z`; the default value
+        'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped
+        to the `x` and `y` directions of the potential, respectively. The length of the
+        vectors has no influence. If the vectors are not perpendicular, the second
+        vector is rotated in the plane to become perpendicular to the first. Providing a
+        value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
     origin : three float, optional
-        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to
-        translating the atoms. The default is (0., 0., 0.).
+        The origin relative to the provided atoms mapped to the origin of the potential.
+        This is equivalent to translating the atoms. The default is (0., 0., 0.).
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
-        If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
-        necessary to preserve periodicity, determined by the `periodic` keyword.
+        The extent of the potential in `x`, `y` and `z`. If not given this is determined
+        from the atoms' cell. If the box size does not match an integer number of the
+        atoms' supercell, an affine transformation may be necessary to preserve
+        periodicity, determined by the `periodic` keyword.
     tolerance : float
-        Determines what is defined as a plane. All atoms within a distance equal to tolerance [Å] from a given plane
-        will be considered to belong to that plane.
+        Determines what is defined as a plane. All atoms within a distance equal to
+        tolerance [Å] from a given plane will be considered to belong to that plane.
 
     Returns
     -------
@@ -873,7 +899,7 @@ def orthogonalize_cell(
         atoms.positions[:] = np.dot(atoms.positions, A)
         atoms.cell[:] = np.diag(box)
 
-    #elif not np.allclose(A, np.eye(3)):
+    # elif not np.allclose(A, np.eye(3)):
     #    raise RuntimeError()
 
     if return_transform:
@@ -887,7 +913,7 @@ def orthogonalize_cell(
 
 def atoms_in_cell(
     atoms: Atoms,
-    margin: float | tuple[float, float, float] = 0.0,
+    margin: SupportsFloat | tuple[float, float, float] = 0.0,
 ) -> Atoms:
     """
     Crop atoms outside the cell.
@@ -897,15 +923,16 @@ def atoms_in_cell(
     atoms : ase.Atoms
         Atoms to be cropped.
     margin : float or tuple of three floats
-        Atoms that are outside the cell by this margin are not cropped (by default no margin).
+        Atoms that are outside the cell by this margin are not cropped (by default no
+        margin).
 
     Returns
     -------
     cropped : ase.Atoms
         Cropped atoms.
     """
-    if isinstance(margin, Number):
-        margin = (margin, margin, margin)
+    if isinstance(margin, SupportsFloat):
+        margin = (float(margin), float(margin), float(margin))
 
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
@@ -926,8 +953,9 @@ def cut_cell(
     margin: float | tuple[float, float, float] = 0.0,
 ) -> Atoms:
     """
-    Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity. If the
-    given atoms do not originally fill the cell, they are first repeated until they do.
+    Fit the given atoms into a given cell by cropping atoms that are outside the cell,
+    ignoring periodicity. If the given atoms do not originally fill the cell, they are
+    first repeated until they do.
 
     Parameters
     ----------
@@ -936,12 +964,13 @@ def cut_cell(
     cell : tuple of floats
         Cell to be fit into.
     plane : str or tuple of tuples
-        Plane to be rotated into given as either a string or two tuples (by default `xy` which results in no rotation
-        for a standardized cell).
+        Plane to be rotated into given as either a string or two tuples (by default `xy`
+        which results in no rotation for a standardized cell).
     origin : tuple of floats
         Offset of the origin for the given cell with respect to the original cell.
     margin : float or tuple of three floats
-        Atoms that are outside the cell by this margin are not cropped (by default no margin).
+        Atoms that are outside the cell by this margin are not cropped (by default no
+        margin).
 
     Returns
     -------
@@ -951,8 +980,8 @@ def cut_cell(
     if cell is None:
         cell = tuple(best_orthogonal_cell(atoms.cell))
 
-    if isinstance(margin, Number):
-        margin = (margin, margin, margin)
+    if isinstance(margin, SupportsFloat):
+        margin = (float(margin), float(margin), float(margin))
 
     atoms = atoms.copy()
     if not np.all(np.isclose(origin, (0.0, 0.0, 0.0))):
@@ -999,22 +1028,23 @@ def cut_cell(
 
 def pad_atoms(
     atoms: Atoms,
-    margins: float | tuple[float, float, float],
+    margins: SupportsFloat | tuple[float, float, float],
     directions: str = "xyz",
 ) -> Atoms:
     """
-    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms within the margin distance from
-    the cell boundary.
+    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms
+    within the margin distance from the cell boundary.
 
     Parameters
     ----------
     atoms: ase.Atoms
         The atoms that should be padded.
     margins: one or tuple of three floats
-        The padding margin. Can be specified either as a single value for all directions, or three separate values.
+        The padding margin. Can be specified either as a single value for all
+        directions, or three separate values.
     directions : str
-        The directions to pad the atoms as a concatenation of one or more of `x`, `y` and `z` for each of the principal
-        directions.
+        The directions to pad the atoms as a concatenation of one or more of `x`, `y`
+        and `z` for each of the principal directions.
 
     Returns
     -------
@@ -1025,7 +1055,7 @@ def pad_atoms(
     # if not is_cell_orthogonal(atoms):
     #    raise RuntimeError('The cell of the atoms must be orthogonal.')
 
-    if isinstance(margins, Number):
+    if isinstance(margins, SupportsFloat):
         margins = (float(margins),) * 3
 
     assert isinstance(margins, tuple)
