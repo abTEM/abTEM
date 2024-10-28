@@ -140,10 +140,12 @@ class BaseTransferFunction(
 
         if self.gpts is None and gpts is None:
             gpts = 128
+        else:
+            gpts = self.gpts
 
         ctf = self.copy()
-        ctf.sampling = sampling
         ctf.gpts = gpts
+        ctf.sampling = sampling
 
         array = ctf._evaluate_kernel()
         xp = get_array_module(array)
@@ -156,7 +158,7 @@ class BaseTransferFunction(
         )
         return diffraction_patterns
 
-    def show(self, max_angle: float, **kwargs: Any) -> Visualization:
+    def show(self, max_angle: float = None, **kwargs: Any) -> Visualization:
         return self.to_diffraction_patterns(max_angle=max_angle).show(**kwargs)
 
 
@@ -578,9 +580,7 @@ class Vortex(BaseAperture):
         assert isinstance(semiangle_cutoff, SupportsFloat)
         semiangle_cutoff = semiangle_cutoff / 1e3
         if self._soft:
-            array = soft_aperture(
-                alpha, phi, semiangle_cutoff, self.angular_sampling
-            )
+            array = soft_aperture(alpha, phi, semiangle_cutoff, self.angular_sampling)
         else:
             array = alpha < semiangle_cutoff
         array = array * np.exp(1j * phi * self.quantum_number)
@@ -669,6 +669,77 @@ class Zernike(BaseAperture):
         return array
 
 
+class RadialPhasePlate(BaseAperture):
+    def __init__(
+        self,
+        num_flips: int,
+        semiangle_cutoff: float,
+        phase_shift: float = np.pi,
+        power_law: float = 2.0,
+        shift_central_semiangle: float = 0.0,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+    ):
+        self._num_flips = num_flips
+        self._shift_central_semiangle = shift_central_semiangle
+        self._power_law = power_law
+        self._phase_shift = phase_shift
+
+        super().__init__(
+            distributions=(),
+            semiangle_cutoff=semiangle_cutoff,
+            energy=energy,
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+        )
+
+    @property
+    def soft(self) -> bool:
+        """True if the aperture has a soft edge."""
+        return False
+
+    @property
+    def num_flips(self) -> int:
+        """Number of phase flips."""
+        return self._num_flips
+
+    @property
+    def phase_shift(self) -> float:
+        """Phase shift of the phase plate."""
+        return self._phase_shift
+
+    @property
+    def power_law(self) -> float:
+        """Power law of the phase plate."""
+        return self._power_law
+
+    @property
+    def shift_central_semiangle(self) -> float:
+        """Shift central semiangle of the phase plate."""
+        return self._shift_central_semiangle
+
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
+        xp = get_array_module(alpha)
+        max_alpha = self.semiangle_cutoff / 1e3
+        min_alpha = self.shift_central_semiangle / 1e3
+
+        alpha_normed = xp.zeros_like(alpha)
+        alpha_normed[alpha > max_alpha] = max_alpha
+        alpha_normed[alpha < max_alpha] = alpha[alpha < max_alpha]
+        alpha_normed[alpha_normed < min_alpha] = min_alpha
+        alpha_normed = (alpha_normed - alpha_normed.min()) / np.ptp(alpha_normed)
+
+        phase_shift = xp.sin(alpha_normed * np.pi * (self.num_flips + 1)) < 0.0
+        phase_shift = xp.exp(1.0j * self.phase_shift * phase_shift)
+
+        return phase_shift
+
+
 class TemporalEnvelope(BaseTransferFunction):
     """
     Envelope function for simulating partial temporal coherence in the quasi-coherent
@@ -744,7 +815,8 @@ class TemporalEnvelope(BaseTransferFunction):
 
 
 def symbol_to_tex_symbol(symbol: str) -> str:
-    return symbol.replace("C", "C_{").replace("phi", "\\phi_{") + "}"
+    tex_symbol = symbol.replace("C", "C_{").replace("phi", "\\phi_{") + "}"
+    return f"${tex_symbol}$"
 
 
 polar_aliases = {

@@ -182,12 +182,12 @@ class Visualization:
         else:
             fig = ax.get_figure()
 
-        artist_type = _validate_artist_type(
+        self._artist_type = _validate_artist_type(
             measurement, complex_conversion="none", artist_type=artist_type
         )
 
         if cbar:
-            ncbars = artist_type.num_cbars
+            ncbars = self._artist_type.num_cbars
         else:
             ncbars = 0
 
@@ -230,6 +230,7 @@ class Visualization:
         self._indices = ()
 
         self._complex_conversion = convert_complex
+
         self._autoscale = config.get("visualize.autoscale", False)
         self._column_titles = []
         self._row_titles = []
@@ -265,7 +266,7 @@ class Visualization:
 
             self.set_row_titles(row_titles)
 
-        self._make_new_artists(artist_type=artist_type, **kwargs)
+        self._make_new_artists(artist_type=self._artist_type, **kwargs)
 
         self.adjust_coordinate_limits_to_artists(xlim=xlim, ylim=ylim)
 
@@ -274,7 +275,9 @@ class Visualization:
         else:
             self.set_value_limits(value_limits)
 
-        if artist_type is DomainColoringArtist:
+        if self._artist_type is DomainColoringArtist and isinstance(
+            self._axes, AxesGrid
+        ):
             self.axes.set_sizes(cbar_spacing=0.5)
 
     def interact(self, gui_type, display):
@@ -575,7 +578,7 @@ class Visualization:
         artist_type = _validate_artist_type(
             self.measurement,
             complex_conversion=self._complex_conversion,
-            artist_type=artist_type,
+            artist_type=self._artist_type,
         )
 
         artists = np.zeros(self.axes.shape, dtype=object)
@@ -604,7 +607,9 @@ class Visualization:
         self._artists = artists
 
     def set_artists(self, name, locs: str | tuple[int, ...] = "all", **kwargs):
-        artist_type = _validate_artist_type(self._measurement, self._complex_conversion)
+        artist_type = _validate_artist_type(
+            self._measurement, self._complex_conversion, artist_type=self._artist_type
+        )
 
         if not hasattr(artist_type, f"set_{name}"):
             raise RuntimeError(
