@@ -12,6 +12,7 @@ from typing import (
     Iterable,
     Optional,
     Sequence,
+    SupportsFloat,
     TypeGuard,
     Union,
 )
@@ -326,6 +327,11 @@ class BaseStructureFactor(metaclass=ABCMeta):
         return len(self.hkl)
 
     @property
+    @abstractmethod
+    def device(self) -> str:
+        pass
+
+    @property
     def gpts(self) -> tuple[int, int, int]:
         """Number of reciprocal space grid points."""
         return reciprocal_space_gpts(self.cell, self.g_max)
@@ -563,7 +569,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
         )
 
 
-class StructureFactorArray(BaseStructureFactor, ArrayObject):
+class StructureFactorArray(ArrayObject, BaseStructureFactor):
     """The StructureFactorArray class represents structure factors as an ArrayObject.
 
     Parameters
@@ -1107,18 +1113,17 @@ def reduce_plane_wave_expansion(values, plane_waves):
 
 
 def calculate_wave_functions(amplitudes, g_vec, extent, gpts, thicknesses):
-
     xp = get_array_module(amplitudes)
     x = xp.linspace(0, extent[0], gpts[0], endpoint=False)
     y = xp.linspace(0, extent[1], gpts[1], endpoint=False)
     z = xp.array(thicknesses)
-    
+
     basis = plane_wave_basis(g_vec, x, y, z)
     wave_functions = reduce_plane_wave_expansion(amplitudes, basis)
     return wave_functions
 
 
-AllowedRotations = Union[BaseDistribution, np.ndarray, Number]
+AllowedRotations = Union[BaseDistribution, np.ndarray, SupportsFloat]
 
 
 def allowed_chars(s: str, allowed_chars: str) -> bool:
@@ -1481,7 +1486,7 @@ class BlochWaves:
 
     def calculate_diffraction_patterns(
         self,
-        thicknesses: float | Sequence[float],
+        thicknesses: float | Sequence[float] | np.ndarray,
         return_complex: bool = False,
         lazy: bool = True,
     ) -> IndexedDiffractionPatterns:
@@ -1497,7 +1502,7 @@ class BlochWaves:
         lazy : bool
             If True, the calculation is done lazily using dask. If False,
             the calculation is done eagerly.
-        
+
         Returns
         -------
         IndexedDiffractionPatterns
@@ -1592,7 +1597,6 @@ class BlochWaves:
                 int(np.ceil(extent[0] / sampling[0])),
                 int(np.ceil(extent[1] / sampling[1])),
             )
-
 
         xp = get_array_module(self.device)
 
@@ -1691,7 +1695,7 @@ class BlochWaves:
     #     return waves
 
     def rotate(
-        self, *args: str | BaseDistribution | np.ndarray | Number, degrees: bool = False
+        self, *args: str | BaseDistribution | np.ndarray | SupportsFloat, degrees: bool = False
     ) -> BlochWaves | BlochwaveEnsemble:
         """Rotate the unit cell by a given set of Euler angles.
 
@@ -1780,7 +1784,7 @@ class BlochWaves:
 
 
 def is_base_distribution_tuple(
-    rotations: tuple[BaseDistribution | np.ndarray | Number, ...],
+    rotations: tuple[BaseDistribution | np.ndarray | float, ...],
 ) -> TypeGuard[tuple[BaseDistribution, ...]]:
     return all(isinstance(rotation, BaseDistribution) for rotation in rotations)
 
@@ -1788,7 +1792,7 @@ def is_base_distribution_tuple(
 class BlochwaveEnsemble(Ensemble, CopyMixin):
     def __init__(
         self,
-        *args: str | BaseDistribution | np.ndarray | Number,
+        *args: str | BaseDistribution | np.ndarray | SupportsFloat,
         structure_factor: BaseStructureFactor,
         energy: float,
         sg_max: float,
@@ -2024,7 +2028,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     def _calculate_diffraction_intensities(
         self,
-        thicknesses: Sequence[float],
+        thicknesses: np.ndarray,
         return_complex: bool,
         pbar: bool,
         hkl_mask: Optional[np.ndarray] = None,
@@ -2086,7 +2090,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
     def _run_calculate_diffraction_patterns(
         block: np.ndarray,
         hkl_mask: np.ndarray,
-        thicknesses: Sequence[float],
+        thicknesses: np.ndarray,
         return_complex: bool,
         pbar: bool,
     ) -> np.ndarray:
@@ -2103,7 +2107,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     def _lazy_calculate_diffraction_patterns(
         self,
-        thicknesses: Sequence[float],
+        thicknesses: np.ndarray,
         return_complex: bool,
         pbar: bool,
     ) -> tuple[da.core.Array, np.ndarray]:
@@ -2138,7 +2142,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
     def calculate_diffraction_patterns(
         self,
-        thicknesses: float | Sequence[float],
+        thicknesses: float | Sequence[float] | np.ndarray,
         return_complex: bool = False,
         lazy: bool = True,
         pbar: Optional[bool] = None,
@@ -2178,6 +2182,12 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
+        if thicknesses.ndim == 0:
+            thicknesses = np.atleast_1d(thicknesses)
+            squeeze_thickness_dim = True
+        else:
+            squeeze_thickness_dim = False
+
         array: np.ndarray | da.core.Array
         if lazy:
             array, hkl_mask = self._lazy_calculate_diffraction_patterns(
@@ -2201,8 +2211,9 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
             np.swapaxes(orientation_matrices, -2, -1),
         )
 
-        if not len(ensemble_axes_metadata):
+        if squeeze_thickness_dim:
             array = array[..., 0, :]
+            ensemble_axes_metadata = ensemble_axes_metadata[:-1]
         else:
             reciprocal_lattice_vectors = reciprocal_lattice_vectors[..., None, :, :]
 
