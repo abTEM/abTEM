@@ -47,10 +47,10 @@ def _validate_tilt(
     return tilt
 
 
-def _get_tilt_axes(waves):
+def _get_tilt_axes(waves) -> tuple[TiltAxis | AxisAlignedTiltAxis, ...]:
     return tuple(
-        i
-        for i, axis in enumerate(waves.ensemble_axes_metadata)
+        axis
+        for axis in waves.ensemble_axes_metadata
         if hasattr(axis, "tilt")
     )
 
