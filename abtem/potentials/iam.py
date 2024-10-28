@@ -66,11 +66,10 @@ if TYPE_CHECKING:
 
 
 class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
-    # @property
-    # @abstractmethod
-    # def device(self) -> str:
-    #     pass
-    device: str
+    #@property
+    #@abstractmethod
+    #def device(self) -> str:
+    #    pass
 
     @property
     def base_shape(self):
@@ -93,8 +92,9 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
 
     @property
     @abstractmethod
-    def exit_planes(self) -> tuple[int]:
-        """The "exit planes" of the potential. The indices of slices where a measurement is returned."""
+    def exit_planes(self) -> tuple[int, ...]:
+        """The "exit planes" of the potential. The indices of slices where a measurement
+        is returned."""
         pass
 
     @property
@@ -115,7 +115,8 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
 
     @property
     def exit_thicknesses(self) -> tuple[float, ...]:
-        """The "exit thicknesses" of the potential. The thicknesses in the potential where a measurement is returned."""
+        """The "exit thicknesses" of the potential. The thicknesses in the potential
+        where a measurement is returned."""
         thicknesses = np.cumsum(self.slice_thickness)
         exit_indices = np.array(self.exit_planes, dtype=int)
         exit_thicknesses = tuple(thicknesses[i] for i in exit_indices)
@@ -204,8 +205,9 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         Parameters
         ----------
         project : bool, optional
-            Show the projected potential (True, default) or show all potential slices. It is recommended to index a
-            subset of the potential slices when this keyword set to False.
+            Show the projected potential (True, default) or show all potential slices.
+            It is recommended to index a subset of the potential slices when this
+            keyword set to False.
         kwargs :
             Additional keyword arguments for the show method of :class:`.Images`.
         """
@@ -308,8 +310,10 @@ class _FieldBuilder(BaseField):
     ):
         self._array_object = array_object
         if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
+            if not isinstance(plane, str):
+                raise NotImplementedError
             axes = plane_to_axes(plane)
-            cell = cell[:, list(axes)]
+            cell = np.array(cell)[:, list(axes)]
             box = tuple(best_orthogonal_cell(cell))
 
         elif box is None:
@@ -448,9 +452,9 @@ class _FieldBuilder(BaseField):
             )
 
             if self.ensemble_shape:
-                for i, _, potential in self.generate_blocks(1):
-                    potential = potential.item()
-                    i = np.unravel_index((0,), self.ensemble_shape)
+                for _, _, potential_wrapped in self.generate_blocks(1):
+                    potential = potential_wrapped.item()
+                    i = np.unravel_index(0, self.ensemble_shape)
 
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
@@ -460,14 +464,15 @@ class _FieldBuilder(BaseField):
             else:
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
                     array[j] = slic.array[0]
-        potential = self._array_object(
+
+        output_potential = self._array_object(
             array,
             sampling=self._valid_sampling,
             slice_thickness=self.slice_thickness[first_slice:last_slice],
             exit_planes=self.exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
         )
-        return potential
+        return output_potential
 
 
 class _FieldBuilderFromAtoms(_FieldBuilder):
@@ -490,7 +495,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
     ):
         self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
-        self._sliced_atoms = None
+        self._sliced_atoms: Optional[BaseSlicedAtoms] = None
         self._array_object = array_object
 
         super().__init__(
@@ -519,7 +524,8 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
     @property
     def integrator(self):
-        """The integrator determining how the projection integrals for each slice is calculated."""
+        """The integrator determining how the projection integrals for each slice is
+        calculated."""
         return self._integrator
 
     def _cutoffs(self):
@@ -532,7 +538,8 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
     def get_transformed_atoms(self):
         """
-        The atoms used in the multislice algorithm, transformed to the given plane, origin and box.
+        The atoms used in the multislice algorithm, transformed to the given plane,
+        origin and box.
 
         Returns
         -------
@@ -731,7 +738,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             **kwargs,
         )
 
-    def _partition_args(self, chunks: Chunks = (1,), lazy: bool = True):
+    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+        if chunks is None:
+            chunks = (1,)
+
         return self.frozen_phonons._partition_args(chunks, lazy=lazy)
 
 
@@ -751,8 +761,8 @@ def _validate_frozen_phonons(atoms):
             frozen_phonons = DummyFrozenPhonons(atoms)
         else:
             raise ValueError(
-                f"Frozen phonons should be of types `FrozenPhonons`, `Atoms` or `AtomsEnsemble`, "
-                f"not {atoms}"
+                "Frozen phonons should be of types `FrozenPhonons`, `Atoms` or"
+                f"`AtomsEnsemble`, not {atoms}"
             )
     else:
         frozen_phonons = atoms
@@ -762,68 +772,82 @@ def _validate_frozen_phonons(atoms):
 
 class Potential(_FieldBuilderFromAtoms, BasePotential):
     """
-    Calculate the electrostatic potential of a set of atoms or frozen phonon configurations. The potential is calculated
-    with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic potentials.
+    Calculate the electrostatic potential of a set of atoms or frozen phonon
+    configurations. The potential is calculated with the Independent Atom Model (IAM)
+    using a user-defined parametrization of the atomic potentials.
 
     Parameters
     ----------
     atoms : ase.Atoms or abtem.FrozenPhonons
-        Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
-        the electrostatic potential(s).
+        Atoms or FrozenPhonons defining the atomic configuration(s) used in the
+        independent atom model for calculating the electrostatic potential(s).
     gpts : one or two int, optional
-        Number of grid points in `x` and `y` describing each slice of the potential. Provide either "sampling" (spacing
-        between consecutive grid points) or "gpts" (total number of grid points).
+        Number of grid points in `x` and `y` describing each slice of the potential.
+        Provide either "sampling" (spacing between consecutive grid points) or "gpts"
+        (total number of grid points).
     sampling : one or two float, optional
-        Sampling of the potential in `x` and `y` [Å]. Provide either "sampling" or "gpts".
+        Sampling of the potential in `x` and `y` [Å].
+        Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
-        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of
-        supercell. The slice thickness may be given as a sequence of values for each slice, in which case an error will
-        be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
+        Thickness of the potential slices in the propagation direction in [Å]
+        (default is 1 Å).
+        If given as a float, the number of slices is calculated by dividing the slice
+        thickness into the `z`-height of supercell. The slice thickness may be given as
+        a sequence of values for each slice, in which case an error will be thrown if
+        the sum of slice thicknesses is not equal to the height of the atoms.
     parametrization : 'lobato' or 'kirkland', optional
-        The potential parametrization describes the radial dependence of the potential for each element. Two of the
-        most accurate parametrizations are available (by Lobato et al. and Kirkland; default is 'lobato').
+        The potential parametrization describes the radial dependence of the potential
+        for each element. Two of the most accurate parametrizations are available
+        (by Lobato et al. and Kirkland; default is 'lobato').
         See the citation guide for references.
     projection : 'finite' or 'infinite', optional
-        If 'finite' the 3D potential is numerically integrated between the slice boundaries. If 'infinite' (default),
-        the infinite potential projection of each atom will be assigned to a single slice.
+        If 'finite' the 3D potential is numerically integrated between the slice
+        boundaries. If 'infinite' (default), the infinite potential projection of each
+        atom will be assigned to a single slice.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
-        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
-        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
-        an integer a measurement will be collected every `exit_planes` number of slices.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the
+        slice indices after which an exit plane is desired, and hence during a
+        multislice simulation a measurement is created. If `exit_planes` is an integer
+        a measurement will be collected every `exit_planes` number of slices.
     plane : str or two tuples of three float, optional
-        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
-        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
-        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
-        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
-        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The plane relative to the provided atoms mapped to `xy` plane of the potential,
+        i.e. provided plane is perpendicular to the propagation direction. If string,
+        it must be a concatenation of two of 'x', 'y' and 'z'; the default value 'xy'
+        indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped
+        to the `x` and `y` directions of the potential, respectively. The length of the
+        vectors has no influence. If the vectors are not perpendicular, the second
+        vector is rotated in the plane to become perpendicular to the first.
+        Providing a value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing
+        'xy'.
     origin : three float, optional
-        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to
-        translating the atoms. The default is (0., 0., 0.).
+        The origin relative to the provided atoms mapped to the origin of the potential.
+        This is equivalent to translating the atoms. The default is (0., 0., 0.).
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
-        If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
-        necessary to preserve periodicity, determined by the `periodic` keyword.
+        The extent of the potential in `x`, `y` and `z`. If not given this is determined
+        from the atoms' cell. If the box size does not match an integer number of the
+        atoms' supercell, an affine transformation may be necessary to preserve
+        periodicity, determined by the `periodic` keyword.
     periodic : bool, True
-        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is
-        transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine
-        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
-        potential, which may not preserve periodicity.
+        If a transformation of the atomic structure is required, `periodic` determines
+        how the atomic structure is transformed. If True, the periodicity of the Atoms
+        is preserved, which may require applying a small affine transformation to the
+        atoms. If False, the transformed potential is effectively cut out of a larger
+        repeated potential, which may not preserve periodicity.
     integrator : ProjectionIntegrator, optional
-        Provide a custom integrator for the projection integrals of the potential slicing.
+        Provide a custom integrator for the projection integrals of the potential
+        slicing.
     device : str, optional
-        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
-        configuration file.
+        The device used for calculating the potential, 'cpu' or 'gpu'. The default is
+        determined by the user configuration file.
     """
 
     _exclude_from_copy = ("parametrization", "projection")
 
     def __init__(
         self,
-        atoms: Atoms | BaseFrozenPhonons | None = None,
+        atoms: Atoms | BaseFrozenPhonons,
         gpts: int | tuple[int, int] | None = None,
         sampling: float | tuple[float, float] | None = None,
         slice_thickness: float | tuple[float, ...] = 1,
@@ -871,7 +895,7 @@ class FieldArray(BaseField, ArrayObject):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        slice_thickness: float | Sequence[float],
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         exit_planes: Optional[int | tuple[int, ...]] = None,
@@ -1007,8 +1031,9 @@ class FieldArray(BaseField, ArrayObject):
         Parameters
         ----------
         repetitions: two or three int
-            The number of repetitions of the potential along each axis. NOTE: if three integers are given, the first
-            represents the number of repetitions along the `z`-axis.
+            The number of repetitions of the potential along each axis. NOTE: if three
+            integers are given, the last represents the number of repetitions along the
+            `z`-axis.
 
         Returns
         -------
@@ -1016,13 +1041,21 @@ class FieldArray(BaseField, ArrayObject):
             The tiled potential.
         """
         if len(repetitions) == 2:
-            repetitions = tuple(repetitions) + (1,)
+            repetitions = (repetitions[0], repetitions[1], 1)
+
+        assert len(repetitions) == 3
 
         new_array = np.tile(
             self.array, (repetitions[2], repetitions[0], repetitions[1])
         )
 
-        new_extent = (self.extent[0] * repetitions[0], self.extent[1] * repetitions[1])
+        if self.extent is not None:
+            new_extent = (
+                self.extent[0] * repetitions[0],
+                self.extent[1] * repetitions[1],
+            )
+        else:
+            new_extent = None
         new_slice_thickness = tuple(np.tile(self.slice_thickness, repetitions[2]))
 
         return self.__class__(
@@ -1070,16 +1103,17 @@ class FieldArray(BaseField, ArrayObject):
 
 class PotentialArray(BasePotential, FieldArray):
     """
-    The potential array represents slices of the electrostatic potential as an array. All other potentials build
-    potential arrays.
+    The potential array represents slices of the electrostatic potential as an array.
+    All other potentials build potential arrays.
 
     Parameters
     ----------
     array: 3D np.ndarray
-        The array representing the potential slices. The first dimension is the slice index and the last two are the
-        spatial dimensions.
+        The array representing the potential slices. The first dimension is the slice
+        index and the last two are the spatial dimensions.
     slice_thickness: float
-        The thicknesses of potential slices [Å]. If a float, the thickness is the same for all slices.
+        The thicknesses of potential slices [Å]. If a float, the thickness is the same
+        for all slices.
         If a sequence, the length must equal the length of the potential array.
     extent: one or two float, optional
         Lateral extent of the potential [Å].
@@ -1087,14 +1121,16 @@ class PotentialArray(BasePotential, FieldArray):
         Lateral sampling of the potential [1 / Å].
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
-        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
-        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
-        an integer a measurement will be collected every `exit_planes` number of slices.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the
+        slice indices after which an exit plane is desired, and hence during a
+        multislice simulation a measurement is created. If `exit_planes` is an integer a
+        measurement will be collected every `exit_planes` number of slices.
     ensemble_axes_metadata : list of AxesMetadata
-        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with
+        the shape of the array.
     metadata : dict
-        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
-        from the waves.
+        A dictionary defining wave function metadata. All items will be added to the
+        metadata of measurements derived from the waves.
     """
 
     _base_dims = 3
@@ -1102,7 +1138,7 @@ class PotentialArray(BasePotential, FieldArray):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        slice_thickness: float | Sequence[float],
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         exit_planes: Optional[int | tuple[int, ...]] = None,
@@ -1132,12 +1168,12 @@ class PotentialArray(BasePotential, FieldArray):
 
     @classmethod
     def from_array_and_metadata(
-        cls: type[ArrayObject],
+        cls: type[PotentialArray],
         array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
         metadata: dict,
-    ) -> ArrayObjectType:
-        pass
+    ) -> PotentialArray:
+        raise NotImplementedError
 
     def transmission_function(self, energy: float) -> TransmissionFunction:
         """
@@ -1158,12 +1194,12 @@ class PotentialArray(BasePotential, FieldArray):
         if self.is_lazy:
             array = da.map_blocks(
                 self._transmission_function,
-                self._array.map_blocks,
+                self.array,
                 energy=energy,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
         else:
-            array = self._transmission_function(self._array, energy=energy)
+            array = self._transmission_function(self.array, energy=energy)
 
         t = TransmissionFunction(
             array,
@@ -1190,7 +1226,7 @@ class PotentialArray(BasePotential, FieldArray):
             Transmission function for the wave function through the potential slice.
         """
 
-        transmission_function = self.transmission_function(waves.energy)
+        transmission_function = self.transmission_function(waves._valid_energy)
 
         return transmission_function.transmit(waves, conjugate=conjugate)
 
@@ -1201,11 +1237,12 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
     Parameters
     ----------
     array : 3D np.ndarray
-        The array representing the potential slices. The first dimension is the slice index and the last two are the
-        spatial dimensions.
+        The array representing the potential slices. The first dimension is the slice
+        index and the last two are the spatial dimensions.
     slice_thickness : float
-        The thicknesses of potential slices [Å]. If a float, the thickness is the same for all slices.
-        If a sequence, the length must equal the length of the potential array.
+        The thicknesses of potential slices [Å]. If a float, the thickness is the same
+        for all slices. If a sequence, the length must equal the length of the potential
+        array.
     extent : one or two float, optional
         Lateral extent of the potential [Å].
     sampling : one or two float, optional
@@ -1325,6 +1362,7 @@ class CrystalPotential(_PotentialBuilder):
             self._seeds = None
         else:
             if num_frozen_phonons is None and seeds:
+                assert isinstance(seeds, tuple)
                 num_frozen_phonons = len(seeds)
             elif num_frozen_phonons is None and seeds is None:
                 num_frozen_phonons = 1
@@ -1341,10 +1379,11 @@ class CrystalPotential(_PotentialBuilder):
                 "not have frozen phonons"
             )
 
-        # if (potential_unit.num_frozen_phonons > 1) and (num_frozen_phonons is not None):
-        #     warnings.warn(
-        #         "the potential unit has frozen phonons, but 'num_frozen_phonons' is not set"
-        #     )
+        if (potential_unit.num_configurations > 1) and (num_frozen_phonons is not None):
+            warnings.warn(
+                "the potential unit has frozen phonons, but 'num_frozen_phonons' is not"
+                "set"
+            )
 
         gpts = (
             potential_unit._valid_gpts[0] * repetitions[0],
@@ -1395,14 +1434,19 @@ class CrystalPotential(_PotentialBuilder):
     def potential_unit(self) -> BasePotential:
         return self._potential_unit
 
-    @HasGrid2DMixin.gpts.setter
-    def gpts(self, gpts):
+    @property
+    def gpts(self) -> tuple[int, int] | None:
+        return super().gpts
+
+    @gpts.setter
+    def gpts(self, gpts: tuple[int, int]):
         if not (
             (gpts[0] % self.repetitions[0] == 0)
             and (gpts[1] % self.repetitions[0] == 0)
         ):
             raise ValueError(
-                "Number of grid points must be divisible by the number of potential repetitions."
+                "Number of grid points must be divisible by the number of potential"
+                "repetitions."
             )
         self.grid.gpts = gpts
         self._potential_unit.gpts = (
@@ -1410,8 +1454,12 @@ class CrystalPotential(_PotentialBuilder):
             gpts[1] // self._repetitions[1],
         )
 
-    @HasGrid2DMixin.sampling.setter
-    def sampling(self, sampling):
+    @property
+    def sampling(self) -> tuple[float, float] | None:
+        return super().sampling
+
+    @sampling.setter
+    def sampling(self, sampling: tuple[float, float]):
         self.sampling = sampling
         self._potential_unit.sampling = sampling
 
@@ -1457,7 +1505,10 @@ class CrystalPotential(_PotentialBuilder):
         output = partial(self._from_partitioned_args_func, **kwargs)
         return output
 
-    def _partition_args(self, chunks: int = 1, lazy: bool = True):
+    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+        if chunks is None:
+            chunks = 1
+
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         if chunks == ():
@@ -1515,10 +1566,14 @@ class CrystalPotential(_PotentialBuilder):
         slices : generator of np.ndarray
             Generator for the array of slices.
         """
-        if hasattr(self.potential_unit, "array"):
-            potentials = self.potential_unit
-        else:
+        # if hasattr(self.potential_unit, "array")
+        #    potentials = self.potential_unit
+        if not isinstance(self.potential_unit, PotentialArray):
             potentials = self.potential_unit.build(lazy=False)
+        else:
+            potentials = self.potential_unit
+
+        assert isinstance(potentials, PotentialArray)
 
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
@@ -1534,9 +1589,8 @@ class CrystalPotential(_PotentialBuilder):
         stop = first_slice + 1
 
         for i in range(self.repetitions[2]):
-            generator = potentials[
-                rng.integers(0, potentials.shape[0])
-            ].generate_slices()
+            potential = potentials[rng.integers(0, potentials.shape[0])]
+            generator = potential.generate_slices()
 
             for j in range(len(self.potential_unit)):
                 slic = next(generator).tile(self.repetitions[:2])
