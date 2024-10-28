@@ -7,7 +7,7 @@ import inspect
 import itertools
 import os
 import warnings
-from typing import Any, Optional, Sequence, TypeVar
+from typing import Any, Optional, Sequence, TypeGuard, TypeVar, overload
 
 import dask.array as da
 import numpy as np
@@ -246,6 +246,24 @@ def normalize_axes(
     return normalized_axes
 
 
+@overload
+def expand_dims_to_broadcast(
+    arr1: np.ndarray,
+    arr2: np.ndarray,
+    match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
+    broadcast: bool = False,
+) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@overload
+def expand_dims_to_broadcast(
+    arr1: da.core.Array,
+    arr2: da.core.Array,
+    match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
+    broadcast: bool = False,
+) -> tuple[da.core.Array, da.core.Array]: ...
+
+
 def expand_dims_to_broadcast(
     arr1: np.ndarray | da.core.Array,
     arr2: np.ndarray | da.core.Array,
@@ -360,3 +378,20 @@ def get_dtype(complex: bool = False) -> np.dtype:
         raise RuntimeError(f"Invalid dtype: {dtype}")
 
     return dtype
+
+
+def is_scalar(value) -> TypeGuard[float | int | np.floating | np.integer]:
+    """
+    Check if the value is a float, int, or a NumPy scalar.
+
+    Parameters
+    ----------
+    value : any
+        The value to check.
+
+    Returns
+    -------
+    bool
+        True if the value is a float, int, or a NumPy scalar, False otherwise.
+    """
+    return isinstance(value, (float, int, np.floating, np.integer))
