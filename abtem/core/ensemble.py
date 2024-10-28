@@ -14,7 +14,7 @@ from abtem.core.chunks import Chunks, ValidatedChunks, chunk_ranges, validate_ch
 from abtem.core.utils import interleave, itemset
 
 
-def _wrap_with_array(x: Any, ndims: int | None = None):
+def _wrap_with_array(x: Any, ndims: int | None = None) -> np.ndarray:
     if ndims is None:
         ndims = len(x.ensemble_shape)
 
@@ -81,7 +81,7 @@ class Ensemble:
         pass
 
     @abstractmethod
-    def _from_partitioned_args(self) -> Callable[..., Ensemble]:
+    def _from_partitioned_args(self) -> Callable[..., np.ndarray]:
         pass
 
     def ensemble_blocks(self, chunks: Optional[Chunks] = None) -> da.core.Array:
@@ -124,7 +124,7 @@ class Ensemble:
 
     def generate_blocks(
         self, chunks: Chunks = 1
-    ) -> Generator[tuple[tuple[int, ...], tuple[slice, ...], Ensemble], None, None]:
+    ) -> Generator[tuple[tuple[int, ...], tuple[slice, ...], np.ndarray], None, None]:
         """
         Generate chunks of the ensemble.
 
