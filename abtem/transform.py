@@ -211,7 +211,9 @@ class ArrayObjectTransform(
 
         return CompositeArrayObjectTransform(transforms)
 
-    def _out_axes_metadata(self, array_object: ArrayObjectType) -> tuple[list[AxisMetadata], ...]:
+    def _out_axes_metadata(
+        self, array_object: ArrayObjectType
+    ) -> tuple[list[AxisMetadata], ...]:
         return (
             [
                 *self._out_ensemble_axes_metadata(array_object)[0],
@@ -336,14 +338,17 @@ class ArrayObjectTransform(
 
     def _apply(
         self, array_object: ArrayObjectType
-    ) -> ArrayObject | tuple[ArrayObject, ...]:
+    ) -> (
+        ArrayObjectType
+        | ArrayObjectTypeAlt
+        | tuple[ArrayObjectType | ArrayObjectTypeAlt, ...]
+    ):
         new_array = self._calculate_new_array(array_object)
-
         if self._num_outputs > 1:
-            # assert isinstance(new_array, tuple)
+            # assert isinstance(new_array, tuple) TODO
             return self._pack_multiple_outputs(array_object, new_array)
         else:
-            # assert isinstance(new_array, np.ndarray)
+            # assert isinstance(new_array, np.ndarray) TODO
             return self._pack_single_output(array_object, new_array)
 
 
@@ -374,9 +379,9 @@ class EnsembleTransform(
         return ensemble_axes_metadata
 
     def _get_axes_metadata_from_distributions(
-        self, **kwargs: Mapping[str, BaseDistribution]
+        self, **kwargs: Mapping[str, Any]
     ) -> list[AxisMetadata]:
-        ensemble_axes_metadata = []
+        ensemble_axes_metadata: list[AxisMetadata] = []
         for name, value in kwargs.items():
             assert name in self._distributions
             distribution = getattr(self, name)
@@ -406,8 +411,8 @@ class WavesTransform(EnsembleTransform[WavesType, ArrayObjectType]):
     ) -> np.ndarray | tuple[np.ndarray, ...]:
         pass
 
-    def apply(self, waves: WavesType) -> ArrayObject | tuple[ArrayObject, ...]:
-        transformed_waves = self._apply(waves)
+    def apply(self, waves: WavesType) -> ArrayObject | list[ArrayObject]:
+        transformed_waves = waves.apply_transform(self)
         return transformed_waves
 
 
@@ -470,14 +475,13 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
 
         self._transforms = transforms
 
-        self._base_shapes = None
-        self._ensemble_shapes = None
-        self._base_axes_metadata = None
-        self._ensemble_axes_metadata = None
-        self._types = None
-        self._metas = None
-        self._metadata = None
-
+        self._base_shapes: Optional[tuple] = None
+        self._ensemble_shapes: Optional[tuple] = None
+        self._base_axes_metadata: Optional[tuple] = None
+        self._ensemble_axes_metadata: Optional[tuple] = None
+        self._types: Optional[tuple] = None
+        self._metas: Optional[tuple] = None
+        self._metadata: Optional[tuple] = None
         super().__init__()
 
     @property
@@ -516,7 +520,8 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         self, transform: ArrayObjectTransform, index: int
     ) -> CompositeArrayObjectTransform:
         """
-        Inserts an array object transform to the sequence of transforms before the specified index.
+        Inserts an array object transform to the sequence of transforms before the
+        specified index.
 
         Parameters
         ----------
@@ -566,12 +571,12 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         self, array_object
     ) -> tuple[list[AxisMetadata], ...]:
         if self._ensemble_axes_metadata is not None:
-            return (self._ensemble_axes_metadata,)
+            return self._ensemble_axes_metadata
         return (self.ensemble_axes_metadata + array_object.ensemble_axes_metadata,)
 
     def _out_base_axes_metadata(self, array_object) -> tuple[list[AxisMetadata], ...]:
         if self._base_axes_metadata is not None:
-            return (self._base_axes_metadata,)
+            return self._base_axes_metadata
 
         return self.transforms[0]._out_base_axes_metadata(array_object)
 
@@ -718,11 +723,13 @@ class ReciprocalSpaceMultiplication(WavesToWavesTransform):
         waves = waves.ensure_reciprocal_space(overwrite_x=self.in_place)
         kernel = self._evaluate_kernel(waves)
 
+        array = waves.array
+
         kernel, new_array = expand_dims_to_broadcast(
-            kernel, waves.array, match_dims=((-2, -1), (-2, -1))
+            kernel, array, match_dims=((-2, -1), (-2, -1))
         )
 
-        xp = get_array_module(waves.array)
+        xp = get_array_module(array)
 
         kernel = xp.array(kernel)
 
