@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 
@@ -15,6 +15,8 @@ from abtem.core.utils import CopyMixin, EqualityMixin
 if TYPE_CHECKING:
     from abtem.potentials.iam import TransmissionFunction
     from abtem.waves import Waves
+
+    U = TypeVar("U", Waves, TransmissionFunction)
 
 
 def antialias_aperture(
@@ -58,7 +60,7 @@ class AntialiasAperture(HasGrid2DMixin, CopyMixin, EqualityMixin):
         self._key = None
         self._array = None
 
-    def get_array(self, x: Waves | TransmissionFunction):
+    def get_array(self, x: U):
         key = (
             x.gpts,
             x.sampling,
@@ -78,9 +80,7 @@ class AntialiasAperture(HasGrid2DMixin, CopyMixin, EqualityMixin):
 
         return self._array
 
-    def bandlimit(
-        self, x: Waves | TransmissionFunction, in_place: bool = False
-    ) -> Waves | TransmissionFunction:
+    def bandlimit(self, x: U, in_place: bool = False) -> U:
         kernel = self.get_array(x)
         kernel = kernel[(None,) * (len(x.shape) - 2)]
 
