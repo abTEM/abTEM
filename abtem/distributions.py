@@ -77,8 +77,8 @@ class DistributionFromValues(BaseDistribution):
     weights : np.ndarray, optional
         The values of the weights. If None, all weights are set to 1.
     ensemble_mean : bool, optional
-        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full
-        ensemble is kept.
+        If True, the mean of an ensemble of measurements defined by the distribution is
+        calculated, otherwise the full ensemble is kept.
     """
 
     def __init__(
@@ -103,8 +103,6 @@ class DistributionFromValues(BaseDistribution):
 
     @property
     def dimensions(self) -> int:
-        if len(self.shape) > 1:
-            return self.shape[1]
         return 1
 
     @property
@@ -153,7 +151,8 @@ class DistributionFromValues(BaseDistribution):
 
     def combine(self, other: DistributionFromValues) -> MultidimensionalDistribution:
         """
-        Combine distribution with another distribution to produce a higher-dimensional distribution.
+        Combine distribution with another distribution to produce a higher-dimensional
+        distribution.
 
         Parameters
         ----------
@@ -170,12 +169,14 @@ class DistributionFromValues(BaseDistribution):
 
 class MultidimensionalDistribution(BaseDistribution):
     """
-    A multidimensional distribution composed of multiple lower-dimensional distributions.
+    A multidimensional distribution composed of multiple lower-dimensional
+    distributions.
 
     Parameters
     ----------
     distributions : list of BaseDistribution
-        The lower-dimensional distributions composed into a higher-dimensional distribution.
+        The lower-dimensional distributions composed into a higher-dimensional
+        distribution.
     """
 
     def __init__(self, distributions: Sequence[BaseDistribution]):
@@ -266,8 +267,8 @@ def from_values(
     weights : sequence of float, optional
         The scalar values of the weights (default is None).
     ensemble_mean : bool, optional
-        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full
-        ensemble is kept.
+        If True, the mean of an ensemble of measurements defined by the distribution is
+        calculated, otherwise the full ensemble is kept.
     """
     if weights is None:
         weights = np.ones(len(values))
@@ -285,23 +286,25 @@ def uniform(
     ensemble_mean: bool = False,
 ) -> DistributionFromValues:
     """
-    Return a distribution with uniformly weighted values evenly spaced over a specified interval.
-    As an example, this distribution may be used for simulating a focal series.
+    Return a distribution with uniformly weighted values evenly spaced over a specified
+    interval. As an example, this distribution may be used for simulating a focal
+    series.
 
     Parameters
     ----------
     low : float
         The lowest value of the distribution.
     high : float
-        The highest value of the distribution. If endpoint is set to False, the sequence consists of
-        all but the last of `num_samples + 1` evenly spaced samples so that the high value is excluded.
+        The highest value of the distribution. If endpoint is set to False, the sequence
+        consists of all but the last of `num_samples + 1` evenly spaced samples so that
+        the high value is excluded.
     num_samples : int
         Number of samples in the distribution.
     endpoint : bool
 
     ensemble_mean : bool, optional
-        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full
-        ensemble is kept.
+        If True, the mean of an ensemble of measurements defined by the distribution is
+        calculated, otherwise the full ensemble is kept.
     """
 
     values = np.linspace(start=low, stop=high, num=num_samples, endpoint=endpoint)
@@ -322,26 +325,29 @@ def gaussian(
     normalize: str = "intensity",
 ) -> MultidimensionalDistribution:
     """
-    Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.
-    The values are evenly spaced within a given truncation of the Gaussian distribution. As an example, this
-    distribution may be used for simulating focal spread.
+    Return a distribution with values weighted according to a (multidimensional)
+    Gaussian distribution. The values are evenly spaced within a given truncation of the
+    Gaussian distribution. As an example, this distribution may be used for simulating
+    focal spread.
 
     Parameters
     ----------
     standard_deviation : float or tuple of float
-        The standard deviation of the distribution. The standard deviations may be given for each axis as a tuple,
-        or as a single number, in which case it is equal for all axes.
+        The standard deviation of the distribution. The standard deviations may be given
+        for each axis as a tuple, or as a single number, in which case it is equal for
+        all axes.
     num_samples : int
-        Number of samples uniformly spaced samples. The samples may be given for each axis as a tuple, or as a
-        single number, in which case it is equal for all axes.
+        Number of samples uniformly spaced samples. The samples may be given for each
+        axis as a tuple, or as a single number, in which case it is equal for all axes.
     center : float or tuple of float
-        The center of the Gaussian distribution (default is 0.0). The center may be given for each axis as a tuple, or
-        as a single number, in which case it is equal for all axes.
+        The center of the Gaussian distribution (default is 0.0). The center may be
+        given for each axis as a tuple, or as a single number, in which case it is equal
+        for all axes.
     dimension : int, optional
         Number of dimensions of the Gaussian distribution.
     ensemble_mean : bool, optional
-        If True, the mean of ensemble of measurements defined by the distribution is calculated, otherwise the full
-        ensemble is kept. Default is True.
+        If True, the mean of ensemble of measurements defined by the distribution is
+        calculated, otherwise the full ensemble is kept. Default is True.
     sampling_limit : float, optional
         Truncate the distribution at this many standard deviations (default is 3.0).
     normalize : str, optional
@@ -507,18 +513,17 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
         return blocks
 
     @classmethod
-    def _partial_transform(cls, *args, keys, **kwargs) -> EnsembleFromDistributions:
+    def _partial_transform(cls, *args, keys, **kwargs) -> np.ndarray:
         assert len(args) == len(keys)
 
         args = unpack_blockwise_args(args)
         kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
 
-        new_transform = cls(**kwargs)
-        new_transform = _wrap_with_array(new_transform, len(keys))
+        new_transform = _wrap_with_array(cls(**kwargs), len(keys))
 
         return new_transform
 
-    def _from_partitioned_args(self) -> Callable[..., EnsembleFromDistributions]:
+    def _from_partitioned_args(self) -> Callable[..., np.ndarray]:
         keys = tuple(self._distribution_properties.keys())
         kwargs = self._copy_kwargs()
         return partial(self._partial_transform, keys=keys, **kwargs)
