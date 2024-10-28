@@ -1,7 +1,7 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
 import warnings
-from typing import Tuple, TypeVar
+from typing import Tuple, TypeVar, overload
 
 import dask.array as da
 import numpy as np
@@ -211,13 +211,21 @@ def _fft_dispatch(
             func_name=func_name,
             overwrite_x=overwrite_x,
             **kwargs,
-            meta=xp.array((), dtype=np.complex64),
+            meta=xp.array((), dtype=get_dtype(complex=True)),
         )
 
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
         return getattr(cp.fft, func_name)(x, **kwargs)
+
+
+@overload
+def fft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+
+
+@overload
+def fft2(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
 
 
 def fft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
@@ -228,6 +236,14 @@ def fft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
     return _fft_dispatch(x, func_name="fft2", overwrite_x=overwrite_x, **kwargs)
 
 
+@overload
+def ifft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+
+
+@overload
+def ifft2(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
+
+
 def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
     """
     Compute the 2-dimensional inverse discrete Fourier Transform.
@@ -236,10 +252,26 @@ def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
     return _fft_dispatch(x, func_name="ifft2", overwrite_x=overwrite_x, **kwargs)
 
 
+@overload
+def fftn(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+
+
+@overload
+def fftn(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
+
+
 def fftn(x: U, overwrite_x: bool = False, **kwargs) -> U:
     """Compute the n-dimensional discrete Fourier Transform. Using the FFT library
     specified in the configuration."""
     return _fft_dispatch(x, func_name="fftn", overwrite_x=overwrite_x, **kwargs)
+
+
+@overload
+def ifftn(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+
+
+@overload
+def ifftn(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
 
 
 def ifftn(x: U, overwrite_x: bool = False, **kwargs) -> U:
@@ -257,6 +289,18 @@ def _fft2_convolve(x: U, kernel: U, overwrite_x: bool = False) -> U:
     except ValueError:
         x = x * kernel
     return ifft2(x, overwrite_x=overwrite_x)
+
+
+@overload
+def fft2_convolve(
+    x: np.ndarray, kernel: np.ndarray, overwrite_x: bool = False
+) -> np.ndarray: ...
+
+
+@overload
+def fft2_convolve(
+    x: da.core.Array, kernel: np.ndarray, overwrite_x: bool = False
+) -> da.core.Array: ...
 
 
 def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
@@ -288,7 +332,7 @@ def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:
             x,
             kernel=kernel,
             overwrite_x=overwrite_x,
-            meta=xp.array((), dtype=np.complex64),
+            meta=xp.array((), dtype=get_dtype(complex=True)),
         )
 
     check_cupy_is_installed()  # type: ignore
@@ -525,7 +569,7 @@ def fft_interpolate(
         pass
     else:
         pass
-        #raise ValueError(f"Normalization [{normalization}] not recognized.")
+        # raise ValueError(f"Normalization [{normalization}] not recognized.")
 
     # elif normalization != "intensity":
     #    raise ValueError()
