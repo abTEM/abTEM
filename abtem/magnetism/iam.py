@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 import dask.array as da
 import numpy as np
@@ -12,9 +12,9 @@ from scipy.integrate import trapezoid  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 
-from abtem.core.grid import coordinate_grid
 from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessAxis
 from abtem.core.energy import energy2sigma
+from abtem.core.grid import coordinate_grid
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
@@ -612,7 +612,7 @@ class MagneticFieldArray(BaseMagneticField, FieldArray):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        slice_thickness: float | Sequence[float],
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         exit_planes: Optional[int | tuple[int, ...]] = None,
@@ -648,7 +648,7 @@ class VectorPotentialArray(BaseVectorPotential, FieldArray):
     def __init__(
         self,
         array: np.ndarray | da.core.Array,
-        slice_thickness: Optional[float | tuple[float, ...]] = None,
+        slice_thickness: float | Sequence[float],
         extent: Optional[float | tuple[float, float]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         exit_planes: Optional[int | tuple[int, ...]] = None,
