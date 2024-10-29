@@ -553,6 +553,8 @@ class FrozenPhonons(BaseFrozenPhonons):
         return output
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+        if chunks is None:
+            chunks = 1
         chunks = validate_chunks(self.ensemble_shape, chunks)
         if lazy:
             arrays = []
@@ -631,11 +633,11 @@ class AtomsEnsemble(BaseFrozenPhonons):
                 trajectory = da.concatenate(stack)
 
             else:
-                stack = np.empty(len(trajectory), dtype=object)
+                stack_array = np.empty(len(trajectory), dtype=object)
                 for i, atoms in enumerate(trajectory):
-                    itemset(stack, i, atoms)
+                    itemset(stack_array, i, atoms)
 
-                trajectory = stack
+                trajectory = stack_array
 
         assert isinstance(trajectory, (np.ndarray, da.core.Array))
 
@@ -704,7 +706,9 @@ class AtomsEnsemble(BaseFrozenPhonons):
             return (1,) * len(self.ensemble_shape)
         return (1,)
 
-    def _partition_args(self, chunks: int = 1, lazy: bool = True):
+    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+        if chunks is None:
+            chunks = 1
         chunks = validate_chunks(self.ensemble_shape, chunks)
         if lazy:
             arrays = []

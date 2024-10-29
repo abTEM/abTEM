@@ -19,7 +19,7 @@ except ImportError:
 @pytest.fixture
 def gpaw_calculator_no_bonding():
     atoms = Atoms("C", positions=[(0, 0, 0)], cell=(5.0,) * 3, pbc=True)
-    atoms.calc = GPAW(h=0.2, txt=None, kpts=(3, 3, 3))
+    atoms.calc = GPAW(mode="fd", h=0.2, txt=None, kpts=(3, 3, 3))
     atoms.get_potential_energy()
     return atoms.calc
 
@@ -27,7 +27,7 @@ def gpaw_calculator_no_bonding():
 @pytest.fixture
 def gpaw_calculator_bonding():
     atoms = Atoms("C", positions=[(0, 0, 0)], cell=(2.0,) * 3, pbc=True)
-    atoms.calc = GPAW(h=0.2, txt=None, kpts=(3, 3, 3))
+    atoms.calc = GPAW(mode="fd", h=0.2, txt=None, kpts=(3, 3, 3))
     atoms.get_potential_energy()
     return atoms.calc
 

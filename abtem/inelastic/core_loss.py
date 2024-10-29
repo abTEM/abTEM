@@ -693,7 +693,7 @@ def fast_roll(array, shifts):
     return output
 
 
-class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
+class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
     _base_dims = 2
 
     def __init__(
