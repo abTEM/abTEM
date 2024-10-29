@@ -494,7 +494,7 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
             temp_array *= scattering_factor / sinc(gpts, sampling, device)
 
-            #if not fourier_space:
+            # if not fourier_space:
             temp_array = ifft2(temp_array, overwrite_x=True).real
 
             array += temp_array
@@ -586,7 +586,8 @@ class ProjectionIntegralTable:
 
 def optimize_cutoff(func: Callable, tolerance: float, a: float, b: float) -> float:
     """
-    Calculate the point where a function becomes lower than a given tolerance within a given bracketing interval.
+    Calculate the point where a function becomes lower than a given tolerance within a
+    given bracketing interval.
 
     Parameters
     ----------
@@ -741,19 +742,24 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         #     np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
         # )
 
-        projection = lambda z: potential(
-            np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
-        )
+        # projection = lambda z: potential(
+        #    np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2)
+        # )
+
+        def project_along_z(z):
+            return potential(np.sqrt(radial_gpts[:, None] ** 2 + z[None] ** 2))
+
         # * np.exp(-(radial_gpts[:, None] ** 2) / 10000)
 
         table = np.zeros((len(limits) - 1, len(radial_gpts)))
         table[0, :] = integrate.fixed_quad(
-            projection, -limits[0] * 2, limits[0], n=self._quad_order
+            project_along_z, -limits[0] * 2, limits[0], n=self._quad_order
         )[0]
 
         for j, (a, b) in enumerate(zip(limits[1:-1], limits[2:])):
             table[j + 1] = (
-                table[j] + integrate.fixed_quad(projection, a, b, n=self._quad_order)[0]
+                table[j]
+                + integrate.fixed_quad(project_along_z, a, b, n=self._quad_order)[0]
             )
 
         table = table * self._taper_values(radial_gpts, cutoff, self._taper)[None]
@@ -848,10 +854,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             symbol = chemical_symbols[number]
 
             if symbol in self._parametrization.sigmas:
-                sigma = (
-                    self._parametrization.sigmas[symbol]
-                    / np.array(sampling)
-                )
+                sigma = self._parametrization.sigmas[symbol] / np.array(sampling)
                 temp = get_ndimage_module(temp).gaussian_filter(
                     temp, sigma=sigma, mode="wrap"
                 )

@@ -21,8 +21,8 @@ except ModuleNotFoundError:
 except ImportError:
     if config.get("device") == "gpu":
         warnings.warn(
-            "The CuPy library could not be imported. Please check your installation, or change your configuration to "
-            "use CPU."
+            "The CuPy library could not be imported. Please check your installation, or"
+            " change your configuration to use CPU."
         )
     cp = None
 
@@ -59,8 +59,8 @@ def validate_device(device: str | None = None) -> str:
     Parameters
     ----------
     device : str, None
-        The device string to validate. Must be either 'cpu' or 'gpu'. If None, the device from the configuration is
-        used.
+        The device string to validate. Must be either 'cpu' or 'gpu'. If None, the
+        device from the configuration is used.
 
     Returns
     -------
@@ -85,7 +85,8 @@ def get_array_module(
     Parameters
     ----------
     x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
-        The array or string to get the array module for. If None, the default device is used.
+        The array or string to get the array module for. If None, the default device is
+        used.
 
     Returns
     -------
@@ -128,7 +129,8 @@ def get_array_module(
 
 def device_name_from_array_module(xp: ArrayModule) -> str:
     """
-    Get the device string from the array module. The array module must be either NumPy or CuPy.
+    Get the device string from the array module. The array module must be either NumPy
+    or CuPy.
 
     Parameters
     ----------
@@ -156,7 +158,8 @@ def get_scipy_module(x: ModuleType | np.ndarray | da.core.Array | str | None = N
     Parameters
     ----------
     x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
-        The array or string to get the SciPy module for. If None, the default device is used.
+        The array or string to get the SciPy module for. If None, the default device is
+        used.
 
     Returns
     -------
@@ -185,7 +188,8 @@ def get_ndimage_module(
     Parameters
     ----------
     x : numpy.ndarray, cupy.ndarray, dask.array.Array, str, None
-        The array or string to get the ndimage module for. If None, the default device is used.
+        The array or string to get the ndimage module for. If None, the default device
+        is used.
 
     Returns
     -------

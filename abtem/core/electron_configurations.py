@@ -1,5 +1,7 @@
 import numpy as np
 
+# ruff: noqa: E501
+
 electron_configurations = {
     "H": "1s1",
     "He": "1s2",
@@ -120,6 +122,7 @@ electron_configurations = {
     "Ts": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p5",
     "Og": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p6",
 }
+
 
 azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
 azimuthal_letter = {value: key for key, value in azimuthal_number.items()}

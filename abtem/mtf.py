@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from abtem.core.grid import spatial_frequencies
+
 
 def default_mtf_func(k: np.ndarray, c0: float, c1: float, c2: float, c3: float):
     """

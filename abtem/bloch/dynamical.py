@@ -1695,7 +1695,9 @@ class BlochWaves:
     #     return waves
 
     def rotate(
-        self, *args: str | BaseDistribution | np.ndarray | SupportsFloat, degrees: bool = False
+        self,
+        *args: str | BaseDistribution | np.ndarray | SupportsFloat,
+        degrees: bool = False,
     ) -> BlochWaves | BlochwaveEnsemble:
         """Rotate the unit cell by a given set of Euler angles.
 
@@ -2183,7 +2185,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         thicknesses = np.array(thicknesses, dtype=get_dtype())
 
         if thicknesses.ndim == 0:
-            thicknesses = np.atleast_1d(thicknesses)
+            thicknesses = thicknesses[None]
             squeeze_thickness_dim = True
         else:
             squeeze_thickness_dim = False

@@ -31,7 +31,6 @@ from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.ensemble import (
-    EmptyEnsemble,
     Ensemble,
     _wrap_with_array,
     unpack_blockwise_args,
@@ -49,7 +48,6 @@ from abtem.detectors import BaseDetector, FlexibleAnnularDetector
 from abtem.distributions import BaseDistribution
 from abtem.inelastic.core_loss import (
     BaseTransitionPotential,
-    _validate_transition_potentials,
 )
 from abtem.measurements import (
     BaseMeasurements,
@@ -988,8 +986,9 @@ class Waves(BaseWaves, ArrayObject):
         transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
-    ) -> Waves | BaseMeasurements | ComputableList[Waves | BaseMeasurements]:
-        transition_potentials = _validate_transition_potentials(transition_potentials)
+    ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
+        if not isinstance(transition_potentials, (list, tuple)):
+            transition_potentials = [transition_potentials]
 
         potential = validate_potential(potential, self)
 
@@ -1003,9 +1002,7 @@ class Waves(BaseWaves, ArrayObject):
                 sites=sites,
             )
             new_measurements = self.apply_transform(multislice_transform)
-            assert isinstance(
-                new_measurements, (Waves, BaseMeasurements)
-            )  # Type narrowing for MyPy
+            assert isinstance(new_measurements, (Waves, BaseMeasurements))
             measurements.append(new_measurements)
 
         if len(measurements) > 1:
@@ -1025,14 +1022,14 @@ class Waves(BaseWaves, ArrayObject):
             )
 
             assert isinstance(measurements, list)
-            measurements = abtem.stack(
+            stacked_measurements = abtem.stack(
                 measurements,
                 axis_metadata,
             )
         else:
-            measurements = measurements[0]
+            stacked_measurements = measurements[0]
 
-        return _reduce_ensemble(measurements)
+        return _reduce_ensemble(stacked_measurements)
 
     def multislice(
         self,
@@ -1079,7 +1076,7 @@ class Waves(BaseWaves, ArrayObject):
         potential: Optional[Atoms | BasePotential] = None,
         detectors: Optional[BaseDetector | Sequence[BaseDetector]] = None,
         max_batch: int | str = "auto",
-    ) -> Waves | BaseMeasurements | ComputableList[Waves | BaseMeasurements]:
+    ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """Run the multislice algorithm from probe wave functions over the provided
         scan.
 
@@ -1148,7 +1145,7 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         self._tilt = _validate_tilt(value)
 
     @abstractmethod
-    def build(self, lazy) -> Waves:
+    def build(self, *args, **kwargs) -> Waves:
         pass
 
     def apply_transform(
@@ -1341,17 +1338,20 @@ class PlaneWave(_WavesBuilder):
     gpts : two int, optional
         Number of grid points describing the wave function.
     sampling : two float, optional
-        Lateral sampling of the wave functions [Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of the wave functions [Å]. If 'gpts' is also given, will be
+        ignored.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     normalize : bool, optional
-        If true, normalizes the wave function such that its reciprocal space intensity sums to one. If false, the
+        If true, normalizes the wave function such that its reciprocal space intensity
+        sums to one. If false, the
         wave function takes a value of one everywhere.
     tilt : two float, optional
-        Small-angle beam tilt [mrad] (default is (0., 0.)). Implemented by shifting the wave functions at every slice.
+        Small-angle beam tilt [mrad] (default is (0., 0.)). Implemented by shifting the
+        wave functions at every slice.
     device : str, optional
-        The wave functions are stored on this device ('cpu' or 'gpu'). The default is determined by the user
-        configuration.
+        The wave functions are stored on this device ('cpu' or 'gpu'). The default is
+        determined by the user configuration.
     """
 
     def __init__(
@@ -1437,11 +1437,12 @@ class PlaneWave(_WavesBuilder):
         Parameters
         ----------
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
-            setting in the user configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly.
+            If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
 
         Returns
@@ -1458,7 +1459,11 @@ class PlaneWave(_WavesBuilder):
         else:
             probes = self._lazy_build_waves(self, max_batch)
 
-        return _reduce_ensemble(probes)
+        waves = _reduce_ensemble(probes)
+
+        assert isinstance(waves, Waves)
+
+        return waves
 
     def multislice(
         self,
@@ -1466,31 +1471,34 @@ class PlaneWave(_WavesBuilder):
         detectors: Optional[BaseDetector] = None,
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
-    ) -> BaseMeasurements | Waves | ComputableList[BaseMeasurements | Waves]:
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """Run the multislice algorithm, after building the plane-wave wave function as
         needed. The grid of the wave functions will be set to the grid of the potential.
 
         Parameters
         ----------
         potential : BasePotential, Atoms
-            The potential through which to propagate the wave function. Optionally atoms can be directly given.
+            The potential through which to propagate the wave function.
+            Optionally atoms can be directly given.
         detectors : Detector, list of detectors, optional
-            A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm.
+            A detector or a list of detectors defining how the wave functions should be
+            converted to measurements after running the multislice algorithm.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
-            setting in the user configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly.
+            If None, this defaults to the setting in the user configuration file.
 
         Returns
         -------
         measurements : BaseMeasurements or ComputableList of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
+            Wave functions at the exit plane(s) of the potential
+            (if no detector(s) given).
         """
         potential = validate_potential(potential)
         lazy = _validate_lazy(lazy)
@@ -1516,30 +1524,38 @@ class Probe(_WavesBuilder):
     Parameters
     ----------
     semiangle_cutoff : float, optional
-        The cutoff semiangle of the aperture [mrad]. Ignored if a custom aperture is given.
+        The cutoff semiangle of the aperture [mrad]. Ignored if a custom aperture is
+        given.
     extent : float or two float, optional
-        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be ignored.
+        Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be
+        ignored.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     soft : float, optional
-        Taper the edge of the default aperture [mrad] (default is 2.0). Ignored if a custom aperture is given.
-    tilt : two float, two 1D :class:`.BaseDistribution`, 2D :class:`.BaseDistribution`, optional
+        Taper the edge of the default aperture [mrad] (default is 2.0). Ignored if a
+        custom aperture is given.
+    tilt : two float, two 1D :class:`.BaseDistribution`, 2D :class:`.BaseDistribution`,
+    optional
         Small-angle beam tilt [mrad]. This value should generally not exceed one degree.
     device : str, optional
-        The probe wave functions will be build and stored on this device ('cpu' or 'gpu'). The default is determined by
-        the user configuration.
+        The probe wave functions will be build and stored on this device
+        ('cpu' or 'gpu'). The default is determined by the user configuration.
     aperture : BaseAperture, optional
-        An optional custom aperture. The provided aperture should be a subtype of :class:`.BaseAperture`.
+        An optional custom aperture. The provided aperture should be a subtype of
+        :class:`.BaseAperture`.
     aberrations : dict or Aberrations
         The phase aberrations as a dictionary.
     transforms : list of :class:`.WaveTransform`
-        A list of additional wave function transforms which will be applied after creation of the probe wave functions.
+        A list of additional wave function transforms which will be applied after
+        creation of the probe wave functions.
     kwargs :
-        Provide the aberrations as keyword arguments, forwarded to the :class:`.Aberrations`.
+        Provide the aberrations as keyword arguments, forwarded to the
+        :class:`.Aberrations`.
     """
 
     def __init__(
@@ -1652,7 +1668,7 @@ class Probe(_WavesBuilder):
         self.aperture.semiangle_cutoff = value
 
     @property
-    def aperture(self) -> Aperture:
+    def aperture(self) -> BaseAperture:
         """Condenser or probe-forming aperture."""
         return self._aperture
 
@@ -1755,14 +1771,16 @@ class Probe(_WavesBuilder):
         Parameters
         ----------
         scan : array of `xy`-positions or BaseScan, optional
-            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+            Positions of the probe wave functions. If not given, scans across the entire
+            potential at Nyquist sampling.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
-            setting in the user configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly.
+            If not given, defaults to the setting in the user configuration file.
 
         Returns
         -------
@@ -1787,17 +1805,20 @@ class Probe(_WavesBuilder):
         potential : BasePotential or Atoms
             The scattering potential. Optionally atoms can be directly given.
         scan : array of xy-positions or BaseScan, optional
-            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+            Positions of the probe wave functions. If not given, scans across the entire
+            potential at Nyquist sampling.
         detectors : BaseDetector or list of BaseDetector, optional
-            A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. If not given, defaults to the flexible annular detector.
+            A detector or a list of detectors defining how the wave functions should be
+            converted to measurements after running the multislice algorithm. If not
+            given, defaults to the flexible annular detector.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
-            setting in the user configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly.
+            If None, this defaults to the setting in the user configuration file.
 
         Returns
         -------
@@ -1835,14 +1856,16 @@ class Probe(_WavesBuilder):
             It can be an instance of `BasePotential` or an `Atoms` object.
         transition_potentials : BaseTransitionPotential | list[BaseTransitionPotential]
             The transition potentials to be used for multislice calculations.
-            It can be an instance of `BaseTransitionPotential` or a list of `BaseTransitionPotential` objects.
+            It can be an instance of `BaseTransitionPotential` or a list of
+            `BaseTransitionPotential` objects.
         scan : tuple | BaseScan, optional
             The scan parameters. It can be a tuple or an instance of `BaseScan`.
             Defaults to None.
         detectors : BaseDetector | list[BaseDetector], optional
-            A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
-            Defaults to None, which
+            A detector or a list of detectors defining how the wave functions should be
+            converted to measurements after running the multislice algorithm. See
+            abtem.measurements.detect for a list of implemented detectors.
+            Defaults to None.
         sites : SliceIndexedAtoms | Atoms, optional
             The slice indexed atoms to be used for multislice calculations.
             It can be an instance of `SliceIndexedAtoms` or an `Atoms` object.
@@ -1852,8 +1875,8 @@ class Probe(_WavesBuilder):
             It can be an instance of `BaseDetector` or a list of `BaseDetector` objects.
             Defaults to None.
         double_channel : bool, optional
-            A boolean indicating whether to use double channel for recording the measurements.
-            Defaults to True.
+            A boolean indicating whether to use double channel for recording the
+            measurements. Defaults to True.
         max_batch : int | str, optional
             The maximum batch size for parallel processing.
             It can be an integer or the string "auto".
@@ -1910,24 +1933,28 @@ class Probe(_WavesBuilder):
         potential : BasePotential or Atoms
             The scattering potential.
         scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+            Positions of the probe wave functions. If not given, scans across the entire
+            potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
-            A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            A detector or a list of detectors defining how the wave functions should be
+            converted to measurements after running the multislice algorithm.
+            See abtem.measurements.detect for a list of implemented detectors.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         lazy : bool, optional
-            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
-            set in the configuration file.
+            If True, create the measurements lazily, otherwise, calculate instantly.
+            If None, this defaults to the value set in the configuration file.
 
         Returns
         -------
         detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
+            Wave functions at the exit plane(s) of the potential
+            (if no detector(s) given).
         """
 
         if scan is None:
@@ -1947,7 +1974,12 @@ class Probe(_WavesBuilder):
         return measurements
 
     @staticmethod
-    def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
+    def _line_intersect_rectangle(
+        point0: tuple[float, float],
+        point1: tuple[float, float],
+        lower_corner: tuple[float, float],
+        upper_corner: tuple[float, float],
+    ) -> tuple[tuple[float, float], tuple[float, float]]:
         if point0[0] == point1[0]:
             return (point0[0], lower_corner[1]), (point0[0], upper_corner[1])
 
@@ -1984,11 +2016,13 @@ class Probe(_WavesBuilder):
 
         measurement = self.build(point1).intensity()
 
-        point2 = point1 + np.array(
-            [np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)]
+        point2 = (
+            point1[0] + np.cos(np.pi * angle / 180),
+            point1[1] + np.sin(np.pi * angle / 180),
         )
+
         point1, point2 = self._line_intersect_rectangle(
-            point1, point2, (0.0, 0.0), self.extent
+            point1, point2, (0.0, 0.0), self._valid_extent
         )
         return measurement.interpolate_line(point1, point2)
 

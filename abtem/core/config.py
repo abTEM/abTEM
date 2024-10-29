@@ -221,7 +221,8 @@ def check_deprecations(key: str, deprecations: dict = deprecations) -> str:
     --------
     >>> deprecations = {"old_key": "new_key", "invalid": None}
     >>> check_deprecations("old_key", deprecations=deprecations)  # doctest: +SKIP
-    UserWarning: Configuration key "old_key" has been deprecated. Please use "new_key" instead.
+    UserWarning: Configuration key "old_key" has been deprecated. Please use "new_key"
+    instead.
 
     >>> check_deprecations("invalid", deprecations=deprecations)
     Traceback (most recent call last):

@@ -170,7 +170,8 @@ def get_conversion_factor(
     if units_type[old_units] == "reciprocal_space" and units_type[units] == "angular":
         if energy is None:
             raise RuntimeError(
-                "energy must be provided to convert from reciprocal space to angular units"
+                "energy must be provided to convert from reciprocal space to angular"
+                " units"
             )
 
         wavelength = energy2wavelength(energy)

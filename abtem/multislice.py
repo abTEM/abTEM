@@ -735,7 +735,7 @@ def transition_potential_multislice_and_detect(
                 scatter_index, atomic_number=transition_potential.Z
             )
 
-            tqdm_pbar.update_if_exists(n_waves)
+            tqdm_pbar.update_if_exists(int(n_waves))
 
             if len(sites_slice) == 0:
                 continue

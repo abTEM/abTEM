@@ -203,7 +203,7 @@ def integrate_ellipse_around_pixels(
         order = np.arange(nm.shape[-2])
     else:
         order = np.argsort(priority, axis=-1)
-    
+
     for i, (nmx, nmy) in enumerate(nm[order]):
         x_slice = slice(max(0, nmx - a), min(array.shape[-2], nmx + a + 1))
         y_slice = slice(max(0, nmy - b), min(array.shape[-1], nmy + b + 1))

@@ -391,7 +391,8 @@ def check_orthogonality(vectors: np.ndarray, tol: float = 1e-9) -> bool:
     Returns:
     --------
     bool
-        True if all pairs of vectors are orthogonal within the given tolerance, False otherwise.
+        True if all pairs of vectors are orthogonal within the given tolerance, False
+        otherwise.
     """
     if vectors.shape[1] != 3:
         raise ValueError("Each vector must be 3-dimensional.")

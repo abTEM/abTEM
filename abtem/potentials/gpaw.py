@@ -33,12 +33,12 @@ from abtem.inelastic.phonons import (
     _safe_read_atoms,
 )
 from abtem.parametrizations import EwaldParametrization, LobatoParametrization
-from abtem.potentials.charge_density import _generate_slices, _interpolate_slice
+from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
 try:
     from gpaw import GPAW
-except:
+except ImportError:
     GPAW = None
 
 
@@ -204,7 +204,7 @@ def _generate_slices(
     if potential.plane != "xy":
         axes = plane_to_axes(potential.plane)
         valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
-    #else:
+    # else:
     #    atoms = ewald_potential.frozen_phonons.atoms
 
     transformed_atoms = potential.get_transformed_atoms()
@@ -218,7 +218,7 @@ def _generate_slices(
 
     if last_slice is None:
         last_slice = len(potential)
-    
+
     for i, slice_idx in enumerate(range(first_slice, last_slice)):
         slic = next(potential_generators[0])
 
@@ -241,61 +241,74 @@ def _generate_slices(
 
 class GPAWPotential(_PotentialBuilder):
     """
-    Calculate the electrostatic potential from a (set of) converged GPAW DFT calculation(s). Frozen phonons can be
-    included either by specifying multiple GPAW calculators corresponding to the different phonon configurations, or
-    approximately for a single calculator by using the `frozen_phonons` keyword.
+    Calculate the electrostatic potential from a (set of) converged GPAW DFT
+    calculation(s). Frozen phonons can be included either by specifying multiple GPAW
+    calculators corresponding to the different phonon configurations, or approximately
+    for a single calculator by using the `frozen_phonons` keyword.
 
     Parameters
     ----------
     calculators : (list of) gpaw.calculator.GPAW or (list of) str
-        GPAW calculator or path to GPAW calculator or list of calculators or paths. Atoms are read from the calculator.
+        GPAW calculator or path to GPAW calculator or list of calculators or paths.
+        Atoms are read from the calculator.
     gpts : one or two int, optional
-        Number of grid points in `x` and `y` describing each slice of the potential. Provide either "sampling" (spacing
-        between consecutive grid points) or "gpts" (total number of grid points).
+        Number of grid points in `x` and `y` describing each slice of the potential.
+        Provide either "sampling" (spacing between consecutive grid points) or "gpts"
+        (total number of grid points).
     sampling : one or two float, optional
-        Sampling of the potential in `x` and `y` [1 / Å]. Provide either "sampling" or "gpts".
+        Sampling of the potential in `x` and `y` [1 / Å].
+        Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
-        If given as a float the number of slices is calculated by dividing the slice thickness into the `z`-height
-        of supercell. The slice thickness may be given as a sequence of values for each slice, in which case an
-        error will be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
+        Thickness of the potential slices in the propagation direction in [Å]
+        (default is 0.5 Å).
+        If given as a float the number of slices is calculated by dividing the slice
+        thickness into the `z`-height of supercell. The slice thickness may be given as
+        a sequence of values for each slice, in which case an error will be thrown if
+        the sum of slice thicknesses is not equal to the height of the atoms.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
-        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
-        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
-        an integer a measurement will be collected every `exit_planes` number of slices.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the
+        slice indices after which an exit plane is desired, and hence during a
+        multislice simulation a measurement is created. If `exit_planes` is an integer a
+        measurement will be collected every `exit_planes` number of slices.
     plane : str or two tuples of three float, optional
-        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
-        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
-        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
-        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
-        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
-        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The plane relative to the provided atoms mapped to `xy` plane of the potential,
+        i.e. provided plane is perpendicular to the propagation direction. If string,
+        it must be a concatenation of two of 'x', 'y' and 'z';
+        the default value 'xy' indicates that potential slices are cuts along the
+        `xy`-plane of the atoms. The plane may also be specified with two arbitrary
+        3D vectors, which are mapped to the `x` and `y` directions of the potential.
+        The length of the vectors has no influence. If the vectors are not
+        perpendicular, the second vector is rotated in the plane to become perpendicular
+        to the first. Providing a value of ((1., 0., 0.), (0., 1., 0.)) is equivalent to
+        providing 'xy'.
     origin : three float, optional
-        The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to translating
-        the atoms. The default is (0., 0., 0.)
+        The origin relative to the provided Atoms mapped to the origin of the Potential.
+        This is equivalent to translating the atoms. The default is (0., 0., 0.)
     box : three float, optional
-        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
-        If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
-        necessary to preserve periodicity, determined by the `periodic` keyword
+        The extent of the potential in `x`, `y` and `z`. If not given this is determined
+        from the atoms' cell. If the box size does not match an integer number of the
+        atoms' supercell, an affine transformation may be necessary to preserve
+        periodicity, determined by the `periodic` keyword
     periodic : bool
-        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is
-        transformed. If True (default), the periodicity of the Atoms is preserved, which may require applying a small affine
-        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
-        potential, which may not preserve periodicity.
+        If a transformation of the atomic structure is required, `periodic` determines
+        how the atomic structure is transformed. If True (default), the periodicity of
+        the Atoms is preserved, which may require applying a small affine
+        transformation to the atoms. If False, the transformed potential is effectively
+        cut out of a larger repeated potential, which may not preserve periodicity.
     frozen_phonons : abtem.AbstractFrozenPhonons, optional
-        Approximates frozen phonons for a single GPAW calculator by displacing only the nuclear core potentials.
-        Supercedes the atoms from the calculator.
+        Approximates frozen phonons for a single GPAW calculator by displacing only the
+        nuclear core potentials. Supercedes the atoms from the calculator.
     repetitions : tuple of int
-        Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before applying frozen phonon displacements
-        to calculate the potential contribution of the nuclear cores. Necessary when using frozen phonons.
+        Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before
+        applying frozen phonon displacements to calculate the potential contribution of
+        the nuclear cores. Necessary when using frozen phonons.
     gridrefinement : int
-        Necessary interpolation of the charge density into a finer grid for improved numerical precision.
-        Allowed values are '2' and '4'.
+        Necessary interpolation of the charge density into a finer grid for improved
+        numerical precision. Allowed values are '2' and '4'.
     device : str, optional
-        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
-        configuration file.
+        The device used for calculating the potential, 'cpu' or 'gpu'. The default is
+        determined by the user configuration file.
     """
 
     def __init__(
@@ -487,28 +500,28 @@ class GPAWPotential(_PotentialBuilder):
         atoms = self.frozen_phonons.atoms
 
         if self.repetitions != (1, 1, 1):
-            cell_cv = calculator.gd.cell_cv * self.repetitions
-            N_c = tuple(
-                n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
-            )
-            gd = calculator.gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
+            # cell_cv = calculator.gd.cell_cv * self.repetitions
+            # N_c = tuple(
+            #    n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
+            # )
+            # gd = calculator.gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
             atoms = atoms * self.repetitions
-            nt_sG = np.tile(calculator.nt_sG, self.repetitions)
-        else:
-            gd = calculator.gd
-            nt_sG = calculator.nt_sG
+            # nt_sG = np.tile(calculator.nt_sG, self.repetitions)
+        # else:
+        # gd = calculator.gd
+        # nt_sG = calculator.nt_sG
 
         random_atoms = self.frozen_phonons.randomize(atoms)
 
         interpolators = get_core_correction_interpolators(
             calculator.setups, calculator.D_asp, calculator.Q_aL, 0.001
         )
-        
-        #calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
-        #calc.initialize(random_atoms)
 
-        #ewald_potential = self._get_ewald_potential()
-        
+        # calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
+        # calc.initialize(random_atoms)
+
+        # ewald_potential = self._get_ewald_potential()
+
         # array = self._get_all_electron_density()
         # array = calculator.valence_potential
 
@@ -630,7 +643,8 @@ class GPAWPotential(_PotentialBuilder):
 
 class GPAWParametrization:
     """
-    Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.
+    Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT
+    calculation.
     """
 
     def __init__(self, nodes=None, integration_step=0.002):
@@ -704,7 +718,8 @@ class GPAWParametrization:
         Returns
         -------
         charge : callable
-            Function of the radial charge density with parameter 'r' corresponding to the radial distance from the core.
+            Function of the radial charge density with parameter 'r' corresponding to
+            the radial distance from the core.
         """
         ae = self._get_all_electron_atom(symbol, charge)
         r = ae.rgd.r_g * units.Bohr
@@ -776,7 +791,8 @@ class GPAWParametrization:
     #     Returns
     #     -------
     #     potential : callable
-    #         Function of the radial electrostatic potential with parameter 'r' corresponding to the radial distance from the core.
+    #         Function of the radial electrostatic potential with parameter 'r'
+    # corresponding to the radial distance from the core.
     #     """
     #
     #     ae = self._get_all_electron_atom(symbol, charge)

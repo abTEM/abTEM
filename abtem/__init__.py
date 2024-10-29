@@ -1,8 +1,5 @@
 """Main abTEM module."""
 
-import importlib
-import sys
-
 from abtem import distributions, transfer
 from abtem._version import __version__
 from abtem.array import concatenate, from_zarr, stack

@@ -33,12 +33,14 @@ def spline_orders(splines):
 # def Y(order, degree, theta, phi):
 #     if order > 0:
 #         return (1 / np.sqrt(2) * (
-#                     sph_harm(order, degree, theta, phi) + (-1) ** order * sph_harm(-order, degree, theta, phi))).real
+#                     sph_harm(order, degree, theta, phi) + (-1) ** order *
+# sph_harm(-order, degree, theta, phi))).real
 #     elif order == 0:
 #         return sph_harm(order, degree, theta, phi).real
 #     else:
 #         return (1 / (np.sqrt(2) * 1.j) * (
-#                     sph_harm(-order, degree, theta, phi) - (-1) ** order * sph_harm(order, degree, theta, phi))).real
+#                     sph_harm(-order, degree, theta, phi) - (-1) ** order *
+# sph_harm(order, degree, theta, phi))).real
 
 
 def real_sph_harm(order, degree, theta, phi):

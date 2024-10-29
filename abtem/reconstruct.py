@@ -1068,9 +1068,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
 
         if pre_probe_correction_update_steps is None:
-            queue_summary += f"\n--Probe correction is enabled"
+            queue_summary += "\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
-            queue_summary += f"\n--Probe correction is disabled"
+            queue_summary += "\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
 
@@ -2581,15 +2581,15 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                 queue_summary += f"\n--Simultaneous PIE with position correction for {remaining_update_steps} steps"
 
         if pre_probe_correction_update_steps is None:
-            queue_summary += f"\n--Probe correction is enabled"
+            queue_summary += "\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
-            queue_summary += f"\n--Probe correction is disabled"
+            queue_summary += "\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
 
         if common_probe:
             queue_summary += (
-                f"\n--Using the first probe as a common probe for both objects"
+                "\n--Using the first probe as a common probe for both objects"
             )
 
         functions_queue = [
@@ -3732,9 +3732,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                 queue_summary += f"\n--Mixed-State PIE with position correction for {remaining_update_steps} steps"
 
         if pre_probe_correction_update_steps is None:
-            queue_summary += f"\n--Probe correction is enabled"
+            queue_summary += "\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
-            queue_summary += f"\n--Probe correction is disabled"
+            queue_summary += "\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
 
@@ -4382,7 +4382,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Updated sum of squares error estimate
         """
-        """
+        r"""
         MS-PIE Fourier-amplitude modification projection:
         \psi'^N_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^N_{R_j}(u)] / |F[\psi^N_{R_j}(u)]|]
         """
@@ -4669,9 +4669,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             queue_summary += f"\n--Multislice PIE with position correction for {remaining_update_steps} steps"
 
         if pre_probe_correction_update_steps is None:
-            queue_summary += f"\n--Probe correction is enabled"
+            queue_summary += "\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
-            queue_summary += f"\n--Probe correction is disabled"
+            queue_summary += "\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
 

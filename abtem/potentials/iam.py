@@ -66,9 +66,9 @@ if TYPE_CHECKING:
 
 
 class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=ABCMeta):
-    #@property
-    #@abstractmethod
-    #def device(self) -> str:
+    # @property
+    # @abstractmethod
+    # def device(self) -> str:
     #    pass
 
     @property
@@ -1376,13 +1376,13 @@ class CrystalPotential(_PotentialBuilder):
         ):
             warnings.warn(
                 "'num_frozen_phonons' is greater than one, but the potential unit does"
-                "not have frozen phonons"
+                " not have frozen phonons"
             )
 
         if (potential_unit.num_configurations > 1) and (num_frozen_phonons is not None):
             warnings.warn(
                 "the potential unit has frozen phonons, but 'num_frozen_phonons' is not"
-                "set"
+                " set"
             )
 
         gpts = (
@@ -1396,6 +1396,9 @@ class CrystalPotential(_PotentialBuilder):
 
         box = extent + (potential_unit.thickness * repetitions[2],)
         slice_thickness = potential_unit.slice_thickness * repetitions[2]
+
+        assert hasattr(potential_unit, "device")
+
         super().__init__(
             array_object=PotentialArray,
             gpts=gpts,

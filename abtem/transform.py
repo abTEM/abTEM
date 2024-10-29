@@ -345,10 +345,10 @@ class ArrayObjectTransform(
     ):
         new_array = self._calculate_new_array(array_object)
         if self._num_outputs > 1:
-            # assert isinstance(new_array, tuple) TODO
+            assert isinstance(new_array, tuple)
             return self._pack_multiple_outputs(array_object, new_array)
         else:
-            # assert isinstance(new_array, np.ndarray) TODO
+            assert isinstance(new_array, np.ndarray)
             return self._pack_single_output(array_object, new_array)
 
 
@@ -628,9 +628,9 @@ class CompositeArrayObjectTransform(ArrayObjectTransform):
         chunks_tuples = tuple(c if isinstance(c, tuple) else (c,) for c in chunks)
         return join_tuples(chunks_tuples)
 
-    def apply(self, array_object: ArrayObject) -> ArrayObject | tuple[ArrayObject, ...]:
-        if len(self):
-            return super()._apply(array_object)
+    def apply(self, array_object: ArrayObject) -> ArrayObject | list[ArrayObject]:
+        if len(self) > 0:
+            return array_object.apply_transform(self)
         else:
             return array_object
 
@@ -723,7 +723,7 @@ class ReciprocalSpaceMultiplication(WavesToWavesTransform):
         waves = waves.ensure_reciprocal_space(overwrite_x=self.in_place)
         kernel = self._evaluate_kernel(waves)
 
-        array = waves.array
+        array = waves._eager_array
 
         kernel, new_array = expand_dims_to_broadcast(
             kernel, array, match_dims=((-2, -1), (-2, -1))

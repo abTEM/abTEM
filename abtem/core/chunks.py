@@ -146,19 +146,22 @@ def validate_chunks(
     device: str = "cpu",
 ) -> ValidatedChunks:
     """
-    Validate the chunks for a Dask array based on the shape and a maximum number of elements.
+    Validate the chunks for a Dask array based on the shape and a maximum number of
+    elements.
 
     Parameters
     ----------
     shape : tuple of int
         The shape of the array.
     chunks : int or tuple of int or str
-        The chunk sizes of the Dask array. If an integer, the array will be split into equal chunks. If a tuple, the
-        array will be split into the specified chunks. If "auto", the chunks will be determined automatically based
-        on the shape and the maximum number of elements.
+        The chunk sizes of the Dask array. If an integer, the array will be split into
+        equal chunks. If a tuple, the array will be split into the specified chunks.
+        If "auto", the chunks will be determined automatically based on the shape and
+        the maximum number of elements.
     max_elements : int or str
-        The maximum number of elements in a chunk. If "auto", the maximum number of elements will be determined based
-        on the maximum number of bytes per chunk and the dtype.
+        The maximum number of elements in a chunk. If "auto", the maximum number of
+        elements will be determined based on the maximum number of bytes per chunk and
+        the dtype.
     dtype : np.dtype
         The dtype of the array.
     device : str
@@ -197,7 +200,8 @@ def validate_chunks(
 
     else:
         raise ValueError(
-            f"chunks must be an integer, a tuple of integers a tuple of tuple of integers or 'auto' got {chunks}",
+            "chunks must be an integer, a tuple of integers a tuple of tuple of"
+            f"integers or 'auto' got {chunks}"
         )
 
     assert_chunks_match_shape(shape, validated_chunks)
@@ -213,19 +217,22 @@ def _auto_chunks(
     device: str = "cpu",
 ) -> ValidatedChunks:
     """
-    Automatically determine the chunks for a Dask array based on the shape and a maximum number of elements.
+    Automatically determine the chunks for a Dask array based on the shape and a maximum
+    number of elements.
 
     Parameters
     ----------
     shape : tuple of int
         The shape of the array.
     chunks : tuple of int or str
-        The chunk sizes of the Dask array. If an integer, the array will be split into equal chunks. If a tuple, the
-        array will be split into the specified chunks. If "auto", the chunks will be determined automatically based
-        on the shape and the maximum number of elements.
+        The chunk sizes of the Dask array. If an integer, the array will be split into
+        equal chunks. If a tuple, the array will be split into the specified chunks.
+        If "auto", the chunks will be determined automatically based on the shape and
+        the maximum number of elements.
     max_elements : int or str
-        The maximum number of elements in a chunk. If "auto", the maximum number of elements will be determined based
-        on the maximum number of bytes per chunk and the dtype.
+        The maximum number of elements in a chunk. If "auto", the maximum number of
+        elements will be determined based on the maximum number of bytes per chunk and
+        the dtype.
     dtype : np.dtype
         The dtype of the array.
     device : str
@@ -320,7 +327,8 @@ def equal_sized_chunks(
     num_items: int, num_chunks: Optional[int] = None, chunk_size: Optional[int] = None
 ) -> tuple[int, ...]:
     """
-    Split an n integer into m (almost) equal integers, such that the sum of smaller integers equals n.
+    Split an n integer into m (almost) equal integers, such that the sum of smaller
+    integers equals n.
 
     Parameters
     ----------

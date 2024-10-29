@@ -28,7 +28,8 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         semiangle_cutoff: float = None,
     ):
         """
-        The diagonal mixed coherence may be used to efficient calculate partial coherence for electron probes.
+        The diagonal mixed coherence may be used to efficient calculate partial
+        coherence for electron probes.
 
         Parameters
         ----------
@@ -39,12 +40,14 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         rectangular_offset : two float, optional
             The standard deviation of the 2D gaussian shaped electron source [Å].
         eigenvectors : int, or tuple of int
-            The subset of eigenvectors of the decomposed mixed coherence used to represent the electron probe. It is
-            possible to parallelize over eigenvectors.
+            The subset of eigenvectors of the decomposed mixed coherence used to
+            represent the electron probe. It is possible to parallelize over
+            eigenvectors.
         energy : float, optional
             Electron energy [eV]. If not given, this will be matched to a wave function.
         semiangle_cutoff : float, optional
-            Aperture half-angle [mrad]. If not given, this will be matched to a wave function.
+            Aperture half-angle [mrad]. If not given, this will be matched to a wave
+            function.
         """
 
         self._focal_spread = focal_spread
@@ -105,7 +108,8 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
                 semiangle_cutoff = waves.metadata["semiangle_cutoff"]
             except KeyError:
                 raise RuntimeError(
-                    '"Semiangle_cutoff" could not be inferred from Waves, please provide as an argument.'
+                    "'Semiangle_cutoff' could not be inferred from Waves, please"
+                    " provide as an argument."
                 )
         else:
             semiangle_cutoff = self.semiangle_cutoff

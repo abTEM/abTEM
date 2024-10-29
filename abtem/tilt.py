@@ -48,11 +48,7 @@ def _validate_tilt(
 
 
 def _get_tilt_axes(waves) -> tuple[TiltAxis | AxisAlignedTiltAxis, ...]:
-    return tuple(
-        axis
-        for axis in waves.ensemble_axes_metadata
-        if hasattr(axis, "tilt")
-    )
+    return tuple(axis for axis in waves.ensemble_axes_metadata if hasattr(axis, "tilt"))
 
 
 def precession_tilts(

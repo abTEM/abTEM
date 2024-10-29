@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from abc import abstractmethod
-from typing import Any, Optional, Sequence, SupportsFloat, TypeGuard, Iterable
+from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 
 import numpy as np
 from ase import Atoms
@@ -64,7 +64,7 @@ def is_number(value: Any) -> TypeGuard[int | float | np.ndarray]:
 
 
 def _validate_slice_thickness(
-    slice_thickness: float | Sequence[float],
+    slice_thickness: float | np.ndarray | Sequence[float],
     thickness: Optional[float] = None,
     num_slices: Optional[int] = None,
 ) -> tuple[float, ...]:
@@ -74,10 +74,8 @@ def _validate_slice_thickness(
             n = float(np.ceil(thickness / slice_thickness))
             validated_slice_thickness = (thickness / n,) * int(n)
         elif num_slices is not None:
-            print(
-                slice_thickness,
-                type(slice_thickness),
-            )
+            if isinstance(slice_thickness, np.ndarray):
+                slice_thickness = cast(float, slice_thickness.item())
             validated_slice_thickness = (float(slice_thickness),) * num_slices
         else:
             raise RuntimeError("Either thickness or num_slices must be given.")

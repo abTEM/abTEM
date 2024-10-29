@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from numbers import Number
-from typing import Dict, Optional, Sequence, TypeGuard, Union
+from typing import Any, Callable, Dict, Optional, Sequence, TypeGuard, Union
 
 import dask
 import dask.array as da
@@ -18,10 +18,11 @@ from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
 
 from abtem.core.axes import AxisMetadata, FrozenPhononsAxis, UnknownAxis
-from abtem.core.chunks import chunk_ranges, validate_chunks
+from abtem.core.chunks import Chunks, chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 
+Reader: Optional[Callable] = None
 try:
     from gpaw.io import Reader  # noqa
 except ImportError:
@@ -30,6 +31,7 @@ except ImportError:
 
 def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
     if isinstance(calculator, str):
+        assert Reader is not None
         with Reader(calculator) as reader:
             atoms = read_atoms(reader.atoms)
     else:
@@ -54,7 +56,8 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @property
     def ensemble_mean(self):
-        """The mean of the ensemble of results from a multislice simulation is calculated."""
+        """The mean of the ensemble of results from a multislice simulation is
+        calculated."""
         return self._ensemble_mean
 
     @property
@@ -69,8 +72,10 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @staticmethod
     def _validate_atomic_numbers_and_cell(
-        atoms: Atoms | np.ndarray, atomic_numbers, cell
-    ):
+        atoms: Atoms | np.ndarray,
+        atomic_numbers: Optional[np.ndarray] = None,
+        cell: Optional[Cell] = None,
+    ) -> tuple[np.ndarray, Cell]:
         if isinstance(atoms, da.core.Array) and (
             atomic_numbers is None or cell is None
         ):
@@ -78,6 +83,8 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         if isinstance(atoms, np.ndarray):
             atoms = atoms.item()
+
+        assert isinstance(atoms, Atoms)
 
         if cell is None:
             cell = atoms.cell.copy()
@@ -187,7 +194,10 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         kwargs = self._copy_kwargs(exclude=("atoms",))
         return partial(self._from_partitioned_args_func, **kwargs)
 
-    def _partition_args(self, chunks: int = 1, lazy: bool = True):
+    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+        if chunks is None:
+            chunks = 1
+
         if lazy:
             lazy_args = dask.delayed(_wrap_with_array)(self.atoms, ndims=1)
 
@@ -207,7 +217,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
 def _validate_seeds(
     seeds: int | tuple[int, ...] | None, num_seeds: Optional[int] = None
 ) -> tuple[int, ...]:
-    if seeds is None or np.isscalar(seeds):
+    if seeds is None or isinstance(seeds, int):
         if num_seeds is None:
             raise ValueError("Provide `num_configs` or a seed for each configuration.")
 
@@ -228,12 +238,12 @@ def _validate_seeds(
 
 
 def ensure_all_values_are_tuples(
-    props: dict[str, float | int] | dict[str, tuple[float | int, ...]],
+    props: dict[Any, Any],
 ) -> TypeGuard[Dict[str, tuple[float | int, ...]]]:
     return all(isinstance(value, tuple) for value in props.values())
 
 
-def all_keys_are_ints(props: dict[str, float | int]) -> TypeGuard[dict[int, float]]:
+def all_keys_are_ints(props: dict[Any, Any]) -> TypeGuard[dict[int, Any]]:
     return all(isinstance(key, int) for key in props.keys())
 
 
@@ -266,7 +276,7 @@ def validate_per_atom_property(
     elif isinstance(props, dict):
         if all_keys_are_ints(props):
             validated_props = {
-                chemical_symbols[key]: value for key, value in props.items()
+                chemical_symbols[key]: np.array(value) for key, value in props.items()
             }
         elif not all(isinstance(key, str) for key in props.keys()):
             raise RuntimeError(
@@ -384,7 +394,8 @@ def atom_property_dict_to_atom_property_array(
 
 class FrozenPhonons(BaseFrozenPhonons):
     """
-    The frozen phonons randomly displace the atomic positions to emulate thermal vibrations.
+    The frozen phonons randomly displace the atomic positions to emulate thermal
+    vibrations.
 
     Parameters
     ----------
@@ -393,24 +404,29 @@ class FrozenPhonons(BaseFrozenPhonons):
     num_configs : int
         Number of frozen phonon configurations.
     sigmas : float or dict or list
-        If float, the standard deviation of the displacements is assumed to be identical for all atoms.
-        If dict, a displacement standard deviation should be provided for each species. The atomic species can be
-        specified as atomic number or a symbol, using the ASE standard.
-        If list or array, a displacement standard deviation should be provided for each atom.
+        If float, the standard deviation of the displacements is assumed to be identical
+        for all atoms. If dict, a displacement standard deviation should be provided for
+        each species. The atomic species can be specified as atomic number or a symbol,
+        using the ASE standard. If list or array, a displacement standard deviation
+        should be provided for each atom.
 
-        Anistropic displacements may be given by providing a standard deviation for each principal direction.
-        This may be a tuple of three numbers for identical displacements for all atoms. A dict of tuples of three
-        numbers to specify displacements for each species. A list or array with three numbers for each atom.
+        Anistropic displacements may be given by providing a standard deviation for each
+        principal direction. This may be a tuple of three numbers for identical
+        displacements for all atoms. A dict of tuples of three numbers to specify
+        displacements for each species. A list or array with three numbers for each
+        atom.
 
     directions : str, optional
-        The displacement directions of the atoms as a string; for example 'xy' (default) for displacement in the `x`-
-        and `y`-direction (i.e. perpendicular to the propagation direction).
+        The displacement directions of the atoms as a string; for example 'xy' (default)
+        for displacement in the `x`- and `y`-direction (i.e. perpendicular to the
+        propagation direction).
     ensemble_mean : bool, optional
-        If True (default), the mean of the ensemble of results from a multislice simulation is calculated, otherwise,
-        the result of every frozen phonon configuration is returned.
+        If True (default), the mean of the ensemble of results from a multislice
+        simulation is calculated, otherwise, the result of every frozen phonon
+        configuration is returned.
     seed : int or sequence of int
-        Seed(s) for the random number generator used to generate the displacements, or one seed for each configuration
-        in the frozen phonon ensemble.
+        Seed(s) for the random number generator used to generate the displacements, or
+        one seed for each configuration in the frozen phonon ensemble.
     """
 
     def __init__(
@@ -425,7 +441,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         seed: Optional[int | tuple[int, ...]] = None,
     ):
         if isinstance(sigmas, dict):
-            atomic_numbers = [data.atomic_numbers[symbol] for symbol in sigmas.keys()]
+            atomic_numbers = np.array(
+                [data.atomic_numbers[symbol] for symbol in sigmas.keys()]
+            )
         else:
             atomic_numbers = None
 
@@ -464,7 +482,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         return self._seed
 
     @property
-    def sigmas(self) -> float | dict[str | int, float] | Sequence[float]:
+    def sigmas(self) -> np.ndarray | dict[str, np.ndarray]:
         """Displacement standard deviation for each atom."""
         return self._sigmas
 
@@ -534,7 +552,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         output = partial(self._from_partitioned_args_func, **kwargs)
         return output
 
-    def _partition_args(self, chunks: int = 1, lazy: bool = True):
+    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
         if lazy:
             arrays = []
@@ -578,10 +596,11 @@ class AtomsEnsemble(BaseFrozenPhonons):
     trajectory : list of ASE.Atoms, dask.core.Array, list of dask.Delayed
         Sequence of atoms representing a distribution of atomic configurations.
     ensemble_mean : True, optional
-        If True, the mean of the ensemble of results from a multislice simulation is calculated, otherwise, the result
-        of every frozen phonon is returned.
+        If True, the mean of the ensemble of results from a multislice simulation is
+        calculated, otherwise, the result of every frozen phonon is returned.
     ensemble_axes_metadata : list of AxesMetadata, optional
-        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with
+        the shape of the array.
     cell : Cell, optional
     """
 

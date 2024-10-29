@@ -158,7 +158,7 @@ class BaseTransferFunction(
         )
         return diffraction_patterns
 
-    def show(self, max_angle: float = None, **kwargs: Any) -> Visualization:
+    def show(self, max_angle: Optional[float] = None, **kwargs: Any) -> Visualization:
         return self.to_diffraction_patterns(max_angle=max_angle).show(**kwargs)
 
 
@@ -725,7 +725,11 @@ class RadialPhasePlate(BaseAperture):
         self, alpha: np.ndarray, phi: np.ndarray
     ) -> np.ndarray:
         xp = get_array_module(alpha)
-        max_alpha = self.semiangle_cutoff / 1e3
+
+        semiangle_cutoff = self.semiangle_cutoff
+        assert isinstance(semiangle_cutoff, SupportsFloat)
+        max_alpha = semiangle_cutoff / 1e3
+
         min_alpha = self.shift_central_semiangle / 1e3
 
         alpha_normed = xp.zeros_like(alpha)

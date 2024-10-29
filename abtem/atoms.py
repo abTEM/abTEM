@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from numbers import Number
 from typing import SupportsFloat
 
 import numpy as np

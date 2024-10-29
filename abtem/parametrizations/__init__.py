@@ -29,9 +29,7 @@ def validate_sigmas(sigmas: float | dict) -> dict:
     if sigmas is None:
         sigmas = {}
     elif isinstance(sigmas, Number):
-        sigmas = {
-            chemical_symbol: sigmas for chemical_symbol in chemical_symbols
-        }
+        sigmas = {chemical_symbol: sigmas for chemical_symbol in chemical_symbols}
 
     if not isinstance(sigmas, dict):
         raise ValueError()
@@ -45,13 +43,14 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     Parameters
     ----------
     parameters : str or dict
-        A given string must be either the full path to a valid ``.json`` file or the name of a valid ``.json`` file in
-        the ``abtem/parametrizations/data/`` folder. A given dictionary must be a mapping from chemical symbols to
-        anything that can converted to a NumPy array with the correct shape for the given parametrization.
+        A given string must be either the full path to a valid ``.json`` file or the
+        name of a valid ``.json`` file in the ``abtem/parametrizations/data/`` folder.
+        A given dictionary must be a mapping from chemical symbols to anything that can
+        converted to a NumPy array with the correct shape for the given parametrization.
     sigmas : dict or float
-        The standard deviation of isotropic displacements for each element as a mapping from chemical symbols to a
-        number. If given as a float the standard deviation of the displacements is assumed to be identical for all
-        atoms.
+        The standard deviation of isotropic displacements for each element as a mapping
+        from chemical symbols to a number. If given as a float the standard deviation of
+        the displacements is assumed to be identical for all atoms.
     """
 
     _functions: dict
@@ -101,7 +100,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     @abstractmethod
     def scaled_parameters(self, symbol: str, name: str) -> np.ndarray:
         """
-        The parameters of the parametrization scaled to the abTEM units for a given function.
+        The parameters of the parametrization scaled to the abTEM units for a given
+        function.
 
         Parameters
         ----------
@@ -131,7 +131,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         Returns
         -------
         electrostatic_potential : callable
-            Function describing electrostatic potential parameterized by the radial distance to the core [Å].
+            Function describing electrostatic potential parameterized by the radial
+            distance to the core [Å].
         """
         return self.get_function("potential", symbol, charge)
 
@@ -149,13 +150,15 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         Returns
         -------
         scattering_factor : callable
-            Function describing scattering parameterized by the squared reciprocal radial distance to the core [1/Å^2].
+            Function describing scattering parameterized by the squared reciprocal
+            radial distance to the core [1/Å^2].
         """
         return self.get_function("scattering_factor", symbol, charge)
 
     def projected_potential(self, symbol: str, charge: float = 0.0) -> Callable:
         """
-        Analytical infinite projection of radial electrostatic potential for given chemical symbol and charge.
+        Analytical infinite projection of radial electrostatic potential for given
+        chemical symbol and charge.
 
         Parameters
         ----------
@@ -167,13 +170,15 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         Returns
         -------
         projected_potential : callable
-            Function describing projected electrostatic potential parameterized by the radial distance to the core [Å].
+            Function describing projected electrostatic potential parameterized by the
+            radial distance to the core [Å].
         """
         return self.get_function("projected_potential", symbol, charge)
 
     def projected_scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
         """
-        Analytical infinite projection of radial scattering factor for given chemical symbol and charge.
+        Analytical infinite projection of radial scattering factor for given chemical
+        symbol and charge.
 
         Parameters
         ----------
@@ -185,8 +190,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         Returns
         -------
         projected_scattering_factor : callable
-            Function describing projected scattering parameterized by the squared reciprocal radial distance to the core
-            [1/Å^2].
+            Function describing projected scattering parameterized by the squared
+            reciprocal radial distance to the core [1/Å^2].
         """
         return self.get_function("projected_scattering_factor", symbol, charge)
 
@@ -204,7 +209,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         Returns
         -------
         charge : callable
-            Function describing charge parameterized by the radial distance to the core [Å].
+            Function describing charge parameterized by the radial distance to the core
+            [Å].
         """
         return self.get_function("charge", symbol, charge)
 
@@ -246,7 +252,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         self, symbol: str, charge: float = 0.0
     ) -> callable:
         """
-        Analytical infinite projection of radial scattering factor for given chemical symbol and charge.
+        Analytical infinite projection of radial scattering factor for given chemical
+        symbol and charge.
 
         Parameters
         ----------
@@ -258,8 +265,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         Returns
         -------
         projected_scattering_factor : callable
-            Function describing projected scattering parameterized by the squared reciprocal radial distance to the core
-            [1/Å^2].
+            Function describing projected scattering parameterized by the squared
+            reciprocal radial distance to the core [1/Å^2].
         """
         return self.get_function("finite_projected_scattering_factor", symbol, charge)
 
@@ -282,11 +289,6 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         if charge > 0.0:
             raise NotImplementedError
 
-        # if charge > 0.0:
-        #     raise RuntimeError(
-        #         f"charge not implemented for parametrization {self.__class__.__name__}"
-        #     )
-
         if charge == 0.0:
             charge_symbol = ""
         elif charge > 0.0:
@@ -302,7 +304,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
             return lambda r, *args, **kwargs: func(r, parameters, *args, **kwargs)
         except KeyError:
             raise RuntimeError(
-                f'parametrized function "{name}" does not exist for element {symbol} with charge {charge}'
+                f"parametrized function '{name}' does not exist for element {symbol}"
+                f" with charge {charge}"
             )
 
     def line_profiles(
@@ -320,11 +323,11 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         symbol : str or list of str
             Chemical symbol(s) of atom(s).
         cutoff : float
-            The outer radial cutoff distance of the line profiles in units of Ångstrom for potentials and units of
-            reciprocal Ångstrom for scattering factors.
+            The outer radial cutoff distance of the line profiles in units of Ångstrom
+            for potentials and units of reciprocal Ångstrom for scattering factors.
         sampling : float, optional
-            The radial sampling of the line profiles in units of Ångstrom for potentials and units of reciprocal
-            Ångstrom for scattering factors. Default is 0.001.
+            The radial sampling of the line profiles in units of Ångstrom for potentials
+            and units of reciprocal Ångstrom for scattering factors. Default is 0.001.
         name : str
             Name of the line profile to return.
         """
@@ -378,17 +381,18 @@ class KirklandParametrization(Parametrization):
     Parameters
     ----------
     parameters : str or dict
-        A given string must be either the full path to a valid ``.json`` file or the name of a valid ``.json`` file in
-        the ``abtem/parametrizations/data/`` folder. A given dictionary must be a mapping from chemical symbols to
-        anything that can converted to a NumPy array of shape (4, 3).
+        A given string must be either the full path to a valid ``.json`` file or the
+        name of a valid ``.json`` file in the ``abtem/parametrizations/data/`` folder.
+        A given dictionary must be a mapping from chemical symbols to anything that can
+        converted to a NumPy array of shape (4, 3).
     sigmas : dict or float
-        The standard deviation of isotropic displacements for each element as a mapping from chemical symbols to a
-        number. If given as a float the standard deviation of the displacements is assumed to be identical for all
-        atoms.
+        The standard deviation of isotropic displacements for each element as a mapping
+        from chemical symbols to a number. If given as a float the standard deviation of
+        the displacements is assumed to be identical for all atoms.
 
     References
     ----------
-    E.J. Kirkland. Advanced computing in electron microscopy. Springer, 2. edition, 2010.
+    E.J. Kirkland. Advanced computing in electron microscopy. Springer, 2. edition, 2010
     """
 
     _functions = {
@@ -466,17 +470,18 @@ class LobatoParametrization(Parametrization):
     Parameters
     ----------
     parameters : str or dict
-        A given string must be either the full path to a valid ``.json`` file or the name of a valid ``.json`` file in
-        the ``abtem/parametrizations/data/`` folder. A given dictionary must be a mapping from chemical symbols to
-        anything that can converted to a NumPy array of shape (2, 5).
+        A given string must be either the full path to a valid ``.json`` file or the
+        name of a valid ``.json`` file in the ``abtem/parametrizations/data/`` folder.
+        A given dictionary must be a mapping from chemical symbols to anything that can
+        converted to a NumPy array of shape (2, 5).
     sigmas : dict or float
-        The standard deviation of isotropic displacements for each element as a mapping from chemical symbols to a
-        number. If given as a float the standard deviation of the displacements is assumed to be identical for all
-        atoms.
+        The standard deviation of isotropic displacements for each element as a mapping
+        from chemical symbols to a number. If given as a float the standard deviation of
+        the displacements is assumed to be identical for all atoms.
 
     References
     ----------
-    Ivan Lobato and Dirk Van Dyck. Acta Crystallographica Section A, 70:636–649, 2014.
+    Ivan Lobato and Dirk Van Dyck. Acta Crystallographica Section A, 70:636-649, 2014.
     """
 
     _functions = {
@@ -555,13 +560,14 @@ class PengParametrization(Parametrization):
     Parameters
     ----------
     parameters : str or dict
-        A given string must be either the full path to a valid ``.json`` file or the name of a valid ``.json`` file in
-        the ``abtem/parametrizations/data/`` folder. A given dictionary must be a mapping from chemical symbols to
-        anything that can converted to a NumPy array of shape (2, 5).
+        A given string must be either the full path to a valid ``.json`` file or the
+        name of a valid ``.json`` file in the ``abtem/parametrizations/data/`` folder.
+        A given dictionary must be a mapping from chemical symbols to anything that can
+        converted to a NumPy array of shape (2, 5).
     sigmas : dict or float
-        The standard deviation of isotropic displacements for each element as a mapping from chemical symbols to a
-        number. If given as a float the standard deviation of the displacements is assumed to be identical for all
-        atoms.
+        The standard deviation of isotropic displacements for each element as a mapping
+        from chemical symbols to a number. If given as a float the standard deviation of
+        the displacements is assumed to be identical for all atoms.
 
     References
     ----------
@@ -675,7 +681,3 @@ def validate_parameters(parameters: str | dict) -> dict:
         raise ValueError()
 
     return parameters
-
-
-# {'potential', 'projected_potential', 'charge', 'finite_projected_potential', 'scattering_factor',
-#                'projected_scattering_factor', 'x_ray_scattering_factor', 'finite_projected_scattering_factor'}

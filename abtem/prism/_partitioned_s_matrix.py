@@ -6,6 +6,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.fft import ifft2
 from abtem.core.grid import spatial_frequencies
 from abtem.prism._natural_neighbors import pairwise_weights
+from abtem.prism.utils import plane_waves, prism_wave_vectors
 from abtem.transfer import CTF
 
 
@@ -119,7 +120,8 @@ def reduce_beamlets_nearest_no_interpolation(waves, basis, parent_s_matrix, shif
                 # waves[i, j, k] = np.dot(basis[j, k, :],
                 #                         parent_s_matrix[
                 #                         (j + shifts[i, 0]) % parent_s_matrix.shape[0],
-                #                         (k + shifts[i, 1]) % parent_s_matrix.shape[1], :])
+                #                         (k + shifts[i, 1]) % parent_s_matrix.shape[1],
+                # :])
                 waves[i, j, k] = np.dot(
                     basis[:, j, k],
                     parent_s_matrix[

@@ -46,11 +46,16 @@ from abtem.core.grid import (
     polar_spatial_frequencies,
     spatial_frequencies,
 )
-from abtem.visualize.artists import LinesArtist
 from abtem.core.units import get_conversion_factor
-from abtem.core.utils import CopyMixin, EqualityMixin, is_broadcastable, label_to_index, normalize_axes
+from abtem.core.utils import (
+    CopyMixin,
+    EqualityMixin,
+    is_broadcastable,
+    label_to_index,
+)
 from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
+from abtem.visualize.artists import LinesArtist
 from abtem.visualize.visualizations import Visualization
 from abtem.visualize.widgets import ImageGUI, LinesGUI, ScatterGUI
 
@@ -815,7 +820,7 @@ class MeasurementsEnsemble(BaseMeasurements):
 
         # raise RuntimeError("Cannot infer pixel area from metadata.")
 
-        #if display_axes != (-2, -1):
+        # if display_axes != (-2, -1):
         #    array = np.moveaxis(self.array, source=display_axes, destination=(-2, -1))
 
         # display_axes = normalize_axes(display_axes, self.shape)
@@ -833,7 +838,7 @@ class MeasurementsEnsemble(BaseMeasurements):
             measurement=self,
             ax=ax,
             artist_type=artist_type,
-            #power=power,
+            # power=power,
             aspect=False,
             share_x=True,
             share_y=common_scale,
@@ -841,7 +846,7 @@ class MeasurementsEnsemble(BaseMeasurements):
             explode=explode,
             overlay=overlay,
             figsize=figsize,
-            #interact=interact,
+            # interact=interact,
             title=title,
             **kwargs,
         )
@@ -1208,39 +1213,49 @@ class _BaseMeasurement2D(BaseMeasurements):
         Parameters
         ----------
         ax : matplotlib.axes.Axes, optional
-            If given the plots are added to the axis. This is not available for exploded plots.
+            If given the plots are added to the axis. This is not available for exploded
+            plots.
         cbar : bool, optional
-            Add colorbar(s) to the image(s). The size and padding of the colorbars may be adjusted using the
-            `set_cbar_size` and `set_cbar_padding` methods.
+            Add colorbar(s) to the image(s). The size and padding of the colorbars may
+            be adjusted using the `set_cbar_size` and `set_cbar_padding` methods.
         cmap : str, optional
-            Matplotlib colormap name used to map scalar data to colors. If the measurement is complex the colormap
-            must be one of 'hsv' or 'hsluv'.
+            Matplotlib colormap name used to map scalar data to colors. If the
+            measurement is complex the colormap must be one of 'hsv' or 'hsluv'.
         vmin : float, optional
-            Minimum of the intensity color scale. Default is the minimum of the array values.
+            Minimum of the intensity color scale. Default is the minimum of the array
+            values.
         vmax : float, optional
-            Maximum of the intensity color scale. Default is the maximum of the array values.
+            Maximum of the intensity color scale. Default is the maximum of the array
+            values.
         power : float
             Show image on a power scale.
         common_color_scale : bool, optional
-            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
-            it is requested). Default is False.
+            If True all images in an image grid are shown on the same colorscale, and a
+            single colorbar is created (if it is requested). Default is False.
         explode : bool, optional
-            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
-            ensemble item is shown. May be given as a sequence of axis indices to create a grid of images from
-            the specified axes. The default is determined by the axis metadata.
+            If True, a grid of images is created for all the items of the last two
+            ensemble axes. If False, the first ensemble item is shown. May be given as a
+            sequence of axis indices to create a grid of images from the specified axes.
+            The default is determined by the axis metadata.
         overlay : bool or sequence of int, optional
-            If True, all line profiles in the ensemble are shown in a single plot. If False, only the first ensemble
-            item is shown. May be given as a sequence of axis indices to specify which line profiles in the ensemble to
-            show together. The default is determined by the axis metadata.
+            If True, all line profiles in the ensemble are shown in a single plot.
+            If False, only the first ensemble item is shown. May be given as a sequence
+            of axis indices to specify which line profiles in the ensemble to show
+            together. The default is determined by the axis metadata.
         figsize : two int, optional
-            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+            The figure size given as width and height in inches, passed to
+            `matplotlib.pyplot.figure`.
         title : bool or str, optional
-            Set the column title of the images. If True is given instead of a string the title will be given by the
-            value corresponding to the "name" key of the axes metadata dictionary, if this item exists.
+            Set the column title of the images. If True is given instead of a string the
+            title will be given by the
+            value corresponding to the "name" key of the axes metadata dictionary, if
+            this item exists.
         units : str
-            The units used for the x and y axes. The given units must be compatible with the axes of the images.
+            The units used for the x and y axes. The given units must be compatible with
+            the axes of the images.
         interact : bool
-            If True, create an interactive visualization. This requires enabling the ipympl Matplotlib backend.
+            If True, create an interactive visualization. This requires enabling the
+            ipympl Matplotlib backend.
         display : bool, optional
             If True (default) the figure is displayed immediately.
 
@@ -1328,11 +1343,11 @@ class Images(_BaseMeasurement2D):
         Parameters
         ----------
         array : array
-            Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the
-            `y`- and `x`-axis.
+            Complex array defining one or more 2D wave functions. The second-to-last and
+            last dimensions are the `y`- and `x`-axis.
         axes_metadata : list of AxesMetadata
-            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
-            axes must be RealSpaceAxis.
+            Axis metadata for each axis. The axis metadata must be compatible with the
+            shape of the array. The last two axes must be RealSpaceAxis.
         metadata : dict
             A dictionary defining the measurement metadata.
 
@@ -1416,8 +1431,8 @@ class Images(_BaseMeasurement2D):
 
     def integrate_gradient(self):
         """
-        Calculate integrated gradients. Requires complex images whose real and imaginary parts represent the `x` and `y`
-        components of a gradient.
+        Calculate integrated gradients. Requires complex images whose real and imaginary
+        parts represent the `x` and `y` components of a gradient.
 
         Returns
         -------
@@ -1444,7 +1459,10 @@ class Images(_BaseMeasurement2D):
         return self.__class__(**kwargs)
 
     def crop(
-        self, extent: tuple[float, float], offset: tuple[float, float] = (0.0, 0.0), centered: bool = False
+        self,
+        extent: tuple[float, float],
+        offset: tuple[float, float] = (0.0, 0.0),
+        centered: bool = False,
     ):
         """
         Crop images to a smaller extent.
@@ -1468,7 +1486,7 @@ class Images(_BaseMeasurement2D):
             )
         elif centered:
             raise ValueError("Offset is not used when centered is True.")
-        
+
         if extent[0] > self.extent[0] or extent[1] > self.extent[1]:
             raise ValueError("Extent must be smaller than the original extent.")
 
@@ -1511,44 +1529,49 @@ class Images(_BaseMeasurement2D):
         cval: float = 0.0,
     ) -> Images:
         """
-        Interpolate images producing equivalent images with a different sampling. Either 'sampling' or 'gpts' must be
-        provided (but not both).
+        Interpolate images producing equivalent images with a different sampling.
+        Either 'sampling' or 'gpts' must be provided (but not both).
 
         Parameters
         ----------
         sampling : float or two float
             Sampling of images after interpolation in `x` and `y` [Å].
         gpts : int or two int
-            Number of grid points of images after interpolation in `x` and `y`. Do not use if 'sampling' is used.
+            Number of grid points of images after interpolation in `x` and `y`.
+            Do not use if 'sampling' is used.
         method : {'fft', 'spline'}
             The interpolation method.
 
                 ``fft`` :
-                    Interpolate by cropping or zero-padding in reciprocal space. This method should be preferred for
-                    periodic images.
+                    Interpolate by cropping or zero-padding in reciprocal space.
+                    This method should be preferred for periodic images.
 
                 ``spline`` :
-                    Interpolate using spline interpolation. This method should be preferred for non-periodic images.
+                    Interpolate using spline interpolation. This method should be
+                    preferred for non-periodic images.
 
         boundary : {'periodic', 'reflect', 'constant'}
-            The boundary parameter determines how the input array is extended beyond its boundaries for spline
-            interpolation.
+            The boundary parameter determines how the input array is extended beyond its
+            boundaries for spline interpolation.
 
                 ``periodic`` :
-                    The images are extended by wrapping around to the opposite edge. Use this mode for periodic images
-                    (default).
+                    The images are extended by wrapping around to the opposite edge.
+                    Use this mode for periodic images (default).
 
                 ``reflect`` :
-                    The images are extended by reflecting about the edge of the last pixel.
+                    The images are extended by reflecting about the edge of the last
+                    pixel.
 
                 ``constant`` :
-                    The images are extended by filling all values beyond the edge with the same constant value, defined
-                    by the 'cval' parameter.
+                    The images are extended by filling all values beyond the edge with
+                    the same constant value, defined by the 'cval' parameter.
 
         order : int
-            The order of the spline interpolation (default is 3). The order has to be in the range 0-5.
+            The order of the spline interpolation (default is 3). The order has to be in
+            the range 0-5.
         normalization : {'values', 'amplitude'}
-            The normalization parameter determines which quantity is preserved after normalization.
+            The normalization parameter determines which quantity is preserved after
+            normalization.
 
                 ``values`` :
                     The pixel-wise values of the images are preserved.
@@ -1557,7 +1580,8 @@ class Images(_BaseMeasurement2D):
                     The total intensity of the images is preserved.
 
         cval : scalar, optional
-            Value to fill past edges in spline interpolation input if boundary is 'constant' (default is 0.0).
+            Value to fill past edges in spline interpolation input if boundary is
+            'constant' (default is 0.0).
 
         Returns
         -------
@@ -1644,7 +1668,8 @@ class Images(_BaseMeasurement2D):
         Parameters
         ----------
         repetitions : tuple of int
-            The number of repetitions of the images along the `x`- and `y`-axis, respectively.
+            The number of repetitions of the images along the `x`- and `y`-axis,
+            respectively.
 
         Returns
         -------
@@ -1843,7 +1868,8 @@ class _BaseMeasurement1D(BaseMeasurements):
 
     def width(self, height: float = 0.5):
         """
-        Calculate the width of line(s) at a given height, e.g. full width at half maximum (the default).
+        Calculate the width of line(s) at a given height, e.g. full width at half
+        maximum (the default).
 
         Parameters
         ----------
@@ -3160,7 +3186,10 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return xp.sum(array * bins, axis=(-2, -1))
 
     def integrate_radial(
-        self, inner: float, outer: float=None, offset: tuple[float, float] = (0.0, 0.0)
+        self,
+        inner: float,
+        outer: float = None,
+        offset: tuple[float, float] = (0.0, 0.0),
     ) -> Images:
         """
         Create images by integrating the diffraction patterns over an annulus defined by an inner and outer integration

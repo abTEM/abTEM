@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from abtem.core.axes import (
-    NonLinearAxis,
-    SampleAxis,
-)
+from abtem.core.axes import NonLinearAxis, SampleAxis
 from abtem.core.backend import get_array_module
 from abtem.core.utils import get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.inelastic.phonons import _validate_seeds
 from abtem.transform import EnsembleTransform
+
+if TYPE_CHECKING:
+    from abtem.core.array import ArrayObject
+    from abtem.measurements import BaseMeasurement
 
 
 class NoiseTransform(EnsembleTransform):
@@ -74,7 +77,9 @@ class NoiseTransform(EnsembleTransform):
     def metadata(self):
         return {"units": "", "label": "electron counts"}
 
-    def _calculate_new_array(self, array_object) -> np.ndarray | tuple[np.ndarray, ...]:
+    def _calculate_new_array(
+        self, array_object: ArrayObject
+    ) -> np.ndarray | tuple[np.ndarray, ...]:
         array = array_object.array
         xp = get_array_module(array)
 
@@ -105,8 +110,8 @@ class NoiseTransform(EnsembleTransform):
 
         return array
 
-    def apply(self, array_object: ArrayObjectSubclass) -> ArrayObjectSubclass:
-        return self._apply(array_object)
+    def apply(self, array_object: ArrayObject) -> ArrayObject:
+        return array_object.apply_transform(self)
 
 
 def _pixel_times(
@@ -174,7 +179,7 @@ def _make_displacement_field(
     num_components: int,
     rms_power: float,
     seed: int = None,
-):
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Displacement field creation internal function
 
@@ -209,7 +214,9 @@ def _make_displacement_field(
     return profile_x, profile_y
 
 
-def _apply_displacement_field(image, distortion_x, distortion_y):
+def _apply_displacement_field(
+    image: np.ndarray, distortion_x: np.ndarray, distortion_y: np.ndarray
+) -> np.ndarray:
     """
     Displacement field applying function
 
@@ -243,7 +250,7 @@ def _apply_displacement_field(image, distortion_x, distortion_y):
 
 
 def apply_scan_noise(
-    measurement,
+    measurement: np.ndarray | BaseMeasurement,
     dwell_time: float,
     flyback_time: float,
     max_frequency: float,
@@ -266,7 +273,8 @@ def apply_scan_noise(
     rms_power: float
         Root-mean-square power of the distortion in unit of percent.
     num_components: int, optional
-        Number of frequency components. More components will be more 'white' but will take longer.
+        Number of frequency components. More components will be more 'white' but will
+        take longer.
 
     Returns
     -------

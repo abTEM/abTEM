@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from types import ModuleType
-from typing import Callable, Generic, Iterable, Optional, Sequence, TypeVar
+from typing import Callable, Iterable, Optional, Sequence, TypeVar
 
 import dask.array as da
 import numpy as np
@@ -82,8 +82,8 @@ U = TypeVar("U")
 
 class Grid(CopyMixin, EqualityMixin):
     """
-    The Grid object represent the simulation grid on which the wave functions and potential are
-    discretized.
+    The Grid object represent the simulation grid on which the wave functions and
+    potential are discretized.
 
     Parameters
     ----------
@@ -96,8 +96,8 @@ class Grid(CopyMixin, EqualityMixin):
     dimensions : int
         Number of dimensions represented by the grid.
     endpoint : bool
-        If true include the grid endpoint. Default is False. For periodic grids the endpoint should
-        not be included.
+        If true include the grid endpoint. Default is False. For periodic grids the
+        endpoint should not be included.
     lock_extent : bool
         If true the extent cannot be modified. Default is False.
     lock_gpts : bool
@@ -137,16 +137,9 @@ class Grid(CopyMixin, EqualityMixin):
         ):
             warnings.warn("Overspecified grid, the provided sampling is ignored")
 
-        # if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
-        #    raise RuntimeError('At most one of extent, gpts, and sampling may be locked')
-
         self._lock_extent = lock_extent
         self._lock_gpts = lock_gpts
         self._lock_sampling = lock_sampling
-
-        # self._extent = extent
-        # self._gpts = gpts
-        # self._sampling = sampling
 
         if self.extent is None:
             self._adjust_extent(self.gpts, self.sampling)
@@ -331,8 +324,8 @@ class Grid(CopyMixin, EqualityMixin):
         other : Grid object
             The grid that should be matched.
         check_match : bool
-            If true check whether grids can match without overriding already defined grid
-            parameters.
+            If true check whether grids can match without overriding already defined
+            grid parameters.
         """
 
         if check_match:
@@ -389,8 +382,9 @@ class Grid(CopyMixin, EqualityMixin):
         self, powers: Optional[int | list[int]] = None
     ) -> tuple[int, ...]:
         """
-        Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are
-        faster for arrays of whose size can be factored into small primes (2, 3, 5 and 7).
+        Round the grid gpts up to the nearest value that is a power of n. Fourier
+        transforms are faster for arrays of whose size can be factored into small primes
+        (2, 3, 5 and 7).
 
         Parameters
         ----------
@@ -622,13 +616,13 @@ def polar_spatial_frequencies(
     sampling : tuple of float
         Sampling of the potential [1 / Å].
     xp : module
-        Array module to use, options are numpy or cupy. Default is numpy. asdasdasdasdasdasdasdasdasdasdasdasdasdasdasd
+        Array module to use, options are numpy or cupy. Default is numpy.
 
     Returns
     -------
     k_and_phi : tuple of np.ndarray
-        Tuple of spatial frequencies in polar coordinates. First element is the radial frequency and
-        the second element is the azimuthal angle.
+        Tuple of spatial frequencies in polar coordinates. First element is the radial
+        frequency and the second element is the azimuthal angle.
     """
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(

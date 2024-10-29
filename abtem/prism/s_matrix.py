@@ -166,7 +166,8 @@ class BaseSMatrix(BaseWaves):
     @property
     @abstractmethod
     def window_gpts(self):
-        """The number of grid points describing the cropping window of the wave functions."""
+        """The number of grid points describing the cropping window of the wave
+        functions."""
         pass
 
     def __len__(self) -> int:
@@ -193,7 +194,8 @@ class BaseSMatrix(BaseWaves):
         **kwargs,
     ) -> Probe:
         """
-        A probe or an ensemble of probes equivalent reducing the SMatrix at a single position.
+        A probe or an ensemble of probes equivalent reducing the SMatrix at a single
+        position.
 
         Parameters
         ----------
@@ -776,44 +778,49 @@ def _no_chunks_reduce(
 
 class SMatrixArray(BaseSMatrix, ArrayObject):
     """
-    A scattering matrix defined by a given array of dimension 3, where the first indexes the probe plane waves and the
-    latter two are the `y` and `x` scan directions.
+    A scattering matrix defined by a given array of dimension 3, where the first indexes
+    the probe plane waves and the latter two are the `y` and `x` scan directions.
 
     Parameters
     ----------
     array : np.ndarray
-        Array defining the scattering matrix. Must be 3D or higher, dimensions before the last three dimensions should
-        represent ensemble dimensions, the next dimension indexes the plane waves and the last two dimensions
-        represent the spatial extent of the plane waves.
+        Array defining the scattering matrix. Must be 3D or higher, dimensions before
+        the last three dimensions should represent ensemble dimensions, the next
+        dimension indexes the plane waves and the last two dimensions represent the
+        spatial extent of the plane waves.
     wave_vectors : np.ndarray
-        Array defining the wave vectors corresponding to each plane wave. Must have shape Nx2, where N is equal to the
-        number of plane waves.
+        Array defining the wave vectors corresponding to each plane wave.
+        Must have shape Nx2, where N is equal to the number of plane waves.
     semiangle_cutoff : float
         The radial cutoff of the plane-wave expansion [mrad].
     energy : float
         Electron energy [eV].
     sampling : one or two float, optional
-        Lateral sampling of wave functions [Å]. Provide only if potential is not given. Will be ignored if 'gpts'
-        is also provided.
+        Lateral sampling of wave functions [Å]. Provide only if potential is not given.
+        Will be ignored if 'gpts' is also provided.
     extent : one or two float, optional
         Lateral extent of wave functions [Å]. Provide only if potential is not given.
     interpolation : one or two int, optional
-        Interpolation factor in the `x` and `y` directions (default is 1, ie. no interpolation). If a single value is
-        provided, assumed to be the same for both directions.
+        Interpolation factor in the `x` and `y` directions
+        (default is 1, ie. no interpolation). If a single value is provided, assumed to
+        be the same for both directions.
     window_gpts : tuple of int
         The number of grid points describing the cropping window of the wave functions.
     window_offset : tuple of int
-        The number of grid points from the origin the cropping windows of the wave functions is displaced.
+        The number of grid points from the origin the cropping windows of the wave
+        functions is displaced.
     periodic: tuple of bool
-        Specifies whether the SMatrix should be assumed to be periodic along the x and y-axis.
+        Specifies whether the SMatrix should be assumed to be periodic along the x and
+        y-axis.
     device : str, optional
-        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is
-        determined by the user configuration.
+        The calculations will be carried out on this device ('cpu' or 'gpu').
+        Default is 'cpu'. The default is determined by the user configuration.
     ensemble_axes_metadata : list of AxesMetadata
-        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with
+        the shape of the array.
     metadata : dict
-        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
-        from the waves.
+        A dictionary defining wave function metadata. All items will be added to the
+        metadata of measurements derived from the waves.
     """
 
     def __init__(
@@ -968,7 +975,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
     @property
     def window_offset(self) -> tuple[float, float]:
-        """The number of grid points from the origin the cropping windows of the wave functions is displaced."""
+        """The number of grid points from the origin the cropping windows of the wave
+        functions is displaced."""
         return self._window_offset
 
     def multislice(self, potential: BasePotential = None) -> "SMatrixArray":
@@ -997,9 +1005,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         if self._device == "gpu" and isinstance(array, np.ndarray):
             array = xp.asarray(array)
 
-        position_coefficients = xp.array(position_coefficients, dtype=xp.complex64)
-
-        # return xp.zeros(position_coefficients.shape[:2] + self.window_gpts, dtype=xp.complex64)
+        position_coefficients = xp.array(
+            position_coefficients, dtype=get_dtype(complex=True)
+        )
 
         if self.window_gpts != self.gpts:
             pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(
@@ -1245,15 +1253,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         scan : Scan object
             Scan defining the positions of the probe wave functions.
         ctf: CTF object, optional
-            The probe contrast transfer function. Default is None (aperture is set by the planewave cutoff).
+            The probe contrast transfer function.
+            Default is None (aperture is set by the planewave cutoff).
         max_batch_reduction : int or str, optional
-            Number of positions per reduction operation. A large number of positions better utilize thread
-            parallelization, but requires more memory and floating point operations. If 'auto' (default), the batch size
-            is automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            Number of positions per reduction operation. A large number of positions
+            better utilize thread parallelization, but requires more memory and floating
+            point operations. If 'auto' (default), the batch size is automatically
+            chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         rechunk : two int or str, optional
-            Partitioning of the scan. The scattering matrix will be reduced in similarly partitioned chunks.
-            Should be equal to or greater than the interpolation.
+            Partitioning of the scan. The scattering matrix will be reduced in similarly
+            partitioned chunks. Should be equal to or greater than the interpolation.
         """
 
         self.accelerator.check_is_defined()
@@ -1273,7 +1283,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             squeeze = ()
 
         if scan is None:
-            squeeze_scan = True
             scan = self.extent[0] / 2, self.extent[1] / 2
 
         scan = validate_scan(
@@ -1326,35 +1335,41 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         rechunk: tuple[int, int] | str = "auto",
     ):
         """
-        Reduce the SMatrix using coefficients calculated by a BaseScan and a CTF, to obtain the exit wave functions
-        at given initial probe positions and aberrations.
+        Reduce the SMatrix using coefficients calculated by a BaseScan and a CTF, to
+        obtain the exit wave functions at given initial probe positions and aberrations.
 
         Parameters
         ----------
         scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+            Positions of the probe wave functions. If not given, scans across the entire
+            potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
-            A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            A detector or a list of detectors defining how the wave functions should be
+            converted to measurements after running the multislice algorithm.
+            See abtem.measurements.detect for a list of implemented detectors.
         ctf : CTF
-            Contrast transfer function from used for calculating the expansion coefficients in the reduction of the
-            SMatrix.
+            Contrast transfer function from used for calculating the expansion
+            coefficients in the reduction of the SMatrix.
         max_batch_reduction : int or str, optional
-            Number of positions per reduction operation. A large number of positions better utilize thread
-            parallelization, but requires more memory and floating point operations. If 'auto' (default), the batch size
-            is automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            Number of positions per reduction operation. A large number of positions
+            better utilize thread parallelization, but requires more memory and floating
+            point operations. If 'auto' (default), the batch size is automatically
+            chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         rechunk : str or tuple of int, optional
-            Parallel reduction of the SMatrix requires rechunking the Dask array from chunking along the expansion axis
-            to chunking over the spatial axes. If given as a tuple of int of length the SMatrix is rechunked to have
-            those chunks. If 'auto' (default) the chunks are taken to be identical to the interpolation factor.
+            Parallel reduction of the SMatrix requires rechunking the Dask array from
+            chunking along the expansion axis to chunking over the spatial axes.
+            If given as a tuple of int of length the SMatrix is rechunked to have those
+            chunks. If 'auto' (default) the chunks are taken to be identical to the
+            interpolation factor.
 
         Returns
         -------
         detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
+            Wave functions at the exit plane(s) of the potential
+            (if no detector(s) given).
         """
         if scan is None:
             scan = GridScan()
@@ -1373,7 +1388,8 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
 class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     """
-    The scattering matrix is used for simulating STEM experiments using the PRISM algorithm.
+    The scattering matrix is used for simulating STEM experiments using the PRISM
+    algorithm.
 
     Parameters
     ----------
@@ -1382,37 +1398,42 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     energy : float
         Electron energy [eV].
     potential : Atoms or AbstractPotential, optional
-        Atoms or a potential that the scattering matrix represents. If given as atoms, a default potential will be
-        created. If nothing is provided the scattering matrix will represent a vacuum potential, in which case the
-        sampling and extent must be provided.
+        Atoms or a potential that the scattering matrix represents. If given as atoms,
+        a default potential will be created. If nothing is provided the scattering
+        matrix will represent a vacuum potential, in which case the sampling and extent
+        must be provided.
     gpts : one or two int, optional
-        Number of grid points describing the scattering matrix. Provide only if potential is not given.
+        Number of grid points describing the scattering matrix. Provide only if
+        potential is not given.
     sampling : one or two float, optional
-        Lateral sampling of scattering matrix [Å]. Provide only if potential is not given. Will be ignored if 'gpts'
-        is also provided.
+        Lateral sampling of scattering matrix [Å]. Provide only if potential is not
+        given. Will be ignored if 'gpts' is also provided.
     extent : one or two float, optional
         Lateral extent of scattering matrix [Å]. Provide only if potential is not given.
     interpolation : one or two int, optional
-        Interpolation factor in the `x` and `y` directions (default is 1, ie. no interpolation). If a single value is
-        provided, assumed to be the same for both directions.
+        Interpolation factor in the `x` and `y` directions (default is 1, ie. no
+        interpolation). If a single value is provided, assumed to be the same for both
+        directions.
     downsample : {'cutoff', 'valid'} or float or bool
-        Controls whether to downsample the scattering matrix after running the multislice algorithm.
+        Controls whether to downsample the scattering matrix after running the
+        multislice algorithm.
 
             ``cutoff`` :
                 Downsample to the antialias cutoff scattering angle (default).
 
             ``valid`` :
-                Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias
-                cutoff scattering angle.
+                Downsample to the largest rectangle that fits inside the circle with a
+                radius defined by the antialias cutoff scattering angle.
 
             float :
                 Downsample to a specified maximum scattering angle [mrad].
     device : str, optional
-        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is
-        determined by the user configuration.
+        The calculations will be carried out on this device ('cpu' or 'gpu').
+        Default is 'cpu'. The default is determined by the user configuration.
     store_on_host : bool, optional
-        If True, store the scattering matrix in host (cpu) memory so that the necessary memory is transferred as chunks
-        to the device to run calculations (default is False).
+        If True, store the scattering matrix in host (cpu) memory so that the necessary
+        memory is transferred as chunks to the device to run calculations
+        (default is False).
     """
 
     def __init__(
@@ -1459,7 +1480,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             warnings.warn(
-                "The interpolation factor does not exactly divide 'gpts', normalization may not be exactly preserved."
+                "The interpolation factor does not exactly divide 'gpts', normalization"
+                "may not be exactly preserved."
             )
 
     @property
@@ -1474,7 +1496,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     def round_gpts_to_interpolation(self) -> SMatrix:
         """
-        Round the gpts of the SMatrix to the closest multiple of the interpolation factor.
+        Round the gpts of the SMatrix to the closest multiple of the interpolation
+        factor.
 
         Returns
         -------
@@ -1492,12 +1515,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     @property
     def downsample(self) -> str | bool:
-        """How to downsample the scattering matrix after running the multislice algorithm."""
+        """How to downsample the scattering matrix after running the multislice
+        algorithm."""
         return self._downsample
 
     @property
     def store_on_host(self) -> bool:
-        """Store the SMatrix in host memory. The reduction may still be calculated on the device."""
+        """Store the SMatrix in host memory. The reduction may still be calculated on
+        the device."""
         return self._store_on_host
 
     @property
@@ -1613,33 +1638,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             self.window_gpts[1] * sampling[1],
         )
 
-    # @staticmethod
-    # def _wrapped_build_s_matrix(*args, s_matrix_partial):
-    #     s_matrix = s_matrix_partial(*tuple(arg.item() for arg in args[:-1]))
-    #
-    #     wave_vector_range = slice(*np.squeeze(args[-1]))
-    #     array = s_matrix._build_s_matrix(wave_vector_range).array
-    #     return array
-    #
-    # def _s_matrix_partial(self):
-    #     def s_matrix(*args, potential_partial, **kwargs):
-    #         if potential_partial is not None:
-    #             potential = potential_partial(*args + (np.array([None], dtype=object),))
-    #         else:
-    #             potential = None
-    #         return SMatrix(potential=potential, **kwargs)
-    #
-    #     potential_partial = (
-    #         self.potential._from_partitioned_args()
-    #         if self.potential is not None
-    #         else None
-    #     )
-    #     return partial(
-    #         s_matrix,
-    #         potential_partial=potential_partial,
-    #         **self._copy_kwargs(exclude=("potential",)),
-    #     )
-
     def multislice(
         self,
         potential=None,
@@ -1653,8 +1651,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         ----------
         potential
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
-            setting in the user configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly.
+            If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
 
@@ -1691,7 +1689,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             potential_partial = self.potential._from_partitioned_args()
             kwargs = self._copy_kwargs(exclude=("potential", "sampling", "extent"))
         else:
-            potential_partial = lambda *args, **kwargs: _wrap_with_array(None, 1)
+
+            def potential_partial(*args, **kwargs):
+                return _wrap_with_array(None, 1)
+
+            # potential_partial = lambda *args, **kwargs: _wrap_with_array(None, 1)
             kwargs = self._copy_kwargs(exclude=("potential",))
 
         return partial(self._s_matrix, potential_partial=potential_partial, **kwargs)
@@ -1759,14 +1761,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         self, lazy: bool = None, max_batch: int | str = "auto", bound: bool = None
     ) -> SMatrixArray:
         """
-        Build the plane waves of the scattering matrix and propagate them through the potential using the
-        multislice algorithm.
+        Build the plane waves of the scattering matrix and propagate them through the
+        potential using the multislice algorithm.
 
         Parameters
         ----------
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
-            setting in the user configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly.
+            If not given, defaults to the setting in the user configuration file.
         max_batch : int or str, optional
             The number of expansion plane waves in each run of the multislice algorithm.
 
@@ -1891,45 +1893,54 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         lazy: bool = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
-        Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
-        to obtain the exit wave functions at given initial probe positions and aberrations.
+        Run the multislice algorithm, then reduce the SMatrix using coefficients
+        calculated by a BaseScan and a CTF, to obtain the exit wave functions at given
+        initial probe positions and aberrations.
 
         Parameters
         ----------
         scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+            Positions of the probe wave functions. If not given, scans across the entire
+            potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
-            A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            A detector or a list of detectors defining how the wave functions should be
+            converted to measurements after running the multislice algorithm.
+            See abtem.measurements.detect for a list of implemented detectors.
         ctf : CTF
-            Contrast transfer function from used for calculating the expansion coefficients in the reduction of the
-            SMatrix.
+            Contrast transfer function from used for calculating the expansion
+            coefficients in the reduction of the SMatrix.
         max_batch_multislice : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         max_batch_reduction : int or str, optional
-            Number of positions per reduction operation. A large number of positions better utilize thread
-            parallelization, but requires more memory and floating point operations. If 'auto' (default), the batch size
-            is automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            Number of positions per reduction operation. A large number of positions
+            better utilize thread parallelization, but requires more memory and floating
+            point operations. If 'auto' (default), the batch size is automatically
+            chosen based on the abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         reduction_scheme : str or tuple of int, optional
-            Parallel reduction of the SMatrix requires rechunking the Dask array from chunking along the expansion axis
-            to chunking over the spatial axes. If given as a tuple of int of length the SMatrix is rechunked to have
-            those chunks. If 'auto' (default) the chunks are taken to be identical to the interpolation factor.
+            Parallel reduction of the SMatrix requires rechunking the Dask array from
+            chunking along the expansion axis to chunking over the spatial axes.
+            If given as a tuple of int of length the SMatrix is rechunked to have those
+            chunks. If 'auto' (default) the chunks are taken to be identical to the
+            interpolation factor.
         disable_s_matrix_chunks : bool, optional
-            If True, each S-Matrix is kept as a single chunk, thus lowering the communication overhead, but providing
-            fewer opportunities for parallelization.
+            If True, each S-Matrix is kept as a single chunk, thus lowering the
+            communication overhead, but providing fewer opportunities for
+            parallelization.
         lazy : bool, optional
-            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
-            set in the configuration file.
+            If True, create the measurements lazily, otherwise, calculate instantly.
+            If None, this defaults to the value set in the configuration file.
 
         Returns
         -------
         detected_waves : BaseMeasurements or list of BaseMeasurement
             The detected measurement (if detector(s) given).
         exit_waves : Waves
-            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
+            Wave functions at the exit plane(s) of the potential (if no detector(s)
+            given).
         """
 
         if scan is None:
@@ -2040,42 +2051,51 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         lazy: bool = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
-        Run the multislice algorithm, then reduce the SMatrix using coefficients calculated by a BaseScan and a CTF,
-        to obtain the exit wave functions at given initial probe positions and aberrations.
+        Run the multislice algorithm, then reduce the SMatrix using coefficients
+        calculated by a BaseScan and a CTF, to obtain the exit wave functions at given
+        initial probe positions and aberrations.
 
         Parameters
         ----------
         scan : BaseScan
-            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+            Positions of the probe wave functions. If not given, scans across the entire
+            potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
-            A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            A detector or a list of detectors defining how the wave functions should be
+            converted to measurements after running the multislice algorithm.
+            See abtem.measurements.detect for a list of implemented detectors.
         ctf : CTF
-            Contrast transfer function from used for calculating the expansion coefficients in the reduction of the
-            SMatrix.
+            Contrast transfer function from used for calculating the expansion
+            coefficients in the reduction of the SMatrix.
         max_batch_multislice : int, optional
-            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the batch size is
-            automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
+            The number of wave functions in each chunk of the Dask array.
+            If 'auto' (default), the batch size is automatically chosen based on the
+            abTEM user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
         max_batch_reduction : int or str, optional
-            Number of positions per reduction operation. A large number of positions better utilize thread
-            parallelization, but requires more memory and floating point operations. If 'auto' (default), the batch size
-            is automatically chosen based on the abtem user configuration settings "dask.chunk-size" and
-            "dask.chunk-size-gpu".
+            Number of positions per reduction operation. A large number of positions
+            better utilize thread parallelization, but requires more memory and floating
+            point operations. If 'auto' (default), the batch size
+            is automatically chosen based on the abtem user configuration settings
+            "dask.chunk-size" and "dask.chunk-size-gpu".
         reduction_scheme : str, optional
-            Parallel reduction of the SMatrix requires rechunking the Dask array from chunking along the expansion axis
-            to chunking over the spatial axes. If given as a tuple of int of length the SMatrix is rechunked to have
-            those chunks. If 'auto' (default) the chunks are taken to be identical to the interpolation factor.
+            Parallel reduction of the SMatrix requires rechunking the Dask array from
+            chunking along the expansion axis to chunking over the spatial axes.
+            If given as a tuple of int of length the SMatrix is rechunked to have those
+            chunks. If 'auto' (default) the chunks are taken to be identical to the
+            interpolation factor.
         disable_s_matrix_chunks : bool, optional
-            If True, each S-Matrix is kept as a single chunk, thus lowering the communication overhead, but providing
-            fewer opportunities for parallelization.
+            If True, each S-Matrix is kept as a single chunk, thus lowering the
+            communication overhead, but providing fewer opportunities for
+            parallelization.
         lazy : bool, optional
-            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
-            set in the configuration file.
+            If True, create the measurements lazily, otherwise, calculate instantly.
+            If None, this defaults to the value set in the configuration file.
 
         Returns
         -------
-        measurements : BaseMeasurements or Waves or list of BaseMeasurements or list of Waves
+        measurements : BaseMeasurements or Waves or list of BaseMeasurements or list of
+        Waves
             The detected measurement (if detector(s) given).
         """
 

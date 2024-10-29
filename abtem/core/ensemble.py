@@ -106,7 +106,7 @@ class Ensemble:
         )
 
         out_ind = tuple(range(sum(arg_dims)))
-        
+
         adjust_chunks = {i: axes_chunks for i, axes_chunks in enumerate(chunks)}
 
         func = self._from_partitioned_args()

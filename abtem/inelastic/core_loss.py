@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import os
-from abc import abstractmethod
+from abc import ABCMeta, abstractmethod
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,7 +17,7 @@ from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import copy_to_device, get_array_module
 from abtem.core.chunks import validate_chunks
-from abtem.core.complex import abs2
+from abtem.core.complex import abs2, complex_exponential
 from abtem.core.electron_configurations import electron_configurations
 from abtem.core.energy import (
     Accelerator,
@@ -32,6 +32,7 @@ from abtem.core.utils import CopyMixin
 from abtem.measurements import Images, RealSpaceLineProfiles, _polar_detector_bins
 
 if TYPE_CHECKING:
+    from abtem.prism.s_matrix import SMatrix
     from abtem.waves import Waves
 
 azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
@@ -243,10 +244,10 @@ def calculate_continuum_radial_wavefunction(Z, n, l, lprime, epsilon, xc="PBE"):
     AllElectronAtom.log = f
 
     check_valid_quantum_number(Z, n, l)
-    config_tuples = config_str_to_config_tuples(
-        electron_configurations[chemical_symbols[Z]]
-    )
-    subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
+    # config_tuples = config_str_to_config_tuples(
+    #     electron_configurations[chemical_symbols[Z]]
+    # )
+    # subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
     ae = AllElectronAtom(chemical_symbols[Z], xc=xc)
     # ae.f_j[subshell_index] -= 0.0
@@ -372,7 +373,7 @@ class SubshellTransitions(BaseTransitionCollection):
         for lprime in self.lprimes:
             for mlprime in range(-lprime, lprime + 1):
                 excited_states.append((None, lprime, mlprime))
-        
+
         transitions = []
         for bound_state, excited_state in itertools.product(
             bound_states, excited_states
@@ -423,9 +424,18 @@ class SubshellTransitions(BaseTransitionCollection):
         )
 
 
-class BaseTransitionPotential(HasAcceleratorMixin, HasGrid2DMixin, CopyMixin):
+class BaseTransitionPotential(
+    HasAcceleratorMixin, HasGrid2DMixin, CopyMixin, metaclass=ABCMeta
+):
     def __init__(
-        self, Z, extent, gpts, sampling, energy, double_channel: bool = True, **kwargs
+        self,
+        Z: int,
+        extent: float | tuple[float, float],
+        gpts: int | tuple[int, int],
+        sampling: float | tuple[float, float],
+        energy: float,
+        double_channel: bool = True,
+        **kwargs,
     ):
         self._Z = Z
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -434,12 +444,17 @@ class BaseTransitionPotential(HasAcceleratorMixin, HasGrid2DMixin, CopyMixin):
         super().__init__(**kwargs)
 
     @property
-    def double_channel(self):
+    def double_channel(self) -> bool:
         return self._double_channel
 
     @property
-    def Z(self):
+    def Z(self) -> int:
         return self._Z
+
+    @property
+    @abstractmethod
+    def metadata(self) -> dict:
+        pass
 
 
 class TransitionPotential(BaseTransitionPotential):
@@ -454,38 +469,36 @@ class TransitionPotential(BaseTransitionPotential):
         energy: float = None,
         double_channel: bool = True,
     ):
-
         self._Z = Z
         self._orbital_filling_factor = orbital_filling_factor
         self._transitions = transitions
         super().__init__(Z, extent, gpts, sampling, energy, double_channel)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._transitions)
 
     @property
-    def orbital_filling_factor(self):
+    def orbital_filling_factor(self) -> bool:
         return self._orbital_filling_factor
 
     @property
-    def double_channel(self):
+    def double_channel(self) -> bool:
         return self._double_channel
 
     @property
-    def Z(self):
+    def Z(self) -> int:
         return self._Z
 
     @property
-    def ensemble_shape(self):
+    def ensemble_shape(self) -> tuple[int]:
         return (len(self._transitions),)
 
     @property
-    def ensemble_axes_metadata(self):
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         values = [
             f"{bound[1:]} → {excited[1:]}"
             for (bound, excited) in self.transition_quantum_numbers
         ]
-
 
         return [
             OrdinalAxis(
@@ -496,7 +509,7 @@ class TransitionPotential(BaseTransitionPotential):
         ]
 
     @property
-    def metadata(self):
+    def metadata(self) -> dict:
         bound = self.transition_quantum_numbers[0][0]
         return {"Z": self.Z, "n": bound[0], "l": bound[1]}
 
@@ -547,14 +560,13 @@ class TransitionPotential(BaseTransitionPotential):
             for mlprimeprime in range(-lprimeprime, lprimeprime + 1):
                 if ml - mlprime - mlprimeprime != 0:
                     continue
-                
+
                 lprime = int(lprime)
                 lprimeprime = int(lprimeprime)
                 l = int(l)
                 mlprime = int(mlprime)
                 mlprimeprime = int(mlprimeprime)
                 ml = int(ml)
-
 
                 prefactor = (
                     np.sqrt(4 * np.pi)
@@ -707,7 +719,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
 
         self._local_potential = self.local_potential(space="real").sum(0)
         self._threshold = None
-    
+
     def from_array_and_metadata(self, array, metadata):
         raise NotImplementedError
 
@@ -766,7 +778,8 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             array = abs2(ifft2(array))
         else:
             raise ValueError(
-                "The 'space' parameter is invalid. Accepted values are 'reciprocal' or 'real'."
+                "The 'space' parameter is invalid. Accepted values are 'reciprocal' or"
+                " 'real'."
             )
 
         return array
@@ -985,118 +998,123 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         self.to_images().show(**kwargs)
 
 
-# def linear_scaling_transition_multislice(
-#     S1: "SMatrix", S2: "SMatrix", scan, transition_potentials, reverse_multislice=False
-# ):
-#     xp = get_array_module(S1._device)
-#     from tqdm.auto import tqdm
-#
-#     positions = scan.get_positions(lazy=False).reshape((-1, 2))
-#
-#     prism_region = (
-#         S1.extent[0] / S1.interpolation[0] / 2,
-#         S1.extent[1] / S1.interpolation[1] / 2,
-#     )
-#
-#     positions = xp.asarray(positions, dtype=np.float32)
-#
-#     wave_vectors = xp.asarray(S1.wave_vectors)
-#     coefficients = complex_exponential(
-#         -2.0 * xp.float32(xp.pi) * positions[:, 0, None] * wave_vectors[None, :, 0]
-#     )
-#     coefficients *= complex_exponential(
-#         -2.0 * xp.float32(np.pi) * positions[:, 1, None] * wave_vectors[None, :, 1]
-#     )
-#     coefficients = coefficients / xp.sqrt(coefficients.shape[1]).astype(np.float32)
-#
-#     potential = S1.potential
-#
-#     sites = validate_sites(potential, sites=None)
-#     chunks = S1.chunks
-#     stream = S1._device == "gpu" and S1._store_on_host
-#
-#     S1 = S1.build(lazy=False, stop=0)
-#
-#     if reverse_multislice:
-#         S2_multislice = S2.build(lazy=False, start=len(potential), stop=0)
-#     else:
-#         S2_multislice = S2
-#
-#     images = np.zeros(len(positions), dtype=np.float32)
-#     for i in tqdm(range(len(potential))):
-#
-#         # if stream:
-#         #     S1 = S1.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
-#         #     # if hasattr(S2_multislice, 'build'):
-#         #     S2 = S2.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
-#         #     # else:
-#         #     #    S2_multislice = S2_multislice.build(potential, chunks=chunks, start=max(i - 1, 0),
-#         #     #                                                       stop=i)
-#         # else:
-#         S1 = S1.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
-#         # S2_multislice = S2.build(start=len(potential), stop=i, lazy=False)
-#
-#         if reverse_multislice:
-#             S2_multislice = S2_multislice.multislice(
-#                 potential, chunks=chunks, start=max(i - 1, 0), stop=i, conjugate=True
-#             )
-#         else:
-#             S2_multislice = S2.build(lazy=False, start=len(potential), stop=i)
-#
-#         sites_slice = transition_potentials.validate_sites(sites[i])
-#
-#         for site in sites_slice:
-#             # S2_crop = S2.crop_to_positions(site)
-#             S2_crop = S2_multislice.crop_to_positions(site)
-#             scattered_S1 = S1.crop_to_positions(site)
-#
-#             if stream:
-#                 S2_crop = S2_crop.copy("gpu")
-#                 scattered_S1 = scattered_S1.copy("gpu")
-#
-#             shifted_site = site - np.array(scattered_S1.crop_offset) * np.array(
-#                 scattered_S1.sampling
-#             )
-#             scattered_S1 = transition_potentials.scatter(scattered_S1, shifted_site)
-#
-#             if S1.interpolation == (1, 1):
-#                 cropped_coefficients = coefficients
-#                 mask = None
-#             else:
-#                 mask = xp.ones(len(coefficients), dtype=bool)
-#                 if S1.interpolation[0] > 1:
-#                     mask *= (
-#                         xp.abs(positions[:, 0] - site[0])
-#                         % (S1.extent[0] - prism_region[0])
-#                     ) <= prism_region[0]
-#                 if S1.interpolation[1] > 1:
-#                     mask *= (
-#                         xp.abs(positions[:, 1] - site[1])
-#                         % (S1.extent[1] - prism_region[1])
-#                     ) <= prism_region[1]
-#
-#                 cropped_coefficients = coefficients[mask]
-#
-#             a = S2_crop.array.reshape((1, len(S2), -1))
-#             b = xp.swapaxes(
-#                 scattered_S1.array.reshape((len(scattered_S1.array), len(S1), -1)), 1, 2
-#             )
-#
-#             SHn0 = xp.dot(a, b)
-#             SHn0 = xp.swapaxes(SHn0[0], 0, 1)
-#
-#             new_values = copy_to_device(
-#                 (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum(
-#                     (0, 1, 2)
-#                 ),
-#                 np,
-#             )
-#             if mask is not None:
-#                 images[mask] += new_values
-#             else:
-#                 images += new_values
-#
-#     images *= np.prod(S1.interpolation).astype(np.float32) ** 2
-#
-#     images = Images(images.reshape(scan.gpts), sampling=scan.sampling)
-#     return images
+def linear_scaling_transition_multislice(
+    S1: SMatrix, S2: SMatrix, scan, transition_potentials, reverse_multislice=False
+):
+    xp = get_array_module(S1._device)
+    from tqdm.auto import tqdm
+
+    positions = scan.get_positions(lazy=False).reshape((-1, 2))
+
+    prism_region = (
+        S1.extent[0] / S1.interpolation[0] / 2,
+        S1.extent[1] / S1.interpolation[1] / 2,
+    )
+
+    positions = xp.asarray(positions, dtype=np.float32)
+
+    wave_vectors = xp.asarray(S1.wave_vectors)
+    coefficients = complex_exponential(
+        -2.0 * xp.float32(xp.pi) * positions[:, 0, None] * wave_vectors[None, :, 0]
+    )
+    coefficients *= complex_exponential(
+        -2.0 * xp.float32(np.pi) * positions[:, 1, None] * wave_vectors[None, :, 1]
+    )
+    coefficients = coefficients / xp.sqrt(coefficients.shape[1]).astype(np.float32)
+
+    potential = S1.potential
+
+    sites = transition_potentials.validate_sites(potential.atoms)
+
+    chunks = S1.chunks
+    stream = S1._device == "gpu" and S1._store_on_host
+
+    S1 = S1.build(lazy=False, stop=0)
+
+    if reverse_multislice:
+        S2_multislice = S2.build(lazy=False, start=len(potential), stop=0)
+    else:
+        S2_multislice = S2
+
+    images = np.zeros(len(positions), dtype=np.float32)
+    for i in tqdm(range(len(potential))):
+        if stream:
+            S1 = S1.streaming_multislice(
+                potential, chunks=chunks, start=max(i - 1, 0), stop=i
+            )
+            if hasattr(S2_multislice, "build"):
+                S2 = S2.streaming_multislice(
+                    potential, chunks=chunks, start=max(i - 1, 0), stop=i
+                )
+            else:
+                S2_multislice = S2_multislice.build(
+                    potential, chunks=chunks, start=max(i - 1, 0), stop=i
+                )
+        else:
+            S1 = S1.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+        # S2_multislice = S2.build(start=len(potential), stop=i, lazy=False)
+
+        if reverse_multislice:
+            S2_multislice = S2_multislice.multislice(
+                potential, chunks=chunks, start=max(i - 1, 0), stop=i, conjugate=True
+            )
+        else:
+            S2_multislice = S2.build(lazy=False, start=len(potential), stop=i)
+
+        sites_slice = transition_potentials.validate_sites(sites[i])
+
+        for site in sites_slice:
+            # S2_crop = S2.crop_to_positions(site)
+            S2_crop = S2_multislice.crop_to_positions(site)
+            scattered_S1 = S1.crop_to_positions(site)
+
+            if stream:
+                S2_crop = S2_crop.copy("gpu")
+                scattered_S1 = scattered_S1.copy("gpu")
+
+            shifted_site = site - np.array(scattered_S1.crop_offset) * np.array(
+                scattered_S1.sampling
+            )
+            scattered_S1 = transition_potentials.scatter(scattered_S1, shifted_site)
+
+            if S1.interpolation == (1, 1):
+                cropped_coefficients = coefficients
+                mask = None
+            else:
+                mask = xp.ones(len(coefficients), dtype=bool)
+                if S1.interpolation[0] > 1:
+                    mask *= (
+                        xp.abs(positions[:, 0] - site[0])
+                        % (S1.extent[0] - prism_region[0])
+                    ) <= prism_region[0]
+                if S1.interpolation[1] > 1:
+                    mask *= (
+                        xp.abs(positions[:, 1] - site[1])
+                        % (S1.extent[1] - prism_region[1])
+                    ) <= prism_region[1]
+
+                cropped_coefficients = coefficients[mask]
+
+            a = S2_crop.array.reshape((1, len(S2), -1))
+            b = xp.swapaxes(
+                scattered_S1.array.reshape((len(scattered_S1.array), len(S1), -1)), 1, 2
+            )
+
+            SHn0 = xp.dot(a, b)
+            SHn0 = xp.swapaxes(SHn0[0], 0, 1)
+
+            new_values = copy_to_device(
+                (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum(
+                    (0, 1, 2)
+                ),
+                np,
+            )
+            if mask is not None:
+                images[mask] += new_values
+            else:
+                images += new_values
+
+    images *= np.prod(S1.interpolation).astype(np.float32) ** 2
+
+    images = Images(images.reshape(scan.gpts), sampling=scan.sampling)
+    return images

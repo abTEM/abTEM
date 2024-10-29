@@ -209,7 +209,8 @@ class Accelerator(EqualityMixin, CopyMixin):
         other: Accelerator object
             The accelerator that should be matched.
         check_match: bool
-            If true check whether accelerators can match without overriding an already defined energy.
+            If true check whether accelerators can match without overriding an already
+            defined energy.
         """
 
         if check_match:
