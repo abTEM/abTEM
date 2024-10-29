@@ -8,12 +8,21 @@ line-length = 88
 [tool.ruff]
 fix = false
 line-length = 88
+ignore = [
+    "E741",
+    "E743", # Example rule code for "Ambiguous function name: `l`"
+]
+exclude = [
+    "abtem/reconstruct.py",
+    "abtem/visualize",
+    "abtem/measurements.py",
+]
 
 [tool.ruff.lint]
 select = [
-    "I", 
-    "E", 
-    "F", 
+    "I",
+    "E",
+    "F",
     "W",
     "F821",
     #"ANN001",  # Missing type annotation for function argument
@@ -23,5 +32,17 @@ select = [
 
 [tool.mypy]
 warn_unreachable = true
+# follow_imports = "silent"
 # disallow_untyped_defs = true
 # disallow_incomplete_defs = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    "ignore:Overspecified grid, the provided sampling:UserWarning",
+    "ignore:module 'sre_parse' is deprecated:DeprecationWarning",
+    "ignore:module 'sre_constants' is deprecated:DeprecationWarning",
+    "ignore:Axis.*not supported by hyperspy.*:UserWarning",
+    "ignore:'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons:UserWarning",
+    "ignore:ignoring keyword argument 'read_only':UserWarning",
+]
