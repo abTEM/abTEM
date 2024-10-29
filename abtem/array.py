@@ -621,12 +621,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @property
     def _eager_array(self) -> np.ndarray:
         """Underlying eager array describing the array object."""
-        #if self.is_lazy:
-        #   raise RuntimeError("array object is lazy")
-        # assert not isinstance(self.array, da.core.Array)
-        array = self.array
-        # assert not isinstance(array, da.core.Array)
-        return array
+        if self.is_lazy:
+          raise RuntimeError("array object is lazy")
+        assert not isinstance(self.array, da.core.Array)
+        return self.array
 
     @property
     def dtype(self) -> np.dtype:
