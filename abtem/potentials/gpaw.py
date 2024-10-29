@@ -17,7 +17,7 @@ from ase import Atoms, units
 from ase.data import atomic_numbers, chemical_symbols
 from scipy.interpolate import interp1d
 
-from abtem.atoms import plane_to_axes
+from abtem.atoms import is_cell_orthogonal, plane_to_axes
 from abtem.core.axes import AxisMetadata
 from abtem.core.electron_configurations import (
     config_str_to_config_tuples,
@@ -201,9 +201,14 @@ def _generate_slices(
         )
         potential_generators.append(potential.generate_slices())
 
+    transform_valence_potential = None
     if potential.plane != "xy":
+        if not is_cell_orthogonal(atoms.cell):
+            raise NotImplementedError
+
         axes = plane_to_axes(potential.plane)
         valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
+        transform_valence_potential = False
     # else:
     #    atoms = ewald_potential.frozen_phonons.atoms
 
@@ -211,10 +216,8 @@ def _generate_slices(
 
     if np.allclose(transformed_atoms.cell, atoms.cell):
         transform_valence_potential = False
-    else:
+    elif transform_valence_potential is None:
         transform_valence_potential = True
-
-    transform_valence_potential = False
 
     if last_slice is None:
         last_slice = len(potential)
