@@ -52,6 +52,7 @@ from abtem.core.utils import (
     EqualityMixin,
     is_broadcastable,
     label_to_index,
+    get_dtype
 )
 from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
@@ -1007,7 +1008,7 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         if margin != 0.0:
             scan.add_margin(margin)
-
+        
         positions = xp.asarray(
             (scan.get_positions(lazy=False) - self.offset) / self.sampling
         )
@@ -1024,7 +1025,17 @@ class _BaseMeasurement2D(BaseMeasurements):
             positions = perpendicular_positions[None, :] + positions[:, None]
 
         if self.is_lazy:
+            # raise NotImplementedError("Lazy interpolation not implemented.")
+            # TDOO: Implement lazy interpolation
+
             base_axes = tuple(range(len(self.base_shape)))
+            chunks = self.array.chunks[:-2] + (positions.shape[0],)
+            new_axis = (base_axes[0],)
+
+            if width:
+                new_axis = new_axis + (new_axis[0] + 1,)
+                chunks = chunks + (1,)
+            
             array = da.map_blocks(
                 _interpolate_stack,
                 self.array,
@@ -1032,9 +1043,9 @@ class _BaseMeasurement2D(BaseMeasurements):
                 mode="wrap",
                 order=order,
                 drop_axis=base_axes,
-                new_axis=base_axes[0],
-                chunks=self.array.chunks[:-2] + (positions.shape[0],),
-                meta=xp.array((), dtype=np.float32),
+                new_axis=new_axis,
+                chunks=chunks,
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = _interpolate_stack(self.array, positions, mode="wrap", order=order)
@@ -2576,9 +2587,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
             radius=radius,
             orientation_matrices=orientation_matrices,
         )
-        # assert mask.shape == mask_all.shape
-
-        # print(mask.shape, mask_all.shape, array.shape, mask[mask_all].sum())
 
         array_all = np.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
         array_all[..., mask[mask_all]] = array
