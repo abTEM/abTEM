@@ -890,14 +890,14 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                              position_step_size: float = 1.0,
                              xp=np,
                              **kwargs):
-        
+
         object_dx                  = sobel(objects,axis=0,mode='wrap')
         object_dy                  = sobel(objects,axis=1,mode='wrap')
-        
+
         object_indices             = _wrapped_indices_2D_window(position,probes.shape,objects.shape)
         d_exit_wave_fft_dx         = xp.fft.fft2(object_dx[object_indices]*probes)
         d_exit_wave_fft_dy         = xp.fft.fft2(object_dy[object_indices]*probes)
-        
+
         exit_wave_fft              = xp.fft.fft2(exit_wave)
         estimated_intensity        = xp.abs(exit_wave_fft)**2
         intensity                  = diffraction_pattern**2
@@ -910,7 +910,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         coefficients_matrix        = xp.column_stack((partial_intensity_dx,partial_intensity_dy))
         displacements              = xp.linalg.lstsq(coefficients_matrix,difference_intensity,rcond=None)[0]
-        
+
         return position - position_step_size*displacements
     """
 
@@ -1671,7 +1671,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     ):
         r"""
         Simultaneous-PIE overlap projection static method:
-        .. math:: 
+        .. math::
             \psi_{R_j}(r) &= V_{R_j}(r) M_{R_j}(r)* P^{\mathrm{forward}}(r) \\
             \phi_{R_j}(r) &= V_{R_j}(r) M^*_{R_j}(r)* P^{\mathrm{reverse}}(r)
 
@@ -1733,7 +1733,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     ):
         r"""
         Simultaneous-PIE overlap projection static method using a common probe
-        .. math:: 
+        .. math::
             \psi_{R_j}(r) &= V_{R_j}(r) M_{R_j}(r)* P(r) \\
             \phi_{R_j}(r) &= V_{R_j}(r) M^*_{R_j}(r)* P(r)
 
@@ -1836,7 +1836,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     ):
         r"""
         Simultaneous-PIE fourier projection static method:
-        .. math:: 
+        .. math::
             \psi'_{R_j}(r) &= F^{-1}[\sqrt{I_j(u)} F[\psi_{R_j}(u)] / |F[\psi_{R_j}(u)]|] \\
             \phi'_{R_j}(r) &= F^{-1}[\sqrt{\Omega_j(u)} F[\phi_{R_j}(u)] / |F[\phi_{R_j}(u)]|]
 
