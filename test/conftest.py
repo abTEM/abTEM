@@ -1,13 +1,28 @@
-import pytest
-from hypothesis import settings, HealthCheck, Phase
+import warnings
+
+from hypothesis import HealthCheck, Phase, settings
+
 from abtem import config
 
 config.set({"diagnostics.progress_bar": False})
 
-settings.register_profile("dev", max_examples=20, print_blob=True, deadline=None,
-                          suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large),
-                          phases=[Phase.generate])
+settings.register_profile(
+    "dev",
+    max_examples=20,
+    print_blob=True,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large),
+    phases=[Phase.generate],
+)
 settings.load_profile("dev")
+
+
+def pytest_configure(config):
+    # Ignore specific warnings globally
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+    )
 
 
 # def pytest_addoption(parser):

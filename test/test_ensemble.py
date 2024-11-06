@@ -4,9 +4,9 @@ from operator import mul
 import hypothesis.strategies as st
 import numpy as np
 import pytest
+import strategies as abtem_st
 from hypothesis import given
 
-import strategies as abtem_st
 from abtem.core.ensemble import concatenate_array_blocks
 
 

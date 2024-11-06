@@ -2,8 +2,9 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from ase import Atoms
-from hypothesis import assume, given, reproduce_failure
+from hypothesis import assume, given
 from hypothesis import strategies as st
+
 import abtem
 from abtem.bloch.utils import (
     auto_detect_centering,
@@ -92,9 +93,7 @@ def test_potential_from_structure_factor(
         slice_thickness=slice_thickness, sampling=sampling, lazy=lazy
     )
 
-    parametrization = abtem.parametrizations.LobatoParametrization(
-        sigmas=thermal_sigma
-    )
+    parametrization = abtem.parametrizations.LobatoParametrization(sigmas=thermal_sigma)
 
     potential = abtem.Potential(
         atoms,
@@ -104,14 +103,13 @@ def test_potential_from_structure_factor(
         projection="infinite",
     )
 
-    structure_factor_potential = structure_factor_potential.project().compute(
-    )
+    structure_factor_potential = structure_factor_potential.project().compute()
     potential = potential.build(lazy=lazy).project().compute()
 
     array1 = structure_factor_potential.array
     array2 = potential.array
     array1 -= array1.min()
     array2 -= array2.min()
-    
+
     error = np.abs(array2 - array1).sum() / array1.sum() * 100
     assert error < 2.5

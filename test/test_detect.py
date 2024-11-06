@@ -1,22 +1,11 @@
 import hypothesis.strategies as st
-import numpy as np
 import pytest
-from hypothesis import given, assume
-from abtem.measurements import _scan_axes, _scan_shape
-
 import strategies as abtem_st
-from abtem import RealSpaceLineProfiles, Images
-from abtem.detectors import (
-    AnnularDetector,
-    FlexibleAnnularDetector,
-    PixelatedDetector,
-)
-from abtem.waves import Probe
-from utils import gpu
+from hypothesis import assume, given
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [False,    True])
+@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu"])
 @pytest.mark.parametrize(
     "detector",
@@ -33,15 +22,15 @@ def test_detect(data, detector, lazy, device):
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
 
-    #measurement = detector.detect(waves).compute()
+    # measurement = detector.detect(waves).compute()
 
-    #assert measurement.ensemble_shape == waves.ensemble_shape
-    #assert measurement.dtype == detector._out_dtype(waves)
-    #assert measurement.base_shape == detector._out_base_shape(waves)
-    #assert type(measurement) == detector._out_type(waves)
-    #assert measurement.base_axes_metadata == detector._out_base_axes_metadata(waves)
+    # assert measurement.ensemble_shape == waves.ensemble_shape
+    # assert measurement.dtype == detector._out_dtype(waves)
+    # assert measurement.base_shape == detector._out_base_shape(waves)
+    # assert type(measurement) == detector._out_type(waves)
+    # assert measurement.base_axes_metadata == detector._out_base_axes_metadata(waves)
 
-    #if detector.to_cpu:
+    # if detector.to_cpu:
     #    assert measurement.device == "cpu"
 
 

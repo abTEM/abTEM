@@ -1,7 +1,8 @@
-from abtem.waves import PlaneWave
-import numpy as np
-from abtem import Potential
 import ase
+import numpy as np
+
+from abtem import Potential
+from abtem.waves import PlaneWave
 
 
 def test_tilt():

@@ -5,7 +5,8 @@ import numpy as np
 
 from abtem.core.energy import energy2wavelength
 from abtem.prism.s_matrix import SMatrix
-from abtem.waves import Probe, PlaneWave, Waves
+from abtem.waves import PlaneWave, Probe, Waves
+
 from . import core as core_st
 from . import transfer as transfer_st
 
@@ -30,7 +31,7 @@ def probe(
     aberrations = draw(transfer_st.aberrations(allow_distribution=allow_distribution))
     aperture = draw(transfer_st.aperture(allow_distribution=allow_distribution))
     return Probe(
-        #semiangle_cutoff=30,
+        # semiangle_cutoff=30,
         gpts=gpts,
         extent=extent,
         energy=energy,
@@ -47,7 +48,9 @@ def plane_wave(draw, device="cpu", normalize=False, allow_distribution=True):
     energy = draw(core_st.energy())
     # aberrations = draw(transfer_st.random_aberrations(allow_distribution=allow_distribution))
     # aperture = draw(transfer_st.random_aperture(allow_distribution=allow_distribution))
-    return PlaneWave(gpts=gpts, extent=extent, energy=energy, device=device, normalize=normalize)
+    return PlaneWave(
+        gpts=gpts, extent=extent, energy=energy, device=device, normalize=normalize
+    )
 
 
 @st.composite
@@ -96,7 +99,6 @@ def s_matrix(
     allow_distribution=False,
     store_on_host=False,
 ):
-
     if potential is None:
         gpts = draw(core_st.gpts())
         extent = draw(core_st.extent())
@@ -113,9 +115,7 @@ def s_matrix(
     )
 
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=UserWarning
-        )
+        warnings.filterwarnings("ignore", category=UserWarning)
         s_matrix = SMatrix(
             potential=potential,
             gpts=gpts,

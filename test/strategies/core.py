@@ -1,12 +1,14 @@
+import os
+import tempfile
+import uuid
+
 import dask
 import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 from hypothesis.extra import numpy as numpy_strats
-import os
-import tempfile
-import uuid
-from abtem.core.axes import ScanAxis, OrdinalAxis
+
+from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import get_array_module
 
 
@@ -19,11 +21,7 @@ def sensible_floats(allow_nan=False, allow_infinity=False, **kwargs):
 
 
 @st.composite
-def gpts(draw,
-         min_value=32,
-         max_value=64,
-         allow_none=False,
-         base=None):
+def gpts(draw, min_value=32, max_value=64, allow_none=False, base=None):
     gpts = st.integers(min_value=min_value, max_value=max_value)
     gpts = gpts | st.tuples(gpts, gpts)
     if allow_none:
@@ -52,7 +50,7 @@ def sampling(draw, min_value=0.02, max_value=0.1, allow_none=False):
 
 
 @st.composite
-def extent(draw, min_value=1., max_value=10., allow_none=False):
+def extent(draw, min_value=1.0, max_value=10.0, allow_none=False):
     extent = st.floats(min_value=min_value, max_value=max_value)
     extent = extent | st.tuples(extent, extent)
     if allow_none:
@@ -73,7 +71,9 @@ def energy(draw, min_value=80e3, max_value=300e3, allow_none=False):
 
 @st.composite
 def temporary_path(draw, allow_none=True):
-    path = st.just(os.path.join(tempfile.gettempdir(), f'abtem-test-{str(uuid.uuid4())}.zarr'))
+    path = st.just(
+        os.path.join(tempfile.gettempdir(), f"abtem-test-{str(uuid.uuid4())}.zarr")
+    )
     if allow_none:
         path = st.one_of(st.just(path), st.none())
     return draw(path)
@@ -81,8 +81,8 @@ def temporary_path(draw, allow_none=True):
 
 @st.composite
 def scan_axis_metadata(draw):
-    sampling = st.floats(min_value=0.01, max_value=.1)
-    offset = st.floats(min_value=0., max_value=10.)
+    sampling = st.floats(min_value=0.01, max_value=0.1)
+    offset = st.floats(min_value=0.0, max_value=10.0)
     endpoint = draw(st.booleans())
     return ScanAxis(offset=draw(offset), sampling=draw(sampling), endpoint=endpoint)
 
@@ -102,18 +102,32 @@ def axes_metadata(draw, shape):
 
 
 @st.composite
-def shape(draw,
-          base_dims=2,
-          min_base_side=1,
-          max_base_side=32,
-          min_ensemble_dims=0,
-          max_ensemble_dims=2,
-          min_ensemble_side=2,
-          max_ensemble_side=4):
-    base_shape = draw(numpy_strats.array_shapes(min_dims=base_dims, max_dims=base_dims,
-                                                min_side=min_base_side, max_side=max_base_side))
-    ensemble_shape = draw(numpy_strats.array_shapes(min_dims=min_ensemble_dims, max_dims=max_ensemble_dims,
-                                                    min_side=min_ensemble_side, max_side=max_ensemble_side))
+def shape(
+    draw,
+    base_dims=2,
+    min_base_side=1,
+    max_base_side=32,
+    min_ensemble_dims=0,
+    max_ensemble_dims=2,
+    min_ensemble_side=2,
+    max_ensemble_side=4,
+):
+    base_shape = draw(
+        numpy_strats.array_shapes(
+            min_dims=base_dims,
+            max_dims=base_dims,
+            min_side=min_base_side,
+            max_side=max_base_side,
+        )
+    )
+    ensemble_shape = draw(
+        numpy_strats.array_shapes(
+            min_dims=min_ensemble_dims,
+            max_dims=max_ensemble_dims,
+            min_side=min_ensemble_side,
+            max_side=max_ensemble_side,
+        )
+    )
     return ensemble_shape + base_shape
 
 
@@ -129,13 +143,15 @@ def chunks(draw, shape, min_chunk_size):
     return validated_chunks
 
 
-def random_array(shape,
-                 min_value=0.,
-                 max_value=1.,
-                 chunks=None,
-                 device='cpu',
-                 dtype=np.float32,
-                 random_state=None):
+def random_array(
+    shape,
+    min_value=0.0,
+    max_value=1.0,
+    chunks=None,
+    device="cpu",
+    dtype=np.float32,
+    random_state=None,
+):
     xp = get_array_module(device)
 
     if chunks is not None:
@@ -148,7 +164,8 @@ def random_array(shape,
             chunks=None,
             device=device,
             dtype=dtype,
-            random_state=random_state)
+            random_state=random_state,
+        )
 
         array = da.from_delayed(array, shape=shape, meta=xp.array((), dtype=dtype))
 
@@ -157,9 +174,13 @@ def random_array(shape,
     if random_state is None:
         random_state = xp.random.RandomState(seed=13)
 
-    array = (random_state.rand(*shape) * (max_value - min_value) + min_value).astype(dtype)
+    array = (random_state.rand(*shape) * (max_value - min_value) + min_value).astype(
+        dtype
+    )
 
     if np.iscomplexobj(array):
-        array.imag = (random_state.rand(*shape) * (max_value - min_value) + min_value).astype(np.float32)
+        array.imag = (
+            random_state.rand(*shape) * (max_value - min_value) + min_value
+        ).astype(np.float32)
 
     return array

@@ -1,27 +1,27 @@
 import numpy as np
 import pytest
-from ase.build import bulk
 from ase import build
+from ase.build import bulk
 
-from abtem.atoms import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_cell
+from abtem.atoms import cut_cell, merge_close_atoms, orthogonalize_cell, shrink_cell
 
 
 def fcc(orthogonal=False):
     if orthogonal:
-        return bulk('Au', cubic=True)
+        return bulk("Au", cubic=True)
     else:
-        return bulk('Au')
+        return bulk("Au")
 
 
 def fcc110(orthogonal=False):
     if orthogonal:
-        atoms = build.fcc110('Au', size=(1, 1, 2), periodic=True)
+        atoms = build.fcc110("Au", size=(1, 1, 2), periodic=True)
         atoms.positions[:] -= atoms.positions[-1]
         atoms.wrap()
         return atoms
     else:
-        atoms = bulk('Au')
-        atoms.rotate(45, 'x', rotate_cell=True)
+        atoms = bulk("Au")
+        atoms.rotate(45, "x", rotate_cell=True)
         return atoms
 
 
@@ -29,40 +29,40 @@ def fcc111(orthogonal=False):
     # x_vector = [ 0.81649658, 0.        , 0.57735027]
     # y_vector = [-0.40824829, 0.70710678, 0.57735027]
     if orthogonal:
-        atoms = build.fcc111('Au', size=(1, 2, 3), periodic=True, orthogonal=True)
+        atoms = build.fcc111("Au", size=(1, 2, 3), periodic=True, orthogonal=True)
         atoms.positions[:] -= atoms.positions[-1]
         atoms.wrap()
         return atoms
     else:
-        atoms = bulk('Au')
-        atoms.rotate(45, 'x', rotate_cell=True)
-        atoms.rotate(np.arctan(np.sqrt(2) / 2) / np.pi * 180, 'y', rotate_cell=True)
-        atoms.rotate(-90, 'z', rotate_cell=True)
+        atoms = bulk("Au")
+        atoms.rotate(45, "x", rotate_cell=True)
+        atoms.rotate(np.arctan(np.sqrt(2) / 2) / np.pi * 180, "y", rotate_cell=True)
+        atoms.rotate(-90, "z", rotate_cell=True)
         return atoms
 
 
 def bcc(orthogonal=False):
     if orthogonal:
-        return bulk('Fe', cubic=True)
+        return bulk("Fe", cubic=True)
     else:
-        return bulk('Fe')
+        return bulk("Fe")
 
 
 def diamond(orthogonal=False):
     if orthogonal:
-        return bulk('C', cubic=True)
+        return bulk("C", cubic=True)
     else:
-        return bulk('C')
+        return bulk("C")
 
 
 def hcp(orthogonal=False):
     if orthogonal:
-        atoms = bulk('Be', orthorhombic=True)
+        atoms = bulk("Be", orthorhombic=True)
         atoms.positions[:] -= atoms.positions[2]
         atoms.wrap()
         return atoms
     else:
-        return bulk('Be')
+        return bulk("Be")
 
 
 def assert_atoms_close(atoms1, atoms2):
@@ -76,7 +76,7 @@ def assert_atoms_close(atoms1, atoms2):
     assert np.allclose(cell1, cell2)
 
 
-@pytest.mark.parametrize('structure', [fcc, fcc110, fcc111, bcc, diamond, hcp])
+@pytest.mark.parametrize("structure", [fcc, fcc110, fcc111, bcc, diamond, hcp])
 def test_orthogonalize_atoms(structure):
     atoms = structure()
     orthogonal_atoms = structure(orthogonal=True)
@@ -84,8 +84,8 @@ def test_orthogonalize_atoms(structure):
     assert_atoms_close(orthogonal_atoms, orthogonalized_atoms)
 
 
-@pytest.mark.parametrize('structure', [fcc, bcc, diamond, hcp])
-@pytest.mark.parametrize('n', [2, 3])
+@pytest.mark.parametrize("structure", [fcc, bcc, diamond, hcp])
+@pytest.mark.parametrize("n", [2, 3])
 def test_shrink_cell(structure, n):
     atoms = structure()
     repeated_atoms = atoms * (n, n, n)
@@ -93,7 +93,7 @@ def test_shrink_cell(structure, n):
     assert_atoms_close(atoms, shrinked_atoms)
 
 
-@pytest.mark.parametrize('structure', [fcc, fcc110, fcc111, bcc, diamond, hcp])
+@pytest.mark.parametrize("structure", [fcc, fcc110, fcc111, bcc, diamond, hcp])
 def test_cut(structure):
     atoms = structure()
 

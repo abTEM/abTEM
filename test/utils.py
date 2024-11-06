@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 from hypothesis import assume
 
-from abtem.core.backend import get_array_module, cp
-from abtem.potentials.iam import Potential
+from abtem.core.backend import cp, get_array_module
 from abtem.inelastic.phonons import BaseFrozenPhonons
+from abtem.potentials.iam import Potential
 from abtem.waves import Waves
 
 
@@ -35,14 +35,26 @@ def ensure_is_tuple(x, length: int = 1):
     return x
 
 
-def array_is_close(a1, a2, rel_tol=np.inf, abs_tol=np.inf, check_above_abs=0., check_above_rel=0., mask=None):
+def array_is_close(
+    a1,
+    a2,
+    rel_tol=np.inf,
+    abs_tol=np.inf,
+    check_above_abs=0.0,
+    check_above_rel=0.0,
+    mask=None,
+):
     if mask is not None:
         a1 = a1[mask]
         a2 = a2[mask]
 
     if rel_tol < np.inf:
-        element_is_checked = (a2 > check_above_abs) * (a2 > (a2.max() * check_above_rel))
-        rel_error = (a1[element_is_checked] - a2[element_is_checked]) / a2[element_is_checked]
+        element_is_checked = (a2 > check_above_abs) * (
+            a2 > (a2.max() * check_above_rel)
+        )
+        rel_error = (a1[element_is_checked] - a2[element_is_checked]) / a2[
+            element_is_checked
+        ]
         if np.any(np.abs(rel_error) > rel_tol):
             return False
 
@@ -61,14 +73,15 @@ def assume_valid_probe_and_detectors(probe, detectors):
     assume(outer_limit <= min(probe.cutoff_angles))
 
 
-def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors, scan=None, parameter_series=None):
+def assert_scanned_measurement_as_expected(
+    measurements, atoms, waves, detectors, scan=None, parameter_series=None
+):
     if not isinstance(measurements, list):
         measurements = [measurements]
 
     assert len(measurements) == len(detectors)
 
     for detector, measurement in zip(detectors, measurements):
-
         expected_shape = ()
 
         if isinstance(atoms, BaseFrozenPhonons):
@@ -76,7 +89,10 @@ def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors
                 expected_shape = (len(atoms),)
 
         if parameter_series is not None:
-            if hasattr(parameter_series, '__len__') and not parameter_series.ensemble_mean:
+            if (
+                hasattr(parameter_series, "__len__")
+                and not parameter_series.ensemble_mean
+            ):
                 expected_shape += (len(parameter_series),)
 
         if detector.detect_every:
@@ -98,8 +114,8 @@ def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors
 
         if detector.to_cpu:
             assert isinstance(measurement.array, np.ndarray)
-        elif waves.device == 'gpu':
+        elif waves.device == "gpu":
             assert isinstance(measurement.array, cp.ndarray)
 
 
-gpu = pytest.param('gpu', marks=pytest.mark.skipif(cp is None, reason='no gpu'))
+gpu = pytest.param("gpu", marks=pytest.mark.skipif(cp is None, reason="no gpu"))

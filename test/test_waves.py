@@ -1,19 +1,14 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume, reproduce_failure
-from matplotlib import pyplot as plt
-
+import strategies as abtem_st
+from hypothesis import assume, given
 from test_grid import check_grid_consistent
 from utils import (
     assert_array_matches_device,
-    gpu,
-    remove_dummy_dimensions,
     assert_array_matches_laziness,
+    gpu,
 )
-
-import strategies as abtem_st
-
 
 # @pytest.mark.parametrize("builder", [Probe, plane_wave, SMatrix])
 # @given(grid_data=grid_data())
@@ -196,7 +191,7 @@ def test_multislice_scatter(data, potential, waves_builder, lazy):
 
     # print(old_sum, new_sum, old_sum > new_sum, potential.array)
     # print(waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)))
-    
+
     assert np.all(
         waves.diffraction_patterns(max_angle=None).array.sum(axis=(-2, -1)) < 1.0002
     )

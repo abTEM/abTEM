@@ -3,32 +3,44 @@ import numpy as np
 import pytest
 from hypothesis import given
 
-#from abtem.integrals import GaussianProjectionIntegrals
-from abtem.integrals import QuadratureProjectionIntegrals
-
-from abtem.parametrizations import LobatoParametrization, KirklandParametrization, PengParametrization
+# from abtem.integrals import GaussianProjectionIntegrals
+from abtem.parametrizations import (
+    KirklandParametrization,
+    LobatoParametrization,
+    PengParametrization,
+)
 
 
 @given(atomic_number=st.integers(min_value=1, max_value=98))
-@pytest.mark.parametrize('parametrization_a',
-                         [LobatoParametrization(),
-                          KirklandParametrization(),
-                          PengParametrization(),
-                          ], ids=['lobato', 'kirkland', 'peng'])
-@pytest.mark.parametrize('parametrization_b',
-                         [LobatoParametrization(),
-                          KirklandParametrization(),
-                          PengParametrization()],
-                         ids=['lobato', 'kirkland', 'peng'])
+@pytest.mark.parametrize(
+    "parametrization_a",
+    [
+        LobatoParametrization(),
+        KirklandParametrization(),
+        PengParametrization(),
+    ],
+    ids=["lobato", "kirkland", "peng"],
+)
+@pytest.mark.parametrize(
+    "parametrization_b",
+    [LobatoParametrization(), KirklandParametrization(), PengParametrization()],
+    ids=["lobato", "kirkland", "peng"],
+)
 def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
     k = np.linspace(0, 5, 100)
-    assert np.allclose(parametrization_a.projected_scattering_factor(atomic_number)(k),
-                       parametrization_b.projected_scattering_factor(atomic_number)(k),
-                       atol=10, rtol=0.1)
-    r = np.linspace(.2, 5, 100)
-    assert np.allclose(parametrization_a.projected_potential(atomic_number)(r),
-                       parametrization_b.projected_potential(atomic_number)(r),
-                       atol=20, rtol=0.1)
+    assert np.allclose(
+        parametrization_a.projected_scattering_factor(atomic_number)(k),
+        parametrization_b.projected_scattering_factor(atomic_number)(k),
+        atol=10,
+        rtol=0.1,
+    )
+    r = np.linspace(0.2, 5, 100)
+    assert np.allclose(
+        parametrization_a.projected_potential(atomic_number)(r),
+        parametrization_b.projected_potential(atomic_number)(r),
+        atol=20,
+        rtol=0.1,
+    )
 
 
 # @pytest.mark.parametrize('parameters',

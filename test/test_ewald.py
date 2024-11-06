@@ -1,6 +1,6 @@
 # from abtem.potentials.parametrizations import EwaldParametrization
 # from abtem.potentials.integrals import ProjectionQuadratureRule
-#from abtem.potentials.poisson import solve_point_charges
+# from abtem.potentials.poisson import solve_point_charges
 
 # parametrization = EwaldParametrization(width=.3)
 #

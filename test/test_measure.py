@@ -1,26 +1,23 @@
-import os
-import pathlib
-
 import ase
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, settings, assume, HealthCheck, reproduce_failure
+import strategies as abtem_st
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis.strategies import composite
+from utils import array_is_close, ensure_is_tuple, gpu
 
 import abtem
-import strategies as abtem_st
-from abtem.core.axes import ScanAxis, OrdinalAxis
+from abtem.core.axes import OrdinalAxis, ScanAxis
 from abtem.core.backend import copy_to_device
 from abtem.measurements import (
-    Images,
     DiffractionPatterns,
+    Images,
     RealSpaceLineProfiles,
-    _scan_shape,
     _scan_sampling,
+    _scan_shape,
 )
 from abtem.waves import Probe
-from utils import ensure_is_tuple, gpu, array_is_close
 
 
 def test_scanned_measurement_type():
@@ -198,8 +195,10 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
         filtered.compute()
         measurement.compute()
     except OSError:
-        pytest.skip("Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218")
-    
+        pytest.skip(
+            "Known CuPy error, but only reproducible in pytest https://github.com/cupy/cupy/issues/8218"
+        )
+
     if np.any(np.array(sigma)) > 1:
         assert not np.allclose(filtered.array, measurement.array)
 

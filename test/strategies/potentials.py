@@ -51,7 +51,7 @@ def atoms(
     )
 
     atoms = Atoms(numbers=draw(numbers), positions=draw(positions), cell=cell, pbc=True)
-    atoms.wrap(eps=0.)
+    atoms.wrap(eps=0.0)
     return atoms
 
 

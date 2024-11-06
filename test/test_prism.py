@@ -1,12 +1,12 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume, reproduce_failure
-
 import strategies as abtem_st
+from hypothesis import assume, given
+from utils import assert_array_matches_device, gpu
+
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
-from utils import gpu, assert_array_matches_device
 
 
 @given(data=st.data())
@@ -19,8 +19,7 @@ def test_prism_matches_probe(data, lazy, device):
     probe = s_matrix.dummy_probes()
 
     s_matrix_diffraction_patterns = (
-
-            s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
+        s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
     )
     probe_diffraction_patterns = (
         probe.build(lazy=lazy).diffraction_patterns(max_angle=None).to_cpu()
@@ -80,7 +79,6 @@ def test_prism_matches_probe_with_multislice(data, lazy, device):
     if np.all(probe_diffraction_patterns.array < 1e-7):
         pass
     else:
-
         assert np.allclose(
             s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
         )
@@ -126,6 +124,7 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
 
     assert s_matrix_measurement == probe_measurement
 
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 @pytest.mark.parametrize(
@@ -148,7 +147,7 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
         abtem_st.annular_detector,
     ],
 )
-#@settings(verbosity=Verbosity.verbose, phases=[Phase.generate])
+# @settings(verbosity=Verbosity.verbose, phases=[Phase.generate])
 def test_prism_scan(
     data, interpolation, detector, downsample, lazy, frozen_phonons, device
 ):
@@ -245,8 +244,8 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
         potential=potential, scan=scan, detectors=detector, lazy=lazy
     ).compute()
 
-    #assert prism_measurement.shape == probe_measurement.shape
-    #assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
+    # assert prism_measurement.shape == probe_measurement.shape
+    # assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
 
 
 # @given(atoms=abtem_st.atoms(min_side_length=5, max_side_length=10),

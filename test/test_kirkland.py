@@ -1,21 +1,27 @@
 import numpy as np
+import pytest
 from ase import Atoms
 
 from abtem.potentials.iam import Potential
 from abtem.waves import PlaneWave
-import pytest
 
 
-@pytest.mark.parametrize('lazy', [True, False], ids=['lazy', 'eager'])
-@pytest.mark.parametrize('projection', ['infinite', 'finite'])
-@pytest.mark.parametrize('integral_space', ['real', 'fourier'])
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+@pytest.mark.parametrize("projection", ["infinite", "finite"])
+@pytest.mark.parametrize("integral_space", ["real", "fourier"])
 def test_fig_5_12(projection, lazy, integral_space):
-    if integral_space == 'real' and projection == 'infinite':
+    if integral_space == "real" and projection == "infinite":
         pytest.skip("invalid parameter combination")
 
-    atoms = Atoms('CSiCuAuU', positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)], cell=(50, 50, 8))
+    atoms = Atoms(
+        "CSiCuAuU",
+        positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)],
+        cell=(50, 50, 8),
+    )
 
-    potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', projection=projection)
+    potential = Potential(
+        atoms=atoms, gpts=512, parametrization="kirkland", projection=projection
+    )
     waves = PlaneWave(energy=200e3)
 
     exit_wave = waves.multislice(potential, lazy=lazy)
@@ -24,5 +30,5 @@ def test_fig_5_12(projection, lazy, integral_space):
 
     intensity = exit_wave.intensity().compute().array
 
-    assert np.round(float(intensity.min()), 2) == .72
+    assert np.round(float(intensity.min()), 2) == 0.72
     assert np.round(float(intensity.max()), 2) == 1.03

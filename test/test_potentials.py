@@ -1,13 +1,10 @@
 import hypothesis.strategies as st
-import numpy as np
 import pytest
-from hypothesis import given
-
 import strategies as abtem_st
-from abtem import FrozenPhonons
-from abtem.potentials.iam import CrystalPotential, Potential
+from hypothesis import given
 from utils import gpu
 
+from abtem.potentials.iam import CrystalPotential, Potential
 
 # @given(atoms=abtem_st.atoms(),
 #        gpts=abtem_st.gpts(),
@@ -22,30 +19,44 @@ from utils import gpu
 #     assert np.allclose(potential1.array.sum(0), potential2.array.sum(0))
 
 
-@given(atoms=abtem_st.atoms(max_atomic_number=14),
-       gpts=abtem_st.gpts(),
-       slice_thickness=st.floats(min_value=1, max_value=2.)
-       )
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', [gpu, 'cpu'])
-@pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
-@pytest.mark.parametrize('projection', ['finite', 'infinite'])
+@given(
+    atoms=abtem_st.atoms(max_atomic_number=14),
+    gpts=abtem_st.gpts(),
+    slice_thickness=st.floats(min_value=1, max_value=2.0),
+)
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+@pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
+@pytest.mark.parametrize("projection", ["finite", "infinite"])
 def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, projection):
-    potential = Potential(atoms, gpts=gpts, device=device, slice_thickness=slice_thickness,
-                          parametrization=parametrization, projection=projection)
+    potential = Potential(
+        atoms,
+        gpts=gpts,
+        device=device,
+        slice_thickness=slice_thickness,
+        parametrization=parametrization,
+        projection=projection,
+    )
     potential_array = potential.build(lazy=lazy).compute()
 
 
-@given(data=st.data(),
-       tile=st.tuples(st.integers(min_value=1, max_value=2),
-                      st.integers(min_value=1, max_value=2),
-                      st.integers(min_value=1, max_value=2)))
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('potential_unit', [
-    abtem_st.potential(projection='infinite', no_frozen_phonons=True),
-    abtem_st.potential_array(max_ensemble_dims=0, lazy=True),
-    abtem_st.potential_array(max_ensemble_dims=0, lazy=False)
-])
+@given(
+    data=st.data(),
+    tile=st.tuples(
+        st.integers(min_value=1, max_value=2),
+        st.integers(min_value=1, max_value=2),
+        st.integers(min_value=1, max_value=2),
+    ),
+)
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize(
+    "potential_unit",
+    [
+        abtem_st.potential(projection="infinite", no_frozen_phonons=True),
+        abtem_st.potential_array(max_ensemble_dims=0, lazy=True),
+        abtem_st.potential_array(max_ensemble_dims=0, lazy=False),
+    ],
+)
 def test_crystal_potential_builds(data, potential_unit, tile, lazy):
     potential_unit = data.draw(potential_unit)
 
@@ -60,24 +71,38 @@ def test_crystal_potential_builds(data, potential_unit, tile, lazy):
     tiled_potential = potential_unit.compute().tile(tile)
     assert crystal_potential == tiled_potential
     assert len(crystal_potential) == len(potential_unit) * tile[2]
-    assert crystal_potential.gpts == (potential_unit.gpts[0] * tile[0], potential_unit.gpts[1] * tile[1])
+    assert crystal_potential.gpts == (
+        potential_unit.gpts[0] * tile[0],
+        potential_unit.gpts[1] * tile[1],
+    )
 
 
-@given(data=st.data(),
-       num_frozen_phonons=st.integers(1, 3),
-       tile=st.tuples(st.integers(min_value=1, max_value=2),
-                      st.integers(min_value=1, max_value=2),
-                      st.integers(min_value=1, max_value=2)))
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('potential_unit', [
-    abtem_st.potential(projection='infinite'),
-    abtem_st.potential_array(max_ensemble_dims=1, lazy=True),
-    abtem_st.potential_array(max_ensemble_dims=1, lazy=False)
-])
-def test_crystal_potential_with_frozen_phonons(data, potential_unit, tile, num_frozen_phonons, lazy):
+@given(
+    data=st.data(),
+    num_frozen_phonons=st.integers(1, 3),
+    tile=st.tuples(
+        st.integers(min_value=1, max_value=2),
+        st.integers(min_value=1, max_value=2),
+        st.integers(min_value=1, max_value=2),
+    ),
+)
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize(
+    "potential_unit",
+    [
+        abtem_st.potential(projection="infinite"),
+        abtem_st.potential_array(max_ensemble_dims=1, lazy=True),
+        abtem_st.potential_array(max_ensemble_dims=1, lazy=False),
+    ],
+)
+def test_crystal_potential_with_frozen_phonons(
+    data, potential_unit, tile, num_frozen_phonons, lazy
+):
     potential_unit = data.draw(potential_unit)
 
-    crystal_potential = CrystalPotential(potential_unit, tile, num_frozen_phonons=num_frozen_phonons)
+    crystal_potential = CrystalPotential(
+        potential_unit, tile, num_frozen_phonons=num_frozen_phonons
+    )
 
     crystal_potential = crystal_potential.build(lazy=lazy)
 
@@ -86,6 +111,7 @@ def test_crystal_potential_with_frozen_phonons(data, potential_unit, tile, num_f
     crystal_potential.compute()
 
     assert num_frozen_phonons == crystal_potential.num_configurations
+
 
 # @given(data=st.data(),
 #        tile=st.tuples(st.integers(min_value=1, max_value=2),

@@ -5,12 +5,12 @@ import numpy as np
 import pytest
 from ase import Atoms, units
 
-from abtem import FrozenPhonons
 from abtem.potentials.iam import Potential
 
 try:
     from gpaw import GPAW
     from gpaw.utilities.ps2ae import PS2AE
+
     from abtem.potentials.gpaw import GPAWPotential
 except ImportError:
     pass
