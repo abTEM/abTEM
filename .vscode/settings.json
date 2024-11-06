@@ -2,6 +2,6 @@
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
     "python.docstringFormat": "numpy",
-    "mypy.runUsingActiveInterpreter": true,
-    "mypy.explicitPackageBases": true,
+    "mypy.runUsingActiveInterpreter": false,
+    "mypy.dmypyExecutable": "/Users/jacob/miniconda3/envs/abtem-py312/bin/dmypy",
 }
