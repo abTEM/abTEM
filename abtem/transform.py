@@ -348,7 +348,8 @@ class ArrayObjectTransform(
             assert isinstance(new_array, tuple)
             return self._pack_multiple_outputs(array_object, new_array)
         else:
-            assert isinstance(new_array, np.ndarray)
+            xp = get_array_module(new_array)
+            assert isinstance(new_array, xp.ndarray)
             return self._pack_single_output(array_object, new_array)
 
 
