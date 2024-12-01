@@ -6,12 +6,13 @@ import numpy as np
 
 from abtem.core import config
 from abtem.core.energy import energy2wavelength
+import ase.units as units
 
 _unit_categories = {
     "real_space": ("Å", "Angstrom", "nm", "um", "mm", "m"),
     "reciprocal_space": ("1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"),
     "angular": ["rad", "mrad", "deg"],
-    "energy": ["eV", "keV"],
+    "energy": ["eV", "keV", "THz", "1/cm", "meV"],
 }
 
 # A mapping from unit to unit category
@@ -33,6 +34,10 @@ _conversion_factors = {
     "mrad": 1,
     "rad": 1e3,
     "deg": 1e3 / np.pi * 180.0,
+    "THz": units._e / units._hplanck / 1e12,
+    "keV": 1e-3,
+    "meV": 1e3,
+    "1/cm": 1 / units.invcm,
 }
 
 _tex_units = {
@@ -49,6 +54,11 @@ _tex_units = {
     "mrad": r"\mathrm{mrad}",
     "deg": r"\mathrm{deg}",
     "e/Å^2": r"\mathrm{e}^-/\mathrm{\AA}^2",
+    "THz": r"\mathrm{THz}",
+    "eV": r"\mathrm{eV}",
+    "meV": r"\mathrm{meV}",
+    "keV": r"\mathrm{keV}",
+    "1/cm": r"\mathrm{cm^{-1}}",
 }
 
 
