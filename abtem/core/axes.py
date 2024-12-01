@@ -267,6 +267,12 @@ class ScanAxis(RealSpaceAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class EnergyAxis(LinearAxis):
+    label: str = "energy"
+    units: str = "eV"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
 
