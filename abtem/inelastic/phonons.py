@@ -17,7 +17,7 @@ from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
 
-from abtem.core.axes import AxisMetadata, FrozenPhononsAxis, UnknownAxis
+from abtem.core.axes import AxisMetadata, FrozenPhononsAxis, EnergyAxis, UnknownAxis
 from abtem.core.chunks import Chunks, chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
@@ -759,3 +759,86 @@ class AtomsEnsemble(BaseFrozenPhonons):
         """
         positions = np.stack([atoms.positions for atoms in self.trajectory])
         return (positions - positions.mean(0)).std()
+
+
+class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
+    def __init__(
+        self,
+        energy_resolved_snapshots: list[Sequence[Atoms]],
+        energies: np.ndarray,
+        ensemble_mean: bool = True,
+    ):
+
+        assert (len(energy_resolved_snapshots) == len(energies)), "Number of snaphots needs to match the number of energies"
+
+        snapshots_stack_array = np.empty(len(energies), dtype=object)
+
+        for ene, trajectory in enumerate(energy_resolved_snapshots):
+            itemset(snapshots_stack_array, ene, AtomsEnsemble(trajectory))
+
+        snapshots_stack = snapshots_stack_array
+
+        assert isinstance(snapshots_stack, np.ndarray)
+
+        ensemble_axes_metadata = [EnergyAxis, FrozenPhononsAxis(_ensemble_mean=ensemble_mean)]
+
+        #assert len(ensemble_axes_metadata) == 2
+
+        atoms = snapshots_stack[0][0].atoms
+
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, None)
+
+        self._snapshots_stack = snapshots_stack
+        self._energies = energies
+
+        super().__init__(
+            atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
+        )
+
+        self._ensemble_axes_metadata = ensemble_axes_metadata
+
+    @property
+    def snapshots_stack(self) -> np.ndarray:
+        """Array of arrays of atoms representing an energy-resolved ensemble of atomic configurations."""
+        return self._snapshots_stack
+
+    @property
+    def energies(self):
+        """The energy bins for the energy-resolved snapshots."""
+        return self._energies
+
+    def __getitem__(self, item):
+        if isinstance(item, int):
+            item = [item]
+        new_snapshots_stack = self._snapshots_stack[item]
+        new_snapshots_stack = [[trj for trj in snap_stack.trajectory] for snap_stack in new_snapshots_stack]
+        new_energies = self._energies[item]
+        kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots","energies",))
+        return EnergyResolvedAtomsEnsemble(new_snapshots_stack, np.array(new_energies), **kwargs)
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        return self._ensemble_axes_metadata
+
+    def __len__(self) -> int:
+        return len(self._snapshots_stack)
+
+    @property
+    def ensemble_shape(self) -> tuple[int, ...]:
+        if isinstance(self._snapshots_stack, (da.core.Array, np.ndarray)):
+            return self._snapshots_stack.shape
+        return (len(self),)
+
+    @property
+    def num_configs(self) -> int:
+        return len(self._snapshots_stack[0]) # Assumes all stacks have equal number of snapshots
+
+    @property
+    def atoms(self) -> Atoms:
+        atoms = self._snapshots_stack[0][0]
+        if isinstance(atoms, np.ndarray):
+            atoms = atoms.item()
+        return atoms
+
+    def randomize(self, atoms: Atoms) -> Atoms:
+        return atoms
