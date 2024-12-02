@@ -20,7 +20,8 @@ from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGrid2DMixin
 from abtem.core.utils import get_dtype, itemset
-from abtem.potentials.iam import BasePotential, validate_potential
+from abtem.potentials.base import BasePotential
+from abtem.potentials.iam import validate_potential
 from abtem.transfer import nyquist_sampling
 from abtem.transform import ReciprocalSpaceMultiplication
 from abtem.visualize.visualizations import Visualization
