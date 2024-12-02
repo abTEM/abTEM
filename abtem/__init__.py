@@ -22,7 +22,8 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
 )
-from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
+from abtem.potentials.base import CrystalPotential, PotentialArray
+from abtem.potentials.iam import Potential
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.transfer import CTF, Aperture, SpatialEnvelope, TemporalEnvelope

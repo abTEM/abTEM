@@ -34,7 +34,8 @@ from abtem.inelastic.phonons import (
 )
 from abtem.parametrizations import EwaldParametrization, LobatoParametrization
 from abtem.potentials.charge_density import _interpolate_slice
-from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
+from abtem.potentials.iam import Potential
+from abtem.potentials.base import PotentialArray, _PotentialBuilder
 
 try:
     from gpaw import GPAW

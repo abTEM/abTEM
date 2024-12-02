@@ -5,7 +5,8 @@ from hypothesis import given
 
 import strategies as abtem_st
 from abtem import FrozenPhonons
-from abtem.potentials.iam import CrystalPotential, Potential
+from abtem.potentials.base import CrystalPotential
+from abtem.potentials.iam import Potential
 from utils import gpu
 
 

@@ -11,7 +11,7 @@ from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma
 
 if TYPE_CHECKING:
-    from abtem.potentials.iam import PotentialArray
+    from abtem.potentials.base import PotentialArray
     from abtem.waves import Waves
 
 
