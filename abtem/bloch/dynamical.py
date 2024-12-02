@@ -58,7 +58,7 @@ from abtem.inelastic.phonons import (
 )
 from abtem.measurements import IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
-from abtem.potentials.iam import PotentialArray
+from abtem.potentials.base import PotentialArray
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy

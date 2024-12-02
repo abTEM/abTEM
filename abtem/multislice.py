@@ -28,12 +28,12 @@ from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.inelastic.core_loss import TransitionPotential, TransitionPotentialArray
 from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurements
-from abtem.potentials.iam import (
+from abtem.potentials.base import (
     BasePotential,
     PotentialArray,
     TransmissionFunction,
-    validate_potential,
 )
+from abtem.potentials.iam import validate_potential
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
 from abtem.transform import ArrayObjectTransform

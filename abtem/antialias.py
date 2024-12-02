@@ -13,7 +13,7 @@ from abtem.core.grid import HasGrid2DMixin, spatial_frequencies
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 if TYPE_CHECKING:
-    from abtem.potentials.iam import TransmissionFunction
+    from abtem.potentials.base import TransmissionFunction
     from abtem.waves import Waves
 
     U = TypeVar("U", Waves, TransmissionFunction)

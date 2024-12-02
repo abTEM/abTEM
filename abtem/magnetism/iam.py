@@ -18,14 +18,14 @@ from abtem.core.grid import coordinate_grid
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
-from abtem.potentials.iam import (
+from abtem.potentials.base import (
     BaseField,
-    FieldArray,
-    _FieldBuilderFromAtoms,
+    FieldArray
 )
+from abtem.potentials.iam import _FieldBuilderFromAtoms
 
 if TYPE_CHECKING:
-    from abtem.potentials.iam import PotentialArray
+    from abtem.potentials.base import PotentialArray
 
 CUTOFF = 4.25
 

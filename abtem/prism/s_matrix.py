@@ -48,7 +48,8 @@ from abtem.detectors import (
 )
 from abtem.measurements import BaseMeasurements
 from abtem.multislice import allocate_multislice_measurements, multislice_and_detect
-from abtem.potentials.iam import BasePotential, validate_potential
+from abtem.potentials.base import BasePotential
+from abtem.potentials.iam import validate_potential
 from abtem.prism.utils import batch_crop_2d, minimum_crop, plane_waves, wrapped_crop_2d
 from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF

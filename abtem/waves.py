@@ -59,7 +59,8 @@ from abtem.multislice import (
     MultisliceTransform,
     transition_potential_multislice_and_detect,
 )
-from abtem.potentials.iam import BasePotential, validate_potential
+from abtem.potentials.base import BasePotential
+from abtem.potentials.iam import validate_potential
 from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _validate_tilt
