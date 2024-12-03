@@ -762,6 +762,22 @@ class AtomsEnsemble(BaseFrozenPhonons):
 
 
 class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
+    """
+    An energy-resolved ensemble of frozen phonon-ensembles (list of lists of Atoms).
+    Describes a list of AtomsEnsemble objects with associated energies.
+
+    Parameters
+    ----------
+    list of trajectories : list of lists of ASE.Atoms
+        List of sequences of atoms representing a distribution of atomic configurations corresponding
+        to phonon displacement at specific energies.
+    energies : array
+        Array of energies corresponding in order to the energies of the atom sequences.
+    ensemble_mean : True, optional
+        If True, the mean of the ensemble of results from a multislice simulation is
+        calculated, otherwise, the result of every frozen phonon is returned.
+
+    """
     def __init__(
         self,
         energy_resolved_snapshots: list[Sequence[Atoms]],
