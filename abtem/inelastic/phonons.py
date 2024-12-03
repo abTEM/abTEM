@@ -858,3 +858,47 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
     def randomize(self, atoms: Atoms) -> Atoms:
         return atoms
+
+    @property
+    def _default_ensemble_chunks(self) -> tuple[int, ...]:
+        if isinstance(self._snapshots_stack, (da.core.Array, np.ndarray)):
+            return (1,) * len(self.ensemble_shape)
+        return (1,)
+
+    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+        if chunks is None:
+            chunks = 1
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+        if lazy:
+            arrays = []
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+                snapshots_stack = self._snapshots_stack[start:stop]
+                lazy_args = dask.delayed(_wrap_with_array)(snapshots_stack, ndims=1)
+                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
+                arrays.append(lazy_array)
+
+            array = da.concatenate(arrays)
+        else:
+            snapshots_stack = self._snapshots_stack
+            if isinstance(snapshots_stack, da.core.Array):
+                snapshots_stack = snapshots_stack.compute()
+
+            array = np.zeros((len(chunks[0]),), dtype=object)
+            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+                itemset(array, i, _wrap_with_array(snapshots_stack[start:stop], 1))
+
+        return (array,)
+
+    @staticmethod
+    def _from_partition_args_func(*args, **kwargs):
+        args = unpack_blockwise_args(args)
+        energy_resolved_snapshots = args[0]
+        energies = args[1]
+        snapshots_stack = EnergyResolvedAtomsEnsemble(energy_resolved_snapshots, energies, **kwargs)
+        return _wrap_with_array(snapshots_stack, 2) # Should this be 2?
+
+    def _from_partitioned_args(self):
+        kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots", "energies", "ensemble_shape"))
+        kwargs["cell"] = self.cell.array
+        kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)
+        return partial(self._from_partition_args_func, **kwargs)
