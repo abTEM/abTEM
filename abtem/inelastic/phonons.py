@@ -763,8 +763,10 @@ class AtomsEnsemble(BaseFrozenPhonons):
 
 class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     """
-    An energy-resolved ensemble of frozen phonon-ensembles (list of lists of Atoms).
+    An energy-resolved ensemble of frozen-phonon ensembles (list of lists of Atoms).
     Describes a list of AtomsEnsemble objects with associated energies.
+
+    Currently requires all frozen-phonon ensembles to be of the same size.
 
     Parameters
     ----------
@@ -842,7 +844,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
         if isinstance(self._snapshots_stack, (da.core.Array, np.ndarray)):
-            return self._snapshots_stack.shape
+            return (len(self._snapshots_stack), len(self._snapshots_stack[0]))
         return (len(self),)
 
     @property
