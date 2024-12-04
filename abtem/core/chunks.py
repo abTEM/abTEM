@@ -122,8 +122,6 @@ def fill_in_chunk_sizes(
         elif isinstance(c, int):
             if c == -1:
                 validated_chunks.append((s,))
-            elif c == 0:
-                validated_chunks.append((s,))
             else:
                 chunk_size = (c,) * (s // c)
                 if s % c:
