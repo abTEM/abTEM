@@ -877,9 +877,8 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             arrays = []
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 snapshots_stack = self._snapshots_stack[start:stop]
-                lazy_args = dask.delayed(_wrap_with_array)(snapshots_stack, ndims=1)
-                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
-                arrays.append(lazy_array)
+                for sstack in snapshots_stack:
+                    arrays.append(sstack._partition_args(chunks[1:], lazy=lazy))
 
             array = da.concatenate(arrays)
         else:
@@ -887,9 +886,19 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             if isinstance(snapshots_stack, da.core.Array):
                 snapshots_stack = snapshots_stack.compute()
 
-            array = np.zeros((len(chunks[0]),), dtype=object)
-            for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-                itemset(array, i, _wrap_with_array(snapshots_stack[start:stop], 1))
+            array = np.empty(tuple(len(x) for x in chunks), dtype=object)
+            
+            for index, slic in iterate_chunk_ranges(chunks):
+                tmp_snapshots_stack = snapshots_stack[slic]
+                itemset(array,  index, _wrap_with_array(tmp_snapshots_stack, len(tmp_snapshots_stack.shape)))
+        
+            # snapshots_stack = self._snapshots_stack
+            # if isinstance(snapshots_stack, da.core.Array):
+            #     snapshots_stack = snapshots_stack.compute()
+
+            # array = np.zeros((len(chunks[0]),), dtype=object)
+            # for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+            #     itemset(array, i, _wrap_with_array(snapshots_stack[start:stop], 1))
 
         return (array,)
 
