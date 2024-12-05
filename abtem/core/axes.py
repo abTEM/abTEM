@@ -267,12 +267,6 @@ class ScanAxis(RealSpaceAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class EnergyAxis(LinearAxis):
-    label: str = "energy"
-    units: str = "eV"
-
-
-@dataclass(eq=False, repr=False, unsafe_hash=True)
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
 
@@ -423,6 +417,12 @@ class TiltAxis(OrdinalAxis):
 class ThicknessAxis(NonLinearAxis):
     label: str = "thickness"
     units: str = "Å"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class EnergyAxis(NonLinearAxis):
+    label: str = "energy"
+    units: str = "eV"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
