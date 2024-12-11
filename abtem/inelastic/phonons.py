@@ -880,7 +880,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 snapshots_stack = self._snapshots_stack[start:stop]
                 for sstack in snapshots_stack:
--                   arrays.append(sstack._partition_args(chunks[1:], lazy=lazy))
+                    arrays.append(sstack._partition_args(chunks[1:], lazy=lazy))
 
             array = da.concatenate(arrays)
 
@@ -929,8 +929,8 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         args = unpack_blockwise_args(args)
         energy_resolved_snapshots = args[0]
         energies = args[1]
--       snapshots_stack = EnergyResolvedAtomsEnsemble(energy_resolved_snapshots, energies, **kwargs)
--       return _wrap_with_array(snapshots_stack, 2) # Should this be 2?
+        snapshots_stack = EnergyResolvedAtomsEnsemble(energy_resolved_snapshots, energies, **kwargs)
+        return _wrap_with_array(snapshots_stack, 2) # Should this be 2?
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots", "energies", "ensemble_shape"))
