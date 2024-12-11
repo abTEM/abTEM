@@ -327,7 +327,7 @@ class AnnularDetector(BaseDetector):
             max_angle="full", parity="same", fftshift=False
         )
         measurement = diffraction_patterns.integrate_radial(
-            inner=self.inner, outer=outer
+            inner=self.inner, outer=outer, offset=self.offset,
         )
 
         if self.to_cpu and hasattr(measurement, "to_cpu"):
