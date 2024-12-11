@@ -326,10 +326,9 @@ class _FieldBuilderFromAtoms(FieldBuilder):
         new_potential = _wrap_with_array(new_potential, ndims)
         return new_potential
 
-    def _from_partitioned_args(self, *args, **kwargs):
+    def _from_partitioned_args(self):
         frozen_phonons_partial = self.frozen_phonons._from_partitioned_args()
         kwargs = self._copy_kwargs(exclude=("atoms", "sampling"))
-
         return partial(
             self._from_partitioned_args_func,
             frozen_phonons_partial=frozen_phonons_partial,

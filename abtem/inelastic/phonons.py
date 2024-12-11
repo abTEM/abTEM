@@ -787,8 +787,9 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         energy_resolved_snapshots: list[Sequence[Atoms]],
         energies: np.ndarray,
         ensemble_mean: bool = True,
+        cell: Optional[Cell] = None,
     ):
-
+        
         assert (len(energy_resolved_snapshots) == len(energies)), "Number of snaphots needs to match the number of energies"
 
         snapshots_stack_array = np.empty(len(energies), dtype=object)
@@ -807,7 +808,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
         atoms = snapshots_stack[0][0].atoms
 
-        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, None)
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, cell)
 
         self._snapshots_stack = snapshots_stack
         self._energies = energies
@@ -879,9 +880,29 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
                 snapshots_stack = self._snapshots_stack[start:stop]
                 for sstack in snapshots_stack:
-                    arrays.append(sstack._partition_args(chunks[1:], lazy=lazy))
+-                   arrays.append(sstack._partition_args(chunks[1:], lazy=lazy))
 
             array = da.concatenate(arrays)
+
+            
+            # arrays = []
+            # for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+            #     snapshots_stack = self._snapshots_stack[start:stop]
+            #     energies = self.energies[start:stop]
+                
+            #     tmp = []
+                
+            #     for energy, sstack in zip(energies, snapshots_stack):
+                    
+            #         tmpargs = sstack._partition_args(chunks[1:])
+            #         tmp.append(tmpargs)
+                
+                
+            #     print('tmp', tmp)
+            #     arrays.append((da.concatenate(tmp), energies))
+            
+            # print('arrays', arrays)            
+            # print('array', array)
         else:
             snapshots_stack = self._snapshots_stack
             if isinstance(snapshots_stack, da.core.Array):
@@ -891,7 +912,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             
             for index, slic in iterate_chunk_ranges(chunks):
                 tmp_snapshots_stack = snapshots_stack[slic]
-                itemset(array,  index, _wrap_with_array(tmp_snapshots_stack, len(tmp_snapshots_stack.shape)))
+                itemset(array,  index, _wrap_with_array(tmp_snapshots_stack, 1))
         
             # snapshots_stack = self._snapshots_stack
             # if isinstance(snapshots_stack, da.core.Array):
@@ -908,8 +929,8 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
         args = unpack_blockwise_args(args)
         energy_resolved_snapshots = args[0]
         energies = args[1]
-        snapshots_stack = EnergyResolvedAtomsEnsemble(energy_resolved_snapshots, energies, **kwargs)
-        return _wrap_with_array(snapshots_stack, 2) # Should this be 2?
+-       snapshots_stack = EnergyResolvedAtomsEnsemble(energy_resolved_snapshots, energies, **kwargs)
+-       return _wrap_with_array(snapshots_stack, 2) # Should this be 2?
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots", "energies", "ensemble_shape"))
@@ -953,6 +974,7 @@ class EnergyResolvedAtomsEnsemble2(BaseFrozenPhonons):
         energy_resolved_snapshots: list[Sequence[Atoms]],
         energies: np.ndarray,
         ensemble_mean: bool = True,
+        cell: Optional[Cell] = None,
     ):
 
         validate_energy_resolved_snaps(energies, energy_resolved_snapshots)
@@ -1049,12 +1071,16 @@ class EnergyResolvedAtomsEnsemble2(BaseFrozenPhonons):
             for index, slic in iterate_chunk_ranges(chunks):
                 
                 snapshots_stack = self._snapshots_stack[slic]
-                lazy_args = dask.delayed(_wrap_with_array)(snapshots_stack, ndims=len(snapshots_stack.shape))
-                lazy_array = da.from_delayed(lazy_args, shape=snapshots_stack.shape, dtype=object)
+                energies = self.energies[slic[0]]
+                
+                lazy_args = dask.delayed(_wrap_with_array)((snapshots_stack, energies), ndims=1)
+                lazy_array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
                 
                 itemset(array, index, lazy_array)
             
-            array = da.from_array(array, chunks=(1,)*len(snapshots_stack.shape))
+            shape = array.shape
+            array = da.concatenate(array.flatten())
+            array = array.reshape(shape)
 
         else:
             snapshots_stack = self._snapshots_stack
@@ -1065,22 +1091,22 @@ class EnergyResolvedAtomsEnsemble2(BaseFrozenPhonons):
             
             for index, slic in iterate_chunk_ranges(chunks):
                 tmp_snapshots_stack = snapshots_stack[slic]
-                itemset(array,  index, _wrap_with_array(tmp_snapshots_stack, len(tmp_snapshots_stack.shape)))
+                energies = self.energies[slic[0]]
+                itemset(array,  index, _wrap_with_array((tmp_snapshots_stack, energies), 1))
         
         return (array,)
     
     @staticmethod
     def _from_partition_args_func(*args, **kwargs):
         args = unpack_blockwise_args(args)
-        energy_resolved_snapshots = args[0]
-        energies = args[1]
-        snapshots_stack = EnergyResolvedAtomsEnsemble(energy_resolved_snapshots, energies, **kwargs)
-        return _wrap_with_array(snapshots_stack, 2) # Should this be 2?
+        energy_resolved_snapshots, energies = args[0]
+        snapshots_stack = EnergyResolvedAtomsEnsemble2(energy_resolved_snapshots, energies, **kwargs)
+        return _wrap_with_array(snapshots_stack, len(snapshots_stack)) # Should this be 2?
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots", "energies", "ensemble_shape"))
         kwargs["cell"] = self.cell.array
-        kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)
+ #       kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(self.ensemble_shape)
         return partial(self._from_partition_args_func, **kwargs)
     
     
