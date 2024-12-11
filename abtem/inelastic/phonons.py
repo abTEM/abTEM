@@ -800,7 +800,8 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
 
         assert isinstance(snapshots_stack, np.ndarray)
 
-        ensemble_axes_metadata = [EnergyAxis, FrozenPhononsAxis(_ensemble_mean=ensemble_mean)]
+        ensemble_axes_metadata = [EnergyAxis(label=r"energy loss", values=energies, units="eV"),
+                                  FrozenPhononsAxis(_ensemble_mean=ensemble_mean)]
 
         #assert len(ensemble_axes_metadata) == 2
 
@@ -1075,7 +1076,7 @@ class EnergyResolvedAtomsEnsemble2(BaseFrozenPhonons):
         energies = args[1]
         snapshots_stack = EnergyResolvedAtomsEnsemble(energy_resolved_snapshots, energies, **kwargs)
         return _wrap_with_array(snapshots_stack, 2) # Should this be 2?
-    
+
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("energy_resolved_snapshots", "energies", "ensemble_shape"))
         kwargs["cell"] = self.cell.array
