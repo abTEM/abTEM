@@ -181,7 +181,7 @@ def _fourier_space_gaussian(k2, width):
 
 
 def add_point_charges_fourier(
-    array: np.ndarray, atoms: Atoms, broadening: float = 0.0
+    array: np.ndarray, atoms: Atoms, broadening: float = 0.05
 ) -> np.ndarray:
     """
     Add the nuclear point charges in Reciprocal space.
@@ -194,7 +194,7 @@ def add_point_charges_fourier(
         Atoms from which the nuclear charges with magnitudes and positions are
         determined.
     broadening : float
-        Gaussian broadening of the point charges (default is 0.0).
+        Gaussian broadening of the point charges (default is 0.05).
 
     Returns
     -------
@@ -208,7 +208,7 @@ def add_point_charges_fourier(
     if broadening:
         broadening = _fourier_space_gaussian(kx**2 + ky**2 + kz**2, broadening)
     else:
-        broadening = 1.0
+        broadening = 0.05
 
     if hasattr(atoms, "atoms"):
         atoms = atoms.atoms
@@ -254,8 +254,8 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
 
     if slice_shape[-1] <= 1:
         raise RuntimeError(
-            "The slice thickness requested is not implmented for the provided charge"
-            " density calculatation"
+            "The slice thickness requested is not implemented for the provided charge"
+            " density calculation."
         )
 
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
@@ -384,7 +384,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         charge_density: np.ndarray = None,
         gpts: Union[int, Tuple[int, int]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
-        slice_thickness: Union[float, Tuple[float]] = 0.5,
+        slice_thickness: Union[float, Tuple[float]] = 1.0,
         plane: str = "xy",
         box: Tuple[float, float, float] = None,
         origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -500,16 +500,16 @@ class ChargeDensityPotential(_PotentialBuilder):
         return (blocks,)
 
     @staticmethod
-    def _charge_density_potential(*args, frozen_phonons_partial, **kwargs):
+    def _charge_density_potential(*args, atoms, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
             args = args.item()
 
         args["atoms"] = frozen_phonons_partial(args["atoms"])
 
-        if isinstance(args["atoms"], np.ndarray):
-            args["atoms"] = AtomsEnsemble(args["atoms"])
-
+        #if isinstance(args["atoms"], np.ndarray):
+        #    args["atoms"] = AtomsEnsemble(args["atoms"])
+        args["atoms"] = atoms # Hack to avoid issues with non-existent FrozenPhonons
         kwargs.update(args)
         potential = ChargeDensityPotential(**kwargs)
 
@@ -525,6 +525,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         )
         new_potential = partial(
             self._charge_density_potential,
+            atoms=self._ewald_potential().frozen_phonons.atoms, #Hack to make atoms explicit
             frozen_phonons_partial=frozen_phonons_partial,
             **kwargs,
         )
@@ -551,7 +552,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
     def _ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(width=1)
+        ewald_parametrization = EwaldParametrization(width=3) #Changed to match GPAWPotential
 
         return Potential(
             atoms=self.frozen_phonons,
