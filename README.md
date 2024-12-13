@@ -37,7 +37,7 @@ To try *ab*TEM in your web browser, please click on the following Binder link:
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
 
-## Citing abTEM
+## Citing *ab*TEM
 
 If you find *ab*TEM useful in your research, please cite our methods article:
 
@@ -47,9 +47,14 @@ J. Madsen & T. Susi, "The abTEM code: transmission electron microscopy from firs
 Open code from articles using *ab*TEM is available in
 our [repository](https://github.com/jacobjma/abTEM/tree/master/articles).
 
+## Usage poll
+
+Our code is used by so many people that it is hard to keep track. If you already use or are interested in using *ab*TEM, we'd appreciate if you could fill in our [poll](https://github.com/abTEM/abTEM/discussions/186)!
+
 ## Contact
 
-* Write the [maintainer](https://github.com/jacobjma) directly
-* Bug reports and development: [GitHub issues](https://github.com/jacobjma/abTEM/issues)
+* Write the [maintainer](https://github.com/tomasusi) or [lead developer](https://github.com/jacobjma) directly
+* Bug reports and issues: [GitHub issues](https://github.com/jacobjma/abTEM/issues)
+* Discussion and development: [GitHub discussions](https://github.com/jacobjma/abTEM/discussions)
 
 Please send us bug reports, patches, code, ideas and questions.
