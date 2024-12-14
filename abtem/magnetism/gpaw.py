@@ -18,7 +18,7 @@ from abtem.magnetism.iam import (
 )
 from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
 from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
-from abtem.potentials.iam import _FieldBuilder
+from abtem.potentials.base import FieldBuilder
 
 
 def _calculate_non_periodic_magnetic_vector_potential():
@@ -97,7 +97,7 @@ class GPAW(Protocol):
     def get_number_of_grid_points(self) -> np.ndarray: ...
 
 
-class _GPAWMagnetics(_FieldBuilder):
+class _GPAWMagnetics(FieldBuilder):
     def __init__(
         self,
         calculators: GPAW | list[GPAW] | list[str] | str,
