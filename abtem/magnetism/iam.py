@@ -13,6 +13,7 @@ from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 
 from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessAxis
+from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma
 from abtem.core.grid import coordinate_grid
 from abtem.inelastic.phonons import BaseFrozenPhonons
@@ -409,14 +410,18 @@ class QuasiDipoleProjections:
         sampling: tuple[float, float],
         device: str = "cpu",
     ):
+        xp = get_array_module(device)
+        
         if len(atoms) == 0:
-            return np.zeros((3,) + gpts, dtype=np.float32)
+            return xp.zeros((3,) + gpts, dtype=np.float32)
 
         positions = atoms.positions
         magnetic_moments = atoms.get_array("magnetic_moments")
         slice_limits = np.array([a, b])
         integral_sampling = (self._sampling,) * 2
 
+        # we create a NumPy array here since self._interpolation_func() is 
+        # numba jit compiled and cannot be used with cupy for now
         array = np.zeros((3,) + gpts, dtype=np.float32)
         for number in np.unique(atoms.numbers):
             mask = atoms.numbers == number
@@ -443,6 +448,9 @@ class QuasiDipoleProjections:
                 integral_sampling,
                 tables,
             )
+        
+        # work around t
+        array = xp.asarray(array)
 
         return array
 
