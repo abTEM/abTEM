@@ -420,9 +420,15 @@ class ThicknessAxis(NonLinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class EnergyAxis(NonLinearAxis):
+class EnergyAxis(OrdinalAxis):
     label: str = "energy"
     units: str = "eV"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class MomentumAxis(OrdinalAxis):
+    label: str = "momentum"
+    units: str = "mrad"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

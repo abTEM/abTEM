@@ -133,6 +133,9 @@ def validate_units(
     if units not in units_type:
         return units
 
+    if units_type[units] == "energy":
+        return units
+
     if units_type[units] == "real_space":
         if units == "Angstrom":
             units = "Å"
