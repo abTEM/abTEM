@@ -687,7 +687,7 @@ class VectorPotentialArray(BaseVectorPotential, FieldArray):
         e_over_hbar = units._e / (units._hplanck / (2 * np.pi)) * 1e-10
         unit_conversion = e_over_hbar / energy2sigma(energy) * 1e-10
         adjusted_potential = potential_array.copy()
-        adjusted_potential.array[:] -= self.array[:, 2] * unit_conversion
+        adjusted_potential.array[:] -= self.array[..., 2, :, :] * unit_conversion
         return adjusted_potential
 
 
