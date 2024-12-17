@@ -13,6 +13,7 @@ _unit_categories = {
     "reciprocal_space": ("1/Å", "1/Angstrom", "1/nm", "1/um", "1/mm", "1/m"),
     "angular": ["rad", "mrad", "deg"],
     "energy": ["eV", "keV", "THz", "1/cm", "meV"],
+    "time": ["ps", "fs"],
 }
 
 # A mapping from unit to unit category
@@ -38,6 +39,7 @@ _conversion_factors = {
     "keV": 1e-3,
     "meV": 1e3,
     "1/cm": 1 / units.invcm,
+    "fs": 1e-3,
 }
 
 _tex_units = {
@@ -134,6 +136,9 @@ def validate_units(
         return units
 
     if units_type[units] == "energy":
+        return units
+    
+    if units_type[units] == "time":
         return units
 
     if units_type[units] == "real_space":
