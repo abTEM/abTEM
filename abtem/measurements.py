@@ -4069,8 +4069,9 @@ class PolarMeasurements(_BaseMeasurement2D):
             )
             return stacked
 
-        xp = get_array_module(self.device)
-        array = xp.zeros_like(differential_1.array, dtype=xp.complex64)
+        xp = get_array_module(self.array)
+
+        array = xp.zeros_like(xp.array(differential_1.array), dtype=xp.complex64)
 
         array.real = differential_1.array
         array.imag = differential_2.array
