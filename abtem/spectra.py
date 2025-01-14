@@ -105,11 +105,13 @@ class BaseSpectra(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         self,
         array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
-        metadata: dict,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict]=None,
     ):
         super().__init__(
             array=array,
-            ensemble_axes_metadata=axes_metadata,
+            axes_metadata=axes_metadata,
+            ensemble_axes_metadata=None,
             metadata=metadata,
         )
 
@@ -483,6 +485,7 @@ class MomentumResolvedSpectrum(_BaseSpectra2D):
         array: da.core.Array | np.array,
         values: list[float],
         axes_metadata: Optional[list[AxisMetadata]] = None,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[Dict] = None,
     ):
         self._values = values
@@ -490,6 +493,7 @@ class MomentumResolvedSpectrum(_BaseSpectra2D):
         super().__init__(
             array=array,
             axes_metadata=axes_metadata,
+            ensemble_axes_metadata=None,
             metadata=metadata,
         )
 
@@ -498,6 +502,7 @@ class MomentumResolvedSpectrum(_BaseSpectra2D):
         cls,
         array: np.ndarray | da.core.Array,
         axes_metadata: list[AxisMetadata],
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
     ) -> "MomentumResolvedSpectrum":
         """
