@@ -64,11 +64,11 @@ def precession_tilts(
     Parameters
     ----------
     precession_angle : float
-        Precession angle [rad].
+        Precession angle [mrad].
     num_samples : int
         Number of tilt samples.
     min_azimuth : float, optional
-        Minmimum azimuthal angle [rad]. Default is 0.
+        Minimum azimuthal angle [rad]. Default is 0.
     max_azimuth : float, optional
         Maximum azimuthal angle [rad]. Default is $2 \\pi$.
     endpoint
@@ -77,7 +77,7 @@ def precession_tilts(
     Returns
     -------
     array_of_tilts : 2D array
-        Array of xy-tilt angles [rad].
+        Array of xy-tilt angles [mrad].
     """
     azimuthal_angles = np.linspace(
         min_azimuth, max_azimuth, num=num_samples, endpoint=endpoint
@@ -87,6 +87,48 @@ def precession_tilts(
     tilt_y = precession_angle * np.sin(azimuthal_angles)
 
     return np.array([tilt_x, tilt_y], dtype=float).T
+
+
+def array_tilts(
+        polar_angles: list[float],
+        nums_azimuthal: list[int],
+):
+    """
+    An array of tilt values at different polar tilts for e.g. tilt-corrected DPC.
+
+    Parameters
+    ----------
+    polar_angles : list[float]
+        List of polar angles [mrad].
+    nums_azimuthal : list[int]
+        List of the number of azimuthal tilts per polar angle.
+
+    Returns
+    -------
+    array_of_tilts : 2D array
+        Array of xy-tilt angles [mrad].
+    """
+
+    assert len(polar_angles) == len(nums_azimuthal), \
+        "The number of azimuthal angles needs to be provided for each polar angle!"
+
+    # Doing this manually with lists as the number of tilts per radius may vary.
+    tilts_x = []
+    tilts_y = []
+
+    # Creates a list of lists of x and y tilts.
+    for i in range(len(polar_angles)):
+        azimuthal_angles = np.linspace(
+            0, 2 * np.pi, num=nums_azimuthal[i], endpoint=False
+        )
+        tilts_x.append(polar_angles[i] * np.cos(azimuthal_angles))
+        tilts_y.append(polar_angles[i] * np.sin(azimuthal_angles))
+
+    # Flattens the list of lists of tilts to one long list for each x and y.
+    tilts_x = [x for xs in tilts_x for x in xs]
+    tilts_y = [y for ys in tilts_y for y in ys]
+
+    return np.array([tilts_x, tilts_y], dtype=float).T
 
 
 class BaseBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
