@@ -7,5 +7,7 @@
 *.pyc
 *.egg-info
 **/__pycache__
+*.zarr/
+*.zarr/**
 build
 dist
