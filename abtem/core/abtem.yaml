@@ -8,7 +8,7 @@ fft: fftw
 precision: float32
 diagnostics:
   # Show the progress bar. Options are 'true', 'false' or 'tqdm'
-  progress_bar: true
+  progress_bar: "tqdm"
   # Show the progress of each task. Options are 'true' or 'false'
   task_progress: false
 dask:

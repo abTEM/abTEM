@@ -173,12 +173,16 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         -------
         measurement : BaseMeasurements
         """
+
+        return self.apply(waves, max_batch="auto")
+
+    def apply(
+        self, waves: Waves, max_batch: int | str = "auto"
+    ) -> BaseMeasurements | Waves:
         measurements = waves.apply_transform(self)
         assert isinstance(measurements, (BaseMeasurements, Waves))
-        # if not isinstance(measurements, (Waves, BaseMeasurements)):
-        #    raise RuntimeError("Detector must return a measurement.")
         return measurements
-
+    
     @abstractmethod
     def angular_limits(self, waves: Waves) -> tuple[float, float]:
         """
@@ -332,7 +336,6 @@ class AnnularDetector(BaseDetector):
 
         if self.to_cpu and hasattr(measurement, "to_cpu"):
             measurement = measurement.to_cpu()
-
         return measurement._eager_array
 
     def detect(
@@ -350,7 +353,7 @@ class AnnularDetector(BaseDetector):
         -------
         measurement : Images or RealSpaceLineProfiles
         """
-        measurements = super().detect(waves)
+        measurements = self.apply(waves)
         assert isinstance(
             measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
         )

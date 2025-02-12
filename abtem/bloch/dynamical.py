@@ -39,7 +39,7 @@ from abtem.bloch.utils import (
     retrieve_structure_factor_values,
 )
 from abtem.core import config
-from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis, TiltAxis
+from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis
 from abtem.core.backend import cp, get_array_module, validate_device
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
@@ -1939,7 +1939,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
                     )
                 else:
                     ensemble_axes_metadata.append(
-                        TiltAxis(
+                        NonLinearAxis(
                             label=f"{axes}_rotation",
                             values=tuple(tuple(value) for value in rotations.values),
                             units=units,

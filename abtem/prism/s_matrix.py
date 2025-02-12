@@ -13,7 +13,7 @@ import numpy as np
 from ase import Atoms
 from dask.graph_manipulation import wait_on
 
-from abtem.array import ArrayObject, ComputableList, _validate_lazy
+from abtem.array import ArrayObject, ComputableList, validate_lazy
 from abtem.core import config
 from abtem.core.axes import (
     AxisMetadata,
@@ -772,7 +772,6 @@ def _no_chunks_reduce(
         detectors=detectors,
         extra_ensemble_axes_metadata=s_matrix_array.ensemble_axes_metadata,
     )
-
     return measurements
 
 
@@ -1302,6 +1301,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         if self.is_lazy:
             if reduction_scheme == "multiple-rechunk":
+                sssss
                 measurements = _multiple_rechunk_reduce(
                     self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
                 )
@@ -1777,11 +1777,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         s_matrix_array : SMatrixArray
             The built scattering matrix.
         """
-        lazy = _validate_lazy(lazy)
+        lazy = validate_lazy(lazy)
 
         downsampled_gpts = self.downsampled_gpts
 
         s_matrix_blocks = self.ensemble_blocks(1)
+
         xp = get_array_module(self.device)
 
         wave_vector_chunks = self._wave_vector_chunks(max_batch)
@@ -1790,6 +1791,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             wave_vector_blocks = self._wave_vector_blocks(
                 wave_vector_chunks, lazy=False
             )
+
+            if not hasattr(s_matrix_blocks, "len"):
+                s_matrix_blocks = s_matrix_blocks[None]
 
             wave_vector_blocks = np.tile(
                 wave_vector_blocks[None], (len(s_matrix_blocks), 1)
@@ -2104,7 +2108,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         if scan is None:
             scan = (self.extent[0] / 2, self.extent[1] / 2)
 
-        lazy = _validate_lazy(lazy)
+        lazy = validate_lazy(lazy)
 
         if ctf is None:
             ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)

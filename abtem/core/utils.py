@@ -7,7 +7,7 @@ import inspect
 import itertools
 import os
 import warnings
-from typing import Any, Optional, Sequence, TypeGuard, TypeVar, overload
+from typing import Any, Optional, Self, Sequence, TypeGuard, TypeVar, overload
 
 import dask.array as da
 import numpy as np
@@ -17,6 +17,8 @@ from abtem.core.config import config
 
 T = TypeVar("T", float, int, bool)
 
+
+np.ndarray(())
 
 def number_to_tuple(
     value: T | tuple[T, ...], dimension: Optional[int] = None
@@ -97,7 +99,7 @@ class CopyMixin:
         kwargs = {key: copy.deepcopy(getattr(self, key)) for key in keys}
         return kwargs
 
-    def copy(self):
+    def copy(self) -> Self:
         """Make a copy."""
         return copy.deepcopy(self)
 
@@ -252,7 +254,8 @@ def expand_dims_to_broadcast(
     arr2: np.ndarray,
     match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
     broadcast: bool = False,
-) -> tuple[np.ndarray, np.ndarray]: ...
+) -> tuple[np.ndarray, np.ndarray]:
+    ...
 
 
 @overload
@@ -261,7 +264,8 @@ def expand_dims_to_broadcast(
     arr2: da.core.Array,
     match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
     broadcast: bool = False,
-) -> tuple[da.core.Array, da.core.Array]: ...
+) -> tuple[da.core.Array, da.core.Array]:
+    ...
 
 
 def expand_dims_to_broadcast(

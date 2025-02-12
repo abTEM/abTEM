@@ -2,49 +2,64 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 import numpy as np
 
+from abtem import distributions
 from abtem.core.axes import AxisAlignedTiltAxis, AxisMetadata, TiltAxis
 from abtem.core.backend import get_array_module
 from abtem.distributions import (
     BaseDistribution,
-    EnsembleFromDistributions,
     MultidimensionalDistribution,
-    from_values,
     validate_distribution,
+    DistributionFromValues,
 )
-from abtem.transform import ArrayObjectTransform, CompositeArrayObjectTransform
+from abtem.transform import WavesToWavesTransform
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
 
 
-def _validate_tilt(
-    tilt: BaseDistribution | tuple[float, float] | np.ndarray,
-) -> BeamTilt | CompositeArrayObjectTransform:
+TiltType = float | BaseDistribution | np.ndarray
+TiltType2D = tuple[TiltType, TiltType] | BaseDistribution | np.ndarray
+
+
+def validate_tilt(
+    tilt: TiltType2D,
+) -> BeamTilt | BeamTilt2D | AxisAlignedBeamTilt:
     """Validate that the given tilt is correctly defined."""
     if isinstance(tilt, MultidimensionalDistribution):
         raise NotImplementedError
 
+    if isinstance(tilt, BaseBeamTilt):
+        return tilt
+
+    # tilt_shape = np.array(tilt, dtype=float).shape
+
+    # if len(tilt_shape) == 2 and not tilt_shape[1] == 2:
+    #    raise ValueError("Tilt should be a 1D or Nx2 array.")
+
+    # if len(tilt_shape) == 1 and not len(tilt) == 2:
+    #    raise ValueError("Tilt should be a 1D or Nx2 array.")
+
+    validated_tilt: BeamTilt | BeamTilt2D | AxisAlignedBeamTilt
     if isinstance(tilt, BaseDistribution):
-        return BeamTilt(tilt)
+        validated_tilt = BeamTilt(tilt)
 
     elif isinstance(tilt, (tuple, list)):
         assert len(tilt) == 2
 
-        transforms = []
-        for tilt_component, direction in zip(tilt, ("x", "y")):
-            transforms.append(
-                AxisAlignedBeamTilt(tilt=tilt_component, direction=direction)
-            )
+        # tilt_x = AxisAlignedBeamTilt(tilt[0], direction="x")
+        # tilt_y = AxisAlignedBeamTilt(tilt[1], direction="y")
 
-        tilt = CompositeArrayObjectTransform(transforms)
+        validated_tilt = BeamTilt2D(tilt_x=tilt[0], tilt_y=tilt[1])
     elif isinstance(tilt, np.ndarray):
-        return BeamTilt(tilt)
+        validated_tilt = BeamTilt(tilt)
+    else:
+        raise ValueError("Tilt should be a BaseDistribution, tuple, or numpy array.")
 
-    return tilt
+    return validated_tilt
 
 
 def _get_tilt_axes(waves) -> tuple[TiltAxis | AxisAlignedTiltAxis, ...]:
@@ -89,7 +104,7 @@ def precession_tilts(
     return np.array([tilt_x, tilt_y], dtype=float).T
 
 
-class BaseBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
+class BaseBeamTilt(WavesToWavesTransform):
     def _out_metadata(self, waves):
         metadata = super()._out_metadata(waves)[0]
 
@@ -101,29 +116,29 @@ class BaseBeamTilt(EnsembleFromDistributions, ArrayObjectTransform):
 
         return (metadata,)
 
-    def _calculate_new_array(self, waves: Waves) -> np.ndarray | tuple[np.ndarray, ...]:
+    def _calculate_new_array(self, waves: Waves) -> np.ndarray:
         xp = get_array_module(waves.device)
         array = waves.array[(None,) * len(self.ensemble_shape)]
         array = xp.tile(array, self.ensemble_shape + (1,) * len(waves.shape))
         return array
 
-    def apply(self, waves: Waves) -> Waves:
+    def apply(self, waves: Waves, max_batch: int | str = "auto") -> Waves:
         """
         Apply tilt(s) to (an ensemble of) wave function(s).
 
         Parameters
         ----------
         waves : Waves
-            The waves to transform.
-        in_place: bool, optional
-            If True, the array representing the waves may be modified in-place.
+            The wave function(s) to apply the tilt to.
+        max_batch : int or str, optional
+            The maximum batch size used in the calculation. If 'auto', the batch size is
+            automatically determined. Default is 'auto'.
 
         Returns
         -------
         waves_with_tilt : Waves
         """
-
-        return self._apply(waves)
+        return super().apply(waves, max_batch=max_batch)
 
 
 class BeamTilt(BaseBeamTilt):
@@ -137,8 +152,21 @@ class BeamTilt(BaseBeamTilt):
     """
 
     def __init__(self, tilt: tuple[float, float] | BaseDistribution | np.ndarray):
-        if isinstance(tilt, np.ndarray):
-            tilt = from_values(tilt)
+        if isinstance(tilt, BaseDistribution):
+            tilt = tilt
+        elif isinstance(tilt, (np.ndarray, list, tuple)):
+            tilt_shape = np.array(tilt, dtype=float).shape
+            if len(tilt_shape) == 2:
+                if not tilt_shape[1] == 2:
+                    raise ValueError("Tilt should be a 1D or Nx2 array.")
+
+                if isinstance(tilt, np.ndarray):
+                    tilt = distributions.from_values(tilt)
+            elif len(tilt_shape) == 1:
+                assert len(tilt) == 2
+                tilt = tuple(tilt)
+            else:
+                raise ValueError("Tilt should be a 1D or Nx2 array.")
 
         self._tilt = tilt
         super().__init__(distributions=("tilt",))
@@ -172,7 +200,7 @@ class BeamTilt(BaseBeamTilt):
             return []
 
 
-class AxisAlignedBeamTilt(BaseBeamTilt):
+class AxisAlignedBeamTilt(DistributionFromValues):
     """
     Class describing tilt(s) aligned with an axis.
 
@@ -184,7 +212,7 @@ class AxisAlignedBeamTilt(BaseBeamTilt):
         Cartesian axis, should be either 'x' or 'y'.
     """
 
-    def __init__(self, tilt: float | BaseDistribution = 0.0, direction: str = "x"):
+    def __init__(self, tilt: TiltType = 0.0, direction: str = "x"):
         if isinstance(tilt, (np.ndarray, list, tuple)):
             tilt = validate_distribution(tilt)
 
@@ -193,7 +221,6 @@ class AxisAlignedBeamTilt(BaseBeamTilt):
 
         self._tilt = tilt
         self._direction = direction
-        super().__init__(distributions=("tilt",))
 
     @property
     def direction(self) -> str:
@@ -226,3 +253,93 @@ class AxisAlignedBeamTilt(BaseBeamTilt):
             ]
         else:
             return []
+
+
+class BeamTilt2D(BaseBeamTilt):
+    """
+    Class describing 2D beam tilt.
+
+    Parameters
+    ----------
+    tilt : array of BeamTilt
+        Tilt along the `x` and `y` axes [mrad] with an optional spread of values.
+    """
+
+    def __init__(self, tilt_x: BaseDistribution, tilt_y: BaseDistribution):
+        tilt_x = validate_distribution(tilt_x)
+        tilt_y = validate_distribution(tilt_y)
+
+        self._tilt_x = tilt_x
+        self._tilt_y = tilt_y
+        super().__init__(distributions=("tilt_x", "tilt_y"))
+
+    @property
+    def ensemble_shape(self) -> tuple[int, int]:
+        if isinstance(self.tilt_x, BaseDistribution):
+            ensemble_shape_x = self.tilt_x.shape
+        else:
+            ensemble_shape_x = ()
+
+        if isinstance(self.tilt_y, BaseDistribution):
+            ensemble_shape_y = self.tilt_y.shape
+        else:
+            ensemble_shape_y = ()
+
+        return ensemble_shape_x + ensemble_shape_y
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.ensemble_shape
+
+    @property
+    def tilt_x(self) -> BaseDistribution | float:
+        """Beam tilt along the x-axis."""
+        return self._tilt_x
+
+    @property
+    def tilt_y(self) -> BaseDistribution | float:
+        """Beam tilt along the y-axis."""
+        return self._tilt_y
+
+    @property
+    def metadata(self):
+        metadata = {}
+        if isinstance(self.tilt_x, BaseDistribution):
+            metadata["base_tilt_x"] = 0.0
+        else:
+            metadata["base_tilt_x"] = self.tilt_x
+
+        if isinstance(self.tilt_y, BaseDistribution):
+            metadata["base_tilt_y"] = 0.0
+        else:
+            metadata["base_tilt_y"] = self.tilt_y
+
+        return metadata
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        ensemble_axes_metadata: list[AxisMetadata] = []
+
+        if isinstance(self.tilt_x, BaseDistribution):
+            ensemble_axes_metadata.append(
+                AxisAlignedTiltAxis(
+                    label="tilt_x",
+                    values=tuple(self.tilt_x.values),
+                    units="mrad",
+                    direction="x",
+                    _ensemble_mean=self.tilt_x.ensemble_mean,
+                )
+            )
+
+        if isinstance(self.tilt_y, BaseDistribution):
+            ensemble_axes_metadata.append(
+                AxisAlignedTiltAxis(
+                    label="tilt_y",
+                    values=tuple(self.tilt_y.values),
+                    units="mrad",
+                    direction="y",
+                    _ensemble_mean=self.tilt_y.ensemble_mean,
+                )
+            )
+
+        return ensemble_axes_metadata

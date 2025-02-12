@@ -2,40 +2,45 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Self
 
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator  # type: ignore
 
 from abtem.core.axes import NonLinearAxis, SampleAxis
-from abtem.core.backend import get_array_module
 from abtem.core.utils import get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
-from abtem.inelastic.phonons import _validate_seeds
+from abtem.inelastic.phonons import validate_seeds
 from abtem.transform import EnsembleTransform
 
 if TYPE_CHECKING:
-    from abtem.core.array import ArrayObject
-    from abtem.measurements import BaseMeasurement
+    from abtem.array import ArrayObject
+    from abtem.core.axes import AxisMetadata
 
 
 class NoiseTransform(EnsembleTransform):
     def __init__(
         self,
         dose: float | np.ndarray | BaseDistribution,
-        samples: int = None,
-        seeds: int | tuple[int, ...] = None,
+        samples: Optional[int] = None,
+        seeds: Optional[int | tuple[int, ...]] = None,
     ):
         self._dose = validate_distribution(dose)
 
-        if samples is None and seeds is None:
-            samples = 1
+        seeds_distribution: None | int | BaseDistribution
+        if isinstance(seeds, int) and samples is None:
+            seeds_distribution = seeds
 
-        if seeds is None and samples > 1:
-            seeds = _validate_seeds(seeds, samples)
-            seeds = validate_distribution(seeds)
+        elif seeds is not None or samples is not None:
+            seeds = validate_seeds(seeds, samples)
+            seeds_distribution = validate_distribution(seeds)
 
-        self._seeds = seeds
+        else:
+            seeds_distribution = None
+
+        self._seeds = seeds_distribution
+
+        print(self._seeds)
 
         super().__init__(
             distributions=(
@@ -45,23 +50,23 @@ class NoiseTransform(EnsembleTransform):
         )
 
     @property
-    def dose(self):
+    def dose(self) -> float | np.ndarray | BaseDistribution:
         return self._dose
 
     @property
-    def seeds(self):
+    def seeds(self) -> Optional[BaseDistribution | int]:
         return self._seeds
 
     @property
-    def samples(self):
-        if hasattr(self.seeds, "__len__"):
-            return len(self.seeds)
+    def samples(self) -> int:
+        if isinstance(self.seeds, BaseDistribution):
+            return len(self.seeds.values)
         else:
             return 1
 
     @property
-    def ensemble_axes_metadata(self):
-        ensemble_axes_metadata = []
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        ensemble_axes_metadata: list[AxisMetadata] = []
 
         if isinstance(self.dose, BaseDistribution):
             ensemble_axes_metadata += [
@@ -74,44 +79,47 @@ class NoiseTransform(EnsembleTransform):
         return ensemble_axes_metadata
 
     @property
-    def metadata(self):
+    def metadata(self) -> dict:
         return {"units": "", "label": "electron counts"}
 
-    def _calculate_new_array(
-        self, array_object: ArrayObject
-    ) -> np.ndarray | tuple[np.ndarray, ...]:
-        array = array_object.array
-        xp = get_array_module(array)
+    def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
+        array = array_object._eager_array
 
         if isinstance(self.seeds, BaseDistribution):
-            array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
+            array = np.tile(array[None], (self.samples,) + (1,) * len(array.shape))
 
         if isinstance(self.dose, BaseDistribution):
-            dose = xp.array(self.dose.values, dtype=get_dtype())
-            array = array[None] * xp.expand_dims(
+            dose = np.array(self.dose.values, dtype=get_dtype())
+            array = array[None] * np.expand_dims(
                 dose, tuple(range(1, len(array.shape) + 1))
             )
         else:
-            array = array * xp.array(self.dose, dtype=get_dtype())
+            array = array * np.array(self.dose, dtype=get_dtype())
 
         if isinstance(self.seeds, BaseDistribution):
             seed = sum(self.seeds.values)
         else:
             seed = self.seeds
 
-        rng = xp.random.default_rng(seed=seed)
+        seed_rng = np.random.default_rng(seed=seed)
 
-        randomized_seed = int(rng.integers(np.iinfo(np.int32).max))
-        rng = xp.random.RandomState(seed=randomized_seed)
+        randomized_seed = int(seed_rng.integers(np.iinfo(np.int32).max))
 
-        array = xp.clip(array, a_min=0.0, a_max=None)
+        poisson_rng = np.random.RandomState(seed=randomized_seed)
 
-        array = rng.poisson(array).astype(get_dtype())
+        array = np.clip(array, a_min=0.0, a_max=None)
+
+        array = poisson_rng.poisson(array).astype(get_dtype())
 
         return array
 
-    def apply(self, array_object: ArrayObject) -> ArrayObject:
-        return array_object.apply_transform(self)
+    def apply(
+        self, array_object: ArrayObjectType, max_batch: int | str = "auto"
+    ) -> ArrayObjectType:
+        new_array_object = array_object.apply_transform(self)
+        if TYPE_CHECKING:
+            assert isinstance(new_array_object, self.__class__)
+        return new_array_object
 
 
 def _pixel_times(
@@ -147,7 +155,10 @@ def _pixel_times(
 
 
 def _single_axis_distortion(
-    time: np.ndarray, max_frequency: float, num_components: int, seed: int = None
+    time: np.ndarray,
+    max_frequency: float,
+    num_components: int,
+    seed: Optional[int] = None,
 ):
     """
     Single axis distortion internal function
@@ -178,7 +189,7 @@ def _make_displacement_field(
     max_frequency: float,
     num_components: int,
     rms_power: float,
-    seed: int = None,
+    seed: Optional[int] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Displacement field creation internal function
@@ -249,53 +260,46 @@ def _apply_displacement_field(
     return warped.reshape(image.shape)
 
 
-def apply_scan_noise(
-    measurement: np.ndarray | BaseMeasurement,
-    dwell_time: float,
-    flyback_time: float,
-    max_frequency: float,
-    rms_power: float,
-    num_components: int = 200,
-):
-    """
-    Add scan noise to a measurement.
+# def apply_scan_noise(
+#     measurement: np.ndarray,
+#     dwell_time: float,
+#     flyback_time: float,
+#     max_frequency: float,
+#     rms_power: float,
+#     num_components: int = 200,
+# ):
+#     """
+#     Add scan noise to a measurement.
 
-    Parameters
-    ----------
-    measurement: Measurement object or 2d array
-        The measurement to add noise to.
-    dwell_time: float
-        Dwell time on a single pixel in s.
-    flyback_time: float
-        Flyback time for the scanning probe at the end of each scan line in s.
-    max_frequency: float
-        Maximum noise frequency in 1 / s.
-    rms_power: float
-        Root-mean-square power of the distortion in unit of percent.
-    num_components: int, optional
-        Number of frequency components. More components will be more 'white' but will
-        take longer.
+#     Parameters
+#     ----------
+#     measurement: Measurement object or 2d array
+#         The measurement to add noise to.
+#     dwell_time: float
+#         Dwell time on a single pixel in s.
+#     flyback_time: float
+#         Flyback time for the scanning probe at the end of each scan line in s.
+#     max_frequency: float
+#         Maximum noise frequency in 1 / s.
+#     rms_power: float
+#         Root-mean-square power of the distortion in unit of percent.
+#     num_components: int, optional
+#         Number of frequency components. More components will be more 'white' but will
+#         take longer.
 
-    Returns
-    -------
-    measurement: Measurement object
-        The noisy measurement.
-    """
+#     Returns
+#     -------
+#     measurement: Measurement object
+#         The noisy measurement.
+#     """
 
-    measurement = measurement.copy()
-    if hasattr(measurement, "array"):
-        array = measurement.array
-    else:
-        array = measurement
+#     time = _pixel_times(dwell_time, flyback_time, array.T.shape)
+#     displacement_x, displacement_y = _make_displacement_field(
+#         time, max_frequency, num_components, rms_power
+#     )
 
-    time = _pixel_times(dwell_time, flyback_time, array.T.shape)
-    displacement_x, displacement_y = _make_displacement_field(
-        time, max_frequency, num_components, rms_power
-    )
-
-    array = _apply_displacement_field(array[:].T, displacement_x, displacement_y)
-    measurement.array[:] = array.T
-    return measurement
+#     array = _apply_displacement_field(array.T, displacement_x, displacement_y)
+#     return array.T
 
 
 class ScanNoiseTransform(EnsembleTransform):
@@ -304,10 +308,10 @@ class ScanNoiseTransform(EnsembleTransform):
         rms_power: float | np.ndarray | BaseDistribution,
         dwell_time: float,
         flyback_time: float,
-        samples: int = None,
+        samples: Optional[int] = None,
         max_frequency: float = 500,
         num_components: int = 1000,
-        seeds: int | tuple[int, ...] = None,
+        seeds: Optional[int | tuple[int, ...]] = None,
     ):
         self._rms_power = validate_distribution(rms_power)
         self._dwell_time = dwell_time
@@ -318,11 +322,12 @@ class ScanNoiseTransform(EnsembleTransform):
         if samples is None and seeds is None:
             samples = 1
 
-        if seeds is None and samples > 1:
-            seeds = _validate_seeds(seeds, samples)
-            seeds = validate_distribution(seeds)
+        if seeds is not None:
+            seeds_distribution = validate_distribution(validate_seeds(seeds, samples))
+        else:
+            seeds_distribution = None
 
-        self._seeds = seeds
+        self._seeds = seeds_distribution
 
         super().__init__(
             distributions=(
@@ -332,40 +337,39 @@ class ScanNoiseTransform(EnsembleTransform):
         )
 
     @property
-    def rms_power(self):
+    def rms_power(self) -> float | np.ndarray | BaseDistribution:
         return self._rms_power
 
     @property
-    def dwell_time(self):
+    def dwell_time(self) -> float:
         return self._dwell_time
 
     @property
-    def flyback_time(self):
+    def flyback_time(self) -> float:
         return self._flyback_time
 
     @property
-    def max_frequency(self):
+    def max_frequency(self) -> float:
         return self._max_frequency
 
     @property
-    def num_components(self):
+    def num_components(self) -> int:
         return self._num_components
 
     @property
-    def seeds(self):
+    def seeds(self) -> Optional[BaseDistribution]:
         return self._seeds
 
     @property
-    def samples(self):
-        if hasattr(self.seeds, "__len__"):
-            return len(self.seeds)
+    def samples(self) -> int:
+        if self.seeds is not None:
+            return len(self.seeds.values)
         else:
             return 1
 
     @property
-    def ensemble_axes_metadata(self):
-        ensemble_axes_metadata = []
-
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        ensemble_axes_metadata: list[AxisMetadata] = []
         if isinstance(self.rms_power, BaseDistribution):
             ensemble_axes_metadata += [
                 NonLinearAxis(
@@ -381,22 +385,28 @@ class ScanNoiseTransform(EnsembleTransform):
         return ensemble_axes_metadata
 
     @property
-    def metadata(self):
+    def metadata(self) -> dict:
         return {"units": "", "label": "electron counts"}
 
-    def _calculate_new_array(self, array_object) -> np.ndarray | tuple[np.ndarray, ...]:
-        array = array_object.array
-        xp = get_array_module(array)
+    def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
+        array = array_object._eager_array
+        base_shape = array_object.base_shape
+        assert len(base_shape) == 2
 
         if isinstance(self.seeds, BaseDistribution):
-            array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
+            array = np.tile(array[None], (self.samples,) + (1,) * len(array.shape))
 
-        time = _pixel_times(self.dwell_time, self.flyback_time, array.shape[-2:])
+        time = _pixel_times(self.dwell_time, self.flyback_time, base_shape)
 
         if isinstance(self.rms_power, BaseDistribution):
-            rms_powers = xp.array(self.rms_power.values, dtype=get_dtype())
+            rms_powers = np.array(self.rms_power.values, dtype=get_dtype())
         else:
-            rms_powers = xp.array([self.rms_power], dtype=get_dtype())
+            rms_powers = np.array([self.rms_power], dtype=get_dtype())
+
+        if self.seeds is not None:
+            seed = sum(self.seeds.values)
+        else:
+            seed = None
 
         arrays = []
         for rms_power in rms_powers:
@@ -407,7 +417,7 @@ class ScanNoiseTransform(EnsembleTransform):
                     self.max_frequency,
                     self.num_components,
                     rms_power,
-                    seed=self.seeds,
+                    seed=seed,
                 )
 
                 inner_array[i] = _apply_displacement_field(

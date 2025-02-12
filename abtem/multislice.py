@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from bisect import bisect_left
 from functools import partial
-from typing import TYPE_CHECKING, Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeGuard, cast
 
 import numpy as np
 from ase import Atoms
@@ -36,7 +36,7 @@ from abtem.potentials.iam import (
 )
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import _get_tilt_axes
-from abtem.transform import ArrayObjectTransform
+from abtem.transform import WavesTransform
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -810,105 +810,33 @@ def transition_potential_multislice_and_detect(
     return measurements
 
 
-# def transition_potential_multislice_and_detect(
-#     waves: Waves,
-#     potential: BasePotential,
-#     detectors: list[BaseDetector],
-#     sites,
-#     transition_potentials,
-#     conjugate: bool = False,
-#     transpose: bool = False,
-# ) -> tuple[BaseMeasurements | Waves, ...] | BaseMeasurements | Waves:
-#     """
-#     Calculate the full multislice algorithm for the given batch of wave functions
-# through a given potential, detecting
-#     at each of the exit planes specified in the potential.
-#
-#     Parameters
-#     ----------
-#     waves : Waves
-#         A batch of wave functions as a :class:`.Waves` object.
-#     potential : BasePotential
-#         A potential as :class:`BasePotential` object.
-#     detectors : (list of) BaseDetector, optional
-#         A detector or a list of detectors defining how the wave functions should be
-# converted to measurements after
-#         running the multislice algorithm.
-#     conjugate : bool, optional
-#         If True, use the conjugate of the transmission function (default is False).
-#     transpose : bool, optional
-#         If True, reverse the order of propagation and transmission (default is False).
-#
-#     Returns
-#     -------
-#     measurements : Waves or (list of) :class:`.BaseMeasurement`
-#         Exit waves or detected measurements or lists of measurements.
-#     """
-#
-#     antialias_aperture = AntialiasAperture()
-#     propagator = FresnelPropagator()
-#
-#     measurements = allocate_multislice_measurements(
-#         waves,
-#         detectors,
-#         potential,
-#     )
-#
-#     for potential_index, _, potential_configuration in potential.generate_blocks():
-#         slice_generator = potential_configuration.generate_slices()
-#
-#         for scatter_index, (scatter_slice, sites_slice) in enumerate(
-#             zip(slice_generator, sites)
-#         ):
-#
-#             waves = multislice_step(
-#                 waves,
-#                 scatter_slice,
-#                 propagator,
-#                 antialias_aperture,
-#                 conjugate=conjugate,
-#                 transpose=transpose,
-#             )
-#
-#             sites_slice = transition_potentials.validate_sites(sites_slice)
-#
-#             for _, scattered_waves in transition_potentials.generate_scattered_waves(
-#                 waves, sites_slice
-#             ):
-#
-#                 for depth, potential_slice in potential_configuration.generate_slices(
-#                     first_slice=scatter_index, return_depth=True
-#                 ):
-#
-#                     scattered_waves = multislice_step(
-#                         scattered_waves,
-#                         potential_slice,
-#                         propagator,
-#                         antialias_aperture,
-#                         conjugate=conjugate,
-#                         transpose=transpose,
-#                     )
-#
-#                     if potential_slice.exit_planes:
-#                         exit_plane_index = np.searchsorted(
-#                             potential.exit_thicknesses, depth - 1e-6
-#                         )
-#
-#                         measurement_index = _validate_potential_ensemble_indices(
-#                             potential_index, exit_plane_index, potential_configuration
-#                         )
-#
-#                         for detector in detectors:
-#                             new_measurement = detector.detect(scattered_waves).mean(0)
-#                             measurements[detector].array[
-#                                 measurement_index
-#                             ] += new_measurement.array
-#
-#     measurements = tuple(measurements.values())
-#     return measurements
+def is_waves_base_measurements_or_list(
+    value: Any,
+) -> TypeGuard["Waves | BaseMeasurements | list[Waves | BaseMeasurements]"]:
+    waves_class_name = "Waves"
+    base_measurements_class_name = "BaseMeasurements"
+    waves_module_name = "abtem.waves"
+    base_measurements_module_name = "abtem.measurements"
+
+    def is_instance_of_waves_or_base_measurements(obj: Any) -> bool:
+        return (
+            obj.__class__.__name__ == waves_class_name
+            and obj.__class__.__module__ == waves_module_name
+        ) or (
+            obj.__class__.__name__ == base_measurements_class_name
+            and obj.__class__.__module__ == base_measurements_module_name
+        )
+
+    if is_instance_of_waves_or_base_measurements(value):
+        return True
+    if isinstance(value, list) and all(
+        is_instance_of_waves_or_base_measurements(item) for item in value
+    ):
+        return True
+    return False
 
 
-class MultisliceTransform(ArrayObjectTransform):
+class MultisliceTransform(WavesTransform[BaseMeasurements]):
     """
     Transformation applying the multislice algorithm to wave functions, producing new
     wave functions or measurements.
@@ -1024,37 +952,39 @@ class MultisliceTransform(ArrayObjectTransform):
             ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
         return ensemble_shape
 
-    def _out_metadata(self, waves: Waves):
+    def _out_metadata(self, waves: Waves) -> tuple[dict, ...]:
         return tuple(detector._out_metadata(waves)[0] for detector in self.detectors)
 
-    def _out_dtype(self, waves: Waves):
+    def _out_dtype(self, waves: Waves) -> tuple[np.dtype, ...]:
         return tuple(detector._out_dtype(waves)[0] for detector in self.detectors)
 
-    def _out_meta(self, waves: Waves):
+    def _out_meta(self, waves: Waves) -> tuple[np.ndarray, ...]:
         return tuple(detector._out_meta(waves)[0] for detector in self.detectors)
 
-    def _out_type(self, waves: Waves):
+    def _out_type(self, waves: Waves) -> tuple[type, ...]:
         return tuple(detector._out_type(waves)[0] for detector in self.detectors)
 
-    def _out_ensemble_shape(self, waves: Waves):
+    def _out_ensemble_shape(self, waves: Waves) -> tuple[tuple[int, ...], ...]:
         shape = tuple(
             self.ensemble_shape + detector._out_ensemble_shape(waves)[0]
             for detector in self.detectors
         )
         return shape
 
-    def _out_base_shape(self, waves: Waves):
+    def _out_base_shape(self, waves: Waves) -> tuple[tuple[int, ...], ...]:
         base_shape = tuple(
             detector._out_base_shape(waves)[0] for detector in self.detectors
         )
         return base_shape
 
-    def _out_base_axes_metadata(self, waves: Waves):
+    def _out_base_axes_metadata(self, waves: Waves) -> tuple[list[AxisMetadata], ...]:
         return tuple(
             detector._out_base_axes_metadata(waves)[0] for detector in self.detectors
         )
 
-    def _out_ensemble_axes_metadata(self, waves: Waves):
+    def _out_ensemble_axes_metadata(
+        self, waves: Waves
+    ) -> tuple[list[AxisMetadata], ...]:
         if len(self.potential.exit_planes) > 1:
             potential_axes_metadata = self.potential.ensemble_axes_metadata + [
                 self.potential._get_exit_planes_axes_metadata()
@@ -1077,23 +1007,27 @@ class MultisliceTransform(ArrayObjectTransform):
             chunks = chunks[:-1]
 
         args = self._potential._partition_args(chunks=chunks, lazy=lazy)
+
         if len(self._potential.ensemble_shape) > 0:
+            ## this needs work
             args = (args[0][..., None],)
+
         return args
 
     @staticmethod
-    def _multislice_transform_member(*args, potential_partial, **kwargs):
+    def _multislice_transform_member(*args, potential_partial: Callable, **kwargs):
         args = unpack_blockwise_args(args)
 
         potential = potential_partial(*args)
         potential = potential.item()
+        transform = MultisliceTransform(potential, **kwargs)
 
-        multislice = MultisliceTransform(potential, **kwargs)
+        ndims = len(transform.ensemble_shape) + 1
 
-        multislice = _wrap_with_array(multislice)
-        return multislice
+        wrapped_transform = _wrap_with_array(transform, ndims)
+        return wrapped_transform
 
-    def _from_partitioned_args(self):
+    def _from_partitioned_args(self) -> Callable:
         potential_partial = self._potential._from_partitioned_args()
         return partial(
             self._multislice_transform_member,
@@ -1122,8 +1056,8 @@ class MultisliceTransform(ArrayObjectTransform):
         return arrays
 
     def apply(
-        self, waves: Waves
-    ) -> Waves | BaseMeasurements | tuple[Waves | BaseMeasurements, ...]:
+        self, waves: Waves, max_batch: int | str = "auto"
+    ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """
         Run the multislice algorithm on the given wave functions. An output is returned
         for each detector.
@@ -1132,60 +1066,15 @@ class MultisliceTransform(ArrayObjectTransform):
         ----------
         waves : Waves
             The wave functions to run the multislice algorithm on.
+        max_batch : int or str, optional
+            The maximum batch size to use for the multislice algorithm. If 'auto' the
+            batch size is chosen automatically based on the available memory.
 
         Returns
         -------
         waves : tuple of Waves and BaseMeasurements
             The wave functions after running the multislice algorithm.
         """
-
-        return self._apply(waves)
-
-    # def apply(self, waves: Waves):
-    #     if "transition_potentials" in self._multislice_func_kwargs.keys():
-    #         sites = self._multislice_func_kwargs.get("sites", None)
-    #         transition_potentials = self._multislice_func_kwargs.get(
-    #             "transition_potentials"
-    #         )
-    #
-    #         transition_potentials = _validate_transition_potentials(
-    #             transition_potentials
-    #         )
-    #
-    #         measurements = []
-    #         for transition_potential in transition_potentials:
-    #             multislice_transform = MultisliceTransform(
-    #                 potential=self.potential,
-    #                 detectors=self.detectors,
-    #                 multislice_func=transition_potential_multislice_and_detect,
-    #                 transition_potential=transition_potential,
-    #                 sites=sites,
-    #             )
-    #             measurements.append(multislice_transform.apply(waves))
-    #
-    #         if len(measurements) > 1:
-    #             axis_metadata = OrdinalAxis(
-    #                 label="Z, n, l",
-    #                 values=[
-    #                     ",".join(
-    #                         (
-    #                             str(transition_potential.metadata["Z"]),
-    #                             str(transition_potential.metadata["n"]),
-    #                             str(transition_potential.metadata["l"]),
-    #                         )
-    #                     )
-    #                     for transition_potential in transition_potentials
-    #                 ],
-    #                 _tex_label="$Z, n, \ell$",
-    #             )
-    #
-    #             measurements = stack(
-    #                 measurements,
-    #                 axis_metadata,
-    #             )
-    #         else:
-    #             measurements = measurements[0]
-    #
-    #         return measurements
-    #     else:
-    #         return super().apply(waves)
+        output = waves.apply_transform(self, max_batch=max_batch)
+        # assert is_waves_base_measurements_or_list(output)
+        return output

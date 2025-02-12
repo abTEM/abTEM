@@ -16,6 +16,8 @@ from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype
 
 def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
     """
+    Ensure that the prodived grid points are valid.
+
     Parameters
     ----------
     gpts : tuple of int
@@ -23,7 +25,7 @@ def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
 
     Returns
     -------
-    gpts : tuple of int
+    tuple of int
         The validated tuple of integers representing the GPTs.
 
     Raises
@@ -31,7 +33,9 @@ def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
     ValueError
         If any value in the gpts tuple is not greater than 0.
     """
-    if not all(gpts):
+    gpts = tuple(gpts)
+
+    if all(n > 0 for n in gpts):
         raise ValueError("gpts must be greater than 0")
 
     return gpts
@@ -56,7 +60,7 @@ def adjusted_gpts(
 
     Returns
     -------
-    new_sampling : tuple of float
+    tuple of float
         The new sampling [Å].
     """
     new_sampling = tuple(

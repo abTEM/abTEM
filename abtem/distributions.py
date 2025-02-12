@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from numbers import Number
-from typing import Callable, Iterator, Optional, Sequence, SupportsFloat
+from typing import Callable, Iterator, Optional, Sequence, SupportsFloat, overload
 
 import dask.array as da
 import numpy as np
@@ -253,7 +253,7 @@ class MultidimensionalDistribution(BaseDistribution):
 
 
 def from_values(
-    values: Sequence[SupportsFloat],
+    values: Sequence[SupportsFloat] | np.ndarray,
     weights: np.ndarray | None = None,
     ensemble_mean: bool = False,
 ) -> DistributionFromValues:
@@ -385,9 +385,23 @@ def gaussian(
     return MultidimensionalDistribution(distributions=distributions)
 
 
+@overload
+def validate_distribution(
+    distribution: BaseDistribution | tuple | list | np.ndarray,
+) -> BaseDistribution: ...
+
+
+@overload
+def validate_distribution(distribution: int) -> int: ...
+
+
+@overload
+def validate_distribution(distribution: float) -> float: ...
+
+
 def validate_distribution(
     distribution: BaseDistribution | tuple | list | np.ndarray | SupportsFloat,
-) -> BaseDistribution | float:
+) -> BaseDistribution | float | int:
     """
     Parameters
     ----------
@@ -503,8 +517,13 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
             for distribution in self._distribution_properties.values()
         )
 
+    @property
+    def _default_ensemble_chunks(self) -> Chunks:
+        return ("auto",) * len(self.ensemble_shape)
+
     def _partition_args(self, chunks: Optional[Chunks] = 1, lazy: bool = True) -> tuple:
         distributions = self._distribution_properties
+
         chunks = self._validate_ensemble_chunks(chunks)
         blocks = tuple(
             distribution.divide(n, lazy=lazy)
@@ -527,7 +546,3 @@ class EnsembleFromDistributions(Ensemble, EqualityMixin, CopyMixin):
         keys = tuple(self._distribution_properties.keys())
         kwargs = self._copy_kwargs()
         return partial(self._partial_transform, keys=keys, **kwargs)
-
-    @property
-    def _default_ensemble_chunks(self) -> Chunks:
-        return ("auto",) * len(self.ensemble_shape)

@@ -221,11 +221,13 @@ def _fft_dispatch(
 
 
 @overload
-def fft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+def fft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    ...
 
 
 @overload
-def fft2(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
+def fft2(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array:
+    ...
 
 
 def fft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
@@ -237,11 +239,13 @@ def fft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
 
 
 @overload
-def ifft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+def ifft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    ...
 
 
 @overload
-def ifft2(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
+def ifft2(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array:
+    ...
 
 
 def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
@@ -253,11 +257,13 @@ def ifft2(x: U, overwrite_x: bool = False, **kwargs) -> U:
 
 
 @overload
-def fftn(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+def fftn(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    ...
 
 
 @overload
-def fftn(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
+def fftn(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array:
+    ...
 
 
 def fftn(x: U, overwrite_x: bool = False, **kwargs) -> U:
@@ -267,11 +273,13 @@ def fftn(x: U, overwrite_x: bool = False, **kwargs) -> U:
 
 
 @overload
-def ifftn(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray: ...
+def ifftn(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    ...
 
 
 @overload
-def ifftn(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array: ...
+def ifftn(x: da.core.Array, overwrite_x: bool = False, **kwargs) -> da.core.Array:
+    ...
 
 
 def ifftn(x: U, overwrite_x: bool = False, **kwargs) -> U:
@@ -294,13 +302,15 @@ def _fft2_convolve(x: U, kernel: U, overwrite_x: bool = False) -> U:
 @overload
 def fft2_convolve(
     x: np.ndarray, kernel: np.ndarray, overwrite_x: bool = False
-) -> np.ndarray: ...
+) -> np.ndarray:
+    ...
 
 
 @overload
 def fft2_convolve(
     x: da.core.Array, kernel: np.ndarray, overwrite_x: bool = False
-) -> da.core.Array: ...
+) -> da.core.Array:
+    ...
 
 
 def fft2_convolve(x: U, kernel: np.ndarray, overwrite_x: bool = False) -> U:

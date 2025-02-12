@@ -5,7 +5,16 @@ from __future__ import annotations
 from abc import ABCMeta, abstractmethod
 from functools import partial
 from numbers import Number
-from typing import Any, Callable, Dict, Optional, Sequence, TypeGuard, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Optional,
+    Sequence,
+    TypeGuard,
+    Union,
+)
 
 import dask
 import dask.array as da
@@ -21,6 +30,10 @@ from abtem.core.axes import AxisMetadata, FrozenPhononsAxis, UnknownAxis
 from abtem.core.chunks import Chunks, chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
+
+if TYPE_CHECKING:
+    pass
+
 
 Reader: Optional[Callable] = None
 try:
@@ -79,7 +92,7 @@ class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if isinstance(atoms, da.core.Array) and (
             atomic_numbers is None or cell is None
         ):
-            atoms = atoms.compute()
+            atoms = atoms.compute(scheduler="single-threaded")
 
         if isinstance(atoms, np.ndarray):
             atoms = atoms.item()
@@ -199,12 +212,11 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
             chunks = 1
 
         if lazy:
-            lazy_args = dask.delayed(_wrap_with_array)(self.atoms, ndims=1)
-
-            array = da.from_delayed(lazy_args, shape=(1,), dtype=object)
+            lazy_args = dask.delayed(_wrap_with_array)(self.atoms, ndims=0)
+            array = da.from_delayed(lazy_args, shape=(), dtype=object)
         else:
             atoms = self.atoms
-            array = _wrap_with_array(atoms, 1)
+            array = _wrap_with_array(atoms, ndims=0)
         return (array,)
 
     def __len__(self):
@@ -214,12 +226,19 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
             return self._num_configs
 
 
-def _validate_seeds(
-    seeds: int | tuple[int, ...] | None, num_seeds: Optional[int] = None
+def validate_seeds(
+    seeds: int | tuple[int, ...] | None,
+    num_seeds: Optional[int] = None,
 ) -> tuple[int, ...]:
-    if seeds is None or isinstance(seeds, int):
+    if num_seeds is None and seeds is None:
+        num_seeds = 1
+
+    if isinstance(seeds, int) and num_seeds is None:
+        seeds = (seeds,)
+
+    elif seeds is None :
         if num_seeds is None:
-            raise ValueError("Provide `num_configs` or a seed for each configuration.")
+            raise ValueError("Provide `num_seeds` or a seed for each configuration.")
 
         rng = np.random.default_rng(seed=seeds)
         seeds = ()
@@ -227,9 +246,19 @@ def _validate_seeds(
             seed = rng.integers(np.iinfo(np.int32).max)
             if seed not in seeds:
                 seeds += (seed,)
+    elif isinstance(seeds, int) and num_seeds is not None:
+        seeds_to_make_new_seeds = seeds
+        rng = np.random.default_rng(seed=seeds_to_make_new_seeds)
+        seeds = ()
+        while len(seeds) < num_seeds:
+            seed = rng.integers(np.iinfo(np.int32).max)
+            if seed not in seeds:
+                seeds += (seed,)
     else:
         if not hasattr(seeds, "__len__"):
-            raise ValueError
+            raise ValueError("Invalid type for `seeds`.")
+
+        seeds = tuple(seeds)
 
         if num_seeds is not None:
             assert num_seeds == len(seeds)
@@ -454,7 +483,7 @@ class FrozenPhonons(BaseFrozenPhonons):
         self._sigmas = validate_sigmas(atoms, sigmas)[0]
         self._directions = directions
         self._atoms = atoms
-        self._seed = _validate_seeds(seed, num_seeds=num_configs)
+        self._seed = validate_seeds(seed, num_seeds=num_configs)
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -630,16 +659,19 @@ class AtomsEnsemble(BaseFrozenPhonons):
                     atoms = da.from_delayed(atoms, shape=(1,), dtype=object)
                     stack.append(atoms)
 
-                trajectory = da.concatenate(stack)
+                trajectory_array = da.concatenate(stack)
 
             else:
                 stack_array = np.empty(len(trajectory), dtype=object)
                 for i, atoms in enumerate(trajectory):
                     itemset(stack_array, i, atoms)
 
-                trajectory = stack_array
-
-        assert isinstance(trajectory, (np.ndarray, da.core.Array))
+                trajectory_array = stack_array
+        elif isinstance(trajectory, (np.ndarray, da.core.Array)):
+            trajectory_array = trajectory
+        else:
+            raise ValueError(f"Invalid type for `trajectory`, got {type(trajectory)}")
+        # assert isinstance(trajectory, (np.ndarray, da.core.Array))
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = [FrozenPhononsAxis(_ensemble_mean=ensemble_mean)]
@@ -648,12 +680,12 @@ class AtomsEnsemble(BaseFrozenPhonons):
         elif not isinstance(ensemble_axes_metadata, list):
             raise ValueError()
 
-        assert len(ensemble_axes_metadata) == len(trajectory.shape)
+        assert len(ensemble_axes_metadata) == len(trajectory_array.shape)
 
-        atoms = trajectory.ravel()[0]
+        atoms = trajectory_array.ravel()[0]
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, None, cell)
 
-        self._trajectory = trajectory
+        self._trajectory = trajectory_array
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean

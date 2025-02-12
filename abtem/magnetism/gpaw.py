@@ -92,9 +92,11 @@ def get_magnetic_field_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
 @runtime_checkable
 class GPAW(Protocol):
     @property
-    def atoms(self) -> Atoms: ...
+    def atoms(self) -> Atoms:
+        ...
 
-    def get_number_of_grid_points(self) -> np.ndarray: ...
+    def get_number_of_grid_points(self) -> np.ndarray:
+        ...
 
 
 class _GPAWMagnetics(_FieldBuilder):

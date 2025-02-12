@@ -24,7 +24,8 @@ def _wrap_with_array(x: Any, ndims: int | None = None) -> np.ndarray:
 
 
 def unpack_blockwise_args(args) -> tuple:
-    return tuple(arg.item() if hasattr(arg, "item") else arg for arg in args)
+    unpacked = tuple(arg.item() if hasattr(arg, "item") else arg for arg in args)
+    return unpacked
 
 
 class Ensemble:
@@ -97,7 +98,6 @@ class Ensemble:
         chunks = self._validate_ensemble_chunks(chunks)
 
         args = self._partition_args(chunks, lazy=True)
-
         arg_dims = tuple(len(arg.shape) for arg in args)
         arg_starts = accumulate((0,) + arg_dims[:-1])
         arg_ends = accumulate(arg_dims)
@@ -106,14 +106,13 @@ class Ensemble:
         )
 
         out_ind = tuple(range(sum(arg_dims)))
-
         adjust_chunks = {i: axes_chunks for i, axes_chunks in enumerate(chunks)}
 
         func = self._from_partitioned_args()
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Increasing number of chunks")
-            return da.blockwise(
+            blocks = da.blockwise(
                 func,
                 out_ind,
                 *interleave(args, arg_ind),
@@ -121,6 +120,7 @@ class Ensemble:
                 concatenate=True,
                 meta=np.array((), dtype=object),
             )
+            return blocks
 
     def generate_blocks(
         self, chunks: Chunks = 1
@@ -140,8 +140,15 @@ class Ensemble:
             if len(block.shape) > 1:
                 raise NotImplementedError
 
+        axis_indices = tuple(
+            tuple(range(block.shape[0])) if len(block.shape) else () for block in blocks
+        )
+
+        if not any(len(indices) for indices in axis_indices):
+            yield (), (), self._from_partitioned_args()(*blocks)
+
         for block_indices, start_stop in zip(
-            itertools.product(*(range(block.shape[0]) for block in blocks)),
+            itertools.product(*axis_indices),
             itertools.product(*chunk_ranges(chunks)),
         ):
             block = tuple(block[i] for i, block in zip(block_indices, blocks))

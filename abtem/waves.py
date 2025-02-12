@@ -7,14 +7,14 @@ from abc import abstractmethod
 from copy import copy
 from functools import partial
 from numbers import Number
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, overload
 
 import dask.array as da
 import numpy as np
 from ase import Atoms
 
-import abtem
-from abtem.array import ArrayObject, ComputableList, _expand_dims, _validate_lazy
+from abtem.array import ArrayObject, ComputableList, _expand_dims, validate_lazy
+from abtem.array import stack as stack_array_object
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
@@ -30,11 +30,7 @@ from abtem.core.backend import (
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
-from abtem.core.ensemble import (
-    Ensemble,
-    _wrap_with_array,
-    unpack_blockwise_args,
-)
+from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft2, fft_crop, fft_interpolate, ifft2
 from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
 from abtem.core.utils import (
@@ -45,10 +41,7 @@ from abtem.core.utils import (
     tuple_range,
 )
 from abtem.detectors import BaseDetector, FlexibleAnnularDetector
-from abtem.distributions import BaseDistribution
-from abtem.inelastic.core_loss import (
-    BaseTransitionPotential,
-)
+from abtem.inelastic.core_loss import BaseTransitionPotential
 from abtem.measurements import (
     BaseMeasurements,
     DiffractionPatterns,
@@ -62,7 +55,7 @@ from abtem.multislice import (
 from abtem.potentials.iam import BasePotential, validate_potential
 from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
-from abtem.tilt import _validate_tilt
+from abtem.tilt import TiltType2D, validate_tilt
 from abtem.transfer import CTF, Aberrations, Aperture, BaseAperture
 from abtem.transform import WavesToWavesTransform
 
@@ -117,6 +110,11 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
 
     Documented in the subclasses.
     """
+
+    # @property
+    # @abstractmethod
+    # def axes_metadata(self) -> AxesMetadataList:
+    #     pass
 
     @property
     @abstractmethod
@@ -277,11 +275,41 @@ class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
         return alpha, phi
 
 
-def _reduce_ensemble(
-    ensemble: ArrayObject | list[ArrayObject],
-) -> ArrayObject | list[ArrayObject]:
+@overload
+def reduce_ensemble(ensemble: Waves) -> Waves: ...
+
+
+@overload
+def reduce_ensemble(ensemble: BaseMeasurements) -> BaseMeasurements: ...
+
+
+@overload
+def reduce_ensemble(
+    ensemble: list[Waves | BaseMeasurements],
+) -> list[Waves | BaseMeasurements]: ...
+
+
+def reduce_ensemble(
+    ensemble: Waves | BaseMeasurements | list[Waves | BaseMeasurements],
+) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
+    """
+    Reduce an ensemble of wave functions or measurements by squeezing or averaging
+    ensemble axes tagged for reduction with the "_squeeze" or "_average" attribute
+    of the axis metadata.
+
+    Parameters
+    ----------
+    ensemble : Waves, BaseMeasurements, list[Waves | BaseMeasurements]
+        The ensemble to reduce.
+
+    Returns
+    -------
+    reduced_output : Waves, BaseMeasurements, list[Waves | BaseMeasurements]
+        The reduced ensemble.
+    """
+
     if isinstance(ensemble, (ComputableList, list, tuple)):
-        outputs = [_reduce_ensemble(x) for x in ensemble]
+        outputs = [reduce_ensemble(x) for x in ensemble]
 
         if isinstance(ensemble, ComputableList):
             outputs = ComputableList(outputs)
@@ -293,13 +321,15 @@ def _reduce_ensemble(
         for i, axes_metadata in enumerate(ensemble.ensemble_axes_metadata)
         if axes_metadata._squeeze
     )
-
     output = ensemble.squeeze(squeeze)
 
+    reduced_output: Waves | BaseMeasurements
     if isinstance(output, BaseMeasurements):
-        output = output.reduce_ensemble()
+        reduced_output = output.reduce_ensemble()
+    else:
+        reduced_output = output
 
-    return output
+    return reduced_output
 
 
 class _WavesNormalization(WavesToWavesTransform):
@@ -986,7 +1016,7 @@ class Waves(BaseWaves, ArrayObject):
         transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
-    ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
+    ) -> Waves | BaseMeasurements:
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
 
@@ -1022,19 +1052,19 @@ class Waves(BaseWaves, ArrayObject):
             )
 
             assert isinstance(measurements, list)
-            stacked_measurements = abtem.stack(
+            stacked_measurements = stack_array_object(
                 measurements,
                 axis_metadata,
             )
         else:
             stacked_measurements = measurements[0]
 
-        return _reduce_ensemble(stacked_measurements)
+        return reduce_ensemble(stacked_measurements)
 
     def multislice(
         self,
         potential: Atoms | BasePotential,
-        detectors: Optional[BaseDetector | Sequence[BaseDetector]] = None,
+        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """Propagate and transmit wave function through the provided potential using the
         multislice algorithm. When detector(s) are given, output will be the
@@ -1066,15 +1096,15 @@ class Waves(BaseWaves, ArrayObject):
             potential=potential, detectors=detectors
         )
 
-        waves = self.apply_transform(transform=multislice_transform)
+        waves = multislice_transform.apply(self)
 
-        return _reduce_ensemble(waves)
+        return reduce_ensemble(waves)
 
     def scan(
         self,
         scan: BaseScan | np.ndarray,
         potential: Optional[Atoms | BasePotential] = None,
-        detectors: Optional[BaseDetector | Sequence[BaseDetector]] = None,
+        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         max_batch: int | str = "auto",
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """Run the multislice algorithm from probe wave functions over the provided
@@ -1128,11 +1158,16 @@ class Waves(BaseWaves, ArrayObject):
         return self.to_images(convert_complex=convert_complex).show(**kwargs)
 
 
-class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
-    def __init__(self, ensemble_names: tuple[str, ...], device: str, tilt=(0, 0)):
+class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
+    def __init__(
+        self,
+        ensemble_names: tuple[str, ...],
+        device: str | None,
+        tilt: TiltType2D = (0.0, 0.0),
+    ):
         self._ensemble_names = ensemble_names
-        self._device = device
-        self.tilt = tilt
+        self._device = validate_device(device)
+        self.tilt = validate_tilt(tilt)
         super().__init__()
 
     @property
@@ -1142,7 +1177,7 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
     @tilt.setter
     def tilt(self, value):
-        self._tilt = _validate_tilt(value)
+        self._tilt = validate_tilt(value)
 
     @abstractmethod
     def build(self, *args, **kwargs) -> Waves:
@@ -1153,10 +1188,8 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     ):
         return self.build(lazy=lazy).apply_transform(transform, max_batch=max_batch)
 
-    def check_can_build(self, potential: Optional[BasePotential] = None):
+    def check_can_build(self):
         """Check whether the wave functions can be built."""
-        if potential is not None:
-            self.grid.match(potential)
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
@@ -1221,6 +1254,7 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         for arg_split, ensemble in zip(self._chunk_splits(), self._ensembles.values()):
             arg_chunks = chunks[slice(*arg_split)]
             args += ensemble._partition_args(arg_chunks, lazy=lazy)
+            # print(args)
 
         return args
 
@@ -1228,10 +1262,10 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def _from_partitioned_args_func(
         cls,
         *args,
-        partials,
+        partials: dict[str, Callable],
         arg_splits,
         **kwargs,
-    ):
+    ) -> np.ndarray:
         args = unpack_blockwise_args(args)
         for arg_split, (name, partial_item) in zip(arg_splits, partials.items()):
             kwargs[name] = partial_item(*args[slice(*arg_split)]).item()
@@ -1242,8 +1276,8 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         new_probe = cls(
             **kwargs,
         )
-        new_probe = _wrap_with_array(new_probe)
-        return new_probe
+        wrapped_new_probe = _wrap_with_array(new_probe)
+        return wrapped_new_probe
 
     def _from_partitioned_args(self, *args, **kwargs):
         partials = {
@@ -1260,16 +1294,16 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         )
 
     @property
-    def _default_ensemble_chunks(self):
+    def _default_ensemble_chunks(self) -> tuple[str, ...]:
         return ("auto",) * len(self.ensemble_shape)
 
     @property
-    def device(self):
+    def device(self) -> str:
         """The device where the waves are created."""
         return self._device
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int, ...]:
         """Shape of the waves."""
         return self.ensemble_shape + self.base_shape
 
@@ -1287,47 +1321,58 @@ class _WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
 
     @staticmethod
     @abstractmethod
-    def _build_waves(waves_builder: _WavesBuilder, wrapped: bool = True):
+    def _calculate_array(waves_builder: WavesBuilder) -> np.ndarray:
         pass
 
-    @staticmethod
-    def _lazy_build_waves(waves_builder: _WavesBuilder, max_batch: int | str) -> Waves:
-        if isinstance(max_batch, int):
-            max_batch = int(max_batch * np.prod(waves_builder._valid_gpts))
+    def _build_validated(
+        self, lazy: Optional[bool] = None, max_batch: int | str = "auto"
+    ) -> Waves:
+        self.check_can_build()
 
-        chunks = waves_builder._default_ensemble_chunks + waves_builder.gpts
+        lazy = validate_lazy(lazy)
+        array: np.ndarray | da.core.Array
+        if lazy:
+            if isinstance(max_batch, int):
+                max_batch = int(max_batch * np.prod(self._valid_gpts))
 
-        chunks = validate_chunks(
-            shape=waves_builder.ensemble_shape + waves_builder.gpts,
-            chunks=chunks,
-            max_elements=max_batch,
-            dtype=waves_builder.dtype,
-        )
+            chunks = self._default_ensemble_chunks + self._valid_gpts
 
-        blocks = waves_builder.ensemble_blocks(chunks=chunks[:-2])
+            valid_chunks = validate_chunks(
+                shape=self.ensemble_shape + self.gpts,
+                chunks=chunks,
+                max_elements=max_batch,
+                dtype=self.dtype,
+            )
 
-        xp = get_array_module(waves_builder.device)
+            blocks = self.ensemble_blocks(chunks=valid_chunks[:-2])
 
-        array = da.map_blocks(
-            waves_builder._build_waves,
-            blocks,
-            meta=xp.array((), dtype=get_dtype(complex=True)),
-            new_axis=tuple_range(2, len(waves_builder.ensemble_shape)),
-            chunks=blocks.chunks + waves_builder.gpts,
-            wrapped=False,
-        )
+            xp = get_array_module(self.device)
 
-        return Waves(
+            array = da.map_blocks(
+                self._calculate_array,
+                blocks,
+                meta=xp.array((), dtype=get_dtype(complex=True)),
+                new_axis=tuple_range(length=2, offset=len(self.ensemble_shape)),
+                chunks=blocks.chunks + self.gpts,
+            )
+
+        else:
+            array = self._calculate_array(self)
+
+        waves = Waves(
             array,
-            energy=waves_builder.energy,
-            extent=waves_builder.extent,
+            energy=self.energy,
+            extent=self.extent,
             reciprocal_space=False,
-            metadata=waves_builder.metadata,
-            ensemble_axes_metadata=waves_builder.ensemble_axes_metadata,
+            metadata=self.metadata,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
         )
 
+        waves = reduce_ensemble(waves)
+        return waves
 
-class PlaneWave(_WavesBuilder):
+
+class PlaneWave(WavesBuilder):
     """Represents electron probe wave functions for simulating experiments with a plane-
     wave probe, such as HRTEM and SAED.
 
@@ -1379,7 +1424,7 @@ class PlaneWave(_WavesBuilder):
 
     @tilt.setter
     def tilt(self, value):
-        self._tilt = _validate_tilt(value)
+        self._tilt = validate_tilt(value)
 
     @property
     def metadata(self):
@@ -1396,7 +1441,7 @@ class PlaneWave(_WavesBuilder):
         return self._normalize
 
     @staticmethod
-    def _build_waves(waves_builder, wrapped: bool = True):
+    def _calculate_array(waves_builder) -> np.ndarray:
         if hasattr(waves_builder, "item"):
             waves_builder = waves_builder.item()
 
@@ -1420,12 +1465,9 @@ class PlaneWave(_WavesBuilder):
             reciprocal_space=False,
         )
 
-        waves = waves.apply_transform(waves_builder.tilt)
+        waves = waves_builder.tilt.apply(waves)
 
-        if not wrapped:
-            waves = waves.array
-
-        return waves
+        return waves._eager_array
 
     def build(
         self,
@@ -1450,18 +1492,8 @@ class PlaneWave(_WavesBuilder):
         plane_waves : Waves
             The wave functions.
         """
-        self.check_can_build()
 
-        lazy = _validate_lazy(lazy)
-
-        if not lazy:
-            probes = self._build_waves(self)
-        else:
-            probes = self._lazy_build_waves(self, max_batch)
-
-        waves = _reduce_ensemble(probes)
-
-        assert isinstance(waves, Waves)
+        waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
         return waves
 
@@ -1501,23 +1533,19 @@ class PlaneWave(_WavesBuilder):
             (if no detector(s) given).
         """
         potential = validate_potential(potential)
-        lazy = _validate_lazy(lazy)
 
-        self.check_can_build(potential)
+        self.grid.match(potential)
 
-        if not lazy:
-            probes = self._build_waves(self)
-        else:
-            probes = self._lazy_build_waves(self, max_batch)
+        waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
         multislice = MultisliceTransform(potential, detectors)
 
-        measurements = probes.apply_transform(multislice)
+        measurements = multislice.apply(waves)
 
-        return _reduce_ensemble(measurements)
+        return reduce_ensemble(measurements)
 
 
-class Probe(_WavesBuilder):
+class Probe(WavesBuilder):
     """Represents electron-probe wave functions for simulating experiments with a
     convergent beam, such as CBED and STEM.
 
@@ -1566,16 +1594,11 @@ class Probe(_WavesBuilder):
         sampling: Optional[float | tuple[float, float]] = None,
         energy: Optional[float] = None,
         soft: bool = True,
-        tilt: (
-            tuple[float | BaseDistribution, float | BaseDistribution] | BaseDistribution
-        ) = (
-            0.0,
-            0.0,
-        ),
+        tilt: TiltType2D = (0.0, 0.0),
         device: Optional[str] = None,
         aperture: Optional[BaseAperture] = None,
         aberrations: Optional[Aberrations | dict] = None,
-        positions: Optional[BaseScan] = None,
+        scan_positions: Optional[BaseScan] = None,
         metadata: Optional[dict] = None,
         **kwargs,
     ):
@@ -1611,10 +1634,10 @@ class Probe(_WavesBuilder):
 
         self._metadata = {} if metadata is None else metadata
 
-        if positions is None:
-            positions = abtem.CustomScan(np.zeros((0, 2)), squeeze=True)
+        if scan_positions is None:
+            scan_positions = CustomScan(np.zeros((0, 2)), squeeze=True)
 
-        self._positions = positions
+        self._scan_positions = scan_positions
 
         self.accelerator.match(self.aperture)
 
@@ -1622,15 +1645,19 @@ class Probe(_WavesBuilder):
             "tilt",
             "aberrations",
             "aperture",
-            "positions",
+            "scan_positions",
         )
 
         super().__init__(ensemble_names=ensemble_names, device=device, tilt=tilt)
 
     @property
-    def positions(self) -> BaseScan:
+    def scan_positions(self) -> BaseScan:
         """The position(s) of the probe."""
-        return self._positions
+        return self._scan_positions
+
+    @scan_positions.setter
+    def scan_positions(self, scan_positions: Sequence | BaseScan):
+        self._scan_positions = validate_scan(scan_positions)
 
     @property
     def soft(self):
@@ -1696,11 +1723,11 @@ class Probe(_WavesBuilder):
         }
 
     @staticmethod
-    def _build_waves(waves_builder, wrapped: bool = True):
+    def _calculate_array(waves_builder) -> np.ndarray:
         if hasattr(waves_builder, "item"):
             waves_builder = waves_builder.item()
 
-        array = waves_builder.positions._evaluate_kernel(waves_builder)
+        array = waves_builder.scan_positions._evaluate_kernel(waves_builder)
 
         waves = Waves(
             array,
@@ -1708,57 +1735,20 @@ class Probe(_WavesBuilder):
             extent=waves_builder.extent,
             metadata=waves_builder.metadata,
             reciprocal_space=True,
-            ensemble_axes_metadata=waves_builder.positions.ensemble_axes_metadata,
+            ensemble_axes_metadata=waves_builder.scan_positions.ensemble_axes_metadata,
         )
 
-        waves = waves.apply_transform(waves_builder.aperture)
+        waves = waves_builder.aperture.apply(waves)
 
-        waves = waves.apply_transform(waves_builder.tilt)
+        waves = waves_builder.tilt.apply(waves)
 
-        waves = waves.apply_transform(waves_builder.aberrations)
+        waves = waves_builder.aberrations.apply(waves)
 
         waves = waves.normalize()
 
         waves = waves.ensure_real_space()
 
-        if not wrapped:
-            waves = waves.array
-
-        return waves
-
-    def _validate_and_build(
-        self,
-        scan: Optional[Sequence | BaseScan] = None,
-        max_batch: int | str = "auto",
-        lazy: Optional[bool] = None,
-        potential=None,
-    ):
-        self.check_can_build(potential)
-        lazy = _validate_lazy(lazy)
-
-        probe = self.copy()
-
-        if potential is not None:
-            probe.grid.match(potential)
-
-        scan = validate_scan(scan, probe)
-
-        if isinstance(scan, CustomScan):
-            squeeze = True
-        else:
-            squeeze = False
-
-        probe._positions = scan
-
-        if not lazy:
-            probes = self._build_waves(probe)
-        else:
-            probes = self._lazy_build_waves(probe, max_batch)
-
-        if squeeze:
-            probes = probes.squeeze(axis=(-3,))
-
-        return probes
+        return waves._eager_array
 
     def build(
         self,
@@ -1787,13 +1777,20 @@ class Probe(_WavesBuilder):
         probe_wave_functions : Waves
             The built probe wave functions.
         """
-        return self._validate_and_build(scan=scan, max_batch=max_batch, lazy=lazy)
+
+        probe = self.copy()
+
+        probe.scan_positions = validate_scan(scan, probe)
+
+        waves = probe._build_validated(max_batch=max_batch, lazy=lazy)
+
+        return waves
 
     def multislice(
         self,
         potential: BasePotential | Atoms,
-        scan: Optional[tuple | BaseScan] = None,
-        detectors: Optional[BaseDetector] = None,
+        scan: Optional[Sequence | BaseScan] = None,
+        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
@@ -1824,104 +1821,107 @@ class Probe(_WavesBuilder):
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurement
         """
+        probe = self.copy()
 
         potential = validate_potential(potential)
+        if potential is not None:
+            probe.grid.match(potential)
 
-        probes = self._validate_and_build(
-            scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
-        )
+        waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
+
         multislice = MultisliceTransform(potential, detectors)
-        measurements = probes.apply_transform(multislice)
 
-        return _reduce_ensemble(measurements)
+        measurements = multislice.apply(waves)
 
-    def transition_potential_scan(
-        self,
-        potential: BasePotential | Atoms,
-        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
-        scan: Optional[BaseScan | Sequence] = None,
-        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
-        sites: Optional[SliceIndexedAtoms | Atoms] = None,
-        # detectors_elastic: BaseDetector | list[BaseDetector] = None,
-        double_channel: bool = True,
-        threshold: float = 1.0,
-        max_batch: int | str = "auto",
-        lazy: Optional[bool] = None,
-    ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
-        """
-        Parameters
-        ----------
-        potential : BasePotential | Atoms
-            The potential to be used for calculating the transition potentials.
-            It can be an instance of `BasePotential` or an `Atoms` object.
-        transition_potentials : BaseTransitionPotential | list[BaseTransitionPotential]
-            The transition potentials to be used for multislice calculations.
-            It can be an instance of `BaseTransitionPotential` or a list of
-            `BaseTransitionPotential` objects.
-        scan : tuple | BaseScan, optional
-            The scan parameters. It can be a tuple or an instance of `BaseScan`.
-            Defaults to None.
-        detectors : BaseDetector | list[BaseDetector], optional
-            A detector or a list of detectors defining how the wave functions should be
-            converted to measurements after running the multislice algorithm. See
-            abtem.measurements.detect for a list of implemented detectors.
-            Defaults to None.
-        sites : SliceIndexedAtoms | Atoms, optional
-            The slice indexed atoms to be used for multislice calculations.
-            It can be an instance of `SliceIndexedAtoms` or an `Atoms` object.
-            Defaults to None.
-        detectors_elastic : BaseDetector | list[BaseDetector], optional
-            The elastic detectors to be used for recording the measurements.
-            It can be an instance of `BaseDetector` or a list of `BaseDetector` objects.
-            Defaults to None.
-        double_channel : bool, optional
-            A boolean indicating whether to use double channel for recording the
-            measurements. Defaults to True.
-        max_batch : int | str, optional
-            The maximum batch size for parallel processing.
-            It can be an integer or the string "auto".
-            Defaults to "auto".
-        lazy : bool, optional
-            A boolean indicating whether to use lazy evaluation for the calculations.
-            Defaults to None.
+        return reduce_ensemble(measurements)
 
-        Returns
-        -------
-        Waves | BaseMeasurements
-            The calculated waves or measurements, depending on the value of `lazy`.
+    # def transition_potential_scan(
+    #     self,
+    #     potential: BasePotential | Atoms,
+    #     transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+    #     scan: Optional[BaseScan | Sequence] = None,
+    #     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
+    #     sites: Optional[SliceIndexedAtoms | Atoms] = None,
+    #     # detectors_elastic: BaseDetector | list[BaseDetector] = None,
+    #     double_channel: bool = True,
+    #     threshold: float = 1.0,
+    #     max_batch: int | str = "auto",
+    #     lazy: Optional[bool] = None,
+    # ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
+    #     """
+    #     Parameters
+    #     ----------
+    #     potential : BasePotential | Atoms
+    #         The potential to be used for calculating the transition potentials.
+    #         It can be an instance of `BasePotential` or an `Atoms` object.
+    #     transition_potentials : BaseTransitionPotential | list[BaseTransitionPotential]
+    #         The transition potentials to be used for multislice calculations.
+    #         It can be an instance of `BaseTransitionPotential` or a list of
+    #         `BaseTransitionPotential` objects.
+    #     scan : tuple | BaseScan, optional
+    #         The scan parameters. It can be a tuple or an instance of `BaseScan`.
+    #         Defaults to None.
+    #     detectors : BaseDetector | list[BaseDetector], optional
+    #         A detector or a list of detectors defining how the wave functions should be
+    #         converted to measurements after running the multislice algorithm. See
+    #         abtem.measurements.detect for a list of implemented detectors.
+    #         Defaults to None.
+    #     sites : SliceIndexedAtoms | Atoms, optional
+    #         The slice indexed atoms to be used for multislice calculations.
+    #         It can be an instance of `SliceIndexedAtoms` or an `Atoms` object.
+    #         Defaults to None.
+    #     detectors_elastic : BaseDetector | list[BaseDetector], optional
+    #         The elastic detectors to be used for recording the measurements.
+    #         It can be an instance of `BaseDetector` or a list of `BaseDetector` objects.
+    #         Defaults to None.
+    #     double_channel : bool, optional
+    #         A boolean indicating whether to use double channel for recording the
+    #         measurements. Defaults to True.
+    #     max_batch : int | str, optional
+    #         The maximum batch size for parallel processing.
+    #         It can be an integer or the string "auto".
+    #         Defaults to "auto".
+    #     lazy : bool, optional
+    #         A boolean indicating whether to use lazy evaluation for the calculations.
+    #         Defaults to None.
 
-        """
-        if scan is None:
-            scan = GridScan()
+    #     Returns
+    #     -------
+    #     Waves | BaseMeasurements
+    #         The calculated waves or measurements, depending on the value of `lazy`.
 
-        if detectors is None:
-            detectors = FlexibleAnnularDetector()
+    #     """
+    #     if scan is None:
+    #         scan = GridScan()
 
-        potential = validate_potential(potential)
+    #     if detectors is None:
+    #         detectors = FlexibleAnnularDetector()
 
-        probes = self._validate_and_build(
-            scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
-        )
+    #     potential = validate_potential(potential)
 
-        multislice = MultisliceTransform(
-            potential,
-            detectors,
-            multislice_func=transition_potential_multislice_and_detect,
-            transition_potential=transition_potentials,
-            sites=sites,
-            double_channel=double_channel,
-            threshold=threshold,
-        )
+    #     probes = self._validate_and_build(
+    #         scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
+    #     )
 
-        measurements = probes.apply_transform(multislice)
+    #     multislice = MultisliceTransform(
+    #         potential,
+    #         detectors,
+    #         multislice_func=transition_potential_multislice_and_detect,
+    #         transition_potential=transition_potentials,
+    #         sites=sites,
+    #         double_channel=double_channel,
+    #         threshold=threshold,
+    #     )
 
-        return _reduce_ensemble(measurements)
+    #     measurements = probes.apply_transform(multislice)
+
+    #     return reduce_ensemble(measurements)
 
     def scan(
         self,
         potential: Atoms | BasePotential,
-        scan: Optional[BaseScan | Sequence] = None,
-        detectors: Optional[BaseDetector | Sequence[BaseDetector]] = None,
+        scan: Optional[Sequence | BaseScan] = None,
+        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:

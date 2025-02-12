@@ -16,7 +16,7 @@ from ase import Atoms
 from ase.cell import Cell
 from ase.data import chemical_symbols
 
-from abtem.array import ArrayObject, _validate_lazy
+from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     best_orthogonal_cell,
     cut_cell,
@@ -44,7 +44,7 @@ from abtem.inelastic.phonons import (
     AtomsEnsemble,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
-    _validate_seeds,
+    validate_seeds,
 )
 from abtem.integrals import (
     QuadratureProjectionIntegrals,
@@ -409,7 +409,7 @@ class _FieldBuilder(BaseField):
         potential_array : PotentialArray
             The built potential as an array.
         """
-        lazy = _validate_lazy(lazy)
+        lazy = validate_lazy(lazy)
 
         self.grid.check_is_defined()
 
@@ -432,6 +432,8 @@ class _FieldBuilder(BaseField):
                 )
             else:
                 new_axis = tuple(range(1, len(self.base_shape)))
+            
+            new_axis = (0, 1, 2)
 
             array = da.map_blocks(
                 self._wrap_build_potential,
@@ -1367,7 +1369,7 @@ class CrystalPotential(_PotentialBuilder):
             elif num_frozen_phonons is None and seeds is None:
                 num_frozen_phonons = 1
 
-            self._seeds = _validate_seeds(seeds, num_frozen_phonons)
+            self._seeds = validate_seeds(seeds, num_frozen_phonons)
 
         if (
             (potential_unit.num_configurations == 1)
@@ -1515,7 +1517,10 @@ class CrystalPotential(_PotentialBuilder):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         if chunks == ():
+            old_chunks = ()
             chunks = ((1,),)
+        else:
+            old_chunks = chunks
 
         if lazy:
             arrays = []
@@ -1532,6 +1537,10 @@ class CrystalPotential(_PotentialBuilder):
                 arrays.append(lazy_array)
 
             array = da.concatenate(arrays)
+
+            if old_chunks == ():
+                array = array[0] 
+
         else:
             potential_unit = self.potential_unit
 

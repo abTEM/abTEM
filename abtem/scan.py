@@ -33,7 +33,37 @@ if TYPE_CHECKING:
 ScanWithSampling = Union["LineScan", "GridScan"]
 
 
-def validate_scan(scan: np.ndarray | BaseScan, probe: Probe | None = None) -> BaseScan:
+def validate_scan(
+    scan: Optional[Sequence | np.ndarray | BaseScan], probe: Probe | None = None
+) -> BaseScan:
+    """
+    Validate that the input is a valid scan or a sequence of valid scan positions.
+
+    Parameters
+    ----------
+    scan : Sequence or np.ndarray or BaseScan
+        The scan or scan positions to validate. If None, a scan with a single position
+        at (0, 0) is returned.
+    probe : Probe or None
+        If given the scan is matched to the extent of the probe.
+
+    Returns
+    -------
+    validated_scan : BaseScan
+        The validated scan object.
+    """
+    if not isinstance(scan, BaseScan) and scan is not None:
+        scan = np.array(scan)
+
+        if (
+            (len(scan.shape) == 1 and not len(scan) == 2)
+            or (len(scan.shape) == 2 and not scan.shape[1] == 2)
+            or len(scan.shape) > 2
+        ):
+            raise ValueError(
+                "scan must be a 1D sequence of length 2, a Nx2 array or a BaseScan"
+            )
+
     validated_scan: BaseScan
     if scan is None and probe is None:
         validated_scan = CustomScan(np.zeros((1, 2)), squeeze=True)
