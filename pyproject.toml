@@ -8,14 +8,10 @@ line-length = 88
 [tool.ruff]
 fix = false
 line-length = 88
-ignore = [
-    "E741",
-    "E743", # Example rule code for "Ambiguous function name: `l`"
-]
 exclude = [
     "abtem/reconstruct.py",
-    "abtem/visualize",
-    "abtem/measurements.py",
+    "test",
+    "*ipynb",
 ]
 
 [tool.ruff.lint]
@@ -29,12 +25,7 @@ select = [
     #"ANN002",  # Missing type annotation for function return
     #"ANN003",  # Missing type annotation for variable
 ]
-
-[tool.mypy]
-warn_unreachable = true
-# follow_imports = "silent"
-# disallow_untyped_defs = true
-# disallow_incomplete_defs = true
+ignore = ["E741", "E743"]
 
 [tool.pytest.ini_options]
 filterwarnings = [
@@ -45,4 +36,12 @@ filterwarnings = [
     "ignore:Axis.*not supported by hyperspy.*:UserWarning",
     "ignore:'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons:UserWarning",
     "ignore:ignoring keyword argument 'read_only':UserWarning",
+]
+
+[tool.numpydoc_validation]
+checks = [
+    "all",  # report on all checks, except the below
+    "EX01",
+    "SA01",
+    "ES01",
 ]
