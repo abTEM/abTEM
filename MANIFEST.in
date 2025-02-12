@@ -4,4 +4,3 @@ recursive-include abtem *.json
 recursive-include abtem *.traj
 include abtem/py.typed
 include LICENSE
-
