@@ -3723,11 +3723,9 @@ class PolarMeasurements(BaseMeasurements):
         The polar measurements.
     """
 
-    _base_dims = 2
-
     def __init__(
         self,
-        array: np.ndarray,
+        array: np.ndarray | da.core.Array,
         radial_sampling: float,
         azimuthal_sampling: float,
         radial_offset: float = 0.0,
@@ -3794,8 +3792,24 @@ class PolarMeasurements(BaseMeasurements):
             metadata=metadata,
         )
 
+    @property
     def _area_per_pixel(self):
         return _scan_area_per_pixel(self)
+
+    @property
+    def sampling(self):
+        raise RuntimeError("Sampling not defined for polar measurement.")
+
+    @property
+    def offset(self):
+        raise RuntimeError("Offset not defined for polar measurement.")
+
+    @property
+    def extent(self):
+        raise RuntimeError("Extent not defined for polar measurement.")
+
+    def _get_1d_equivalent(self):
+        raise RuntimeError("Not defined for polar measurement.")
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
@@ -3952,6 +3966,48 @@ class PolarMeasurements(BaseMeasurements):
 
         return _gaussian_source_size(self, sigma)
 
+    def poisson_noise(
+        self,
+        dose_per_area: Optional[float] = None,
+        total_dose: Optional[float] = None,
+        samples: int = 1,
+        seed: Optional[int] = None,
+    ):
+        """
+        Add Poisson noise (i.e. shot noise) to a measurement corresponding to the provided 'total_dose' (per measurement
+        if applied to an ensemble) or 'dose_per_area' (not applicable for single measurements).
+
+        Parameters
+        ----------
+        dose_per_area : float, optional
+            The irradiation dose per unit of scan area [electrons per Å:sup:`2`]. This is only valid if the diffraction
+            patterns has two scan axes.
+        total_dose : float, optional
+            The irradiation dose per diffraction pattern.
+        samples : int, optional
+            The number of samples to draw from a Poisson distribution. If this is greater than 1, an additional
+            ensemble axis will be added to the measurement.
+        seed : int, optional
+            Seed the random number generator.
+
+        Returns
+        -------
+        noisy_measurement : BaseMeasurements
+            The noisy measurement.
+        """
+
+        if len(_scan_shape(self)) < 2 and dose_per_area is not None:
+            raise ValueError(
+                "Polar measurement has less than two scan axes, provide 'total_dose' not 'dose_per_area'."
+            )
+
+        return super().poisson_noise(
+            dose_per_area=dose_per_area,
+            total_dose=total_dose,
+            samples=samples,
+            seed=seed,
+        )
+
     def to_diffraction_patterns(
         self, gpts: int | tuple[int, int], margin: float | tuple[float, float] = 0.1
     ):
@@ -4066,8 +4122,9 @@ class PolarMeasurements(BaseMeasurements):
             )
             return stacked
 
-        xp = get_array_module(self.device)
-        array = xp.zeros_like(differential_1.array, dtype=xp.complex64)
+        xp = get_array_module(self.array)
+
+        array = xp.zeros_like(xp.array(differential_1.array), dtype=xp.complex64)
 
         array.real = differential_1.array
         array.imag = differential_2.array

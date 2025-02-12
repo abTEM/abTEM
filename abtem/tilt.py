@@ -79,11 +79,11 @@ def precession_tilts(
     Parameters
     ----------
     precession_angle : float
-        Precession angle [rad].
+        Precession angle [mrad].
     num_samples : int
         Number of tilt samples.
     min_azimuth : float, optional
-        Minmimum azimuthal angle [rad]. Default is 0.
+        Minimum azimuthal angle [rad]. Default is 0.
     max_azimuth : float, optional
         Maximum azimuthal angle [rad]. Default is $2 \\pi$.
     endpoint
@@ -92,7 +92,7 @@ def precession_tilts(
     Returns
     -------
     array_of_tilts : 2D array
-        Array of xy-tilt angles [rad].
+        Array of xy-tilt angles [mrad].
     """
     azimuthal_angles = np.linspace(
         min_azimuth, max_azimuth, num=num_samples, endpoint=endpoint

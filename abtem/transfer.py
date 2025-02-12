@@ -587,6 +587,71 @@ class Vortex(BaseAperture):
         return array
 
 
+class AnnularAperture(BaseAperture):
+    """
+    Annular aperture.
+
+    Parameters
+    ----------
+    inner_cutoff : float
+        The cutoff semiangle of inner radius of the aperture [mrad].
+    semiangle_cutoff : float
+        The cutoff semiangle of the aperture [mrad].
+    energy : float, optional
+        Electron energy [eV]. If not provided, inferred from the wave functions.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single
+        float is given, both are set equal.
+    gpts : two ints, optional
+        Number of grid points describing the wave functions.
+    sampling : two float, optional
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
+        ignored.
+    """
+
+    def __init__(
+        self,
+        inner_cutoff: float,
+        semiangle_cutoff: float,
+        energy: Optional[float] = None,
+        extent: Optional[float | tuple[float, float]] = None,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+    ):
+        self._inner_cutoff = inner_cutoff
+        super().__init__(
+            energy=energy,
+            semiangle_cutoff=semiangle_cutoff,
+            extent=extent,
+            gpts=gpts,
+            sampling=sampling,
+        )
+
+    @property
+    def inner_cutoff(self) -> float:
+        """The cutoff semiangle of inner radius of the aperture."""
+        return self._inner_cutoff
+
+    @property
+    def soft(self) -> bool:
+        """True if the aperture has a soft edge."""
+        return False
+
+    def _evaluate_from_angular_grid(
+        self, alpha: np.ndarray, phi: np.ndarray
+    ) -> np.ndarray:
+        xp = get_array_module(alpha)
+        alpha = xp.array(alpha)
+        semiangle_cutoff = self.semiangle_cutoff
+        inner_cutoff = self._inner_cutoff
+        assert isinstance(semiangle_cutoff, SupportsFloat)
+
+        semiangle_cutoff = semiangle_cutoff / 1e3
+        inner_cutoff = inner_cutoff / 1e3
+
+        return xp.asarray((alpha > inner_cutoff) * (alpha < semiangle_cutoff), dtype=get_dtype(complex=False))
+
+
 class Zernike(BaseAperture):
     """
     Zernike aperture.
