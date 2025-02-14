@@ -205,6 +205,20 @@ def _scan_shape(measurements: BaseMeasurements | BaseWaves) -> tuple[int, ...]:
     return tuple(measurements.shape[i] for i in _scan_axes(measurements))
 
 
+def _scan_area_per_pixel(measurements):
+    if len(_scan_sampling(measurements)) == 2:
+        return np.prod(_scan_sampling(measurements))
+    else:
+        raise RuntimeError("Cannot infer pixel area from axes metadata.")
+
+
+def _scan_extent(measurement):
+    extent = ()
+    for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
+        extent += (metadata.sampling * n,)
+    return extent
+
+
 def _annular_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -556,16 +570,12 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         else:
             raise wrong_dose_error
 
-        # xp = get_array_module(self.array)
-
         total_dose = np.array(total_dose, dtype=dtype)
 
-        transform = NoiseTransform(total_dose, samples, seeds=seed)
+        print(seed, samples)
+        transform = NoiseTransform(dose=total_dose, samples=samples, seeds=seed)
 
-        # reveal_type(self)
         measurement = transform.apply(self)
-
-        # reveal_type(measurement)
 
         return measurement
 
@@ -3722,6 +3732,8 @@ class PolarMeasurements(BaseMeasurements):
     polar_measurements : PolarMeasurements
         The polar measurements.
     """
+
+    _base_dims = 2
 
     def __init__(
         self,

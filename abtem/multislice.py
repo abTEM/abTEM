@@ -14,7 +14,7 @@ from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
-from abtem.core.chunks import Chunks, validate_chunks
+from abtem.core.chunks import Chunks, ValidatedChunks, validate_chunks
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2wavelength
@@ -919,13 +919,13 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         """Reverse the order of propagation and transmission."""
         return self._transpose
 
-    @property
-    def _default_ensemble_chunks(self):
-        chunks = self._potential._default_ensemble_chunks
-        num_exit_planes = len(self._potential.exit_planes)
-        if num_exit_planes > 1:
-            chunks = chunks + (num_exit_planes,)
-        return chunks
+    # @property
+    # def _default_ensemble_chunks(self):
+    #     chunks = self._potential._default_ensemble_chunks
+    #     num_exit_planes = len(self._potential.exit_planes)
+    #     if num_exit_planes > 1:
+    #         chunks = chunks + (num_exit_planes,)
+    #     return chunks
 
     @property
     def ensemble_axes_metadata(self):
@@ -935,9 +935,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             exit_planes_metadata = [self.potential._get_exit_planes_axes_metadata()]
         else:
             exit_planes_metadata = []
-
-        # if len(self.potential.exit_planes) == 1:
-        #    exit_planes_metadata._squeeze = True
 
         ensemble_axes_metadata = [
             *ensemble_axes_metadata,
@@ -999,17 +996,48 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         return ensemble_axes_metadata
 
-    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+    @property
+    def _default_ensemble_chunks(self) -> Chunks:
+        chunks: tuple[int, ...] = ()
+
+        if len(self.potential.ensemble_shape) > 0:
+            chunks = chunks + (1,)
+
+        if len(self.potential.exit_planes) > 1:
+            chunks = chunks + (len(self.potential.exit_planes),)
+
+        return chunks
+
+    def _validate_ensemble_chunks(
+        self, chunks: Optional[Chunks] = None, limit: str | int = "auto"
+    ) -> ValidatedChunks:
         if chunks is None:
-            chunks = 1
-        chunks = validate_chunks(self.ensemble_shape, chunks)
-        if len(self._potential.exit_planes) > 1:
+            chunks = self._default_ensemble_chunks
+
+        if (
+            isinstance(chunks, int)
+            and len(self.ensemble_shape) > 1
+            and self.potential.num_exit_planes > 1
+        ):
+            chunks = (chunks, self.potential.num_exit_planes)
+
+        chunks = validate_chunks(self.ensemble_shape, chunks, max_elements=limit)
+
+        if self.potential.num_exit_planes > 1:
+            chunks = chunks[:-1] + ((self.potential.num_exit_planes,),)
+
+        print(self.ensemble_shape)
+        return chunks
+
+    def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
+        chunks = self._validate_ensemble_chunks(chunks)
+
+        if self.potential.num_exit_planes > 1:
             chunks = chunks[:-1]
 
         args = self._potential._partition_args(chunks=chunks, lazy=lazy)
 
-        if len(self._potential.ensemble_shape) > 0:
-            ## this needs work
+        if len(self._potential.exit_planes) > 1:
             args = (args[0][..., None],)
 
         return args
@@ -1022,8 +1050,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         potential = potential.item()
         transform = MultisliceTransform(potential, **kwargs)
 
-        ndims = len(transform.ensemble_shape) + 1
-
+        ndims = len(transform.ensemble_shape)
         wrapped_transform = _wrap_with_array(transform, ndims)
         return wrapped_transform
 
@@ -1077,4 +1104,5 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         """
         output = waves.apply_transform(self, max_batch=max_batch)
         # assert is_waves_base_measurements_or_list(output)
+
         return output

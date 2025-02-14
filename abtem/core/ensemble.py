@@ -136,25 +136,53 @@ class Ensemble:
         chunks = self._validate_ensemble_chunks(chunks)
         blocks = self._partition_args(chunks=chunks, lazy=False)
 
-        for block in blocks:
-            if len(block.shape) > 1:
-                raise NotImplementedError
+        shape = sum((block.shape for block in blocks), ())
 
-        axis_indices = tuple(
-            tuple(range(block.shape[0])) if len(block.shape) else () for block in blocks
-        )
+        start_stops = chunk_ranges(chunks)
 
-        if not any(len(indices) for indices in axis_indices):
-            yield (), (), self._from_partitioned_args()(*blocks)
+        print(start_stops)
+        print(shape)
+        assert tuple(len(cr) for cr in start_stops) == shape
 
-        for block_indices, start_stop in zip(
-            itertools.product(*axis_indices),
-            itertools.product(*chunk_ranges(chunks)),
+        for indices, start_stop in zip(
+            np.ndindex(shape), itertools.product(*start_stops)
         ):
-            block = tuple(block[i] for i, block in zip(block_indices, blocks))
+            block_indices: tuple[tuple[int, ...], ...] = ()
+            j = 0
+            for block in blocks:
+                n = len(block.shape)
+                block_indices += (tuple(indices[index] for index in range(j, j + n)),)
+                j += n
+
+            args = tuple(block[i] for i, block in zip(block_indices, blocks))
             slics = tuple(slice(start, stop) for start, stop in start_stop)
 
-            yield block_indices, slics, self._from_partitioned_args()(*block)
+            yield indices, slics, self._from_partitioned_args()(*args)
+
+        # print(blocks)
+
+        # for block in blocks:
+        # if len(block.shape) > 1:
+        #    print(block)
+        #         raise NotImplementedError
+        # axis_indices = tuple(
+        #     tuple(range(block.shape[0])) if len(block.shape) else () for block in blocks
+        # )
+
+        # if not any(len(indices) for indices in axis_indices):
+        #     yield (), (), self._from_partitioned_args()(*blocks)
+
+        # print(len(tuple(itertools.product(*chunk_ranges(chunks)))))
+        # for block_indices, start_stop in zip(
+        #     itertools.product(*axis_indices),
+        #     itertools.product(*chunk_ranges(chunks)),
+        # ):
+
+        #     block = tuple(block[i] for i, block in zip(block_indices, blocks))
+        #     slics = tuple(slice(start, stop) for start, stop in start_stop)
+        #     print(slics)
+
+        #     yield block_indices, slics, self._from_partitioned_args()(*block)
 
 
 class EmptyEnsemble(Ensemble):

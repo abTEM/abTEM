@@ -20,6 +20,7 @@ T = TypeVar("T", float, int, bool)
 
 np.ndarray(())
 
+
 def number_to_tuple(
     value: T | tuple[T, ...], dimension: Optional[int] = None
 ) -> tuple[T, ...]:
@@ -109,6 +110,7 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         return False
 
     for key, value in a.__dict__.items():
+        # print(key)
         if key in exclude:
             continue
 
@@ -124,16 +126,20 @@ def safe_equality(a, b, exclude: tuple[str, ...] = ()) -> bool:
         ):
             return True
 
-        with warnings.catch_warnings():
-            # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
+        # with warnings.catch_warnings():
+        # warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
+        if isinstance(value, EqualityMixin):
+            equal = safe_equality(value, b.__dict__[key])
+
+        else:  # if isinstance(value, (tuple, list, np.ndarray)):
             try:
                 equal = np.allclose(value, b.__dict__[key])
-
             except (ValueError, TypeError):
                 if isinstance(value, EqualityMixin):
                     equal = safe_equality(value, b.__dict__[key])
-
+        # else:
+        #    equal = safe_equality(value, b.__dict__[key])
         if equal is False:
             return False
 
@@ -254,8 +260,7 @@ def expand_dims_to_broadcast(
     arr2: np.ndarray,
     match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
     broadcast: bool = False,
-) -> tuple[np.ndarray, np.ndarray]:
-    ...
+) -> tuple[np.ndarray, np.ndarray]: ...
 
 
 @overload
@@ -264,8 +269,7 @@ def expand_dims_to_broadcast(
     arr2: da.core.Array,
     match_dims: Optional[tuple[tuple[int, ...], tuple[int, ...]]] = None,
     broadcast: bool = False,
-) -> tuple[da.core.Array, da.core.Array]:
-    ...
+) -> tuple[da.core.Array, da.core.Array]: ...
 
 
 def expand_dims_to_broadcast(

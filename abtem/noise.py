@@ -28,7 +28,9 @@ class NoiseTransform(EnsembleTransform):
         self._dose = validate_distribution(dose)
 
         seeds_distribution: None | int | BaseDistribution
-        if isinstance(seeds, int) and samples is None:
+        if (isinstance(seeds, int) or seeds is None) and (
+            samples is None or samples == 1
+        ):
             seeds_distribution = seeds
 
         elif seeds is not None or samples is not None:
@@ -39,8 +41,6 @@ class NoiseTransform(EnsembleTransform):
             seeds_distribution = None
 
         self._seeds = seeds_distribution
-
-        print(self._seeds)
 
         super().__init__(
             distributions=(
@@ -114,8 +114,8 @@ class NoiseTransform(EnsembleTransform):
         return array
 
     def apply(
-        self, array_object: ArrayObjectType, max_batch: int | str = "auto"
-    ) -> ArrayObjectType:
+        self, array_object: ArrayObject, max_batch: int | str = "auto"
+    ) -> ArrayObject:
         new_array_object = array_object.apply_transform(self)
         if TYPE_CHECKING:
             assert isinstance(new_array_object, self.__class__)

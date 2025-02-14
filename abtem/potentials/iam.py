@@ -432,7 +432,7 @@ class _FieldBuilder(BaseField):
                 )
             else:
                 new_axis = tuple(range(1, len(self.base_shape)))
-            
+
             new_axis = (0, 1, 2)
 
             array = da.map_blocks(
@@ -1515,6 +1515,7 @@ class CrystalPotential(_PotentialBuilder):
             chunks = 1
 
         chunks = validate_chunks(self.ensemble_shape, chunks)
+        print(self.ensemble_shape)
 
         if chunks == ():
             old_chunks = ()
@@ -1539,7 +1540,7 @@ class CrystalPotential(_PotentialBuilder):
             array = da.concatenate(arrays)
 
             if old_chunks == ():
-                array = array[0] 
+                array = array[0]
 
         else:
             potential_unit = self.potential_unit
@@ -1552,6 +1553,9 @@ class CrystalPotential(_PotentialBuilder):
                     seeds = None
 
                 itemset(array, i, (potential_unit, seeds))
+
+            if old_chunks == ():
+                array = _wrap_with_array(array[0], ndims=0)
 
         return (array,)
 

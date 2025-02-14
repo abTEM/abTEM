@@ -11,9 +11,9 @@ from abtem.core.axes import AxisAlignedTiltAxis, AxisMetadata, TiltAxis
 from abtem.core.backend import get_array_module
 from abtem.distributions import (
     BaseDistribution,
+    DistributionFromValues,
     MultidimensionalDistribution,
     validate_distribution,
-    DistributionFromValues,
 )
 from abtem.transform import WavesToWavesTransform
 

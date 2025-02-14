@@ -201,7 +201,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
             args = args.item()
         atoms = args
         new_dummy_frozen_phonons = cls(atoms=atoms, **kwargs)
-        return _wrap_with_array(new_dummy_frozen_phonons, 1)
+        return _wrap_with_array(new_dummy_frozen_phonons, 0)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(exclude=("atoms",))

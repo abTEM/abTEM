@@ -613,35 +613,43 @@ class GPAWPotential(_PotentialBuilder):
             if lazy:
                 array = da.concatenate(list(array))
 
-            return (array,)
-
         else:
-            if len(self.ensemble_shape) == 0:
-                array = np.zeros((1,), dtype=object)
-                calculators = [calculators]
+            if len(self.ensemble_shape) == 0 and lazy:
+                block = dask.delayed(frozen_phonons)(calculators, None)
+                array = da.from_delayed(block, shape=(), dtype=object)
+            elif len(self.ensemble_shape) == 0 and not lazy:
+                array = frozen_phonons(calculators, None)
+                array = _wrap_with_array(array, ndims=0)
             else:
                 array = np.zeros(self.ensemble_shape[0], dtype=object)
-
-            for i, calculator in enumerate(calculators):
-                if len(self.ensemble_shape) > 0:
+                for i, calculator in enumerate(calculators):
                     calculator = [calculator]
 
+                    if lazy:
+                        calculator = dask.delayed(calculator)
+                        block = da.from_delayed(
+                            dask.delayed(frozen_phonons)(calculator, None),
+                            shape=(1,),
+                            dtype=object,
+                        )
+                    else:
+                        block = frozen_phonons(calculator, None)
+
+                    itemset(array, i, block)
+
                 if lazy:
-                    calculator = dask.delayed(calculator)
-                    block = da.from_delayed(
-                        dask.delayed(frozen_phonons)(calculator, None),
-                        shape=(1,),
-                        dtype=object,
-                    )
-                else:
-                    block = frozen_phonons(calculator, None)
+                    array = da.concatenate(list(array))
 
-                itemset(array, i, block)
+        return (array,)
 
-            if lazy:
-                return (da.concatenate(list(array)),)
-            else:
-                return (array,)
+        # return (array,)
+        # # if lazy:
+
+        # #     print(array)
+
+        # #     return (da.concatenate(list(array)),)
+        # # else:
+        # #     return (array,)
 
 
 class GPAWParametrization:

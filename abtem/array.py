@@ -185,6 +185,7 @@ def multi_output_blockwise(
         meta=np.array((), dtype=object),
         **kwargs,
     )
+
     outputs: tuple[da.core.Array, ...] = ()
     for i, (drop_axis, out_meta, new_shape) in enumerate(
         zip(drop_axes, out_metas, new_shapes)
@@ -192,11 +193,6 @@ def multi_output_blockwise(
         if not all(len(out_array.chunks[i]) == 1 for i in drop_axis):
             raise RuntimeError()
 
-        # drop_chunks = ()
-        # for i, (d, n) in enumerate(zip(drop_axis)):
-        #    drop_chunks += c if i not in d else (chunks,)
-
-        # print(drop_chunks, drop_axis)
         drop_chunks = []
         for j, (item, ns) in enumerate(zip(chunks, new_shape)):
             if j not in drop_axis:
@@ -204,8 +200,7 @@ def multi_output_blockwise(
                     assert len(item) == 1
                     item = (ns,)
                 drop_chunks.append(item)
-        drop_chunks = tuple(drop_chunks)
-        # drop_chunks = tuple(item for i, item in enumerate(chunks) if i not in drop_axis)
+        # drop_chunks = tuple(drop_chunks)
 
         new_output = da.map_blocks(
             _extract_blockwise_multi_output,
@@ -1419,15 +1414,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             new_shapes = tuple(
                 tuple(out_shape) for out_shape in transform._out_shape(self)
             )
-            # print(validated_chunks)
-            # print(transform.ensemble_shape)
-            # print(self._lazy_array)
-            # print(validated_chunks)
-            # print("da", drop_axes)
-            # print("na", new_axes)
-            # print(out_metas)
-            # print(new_shapes)
-            # ssss
+
             new_arrays = multi_output_blockwise(
                 self._apply_transform,
                 array=self._lazy_array,
@@ -1612,7 +1599,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         attrs = self.metadata
         attrs["long_name"] = self.metadata["label"]
-        ssssss
 
         return xr.DataArray(self.array, dims=dims, coords=coords, attrs=attrs)
 
@@ -1648,35 +1634,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         self, chunks: Optional[Chunks] = None, lazy: bool = True
     ):
         if len(self.ensemble_shape) == 0:
-            ensemble_axes_metadata = _wrap_with_array([], 1)
+            ensemble_axes_metadata = _wrap_with_array([], 0)
         else:
             chunks = self._validate_ensemble_chunks(chunks)
             chunk_shape = tuple(len(c) for c in chunks)
 
             ensemble_axes_metadata = np.zeros(chunk_shape, dtype=object)
             for index, slic in iterate_chunk_ranges(chunks):
-                # new_ensemble_axes_metadata = []
-
-                # for i, axis in enumerate(self.ensemble_axes_metadata):
-                #     try:
-                #         axis = axis[slic[i]]
-                #     except TypeError:
-                #         axis = axis.copy()
-
-                #     new_ensemble_axes_metadata.append(axis)
                 new_ensemble_axes_metadata = [
                     axis[slic[i]] if hasattr(axis, "__getitem__") else axis.copy()
                     for i, axis in enumerate(self.ensemble_axes_metadata)
                 ]
 
                 itemset(ensemble_axes_metadata, index, new_ensemble_axes_metadata)
-
-            # for index, slic in iterate_chunk_ranges(chunks):
-            #     new_ensemble_axes_metadata = [
-            #         axis[slic[i]] if isinstance(axis, Sequence) else axis.copy()
-            #         for i, axis in enumerate(self.ensemble_axes_metadata)
-            #     ]
-            #     itemset(ensemble_axes_metadata, index, new_ensemble_axes_metadata)
 
         if lazy:
             ensemble_axes_metadata = da.from_array(ensemble_axes_metadata, chunks=1)
@@ -1696,24 +1666,25 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         elif chunks is None:
             chunks = (1,) * len(self.ensemble_shape)
 
-        chunks = self._validate_ensemble_chunks(chunks)
-
+        ensemble_chunks = self._validate_ensemble_chunks(chunks)
         if lazy:
             xp = get_array_module(self.array)
             array = self.ensure_lazy()._lazy_array
 
-            if chunks != array.chunks:
-                array = array.rechunk(chunks + array.chunks[len(chunks) :])
+            if ensemble_chunks != array.chunks:
+                array = array.rechunk(
+                    ensemble_chunks + array.chunks[len(ensemble_chunks) :]
+                )
 
             ensemble_axes_metadata = self._partition_ensemble_axes_metadata(
-                chunks=chunks
+                chunks=ensemble_chunks
             )
 
             def _combine_args(*args):
                 combined = args[0], args[1].item()
                 return _wrap_with_array(combined, 1)
 
-            ndims = max(len(self.ensemble_shape), 1)
+            ndims = len(self.ensemble_shape)
             blocks = da.blockwise(
                 _combine_args,
                 tuple_range(ndims),
@@ -1729,7 +1700,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         else:
             array = self.compute().array
             if len(self.ensemble_shape) == 0:
-                blocks = np.zeros((1,), dtype=object)
+                blocks = np.zeros((), dtype=object)
             else:
                 chunk_shape = tuple(len(c) for c in chunks)
                 blocks = np.zeros(chunk_shape, dtype=object)
@@ -1739,9 +1710,6 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             )
 
             for block_indices, chunk_range in iterate_chunk_ranges(chunks):
-                if len(block_indices) == 0:
-                    block_indices = 0
-
                 itemset(
                     blocks,
                     block_indices,
@@ -1760,7 +1728,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         new_array_object = cls(
             array=array, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs
         )
-        ndims = max(new_array_object.ensemble_dims, 1)
+        ndims = new_array_object.ensemble_dims
         return _wrap_with_array(new_array_object, ndims)
 
     def _from_partitioned_args(self):
