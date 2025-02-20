@@ -305,6 +305,7 @@ def _auto_chunks(
 
         if total > max_elements:
             current_chunks[autodims[j]] -= 1
+            raise RuntimeError("Object cannot be automatically chunked; consider increasing chunk-size parameter!")
             break
 
         if current_chunks == max_chunks:
