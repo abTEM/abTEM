@@ -1,4 +1,4 @@
-numpy
+numpy<2
 pandas
 matplotlib>=3.6
 pyfftw
@@ -6,7 +6,7 @@ scipy
 numba
 dask>=2022.12.1
 distributed
-zarr
+zarr<3
 ase
 threadpoolctl
 tabulate
