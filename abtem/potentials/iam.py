@@ -55,7 +55,8 @@ from abtem.slicing import (
     BaseSlicedAtoms,
     SlicedAtoms,
     SliceIndexedAtoms,
-    _validate_slice_thickness, slice_limits,
+    _validate_slice_thickness,
+    slice_limits,
 )
 
 if TYPE_CHECKING:
@@ -853,7 +854,6 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             sampling=sampling,
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
-            device=device,
             plane=plane,
             origin=origin,
             box=box,
@@ -1084,6 +1084,9 @@ class PotentialArray(BasePotential, FieldArray):
     metadata : dict
         A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
         from the waves.
+    device : str, optional
+        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
+        configuration file.
     """
 
     _base_dims = 3
@@ -1097,7 +1100,10 @@ class PotentialArray(BasePotential, FieldArray):
         exit_planes: int | tuple[int, ...] = None,
         ensemble_axes_metadata: list[AxisMetadata] = None,
         metadata: dict = None,
+        device: str = None,
     ):
+        self._device = validate_device(device)
+
         super().__init__(
             array=array,
             slice_thickness=slice_thickness,
@@ -1107,6 +1113,10 @@ class PotentialArray(BasePotential, FieldArray):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+    @property
+    def device(self) -> str:
+        return self._device
 
     @staticmethod
     def _transmission_function(array, energy):

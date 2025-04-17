@@ -240,7 +240,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
         raise RuntimeError("Cell has non-orthogonal lattice vectors.")
 
-    atoms.positions[np.diag(cell) < 0., :] *= -1
+    atoms.positions[np.diag(cell) < 0.0, :] *= -1
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
 
@@ -965,7 +965,7 @@ def cut_cell(
 
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
-    repetitions = np.ceil(scaled_corners.ptp(axis=0)).astype("int") + 1
+    repetitions = np.ceil(np.ptp(scaled_corners, axis=0)).astype("int") + 1
     new_atoms = atoms * repetitions
 
     center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)

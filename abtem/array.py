@@ -95,6 +95,8 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
     return hyperspy_axes
 
 
+# TODO: "with zarr.open(...)" fails with Zarr 3.x, related to: https://github.com/zarr-developers/zarr-python/pull/2691
+# TODO: Current solution: pin Zarr to version <3.
 class ComputableList(list):
     """
     A list with methods for conveniently computing its items.
@@ -1004,7 +1006,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         **kwargs,
     ):
         """
-        Turn a lazy *ab*\TEM object into its in-memory equivalent.
+        Turn a lazy *ab*TEM object into its in-memory equivalent.
 
         Parameters
         ----------

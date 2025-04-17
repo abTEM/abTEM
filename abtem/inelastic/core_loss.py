@@ -491,7 +491,7 @@ class TransitionPotential(BaseTransitionPotential):
             OrdinalAxis(
                 values=values,
                 label="(l,ml)→(l',ml')",
-                tex_label="$(\ell, m_l) → (\ell', m_l')$",
+                tex_label=r"$(\ell, m_l) → (\ell', m_l')$",
             )
         ]
 
@@ -776,10 +776,10 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
         included = order[:n]
         return self[included]
 
-    def absolute_threshold(self, waves: Waves, threshold: float=1.):
+    def absolute_threshold(self, waves: Waves, threshold: float = 1.0):
 
-        if threshold >= 1.:
-            return 0.
+        if threshold >= 1.0:
+            return 0.0
 
         if hasattr(waves, "build"):
             waves = waves.build(lazy=False)
@@ -830,10 +830,11 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             xp = get_array_module(waves.array)
             validated_sites = copy_to_device(validated_sites, waves.array)
 
-            rounded_sites = xp.round((validated_sites / xp.array(self.sampling))).astype(int)
+            rounded_sites = xp.round(
+                (validated_sites / xp.array(self.sampling))
+            ).astype(int)
 
             local_potential = copy_to_device(self._local_potential, waves.array)
-
 
             shifted_local_potential = fast_roll(local_potential, rounded_sites)
 
@@ -874,7 +875,7 @@ class TransitionPotentialArray(BaseTransitionPotential, ArrayObject):
             #     # plt.imshow(abs2(waves.array[0, 0]))
             #     plt.show()
 
-            #print(type(mask), type(sites))
+            # print(type(mask), type(sites))
 
             sites = sites[mask]
 

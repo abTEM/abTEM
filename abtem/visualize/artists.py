@@ -862,7 +862,7 @@ class ScatterArtist(Artist2D):
             annotations = []
             for hkl in measurement.miller_indices:
                 if config.get("visualize.use_tex"):
-                    annotation = " \ ".join(
+                    annotation = " \\ ".join(
                         [f"\\bar{{{abs(i)}}}" if i < 0 else f"{i}" for i in hkl]
                     )
                     annotations.append(f"${annotation}$")
