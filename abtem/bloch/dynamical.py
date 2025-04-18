@@ -343,7 +343,7 @@ class StructureFactor(BaseStructureFactor):
         atoms: Atoms,
         g_max: float,
         parametrization: str = "lobato",
-        thermal_sigma: float = 0.,
+        thermal_sigma: float = 0.0,
         cutoff: str = "taper",
         device: str = None,
         centering: str = "P",
@@ -1247,32 +1247,32 @@ class BlochWaves:
         )
         return S
 
-    # def _calculate_array(self, thicknesses: np.ndarray):
-    #     hkl = self.structure_factor.hkl[self.hkl_mask]
-    #     cell = self.cell
-    #     A = self.calculate_structure_matrix(lazy=False)
+    def _calculate_array(self, thicknesses: np.ndarray):
+        hkl = self.structure_factor.hkl[self.hkl_mask]
+        cell = self.cell
+        A = self.calculate_structure_matrix(lazy=False)
 
-    #     xp = get_array_module(A)
+        xp = get_array_module(A)
 
-    #     Mii = xp.asarray(calculate_M_matrix(hkl, cell, self.energy))
+        Mii = xp.asarray(calculate_M_matrix(hkl, cell, self.energy))
 
-    #     v, C = xp.linalg.eigh(A)
-    #     gamma = v * self.wavelength / 2.0
+        v, C = xp.linalg.eigh(A)
+        gamma = v * self.wavelength / 2.0
 
-    #     np.fill_diagonal(C, np.diag(C) / Mii)
+        np.fill_diagonal(C, np.diag(C) / Mii)
 
-    #     C_inv = xp.conjugate(C.T)
+        C_inv = xp.conjugate(C.T)
 
-    #     initial = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
-    #     initial = xp.asarray(initial)
+        initial = np.all(hkl == [0, 0, 0], axis=1).astype(complex)
+        initial = xp.asarray(initial)
 
-    #     array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
+        array = xp.zeros(shape=(len(thicknesses), len(hkl)), dtype=complex)
 
-    #     for i, thickness in enumerate(thicknesses):
-    #         alpha = C_inv @ initial
-    #         array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
+        for i, thickness in enumerate(thicknesses):
+            alpha = C_inv @ initial
+            array[i] = C @ (xp.exp(2.0j * xp.pi * thickness * gamma) * alpha)
 
-    #     return array
+        return array
 
     def calculate_diffraction_patterns(
         self,
