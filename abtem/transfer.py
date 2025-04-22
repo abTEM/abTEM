@@ -393,7 +393,7 @@ class Aperture(BaseAperture):
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
-        semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
+        semiangle_cutoff = xp.asarray(self.semiangle_cutoff) * 1e-3
 
         if (
             self.soft

@@ -127,7 +127,7 @@ def _to_hyperspy_axes_metadata(
 
     return hyperspy_axes
 
-
+  
 def _extract_blockwise_multi_output(arr: np.ndarray, index: int) -> np.ndarray:
     arr = arr.item()[index]
     return arr
@@ -214,6 +214,8 @@ def multi_output_blockwise(
     return outputs
 
 
+# TODO: "with zarr.open(...)" fails with Zarr 3.x, related to: https://github.com/zarr-developers/zarr-python/pull/2691
+# TODO: Current solution: pin Zarr to version <3.
 class ComputableList(list):
     """A list with methods for conveniently computing its items."""
 
@@ -1139,7 +1141,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         resource_profiler: bool = False,
         **kwargs,
     ) -> Self | tuple[Self, tuple]:
-        """Turn a lazy *ab*TEM object into its in-memory equivalent.
+        """Turn a lazy *ab*TEM object into its in-memory equivalent."""
 
         Parameters
         ----------

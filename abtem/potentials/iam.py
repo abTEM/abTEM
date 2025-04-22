@@ -884,7 +884,6 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             sampling=sampling,
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
-            device=device,
             plane=plane,
             origin=origin,
             box=box,
@@ -1131,8 +1130,11 @@ class PotentialArray(BasePotential, FieldArray):
         Axis metadata for each ensemble axis. The axis metadata must be compatible with
         the shape of the array.
     metadata : dict
-        A dictionary defining wave function metadata. All items will be added to the
-        metadata of measurements derived from the waves.
+        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
+        from the waves.
+    device : str, optional
+        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
+        configuration file.
     """
 
     _base_dims = 3
@@ -1146,10 +1148,13 @@ class PotentialArray(BasePotential, FieldArray):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        device: str = None,
     ):
         if metadata is None:
             metadata = {}
         metadata = {"label": "potential", "units": "eV / e", **metadata}
+
+        self._device = validate_device(device)
 
         super().__init__(
             array=array,
@@ -1160,6 +1165,10 @@ class PotentialArray(BasePotential, FieldArray):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+    @property
+    def device(self) -> str:
+        return self._device
 
     @staticmethod
     def _transmission_function(array, energy):
