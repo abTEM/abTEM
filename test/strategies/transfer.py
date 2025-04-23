@@ -9,7 +9,7 @@ from abtem.transfer import (
     TemporalEnvelope,
     polar_symbols,
 )
-from abtem.transform import CompositeArrayObjectTransform
+from abtem.transform import ArrayObjectTransform
 
 from . import core as core_st
 from . import scan as scan_st
@@ -94,7 +94,7 @@ def composite_wave_transform(draw, allow_distribution=True):
     sampled_wave_transforms = draw(
         st.lists(st.one_of(wave_transforms), min_size=1, max_size=n)
     )
-    return CompositeArrayObjectTransform(sampled_wave_transforms)
+    return ArrayObjectTransform(sampled_wave_transforms)
 
 
 @st.composite
