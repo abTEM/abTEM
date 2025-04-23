@@ -1481,7 +1481,6 @@ class BlochWaves:
                 energy=self.energy,
                 thicknesses=thicknesses,
             )
-
         return array
 
     def calculate_diffraction_patterns(

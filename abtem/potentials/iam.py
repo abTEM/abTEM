@@ -884,7 +884,6 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             sampling=sampling,
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
-            device=device,
             plane=plane,
             origin=origin,
             box=box,
@@ -1160,6 +1159,10 @@ class PotentialArray(BasePotential, FieldArray):
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
         )
+
+    @property
+    def device(self) -> str:
+        return self._device
 
     @staticmethod
     def _transmission_function(array, energy):

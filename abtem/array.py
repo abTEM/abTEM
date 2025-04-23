@@ -214,6 +214,8 @@ def multi_output_blockwise(
     return outputs
 
 
+# TODO: "with zarr.open(...)" fails with Zarr 3.x, related to: https://github.com/zarr-developers/zarr-python/pull/2691
+# TODO: Current solution: pin Zarr to version <3.
 class ComputableList(list):
     """A list with methods for conveniently computing its items."""
 
