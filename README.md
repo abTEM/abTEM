@@ -2,12 +2,13 @@
 
 [![PyPI version](https://badge.fury.io/py/abtem.svg)](https://badge.fury.io/py/abtem)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
+<!--- [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)--->
 [![DOI](https://zenodo.org/badge/205110910.svg)](https://zenodo.org/badge/latestdoi/205110910)
 
 [**Docs**](https://abtem.github.io/doc/intro.html)
 | [**Install Guide**](https://abtem.github.io/doc/getting_started/install.html)
-| [**Examples**](https://github.com/jacobjma/abTEM/tree/master/examples)
+| [**Walkthrough**](https://abtem.github.io/doc/user_guide/walkthrough/walkthrough.html)
+<!---| [**Examples**](https://github.com/jacobjma/abTEM/tree/master/examples)--->
 
 *ab*TEM (pronounced "ab-tem", as in "*ab initio*") provides a Python API for running simulations of (scanning)
 transmission electron microscopy images and diffraction patterns using the multislice or PRISM algorithms. It is
@@ -30,12 +31,15 @@ see [the installation guide](https://abtem.github.io/doc/intro.html).
 ## Getting started
 
 To get started using *ab*TEM, please visit
-our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html) or check out one of
-the [examples](https://github.com/jacobjma/abTEM/tree/master/examples).
+our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html).
 
-To try *ab*TEM in your web browser, please click on the following Binder link:
+<!---To try *ab*TEM in your web browser, please click on the following Binder link:
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)--->
+
+## Practical guide to simulations
+
+For a pedagogical guide into numerical transmission electron microscopy simulations with extensive use of *ab*TEM code, please see [this computational article](https://www.elementalmicroscopy.com/articles/EM000005).
 
 ## Citing *ab*TEM
 
@@ -54,7 +58,7 @@ Our code is used by so many people that it is hard to keep track. If you already
 ## Contact
 
 * Write the [maintainer](https://github.com/tomasusi) or [lead developer](https://github.com/jacobjma) directly
-* Bug reports and issues: [GitHub issues](https://github.com/jacobjma/abTEM/issues)
-* Discussion and development: [GitHub discussions](https://github.com/jacobjma/abTEM/discussions)
+* Bug reports and issues: [GitHub issues](https://github.com/abTEM/abTEM/issues)
+* Discussion and development: [GitHub discussions](https://github.com/abTEM/abTEM/discussions)
 
 Please send us bug reports, patches, code, ideas and questions.
