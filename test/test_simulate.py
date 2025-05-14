@@ -157,12 +157,10 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
 
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 
-    if isinstance(scan, CustomScan) and scan.shape == (1,):
-        expected_shape = potential.ensemble_shape + measurement_shape
-    else:
-        expected_shape = (
-            potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-        )
+    # if isinstance(scan, CustomScan) and scan.shape == (1,):
+    #    expected_shape = potential.ensemble_shape + measurement_shape
+    # else:
+    expected_shape = potential.ensemble_shape + scan.ensemble_shape + measurement_shape
 
     # print(potential.ensemble_shape, scan.ensemble_shape, measurement_shape)
     # print(measurement.shape)
