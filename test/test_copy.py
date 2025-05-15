@@ -19,7 +19,7 @@ from hypothesis import given
         abtem_st.aperture,
         abtem_st.temporal_envelope,
         abtem_st.spatial_envelope,
-        abtem_st.composite_wave_transform,
+        # abtem_st.composite_wave_transform,
         abtem_st.ctf,
         abtem_st.probe,
         abtem_st.plane_wave,

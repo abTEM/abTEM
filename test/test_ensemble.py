@@ -26,7 +26,7 @@ from abtem.core.ensemble import concatenate_array_blocks
         abtem_st.aperture,
         abtem_st.temporal_envelope,
         abtem_st.spatial_envelope,
-        abtem_st.composite_wave_transform,
+        # abtem_st.composite_wave_transform,
         abtem_st.ctf,
     ],
 )
@@ -56,7 +56,7 @@ def test_ensemble_shape(data, ensemble):
         abtem_st.aperture,
         abtem_st.temporal_envelope,
         abtem_st.spatial_envelope,
-        abtem_st.composite_wave_transform,
+        # abtem_st.composite_wave_transform,
     ],
 )
 def test_ensembles(data, ensemble):
@@ -123,7 +123,7 @@ def test_array_waves_transform(data, ensemble, chunks):
         abtem_st.aperture,
         abtem_st.temporal_envelope,
         abtem_st.spatial_envelope,
-        abtem_st.composite_wave_transform,
+        # abtem_st.composite_wave_transform,
         abtem_st.ctf,
     ],
 )

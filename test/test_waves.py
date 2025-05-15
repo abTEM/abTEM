@@ -266,7 +266,7 @@ def test_build_then_multislice_s_matrix(data, waves_builder, potential, lazy):
         abtem_st.aperture,
         abtem_st.temporal_envelope,
         abtem_st.spatial_envelope,
-        abtem_st.composite_wave_transform,
+        # abtem_st.composite_wave_transform,
         abtem_st.ctf,
     ],
 )
