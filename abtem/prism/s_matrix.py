@@ -6,6 +6,7 @@ import inspect
 import operator
 import warnings
 from abc import abstractmethod
+from copy import deepcopy
 from functools import partial, reduce
 
 import dask.array as da
@@ -95,6 +96,11 @@ def _finalize_lazy_measurements(
             new_axis=new_axis,
             meta=meta,
         )
+        # This line FEEELS wrong, but it does seem to fix some the problems
+        # with reduce... leaving it commented though because i think it's
+        # fixing a symptom, not the actual problem.
+
+        # array = array[0]
 
         ensemble_axes_metadata = detector._out_ensemble_axes_metadata(waves)[0]
 
@@ -753,7 +759,9 @@ def _no_chunks_reduce(
         )
     )
 
-    array = da.map_blocks(
+    # I think having this varaible named 'array' was overwriting something in
+    # self.array. changing to "new array"
+    new_array = da.map_blocks(
         _lazy_reduce,
         array,
         scan=scan,
@@ -766,8 +774,15 @@ def _no_chunks_reduce(
 
     dummy_probes = s_matrix_array.dummy_probes(scan=scan, ctf=ctf)
 
+    # I think right here is where the reduce function is failing.
+    # I believe _finalize_lazy_measurements should be getting metadata about
+    # the FrozenPhonon/Atom axis, but it doesn't, so it thinks there should
+    # be one less axis than there is.
+    # I think maybe s_matrix_array.ensemble_axes_metadata shouldn't actually
+    # be empty here, and is being overwritten as some step.
+    # This is just a guess though
     measurements = _finalize_lazy_measurements(
-        array,
+        new_array,
         waves=dummy_probes,
         detectors=detectors,
         extra_ensemble_axes_metadata=s_matrix_array.ensemble_axes_metadata,
@@ -1301,7 +1316,6 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
         if self.is_lazy:
             if reduction_scheme == "multiple-rechunk":
-                sssss
                 measurements = _multiple_rechunk_reduce(
                     self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
                 )
@@ -1660,6 +1674,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         -------
 
         """
+        # I think this step might cause a loss of metadata that then
+        # causes SMatrix.reduce to fail.
         s_matrix = self.__class__(
             potential=potential, **self._copy_kwargs(exclude=("potential",))
         )
@@ -1792,7 +1808,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 wave_vector_chunks, lazy=False
             )
 
-            if not hasattr(s_matrix_blocks, "len"):
+            # This is the old if/then, which successfully fixed an issue in
+            # multislice where 1xmxn objects would create an s_matrix_blocks
+            # object of shape (). however, it also caused objects built with
+            # FrozenPhonons to fail.
+            # if not hasattr(s_matrix_blocks, "len"):
+            #     s_matrix_blocks = s_matrix_blocks[None]
+
+            # This new line seems to fix the old problem without causing
+            # Frozen Phonons to error out.
+            if len(s_matrix_blocks.shape) < 1:
                 s_matrix_blocks = s_matrix_blocks[None]
 
             wave_vector_blocks = np.tile(
