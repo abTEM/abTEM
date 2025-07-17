@@ -140,8 +140,8 @@ class Ensemble:
 
         start_stops = chunk_ranges(chunks)
 
-        print(start_stops)
-        print(shape)
+        #print(start_stops)
+        #print(shape)
         assert tuple(len(cr) for cr in start_stops) == shape
 
         for indices, start_stop in zip(
