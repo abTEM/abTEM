@@ -200,7 +200,7 @@ def multi_output_blockwise(
                     assert len(item) == 1
                     item = (ns,)
                 drop_chunks.append(item)
-        # drop_chunks = tuple(drop_chunks)
+        drop_chunks = tuple(drop_chunks)
 
         new_output = da.map_blocks(
             _extract_blockwise_multi_output,

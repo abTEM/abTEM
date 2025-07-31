@@ -431,9 +431,9 @@ class _FieldBuilder(BaseField):
                     )
                 )
             else:
-                new_axis = tuple(range(1, len(self.base_shape)))
+                new_axis = tuple(range(0, len(self.base_shape)))
 
-            new_axis = (0, 1, 2)
+            #new_axis = (0, 1, 2) # This was causing problems with FrozenPhonons
 
             array = da.map_blocks(
                 self._wrap_build_potential,
