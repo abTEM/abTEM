@@ -8,7 +8,7 @@ import scipy.ndimage  # type: ignore
 from numba import njit, stencil  # type: ignore
 
 from abtem.core.backend import get_array_module
-from abtem.core.energy import energy2sigma
+from abtem.core.energy import energy2sigma, energy2wavelength
 
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
@@ -265,6 +265,8 @@ class LaplaceOperator:
         laplace_stencil = self.get_stencil(waves, thickness)
         waves._array = laplace_stencil(waves._array)
         return waves
+    
+
 
 
 class DivergedError(Exception):
@@ -281,17 +283,32 @@ def _multislice_exponential_series(
     waves: np.ndarray,
     transmission_function: np.ndarray,
     laplace: Callable,
+    wavelength: float,
+    thickness: float,
+    sampling: tuple[float, float],
     tolerance: float = 1e-16,
     max_terms: int = 300,
+    correction: None | str = None,
+
 ) -> np.ndarray:
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
-    temp = laplace(waves) + waves * transmission_function
+    if correction == "propagator":
+        temp = propagator_corrected_taylor_series(
+                waves, order=5, laplace=laplace, wavelength=wavelength, thickness=thickness, sampling=sampling
+            ) + waves * transmission_function
+    else:
+        temp = laplace(waves) + waves * transmission_function
 
     waves += temp
     for i in range(2, max_terms + 1):
-        temp = (laplace(temp) + temp * transmission_function) / i
+        if correction == "propagator":
+            temp = (propagator_corrected_taylor_series(
+                temp, order=5, laplace=laplace, wavelength=wavelength, thickness=thickness, sampling=sampling
+            ) + temp * transmission_function) / i
+        else:
+            temp = (laplace(temp) + temp * transmission_function) / i
         waves += temp
 
         temp_amplitude = np.abs(temp).sum()
@@ -306,6 +323,26 @@ def _multislice_exponential_series(
             "terms"
         )
     return waves
+
+def propagator_corrected_taylor_series(
+        waves: np.ndarray,
+        order: int,
+        laplace: Callable,
+        wavelength: float,
+        thickness: float,
+        sampling: tuple[float, float]
+        ) -> np.ndarray:
+    xp = get_array_module(waves)
+    if order < 1:
+        raise ValueError("order must be a positive integer and at least 2")
+    series = laplace(waves)
+    temp = laplace(waves)
+    for i in range(2, order + 1):
+        temp = laplace(temp) / 1.0j / thickness * xp.prod(sampling) * wavelength / (-2 * xp.pi)
+        series += temp
+
+    series = series / 2 + laplace(waves) / 2
+    return series
 
 
 # def _multislice_exponential_series(
@@ -328,6 +365,7 @@ def multislice_step(
     laplace: LaplaceOperator,
     tolerance: float = 1e-16,
     max_terms: int = 300,
+    correction: None | str = None,
 ) -> Waves:
     if max_terms < 1:
         raise ValueError()
@@ -352,14 +390,21 @@ def multislice_step(
 
     laplace_stencil = laplace.get_stencil(waves, thickness)
 
+    wavelength = energy2wavelength(waves._valid_energy)
+
     waves._array = _multislice_exponential_series(
         waves._eager_array,
         transmission_function_array,
         laplace_stencil,
+        wavelength,
+        thickness,
+        waves.sampling,
         tolerance,
         max_terms,
+        correction,
     )
     return waves
+
 
 
 # def multislice_step(

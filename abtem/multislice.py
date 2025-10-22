@@ -456,6 +456,7 @@ def multislice_and_detect(
     transpose: bool = False,
     pbar: bool = False,
     method: str = "conventional",
+    correction: None | str = None,
     **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
@@ -513,6 +514,7 @@ def multislice_and_detect(
                 potential_slice=potential_slice,
                 laplace=laplace_operator,
                 max_terms=max_terms,
+                correction=correction,
             )
 
     else:
