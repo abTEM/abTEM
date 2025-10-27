@@ -4,10 +4,11 @@ import math
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
+import cupy as cp
 import scipy.ndimage  # type: ignore
-from numba import njit, stencil  # type: ignore
+from numba import njit, stencil, cuda  # type: ignore
 
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, get_scipy_module
 from abtem.core.energy import energy2sigma, energy2wavelength
 
 if TYPE_CHECKING:
@@ -225,13 +226,66 @@ def _laplace_operator_stencil(
         return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
     else:
         return _laplace_stencil
+    
+def _laplace_operator_stencil_gpu(
+    accuracy, prefactor, mode: str = "wrap", dtype=np.complex64
+):
+    c = finite_difference_coefficients(2, accuracy)
+    c = c * prefactor
+    c = c.astype(dtype)
+    c = np.roll(c, -(len(c) // 2))
+    n = len(c) // 2
+    padding = n + 1
+
+    @cuda.jit
+    def stencil_func(a, out):
+        i, j = cuda.grid(2)
+        q, w = a.shape
+        if 1 <= i < q - 1 and 1 <= j < w - 1:
+            cumul = dtype(0.0)
+            for k in range(-n, n + 1):
+                cumul += c[k] * a[i + k, j] + c[k] * a[i, j + k]
+            out[i, j] = cumul
+
+    def _laplace_stencil(a):
+        out = cp.zeros_like(a)
+        threadsperblock = (16, 16)
+        blockspergrid_x = math.ceil(a.shape[0] / threadsperblock[0])
+        blockspergrid_y = math.ceil(a.shape[1] / threadsperblock[1])
+        blockspergrid = (blockspergrid_x, blockspergrid_y)
+        stencil_func[blockspergrid, threadsperblock](a, out)
+        return out
+
+    def _apply_boundary(mode, padding):
+        pad_width = [(padding,) * 2, (padding,) * 2]
+
+        def stencil_with_boundary(func):
+            def func_wrapper(a: np.ndarray):
+                a = np.pad(a, pad_width=pad_width, mode=mode)
+                res = func(a)
+                return res[padding:-padding, padding:-padding]
+
+            return func_wrapper
+
+        return stencil_with_boundary
+
+    if mode != "none":
+        return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
+    else:
+        return _laplace_stencil
 
 
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
 
     def func(array):
-        return scipy.ndimage.convolve(array, stencil, mode="wrap")
+        print("Using slow laplace operator")
+        scipy_module = get_scipy_module(array)
+        array_module = get_array_module(array)
+
+        with cp.cuda.Device(array.device.id):
+            stencil_xp = array_module.asarray(stencil, dtype=array.dtype)
+        return scipy_module.ndimage.convolve(array, stencil_xp, mode="wrap")
 
     return func
 
@@ -244,8 +298,8 @@ class LaplaceOperator:
 
     def _get_new_stencil(self, key):
         wavelength, sampling, thickness = key
-        prefactor = 1.0j * wavelength * thickness / (4 * np.pi) / np.prod(sampling)
-        return _laplace_operator_stencil(self._accuracy, prefactor, mode="wrap")
+        prefactor = 1j * float(wavelength) * float(thickness) / (4 * np.pi) / np.prod(np.array(sampling, dtype=float))
+        return _laplace_operator_stencil_gpu(self._accuracy, prefactor, mode="wrap")
 
     def get_stencil(self, waves: Waves, thickness: float) -> Callable:
         key = (
@@ -311,7 +365,8 @@ def _multislice_exponential_series(
             temp = (laplace(temp) + temp * transmission_function) / i
         waves += temp
 
-        temp_amplitude = np.abs(temp).sum()
+        temp_amplitude = xp.abs(temp).sum()
+        # print(f"Term {i}, temp amplitude: {temp_amplitude}, ratio: {temp_amplitude / initial_amplitude}, tolerance: {tolerance}")
         if temp_amplitude / initial_amplitude <= tolerance:
             break
 
@@ -338,7 +393,7 @@ def propagator_corrected_taylor_series(
     series = laplace(waves)
     temp = laplace(waves)
     for i in range(2, order + 1):
-        temp = laplace(temp) / 1.0j / thickness * xp.prod(sampling) * wavelength / (-2 * xp.pi)
+        temp = laplace(temp) / 1.0j / thickness * np.prod(sampling) * wavelength / (-2 * np.pi)
         series += temp
 
     series = series / 2 + laplace(waves) / 2
@@ -405,7 +460,8 @@ def multislice_step(
     )
     return waves
 
-
+def printtest():
+    print("test")
 
 # def multislice_step(
 #     waves,
