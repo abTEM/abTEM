@@ -48,7 +48,10 @@ def _fresnel_propagator_array(
     sampling: tuple[float, float],
     energy: float,
     device: str,
+    order: int = 1
 ):
+    if order > 2:
+        raise ValueError("Only orders 1 and 2 are supported for in fourier space, use the realspace multislice instead.")
     xp = get_array_module(device)
     wavelength = energy2wavelength(energy)
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
@@ -57,6 +60,8 @@ def _fresnel_propagator_array(
     f = complex_exponential(
         -(kx**2) * np.pi * thickness * wavelength
     ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+    if order == 2:
+        f = f * complex_exponential((-np.pi* thickness * wavelength ** 3) / 4.0 * (kx**4 + ky**4))
     return f
 
 
@@ -104,7 +109,7 @@ class FresnelPropagator:
         self._key = None
         self._cached_fftw_convolution = CachedFFTWConvolution()
 
-    def get_array(self, waves: Waves, thickness: float) -> np.ndarray:
+    def get_array(self, waves: Waves, thickness: float, order: int = 1) -> np.ndarray:
         """
         Get the Fresnel propagator as an array for the given wave functions and
         thickness.
@@ -137,19 +142,20 @@ class FresnelPropagator:
         if key == self._key:
             return self._array
 
-        self._array = self._calculate_array(waves, thickness)
+        self._array = self._calculate_array(waves, thickness, order=order)
         self._key = key
 
         return self._array
 
     @staticmethod
-    def _calculate_array(waves: Waves, thickness: float) -> np.ndarray:
+    def _calculate_array(waves: Waves, thickness: float, order: int = 1) -> np.ndarray:
         array = _fresnel_propagator_array(
             thickness=thickness,
             gpts=waves._valid_gpts,
             sampling=waves._valid_sampling,
             energy=waves._valid_energy,
             device=waves.device,
+            order=order
         )
 
         array *= antialias_aperture(
@@ -188,7 +194,7 @@ class FresnelPropagator:
         return array
 
     def propagate(
-        self, waves: Waves, thickness: float, in_place: bool = False
+        self, waves: Waves, thickness: float, in_place: bool = False, order: int = 1
     ) -> Waves:
         """
         Propagate wave functions through free space.
@@ -207,8 +213,7 @@ class FresnelPropagator:
         propagated_wave_functions : Waves
             Propagated wave functions.
         """
-        kernel = self.get_array(waves, thickness)
-
+        kernel = self.get_array(waves, thickness, order=order)
         if (config.get("fft") == "fftw") and isinstance(waves._array, np.ndarray):
             array = self._cached_fftw_convolution(
                 waves._array, kernel, overwrite_x=in_place
@@ -338,6 +343,7 @@ def conventional_multislice_step(
     antialias_aperture: AntialiasAperture,
     conjugate: bool = False,
     transpose: bool = False,
+    order: int = 1
 ) -> Waves:
     """
     Calculate one step of the multislice algorithm for the given batch of wave functions
@@ -388,11 +394,11 @@ def conventional_multislice_step(
         thickness = -thickness
 
     if transpose:
-        waves = propagator.propagate(waves, thickness=thickness, in_place=True)
+        waves = propagator.propagate(waves, thickness=thickness, in_place=True, order=order)
         waves = transmission_function.transmit(waves, conjugate=conjugate)
     else:
         waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves, thickness=thickness, in_place=True)
+        waves = propagator.propagate(waves, thickness=thickness, in_place=True, order=order)
 
     return waves
 
@@ -457,6 +463,7 @@ def multislice_and_detect(
     pbar: bool = False,
     method: str = "conventional",
     correction: None | str = None,
+    order: int = 1,
     **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
@@ -501,6 +508,7 @@ def multislice_and_detect(
                 propagator=propagator,
                 conjugate=conjugate,
                 transpose=transpose,
+                order = order
             )
 
     elif method in ("realspace",):
@@ -515,6 +523,7 @@ def multislice_and_detect(
                 laplace=laplace_operator,
                 max_terms=max_terms,
                 correction=correction,
+                order=order
             )
 
     else:

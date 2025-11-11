@@ -10,6 +10,8 @@ from numba import njit, stencil, cuda  # type: ignore
 
 from abtem.core.backend import get_array_module, get_scipy_module
 from abtem.core.energy import energy2sigma, energy2wavelength
+from abtem.antialias import antialias_aperture, AntialiasAperture
+from abtem.core.fft import fft2_convolve
 
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
@@ -189,7 +191,7 @@ def _laplace_stencil_array(accuracy):
 
 
 def _laplace_operator_stencil(
-    accuracy, prefactor, mode: str = "wrap", dtype=np.complex64
+    accuracy, prefactor, mode: str = "wrap", dtype=np.complex64, device: str = "cpu"
 ):
     c = finite_difference_coefficients(2, accuracy)
     c = c * prefactor
@@ -204,9 +206,30 @@ def _laplace_operator_stencil(
         for i in range(-n, n + 1):
             cumul += c[i] * a[i, 0] + c[i] * a[0, i]
         return cumul
+    
+    @cuda.jit
+    def stencil_func_gpu(a, out):
+        i, j = cuda.grid(2)
+        H, W = a.shape
+        if 1 <= i < H - n and 1 <= j < W - n:
+            cumul = dtype(0.0)
+            for k in range(-n, n + 1):
+                cumul += c[k] * a[i + k, j] + c[k] * a[i, j + k]
+            out[i, j] = cumul
+
+    def _laplace_stencil(a):
+        if device == "cpu":
+            return _laplace_stencil_cpu(a)
+        out = cp.zeros_like(a)
+        threadsperblock = (16, 16)
+        blockspergrid_x = math.ceil(a.shape[0] / threadsperblock[0])
+        blockspergrid_y = math.ceil(a.shape[1] / threadsperblock[1])
+        blockspergrid = (blockspergrid_x, blockspergrid_y)
+        stencil_func_gpu[blockspergrid, threadsperblock](a, out)
+        return out
 
     @njit(parallel=True, fastmath=True)
-    def _laplace_stencil(a):
+    def _laplace_stencil_cpu(a):
         return stencil_func(a)
 
     def _apply_boundary(mode, padding):
@@ -214,7 +237,8 @@ def _laplace_operator_stencil(
 
         def stencil_with_boundary(func):
             def func_wrapper(a: np.ndarray):
-                a = np.pad(a, pad_width=pad_width, mode=mode)
+                xp = get_array_module(a)
+                a = xp.pad(a, pad_width=pad_width, mode=mode)
                 res = func(a)
                 return res[padding:-padding, padding:-padding]
 
@@ -227,53 +251,6 @@ def _laplace_operator_stencil(
     else:
         return _laplace_stencil
     
-def _laplace_operator_stencil_gpu(
-    accuracy, prefactor, mode: str = "wrap", dtype=np.complex64
-):
-    c = finite_difference_coefficients(2, accuracy)
-    c = c * prefactor
-    c = c.astype(dtype)
-    c = np.roll(c, -(len(c) // 2))
-    n = len(c) // 2
-    padding = n + 1
-
-    @cuda.jit
-    def stencil_func(a, out):
-        i, j = cuda.grid(2)
-        q, w = a.shape
-        if 1 <= i < q - 1 and 1 <= j < w - 1:
-            cumul = dtype(0.0)
-            for k in range(-n, n + 1):
-                cumul += c[k] * a[i + k, j] + c[k] * a[i, j + k]
-            out[i, j] = cumul
-
-    def _laplace_stencil(a):
-        out = cp.zeros_like(a)
-        threadsperblock = (16, 16)
-        blockspergrid_x = math.ceil(a.shape[0] / threadsperblock[0])
-        blockspergrid_y = math.ceil(a.shape[1] / threadsperblock[1])
-        blockspergrid = (blockspergrid_x, blockspergrid_y)
-        stencil_func[blockspergrid, threadsperblock](a, out)
-        return out
-
-    def _apply_boundary(mode, padding):
-        pad_width = [(padding,) * 2, (padding,) * 2]
-
-        def stencil_with_boundary(func):
-            def func_wrapper(a: np.ndarray):
-                a = np.pad(a, pad_width=pad_width, mode=mode)
-                res = func(a)
-                return res[padding:-padding, padding:-padding]
-
-            return func_wrapper
-
-        return stencil_with_boundary
-
-    if mode != "none":
-        return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
-    else:
-        return _laplace_stencil
-
 
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
@@ -296,12 +273,12 @@ class LaplaceOperator:
         self._key = None
         self._stencil = None
 
-    def _get_new_stencil(self, key):
+    def _get_new_stencil(self, key, device: str = "cpu"):
         wavelength, sampling, thickness = key
         prefactor = 1j * float(wavelength) * float(thickness) / (4 * np.pi) / np.prod(np.array(sampling, dtype=float))
-        return _laplace_operator_stencil_gpu(self._accuracy, prefactor, mode="wrap")
+        return _laplace_operator_stencil(self._accuracy, prefactor, mode="wrap", device=device) # currently gpu hardcoded but should be dynamic
 
-    def get_stencil(self, waves: Waves, thickness: float) -> Callable:
+    def get_stencil(self, waves: Waves, thickness: float, device: str = "cpu") -> Callable:
         key = (
             waves.wavelength,
             waves.sampling,
@@ -311,12 +288,12 @@ class LaplaceOperator:
         if key == self._key:
             return self._stencil
 
-        self._stencil = self._get_new_stencil(key)
+        self._stencil = self._get_new_stencil(key, device=device)
         self._key = key
         return self._stencil
 
     def apply(self, waves, thickness):
-        laplace_stencil = self.get_stencil(waves, thickness)
+        laplace_stencil = self.get_stencil(waves, thickness, device=waves.device)
         waves._array = laplace_stencil(waves._array)
         return waves
     
@@ -343,28 +320,35 @@ def _multislice_exponential_series(
     tolerance: float = 1e-16,
     max_terms: int = 300,
     correction: None | str = None,
+    order: int = 4,
 
 ) -> np.ndarray:
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
+    # kernel = antialias_aperture(
+    #     waves.shape, sampling, xp)
+    # return aperture.bandlimit(waves)
+
     if correction == "propagator":
         temp = propagator_corrected_taylor_series(
-                waves, order=5, laplace=laplace, wavelength=wavelength, thickness=thickness, sampling=sampling
+                waves, order=order, laplace=laplace, wavelength=wavelength, thickness=thickness, sampling=sampling
             ) + waves * transmission_function
     else:
         temp = laplace(waves) + waves * transmission_function
 
     waves += temp
+    # waves = fft2_convolve(waves, kernel)
+
     for i in range(2, max_terms + 1):
         if correction == "propagator":
             temp = (propagator_corrected_taylor_series(
-                temp, order=5, laplace=laplace, wavelength=wavelength, thickness=thickness, sampling=sampling
+                temp, order=order, laplace=laplace, wavelength=wavelength, thickness=thickness, sampling=sampling
             ) + temp * transmission_function) / i
         else:
             temp = (laplace(temp) + temp * transmission_function) / i
         waves += temp
-
+        # waves = fft2_convolve(waves, kernel)
         temp_amplitude = xp.abs(temp).sum()
         # print(f"Term {i}, temp amplitude: {temp_amplitude}, ratio: {temp_amplitude / initial_amplitude}, tolerance: {tolerance}")
         if temp_amplitude / initial_amplitude <= tolerance:
@@ -390,13 +374,25 @@ def propagator_corrected_taylor_series(
     xp = get_array_module(waves)
     if order < 1:
         raise ValueError("order must be a positive integer and at least 2")
-    series = laplace(waves)
-    temp = laplace(waves)
+    laplace_waves = laplace(waves)
+    series = laplace_waves.copy()
+    temp = laplace_waves.copy()
+    alpha = np.prod(sampling) / (1.0j * thickness)
     for i in range(2, order + 1):
-        temp = laplace(temp) / 1.0j / thickness * np.prod(sampling) * wavelength / (-2 * np.pi)
-        series += temp
+        temp = laplace(temp) * alpha
+        series += temp * wavelength ** (i-1) / ((-1) ** (i+1) * 2.0 ** i * np.pi ** (i-1))
 
-    series = series / 2 + laplace(waves) / 2
+    # series = series / 2.0 + laplace_waves / 2.0
+
+    # laplace_waves = laplace(waves)
+    # series = laplace_waves.copy()
+    # temp = laplace_waves.copy()
+    # alpha = np.prod(sampling) * wavelength / (-2.0 * np.pi * 1.0j * thickness)
+    # for i in range(2, order + 1):
+    #     temp = laplace(temp) * alpha
+    #     series += temp
+
+    # series = series / 2.0 + laplace_waves / 2.0
     return series
 
 
@@ -421,6 +417,7 @@ def multislice_step(
     tolerance: float = 1e-16,
     max_terms: int = 300,
     correction: None | str = None,
+    order: int = 4,
 ) -> Waves:
     if max_terms < 1:
         raise ValueError()
@@ -438,12 +435,11 @@ def multislice_step(
 
     thickness = potential_slice.thickness
     transmission_function_array = (
-        1.0j * potential_slice.array[0] * energy2sigma(waves._valid_energy)
+        1.0j * potential_slice.array[0] * energy2sigma(waves._valid_energy) 
     )
 
     # waves = transmission_function.transmit(waves)
-
-    laplace_stencil = laplace.get_stencil(waves, thickness)
+    laplace_stencil = laplace.get_stencil(waves, thickness, device=waves.device)
 
     wavelength = energy2wavelength(waves._valid_energy)
 
@@ -457,8 +453,11 @@ def multislice_step(
         tolerance,
         max_terms,
         correction,
+        order,
     )
-    return waves
+    aperture = AntialiasAperture()
+    return aperture.bandlimit(waves)
+    # return waves
 
 def printtest():
     print("test")
