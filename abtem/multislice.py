@@ -48,10 +48,13 @@ def _fresnel_propagator_array(
     sampling: tuple[float, float],
     energy: float,
     device: str,
-    order: int = 1
+    order: int = 1,
 ):
     if order > 2:
-        raise ValueError("Only orders 1 and 2 are supported for in fourier space, use the realspace multislice instead.")
+        raise ValueError(
+            "Only orders 1 and 2 are supported for in fourier space, use the realspace multislice instead."
+        )
+
     xp = get_array_module(device)
     wavelength = energy2wavelength(energy)
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
@@ -60,8 +63,11 @@ def _fresnel_propagator_array(
     f = complex_exponential(
         -(kx**2) * np.pi * thickness * wavelength
     ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+
     if order == 2:
-        f = f * complex_exponential((-np.pi* thickness * wavelength ** 3) / 4.0 * (kx**4 + ky**4))
+        f = f * complex_exponential(
+            (-np.pi * thickness * wavelength**3) / 4.0 * (kx**4 + ky**4)
+        )
     return f
 
 
@@ -155,7 +161,7 @@ class FresnelPropagator:
             sampling=waves._valid_sampling,
             energy=waves._valid_energy,
             device=waves.device,
-            order=order
+            order=order,
         )
 
         array *= antialias_aperture(
@@ -343,7 +349,7 @@ def conventional_multislice_step(
     antialias_aperture: AntialiasAperture,
     conjugate: bool = False,
     transpose: bool = False,
-    order: int = 1
+    order: int = 1,
 ) -> Waves:
     """
     Calculate one step of the multislice algorithm for the given batch of wave functions
@@ -394,11 +400,15 @@ def conventional_multislice_step(
         thickness = -thickness
 
     if transpose:
-        waves = propagator.propagate(waves, thickness=thickness, in_place=True, order=order)
+        waves = propagator.propagate(
+            waves, thickness=thickness, in_place=True, order=order
+        )
         waves = transmission_function.transmit(waves, conjugate=conjugate)
     else:
         waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves, thickness=thickness, in_place=True, order=order)
+        waves = propagator.propagate(
+            waves, thickness=thickness, in_place=True, order=order
+        )
 
     return waves
 
@@ -462,7 +472,6 @@ def multislice_and_detect(
     transpose: bool = False,
     pbar: bool = False,
     method: str = "conventional",
-    correction: None | str = None,
     order: int = 1,
     **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
@@ -508,7 +517,7 @@ def multislice_and_detect(
                 propagator=propagator,
                 conjugate=conjugate,
                 transpose=transpose,
-                order = order
+                order=order,
             )
 
     elif method in ("realspace",):
@@ -522,8 +531,7 @@ def multislice_and_detect(
                 potential_slice=potential_slice,
                 laplace=laplace_operator,
                 max_terms=max_terms,
-                correction=correction,
-                order=order
+                order=order,
             )
 
     else:

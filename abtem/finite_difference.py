@@ -203,7 +203,7 @@ def _laplace_operator_stencil(
         for i in range(-n, n + 1):
             cumul += c[i] * a[i, 0] + c[i] * a[0, i]
         return cumul
-    
+
     @cuda.jit
     def stencil_func_gpu(a, out):
         i, j = cuda.grid(2)
@@ -221,7 +221,7 @@ def _laplace_operator_stencil(
     def _laplace_stencil_gpu(a):
         xp = get_array_module(a)
         out = xp.zeros_like(a)
-        threadsperblock = (16, 16) # ToDo: threadsperblock hardcoded
+        threadsperblock = (16, 16)  # ToDo: threadsperblock hardcoded
         blockspergrid_x = math.ceil(a.shape[0] / threadsperblock[0])
         blockspergrid_y = math.ceil(a.shape[1] / threadsperblock[1])
         blockspergrid = (blockspergrid_x, blockspergrid_y)
@@ -231,7 +231,7 @@ def _laplace_operator_stencil(
     def _laplace_stencil(a):
         if device == "cpu":
             return _laplace_stencil_cpu(a)
-        elif device == 'gpu':
+        elif device == "gpu":
             return _laplace_stencil_gpu(a)
         else:
             raise ValueError()
@@ -255,6 +255,7 @@ def _laplace_operator_stencil(
     else:
         return _laplace_stencil
 
+
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
 
@@ -272,10 +273,20 @@ class LaplaceOperator:
 
     def _get_new_stencil(self, key, device: str = "cpu"):
         wavelength, sampling, thickness = key
-        prefactor = 1j * float(wavelength) * float(thickness) / (4 * np.pi) / np.prod(np.array(sampling, dtype=float))
-        return _laplace_operator_stencil(self._accuracy, prefactor, mode="wrap", device=device)
+        prefactor = (
+            1j
+            * float(wavelength)
+            * float(thickness)
+            / (4 * np.pi)
+            / np.prod(np.array(sampling, dtype=float))
+        )
+        return _laplace_operator_stencil(
+            self._accuracy, prefactor, mode="wrap", device=device
+        )
 
-    def get_stencil(self, waves: Waves, thickness: float, device: str = "cpu") -> Callable:
+    def get_stencil(
+        self, waves: Waves, thickness: float, device: str = "cpu"
+    ) -> Callable:
         key = (
             waves.wavelength,
             waves.sampling,
@@ -293,6 +304,7 @@ class LaplaceOperator:
         laplace_stencil = self.get_stencil(waves, thickness, device=waves.device)
         waves._array = laplace_stencil(waves._array)
         return waves
+
 
 class DivergedError(Exception):
     def __init__(self, message="the multislice exponential series diverged"):
@@ -318,26 +330,32 @@ def _multislice_exponential_series(
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
-    temp = propagator_taylor_series(
-        waves,
-        order=order,
-        laplace=laplace,
-        wavelength = wavelength,
-        thickness = thickness,
-        sampling = sampling
-    ) + waves * transmission_function
+    temp = (
+        propagator_taylor_series(
+            waves,
+            order=order,
+            laplace=laplace,
+            wavelength=wavelength,
+            thickness=thickness,
+            sampling=sampling,
+        )
+        + waves * transmission_function
+    )
 
     waves += temp
 
     for i in range(2, max_terms + 1):
-        temp = ( propagator_taylor_series(
-            waves,
-            order=order,
-            laplace=laplace,
-            wavelength = wavelength,
-            thickness = thickness,
-            sampling = sampling
-        ) + waves * transmission_function ) / i
+        temp = (
+            propagator_taylor_series(
+                waves,
+                order=order,
+                laplace=laplace,
+                wavelength=wavelength,
+                thickness=thickness,
+                sampling=sampling,
+            )
+            + waves * transmission_function
+        ) / i
 
         waves += temp
         temp_amplitude = xp.abs(temp).sum()
@@ -348,20 +366,19 @@ def _multislice_exponential_series(
             raise DivergedError()
     else:
         raise NotConvergedError(
-            f"series did not converge to a tolerance of {tolerance} in {max_terms}"
-            "terms"
+            f"series did not converge to a tolerance of {tolerance} in {max_terms}terms"
         )
     return waves
 
-def propagator_taylor_series(
-        waves: np.ndarray,
-        order: int,
-        laplace: Callable,
-        wavelength: float,
-        thickness: float,
-        sampling: tuple[float, float]
-        ):
 
+def propagator_taylor_series(
+    waves: np.ndarray,
+    order: int,
+    laplace: Callable,
+    wavelength: float,
+    thickness: float,
+    sampling: tuple[float, float],
+):
     if order < 1:
         raise ValueError("order must be a positive integer and at least 1")
 
@@ -372,13 +389,14 @@ def propagator_taylor_series(
     series = laplace_waves.copy()
     temp = laplace_waves.copy()
 
-    alpha = np.prod(sampling) / (1.0j * thickness) # removes laplace prefactor
+    alpha = np.prod(sampling) / (1.0j * thickness)  # removes laplace prefactor
     for i in range(2, order + 1):
-        prefactor = (-2.0*np.pi * wavelength)**(i-1) * 2.0 
+        prefactor = (-2.0 * np.pi * wavelength) ** (i - 1) * 2.0
         temp = laplace(temp) * alpha
         series += temp * prefactor
 
     return series
+
 
 def multislice_step(
     waves: Waves,
@@ -404,7 +422,7 @@ def multislice_step(
 
     thickness = potential_slice.thickness
     transmission_function_array = (
-        1.0j * potential_slice.array[0] * energy2sigma(waves._valid_energy) 
+        1.0j * potential_slice.array[0] * energy2sigma(waves._valid_energy)
     )
 
     # waves = transmission_function.transmit(waves)
@@ -424,6 +442,5 @@ def multislice_step(
         order,
     )
 
-    aperture = AntialiasAperture() # bandlimit to compare with Fourier
+    aperture = AntialiasAperture()  # bandlimit to compare with Fourier
     return aperture.bandlimit(waves)
-
