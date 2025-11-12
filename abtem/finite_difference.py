@@ -4,7 +4,6 @@ import math
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
-import cupy as cp
 import scipy.ndimage  # type: ignore
 from numba import njit, stencil, cuda  # type: ignore
 
@@ -217,26 +216,33 @@ def _laplace_operator_stencil(
                 cumul += c[k] * a[i + k, j] + c[k] * a[i, j + k]
             out[i, j] = cumul
 
-    def _laplace_stencil(a):
-        if device == "cpu":
-            return _laplace_stencil_cpu(a)
-        out = cp.zeros_like(a)
-        threadsperblock = (16, 16)
+    @njit(parallel=True, fastmath=True)
+    def _laplace_stencil_cpu(a):
+        return stencil_func(a)
+
+    def _laplace_stencil_gpu(a):
+        xp = get_array_module(a)
+        out = xp.zeros_like(a)
+        threadsperblock = (16, 16) # ToDo: threadsperblock hardcoded
         blockspergrid_x = math.ceil(a.shape[0] / threadsperblock[0])
         blockspergrid_y = math.ceil(a.shape[1] / threadsperblock[1])
         blockspergrid = (blockspergrid_x, blockspergrid_y)
         stencil_func_gpu[blockspergrid, threadsperblock](a, out)
         return out
 
-    @njit(parallel=True, fastmath=True)
-    def _laplace_stencil_cpu(a):
-        return stencil_func(a)
+    def _laplace_stencil(a):
+        if device == "cpu":
+            return _laplace_stencil_cpu(a)
+        elif device == 'gpu':
+            return _laplace_stencil_gpu(a)
+        else:
+            raise ValueError()
 
     def _apply_boundary(mode, padding):
         pad_width = [(padding,) * 2, (padding,) * 2]
 
         def stencil_with_boundary(func):
-            def func_wrapper(a: np.ndarray):
+            def func_wrapper(a):
                 xp = get_array_module(a)
                 a = xp.pad(a, pad_width=pad_width, mode=mode)
                 res = func(a)
@@ -250,19 +256,12 @@ def _laplace_operator_stencil(
         return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
     else:
         return _laplace_stencil
-    
 
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
 
     def func(array):
-        print("Using slow laplace operator")
-        scipy_module = get_scipy_module(array)
-        array_module = get_array_module(array)
-
-        with cp.cuda.Device(array.device.id):
-            stencil_xp = array_module.asarray(stencil, dtype=array.dtype)
-        return scipy_module.ndimage.convolve(array, stencil_xp, mode="wrap")
+        return scipy.ndimage.convolve(array, stencil, mode="wrap")
 
     return func
 
