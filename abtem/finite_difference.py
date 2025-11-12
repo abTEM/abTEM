@@ -347,14 +347,14 @@ def _multislice_exponential_series(
     for i in range(2, max_terms + 1):
         temp = (
             propagator_taylor_series(
-                waves,
+                temp,
                 order=order,
                 laplace=laplace,
                 wavelength=wavelength,
                 thickness=thickness,
                 sampling=sampling,
             )
-            + waves * transmission_function
+            + temp * transmission_function
         ) / i
 
         waves += temp
