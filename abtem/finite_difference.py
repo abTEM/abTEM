@@ -206,6 +206,7 @@ def _laplace_operator_stencil(
 
     @cuda.jit
     def stencil_func_gpu(a, out):
+        print(a.ndim)
         i, j = cuda.grid(2)
         H, W = a.shape
         if 1 <= i < H - n and 1 <= j < W - n:
