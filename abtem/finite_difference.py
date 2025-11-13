@@ -391,7 +391,7 @@ def propagator_taylor_series(
 
     alpha = np.prod(sampling) / (1.0j * thickness)  # removes laplace prefactor
     for i in range(2, order + 1):
-        prefactor = (-2.0 * np.pi * wavelength) ** (i - 1) * 2.0
+        prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
         temp = laplace(temp) * alpha
         series += temp * prefactor
 
