@@ -572,7 +572,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         total_dose = np.array(total_dose, dtype=dtype)
 
-        print(seed, samples)
+        #print(seed, samples)
         transform = NoiseTransform(dose=total_dose, samples=samples, seeds=seed)
 
         measurement = transform.apply(self)

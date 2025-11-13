@@ -243,9 +243,9 @@ class ComputableList(list):
         kwargs :
             Keyword arguments passed to `dask.array.to_zarr`.
         """
-
         computables = []
-        with zarr.open(url, mode="w") as root:
+        root = zarr.open(url, mode="w")
+        try:
             for i, has_array in enumerate(self):
                 has_array = has_array.ensure_lazy()
 
@@ -262,6 +262,13 @@ class ComputableList(list):
 
                 root.attrs[f"kwargs{i}"] = packed_kwargs
                 root.attrs[f"type{i}"] = has_array.__class__.__name__
+        finally:
+            # Close underlying store if it supports closing (some stores expose .close()).
+            store = getattr(root, "store", None)
+            if store is not None:
+                close_fn = getattr(store, "close", None)
+                if callable(close_fn):
+                    close_fn()
 
         if not compute:
             return computables
@@ -1401,8 +1408,19 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 len(shape) - len(out_shape) for out_shape in transform._out_shape(self)
             )
 
+            # drop_axes = tuple(
+            #     tuple(range(self.ensemble_dims, self.ensemble_dims + num_dropped_axis))
+            #     for num_dropped_axis in num_dropped_axes
+            # )
+
+            n = len(transform.ensemble_shape)
             drop_axes = tuple(
-                tuple(range(self.ensemble_dims, self.ensemble_dims + num_dropped_axis))
+                tuple(
+                    range(
+                        self.ensemble_dims + n,
+                        self.ensemble_dims + num_dropped_axis + n,
+                    )
+                )
                 for num_dropped_axis in num_dropped_axes
             )
 
@@ -1775,7 +1793,8 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
     import abtem
 
     imported = []
-    with zarr.open(url, mode="r") as f:
+    f = zarr.open(url, mode="r")
+    try:
         i = 0
         types = []
         while True:
@@ -1798,6 +1817,13 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
 
             with config.set({"warnings.overspecified-grid": False}):
                 imported.append(cls(array, **kwargs))
+    finally:
+        # Close underlying store if it supports closing (some stores expose .close()).
+        store = getattr(f, "store", None)
+        if store is not None:
+            close_fn = getattr(store, "close", None)
+            if callable(close_fn):
+                close_fn()
 
     if len(imported) == 1:
         imported = imported[0]
