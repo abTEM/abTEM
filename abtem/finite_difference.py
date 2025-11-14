@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import scipy.ndimage  # type: ignore
-from numba import njit, stencil, cuda  # type: ignore
+from numba import cuda, njit, stencil  # type: ignore
 
-from abtem.core.backend import get_array_module, get_scipy_module
-from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.antialias import AntialiasAperture
+from abtem.core.backend import get_array_module
+from abtem.core.energy import energy2sigma, energy2wavelength
 
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
@@ -198,54 +198,86 @@ def _laplace_operator_stencil(
     padding = n + 1
 
     @stencil(neighborhood=((-n, n + 1), (-n, n + 1)))
-    def stencil_func(a):
+    def stencil_func_2d(a):
         cumul = dtype(0.0)
         for i in range(-n, n + 1):
             cumul += c[i] * a[i, 0] + c[i] * a[0, i]
         return cumul
 
+    @njit(parallel=True, fastmath=True)
+    def _laplace_stencil_cpu_batch(a):
+        out = np.zeros_like(a)
+        for m in range(a.shape[0]):
+            out[m] = stencil_func_2d(a[m])
+        return out
+
     @cuda.jit
-    def stencil_func_gpu(a, out):
-        print(a.ndim)
-        i, j = cuda.grid(2)
-        H, W = a.shape
-        if 1 <= i < H - n and 1 <= j < W - n:
+    def stencil_func_gpu_batch(a, out):
+        m, i, j = cuda.grid(3)
+        M, H, W = a.shape
+        if m < M and n <= i < H - n and n <= j < W - n:
             cumul = dtype(0.0)
             for k in range(-n, n + 1):
-                cumul += c[k] * a[i + k, j] + c[k] * a[i, j + k]
-            out[i, j] = cumul
-
-    @njit(parallel=True, fastmath=True)
-    def _laplace_stencil_cpu(a):
-        return stencil_func(a)
+                cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
+            out[m, i, j] = cumul
 
     def _laplace_stencil_gpu(a):
         xp = get_array_module(a)
         out = xp.zeros_like(a)
-        threadsperblock = (16, 16)  # ToDo: threadsperblock hardcoded
-        blockspergrid_x = math.ceil(a.shape[0] / threadsperblock[0])
-        blockspergrid_y = math.ceil(a.shape[1] / threadsperblock[1])
-        blockspergrid = (blockspergrid_x, blockspergrid_y)
-        stencil_func_gpu[blockspergrid, threadsperblock](a, out)
+
+        M, H, W = a.shape
+
+        threads_x = 32
+        threads_y = 32
+        max_threads = 1024
+        threads_m = max_threads // (threads_x * threads_y)
+        threadsperblock = (threads_m, threads_x, threads_y)
+
+        blockspergrid_m = math.ceil(a.shape[0] / threadsperblock[0])
+        blockspergrid_x = math.ceil(a.shape[1] / threadsperblock[1])
+        blockspergrid_y = math.ceil(a.shape[2] / threadsperblock[2])
+        blockspergrid = (blockspergrid_m, blockspergrid_x, blockspergrid_y)
+        stencil_func_gpu_batch[blockspergrid, threadsperblock](a, out)
+
         return out
 
     def _laplace_stencil(a):
+        # Store original shape and reshape to 3D
+        original_shape = a.shape
+        if a.ndim == 2:
+            a = a.reshape(1, *a.shape)
+        elif a.ndim > 3:
+            a = a.reshape(-1, *a.shape[-2:])
+        elif a.ndim != 3:
+            raise ValueError(f"Array must have at least 2 dimensions, got {a.ndim}")
+
+        # Apply stencil
         if device == "cpu":
-            return _laplace_stencil_cpu(a)
+            result = _laplace_stencil_cpu_batch(a)
         elif device == "gpu":
-            return _laplace_stencil_gpu(a)
+            result = _laplace_stencil_gpu(a)
         else:
-            raise ValueError()
+            raise ValueError(f"Unsupported device: {device}")
+
+        # Reshape back to original shape
+        return result.reshape(original_shape)
 
     def _apply_boundary(mode, padding):
-        pad_width = [(padding,) * 2, (padding,) * 2]
-
         def stencil_with_boundary(func):
             def func_wrapper(a):
                 xp = get_array_module(a)
+
+                # Build pad_width for arbitrary dimensions
+                # Only pad the last two spatial dimensions
+                pad_width = [(0, 0)] * (a.ndim - 2) + [(padding,) * 2, (padding,) * 2]
+
+                # Build slicing to remove padding from last two dimensions
+                slicing = tuple([slice(None)] * (a.ndim - 2) +
+                               [slice(padding, -padding), slice(padding, -padding)])
+
                 a = xp.pad(a, pad_width=pad_width, mode=mode)
                 res = func(a)
-                return res[padding:-padding, padding:-padding]
+                return res[slicing]
 
             return func_wrapper
 
@@ -255,7 +287,6 @@ def _laplace_operator_stencil(
         return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
     else:
         return _laplace_stencil
-
 
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
