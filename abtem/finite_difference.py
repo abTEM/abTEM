@@ -297,7 +297,6 @@ def _laplace_operator_stencil(
     else:
         return _laplace_stencil
 
-
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
 
