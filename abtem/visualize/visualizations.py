@@ -15,6 +15,8 @@ from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
+from mpl_toolkits.mplot3d.axes3d import Axes3D
+from scipy.spatial.transform import Rotation as R
 
 from abtem.atoms import pad_atoms, plane_to_axes
 from abtem.core import config
@@ -648,6 +650,126 @@ class Visualization:
         self.set_artists("scale_bars", locs=locs, **kwargs)
 
 
+#  ====================================================  #
+#    Tools and functions for 2D and 3D plots of atoms    #
+#  ====================================================  #
+
+
+class CellCalculations:
+    """
+    Class for assisting in plotting unit cells and atoms. Handles
+    calculations of cell vertexes, lines, and faces necessary for plotting,
+    as well as default atomic radii, positions, and coloring.
+    Intended for internal use by other abTEM functions.
+    """
+
+    def __init__(self, ase_atoms: Atoms):
+        """
+        extract the atomic and lattice information necessary for plotting
+        from an `ase.atoms.Atoms` object
+        """
+        # create the vertices, edges, and faces for a unit cube
+        _vx = np.array([0, 0, 1, 1, 0, 0, 1, 1])
+        _vy = np.array([0, 1, 1, 0, 0, 1, 1, 0])
+        _vz = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+        _unit_verts = np.stack([_vx, _vy, _vz]).T
+        _el = np.array([0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3])
+        _er = np.array([1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7])
+        self._unit_edges = np.stack([_el, _er]).T
+        _fa = np.array([0, 0, 1, 2, 3, 4])
+        _fb = np.array([1, 1, 5, 6, 7, 5])
+        _fc = np.array([2, 4, 6, 7, 4, 6])
+        _fd = np.array([3, 5, 2, 3, 0, 7])
+        self._unit_faces = np.stack([_fa, _fb, _fc, _fd, _fa]).T
+
+        # use the Atoms.cell information to scale the points
+        # NOTE: faces are not currently used in abtem, but are easy to
+        # calculate at this step and could be handy in off-axis plots for
+        # highlighing the entry and exit faces. They can be added to a plot
+        # with `patches.PathPatch(self.faces[0]).`
+        self.cell = ase_atoms.cell
+        self.verts = np.dot(_unit_verts, self.cell)
+        self.edges = self.verts[self._unit_edges]
+        self.faces = self.verts[self._unit_faces]
+        self.center = np.dot([0.5, 0.5, 0.5], self.cell)
+        # collect the atomic positions, coloring, radii, etc.
+        self.elem = ase_atoms.arrays["numbers"]
+        self.pos = ase_atoms.arrays["positions"]
+        self.colors = jmol_colors[self.elem]
+        self.radii = covalent_radii[self.elem]
+        # define the 2D plotting axes.
+        self.x_plot_axis_2d = np.array([1, 0, 0])
+        self.y_plot_axis_2d = np.array([0, 1, 0])
+
+    def rotate(self, alpha: float, beta: float, gamma: float):
+        """
+        Rotates atomic positions and lattices by an alpha/beta/gamma tilt.
+
+        specifically, this is an active (ie, the part moves, not
+        the obverver) extrinsic(the rotation axes are fixed to the reference
+        not the object) rotation clockwise via the righthand rule around the
+        x-axis, then the y-axis, then the z-axis.
+
+        Thus, alpha and beta align with the alpha/beta tilt angles used in a
+        TEM, and gamma represents a clockwise rotation around the viewing axis.
+
+        NOTE:, this is rotating the VIEWING DIRECTION ONLY, and will have no
+        effect on simulation properties.
+        """
+        r = R.from_euler("xyz", [alpha, beta, gamma], degrees=True).as_matrix()
+        # NOTE: this rotates the cell around (0,0,0), NOT the cell centroid.
+        self.verts = np.dot(r, self.verts.T).T
+        self.edges = self.verts[self._unit_edges]
+        self.faces = self.verts[self._unit_faces]
+        self.center = np.dot(r, self.center.T).T
+        self.x_plot_axis_2d = np.dot(r, self.x_plot_axis_2d.T).T
+        self.y_plot_axis_2d = np.dot(r, self.y_plot_axis_2d.T).T
+        if self.pos.size > 0:
+            self.pos = np.dot(r, self.pos.T).T
+
+    def merge_atomic_columns(self, tol: float = 1e-7):
+        """
+        for large 2D plots, it is often prudent to plot only the atomic
+        columns as opposed to every individual overlapping atom. This function
+        clusters identical atoms whose xy- positions are within a given
+        tolerance and preserves only the atoms with the highest z-position
+        from each cluster.
+
+        Note, this function should be called AFTER all viewing rotations are
+        applied, as it is not data-preserving
+        """
+        new_p, new_e = [], []
+        for elem in np.unique(self.elem):
+            pos = self.pos[self.elem == elem]
+            columns = []
+            while len(pos) > 0:
+                # pick a candidate to look at
+                x = pos[0]
+                # find all their neighbors in the xy plane
+                mask = np.sum(((pos - x)[:, :2]) ** 2, axis=1) ** 0.5 < tol
+                # the highest neighbor defines the colum, the rest are trashed
+                columns.append(pos[mask][np.argmax(pos[mask, 2])])
+                pos = pos[~mask]
+            new_p.append(columns)
+            new_e.append(np.repeat(elem, len(columns)))
+        self.pos = np.vstack(new_p)
+        self.elem = np.hstack(new_e)
+        self.colors = jmol_colors[self.elem]
+        self.radii = covalent_radii[self.elem]
+
+    def get_plot_labels(self):
+        labels = []
+        for vec in [self.x_plot_axis_2d, self.y_plot_axis_2d]:
+            vec = vec / np.linalg.norm(vec)
+            if np.abs(vec).max() > 0.999999:
+                # this is a primary axis, label it as such
+                name = "XYZ"[np.argmax(vec)]
+            else:
+                name = "({})".format(str(np.around(vec, 3))[1:-2])
+            labels.append(name + " [Å]")
+        return labels
+
+
 _cube = np.array(
     [
         [[0, 0, 0], [0, 0, 1]],
@@ -742,64 +864,77 @@ def show_atoms(
     -------
     matplotlib.figure.Figure, matplotlib.axes.Axes
     """
+    # For consistency, use the same atom padding as elsewhere in abtem
     if show_periodic:
         atoms = atoms.copy()
         atoms = pad_atoms(atoms, margins=1e-3)
 
+    if isinstance(plane, str):
+        # use plane_to_axes to get the proper axis reordering, and use scipy
+        # to calc the alpha/beta/gamma that gives that axis alignment.
+        plane = R.align_vectors(
+            np.eye(3)[:2, :], np.eye(3)[plane_to_axes(plane)[:2], :]
+        )[0].as_euler("xyz", degrees=True)
+    # cast plane to 1D numpy array if possible and do a sanity check
+    plane = np.asanyarray(plane).flatten()
+    if plane.size == 2:
+        plane = np.array([plane[0], plane[1], 0])
+    assert plane.size == 3, (
+        "plane must be either a string interpretable by"
+        + "abtem.atoms.plane_to_axes, an alpha/beta angle pair, or an"
+        + "alpha/beta/gamma triplet that can be cast to a numpy array"
+    )
+
+    # use CellCalculations to precalculate information for plotting
+    cc = CellCalculations(atoms)
+    cc.rotate(*plane)
+
     if merge > 0.0:
-        atoms = _merge_columns(atoms, plane, merge)
+        cc.merge_atomic_columns(merge)
 
     if tight_limits and show_cell is None:
         show_cell = False
     elif show_cell is None:
         show_cell = True
 
+    # Either use an existing plot or generate a new one
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
     else:
         fig = ax.get_figure()
 
-    cell = atoms.cell
-    axes = plane_to_axes(plane)
-
-    cell_lines = np.array(
-        [[np.dot(line[0], cell), np.dot(line[1], cell)] for line in _cube]
-    )
-    cell_lines_x, cell_lines_y = cell_lines[..., axes[0]], cell_lines[..., axes[1]]
-
     if show_cell:
-        for cell_line_x, cell_line_y in zip(cell_lines_x, cell_lines_y):
-            ax.plot(cell_line_x, cell_line_y, "k-")
+        # NOTE TO REVIEWERS: this dash-or-not-dash method is imperfect.
+        # the better way to do this would be with shapely, but that's adding
+        # a big dependency for one plotting function. Otherwise i can add some
+        # ad-hoc "does the point intercept a face above" logic later.
+        above = cc.edges[:, :, 2].mean(axis=1) > cc.center[2]
+        print(above)
+        # plot the lower edges with dashed lines
+        [ax.plot(*x.T, "k--") for x in cc.edges[~above, :, :2]]
+        # plot the upper edges with solid lines
+        [ax.plot(*x.T, "k-") for x in cc.edges[above, :, :2]]
 
-    if len(atoms) > 0:
-        positions = atoms.positions[:, axes[:2]]
-        order = np.argsort(-atoms.positions[:, axes[2]])
-        positions = positions[order]
-
-        colors = jmol_colors[atoms.numbers[order]]
-        sizes = covalent_radii[atoms.numbers[order]] * scale
-
-        circles = []
-        for position, size in zip(positions, sizes):
-            circles.append(Circle(position, size))
-
-        coll = PatchCollection(circles, facecolors=colors, edgecolors="black", **kwargs)
+    if cc.pos.size > 0:
+        # convert the atomic data into circular patches and plot them
+        circles = [Circle(*x) for x in zip(cc.pos, cc.radii * scale)]
+        coll = PatchCollection(
+            circles, facecolors=cc.colors, edgecolors="black", **kwargs
+        )
         ax.add_collection(coll)
-
-        ax.axis("equal")
-        ax.set_xlabel(plane[0] + " [Å]")
-        ax.set_ylabel(plane[1] + " [Å]")
-
-        ax.set_title(title)
-
+        # add numerical labels to atoms if desired.
         if numbering:
             if merge:
                 raise ValueError("atom numbering requires 'merge' to be False")
 
-            for i, (position, size) in enumerate(zip(positions, sizes)):
-                ax.annotate(
-                    "{}".format(order[i]), xy=position, ha="center", va="center"
-                )
+            for i, (position, size) in enumerate(zip(cc.pos, cc.radii)):
+                ax.annotate("{}".format(i), xy=position, ha="center", va="center")
+    # clean up the plotting and add labels
+    ax.set_aspect("equal")
+    axis_labels = cc.get_plot_labels()
+    ax.set_xlabel(axis_labels[0])
+    ax.set_ylabel(axis_labels[1])
+    ax.set_title(title)
 
     if legend:
         legend_elements = [
@@ -820,7 +955,121 @@ def show_atoms(
 
     if tight_limits:
         ax.set_adjustable("box")
-        ax.set_xlim([np.min(cell_lines_x), np.max(cell_lines_x)])
-        ax.set_ylim([np.min(cell_lines_y), np.max(cell_lines_y)])
+        ax.set_xlim(np.min(cc.edges[:, :, 0]), np.min(cc.edges[:, :, 0]))
+        ax.set_ylim(np.min(cc.edges[:, :, 1]), np.min(cc.edges[:, :, 1]))
+
+    return fig, ax
+
+
+def show_atoms3d(
+    atoms: Atoms,
+    ax: Axes = None,
+    scale: float | str = "infer",
+    title: str = None,
+    numbering: bool = False,
+    show_periodic: bool = False,
+    figsize: tuple[float, float] = None,
+    legend: bool = False,
+    show_cell: bool = None,
+    #    backemd: str = 'matplotlib'
+    **kwargs,
+):
+    """
+    Create 3D plot of atoms
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The atoms to be shown.
+    ax : matplotlib.axes.Axes, optional
+        If given, the plots are added to the axes.
+    scale : float
+        Factor scaling their covalent radii for the atom display sizes (default is 0.75).
+    title : str
+        Title of the displayed image. Default is None.
+    numbering : bool
+        Display the index of the Atoms as a number. Default is False.
+    show_periodic : bool
+        If True, show the periodic images of the atoms at the cell boundary.
+    figsize : two int, optional
+        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+    legend : bool
+        If True, add a legend indicating the color of the atomic species.
+    merge: float
+        To speed up plotting large numbers of atoms, those closer than the given value [Å] are merged.
+    kwargs : Keyword arguments for matplotlib.collections.PatchCollection.
+
+    Returns
+    -------
+    matplotlib.figure.Figure, matplotlib.axes.Axes
+    """
+    # For consistency, use the same atom padding as elsewhere in abtem
+    if show_periodic:
+        atoms = atoms.copy()
+        atoms = pad_atoms(atoms, margins=1e-3)
+
+    # use CellCalculations to precalculate information for plotting
+    cc = CellCalculations(atoms)
+
+    if show_cell is None:
+        show_cell = True
+
+    # Either use an existing plot or generate a new one
+    if ax is None:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(projection="3d")
+    else:
+        assert isinstance(ax, Axes3D)
+        fig = ax.get_figure()
+
+    if scale == "infer":
+        # TODO: this is a bit ad-hoc, since scatter spot size is based on
+        # pixel count. Also, this will absolutely over-predict size on highly
+        # anisotropic cells
+        # get the square root of the pixel count in your plotting axis
+        pixel_count_sqrt = np.prod(ax.get_tightbbox().size) ** 0.5
+        # use the cube root of the atom count and average atomic radii to
+        # predict the density which which things will be plotted
+        plot_density = (cc.elem.size ** (1 / 3)) * cc.radii.mean() / pixel_count_sqrt
+        # 20 percent seems to look nice, so set the scale to achieve that
+        # density
+        scale = 0.2 / plot_density
+
+    if show_cell:
+        [ax.plot3D(*x.T, "k-") for x in cc.edges]
+
+    if cc.pos.size > 0:
+        # NOTE TO REVIEWERS: Its possible to do true 3d spheres here, but it
+        # can very quickly crash matplotlib, as every sphere needs a mesh
+        # with ~100 or so vertices and faces. This CAN be rendered in pyvista
+        # smoothly, but that has a lot of overhead baggage.
+        # If there is interest, I can include that, but for now, sticking to
+        # simple scaled scatter plots
+        ax.scatter3D(*cc.pos.T, s=(cc.radii * scale) ** 2, c=cc.colors)
+
+    # clean up the plotting and add labels
+    ax.set_aspect("equal")
+    axis_labels = cc.get_plot_labels()
+    ax.set_xlabel("X [Å]")
+    ax.set_ylabel("Y [Å]")
+    ax.set_zlabel("Z [Å]")
+    ax.set_title(title)
+
+    if legend:
+        legend_elements = [
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markeredgecolor="k",
+                label=chemical_symbols[unique],
+                markerfacecolor=jmol_colors[unique],
+                markersize=12,
+            )
+            for unique in np.unique(atoms.numbers)
+        ]
+
+        ax.legend(handles=legend_elements, loc="upper right")
 
     return fig, ax
