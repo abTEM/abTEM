@@ -186,7 +186,6 @@ def _laplace_stencil_array(accuracy):
     stencil[:, len(coefficients) // 2] += coefficients
     return stencil
 
-
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=np.complex64, device: str = "cpu"
 ):
@@ -198,54 +197,86 @@ def _laplace_operator_stencil(
     padding = n + 1
 
     @stencil(neighborhood=((-n, n + 1), (-n, n + 1)))
-    def stencil_func(a):
+    def stencil_func_2d(a):
         cumul = dtype(0.0)
         for i in range(-n, n + 1):
             cumul += c[i] * a[i, 0] + c[i] * a[0, i]
         return cumul
 
+    @njit(parallel=True, fastmath=True)
+    def _laplace_stencil_cpu_batch(a):
+        out = np.zeros_like(a)
+        for m in range(a.shape[0]):
+            out[m] = stencil_func_2d(a[m])
+        return out
+
     @cuda.jit
-    def stencil_func_gpu(a, out):
-        print(a.ndim)
-        i, j = cuda.grid(2)
-        H, W = a.shape
-        if 1 <= i < H - n and 1 <= j < W - n:
+    def stencil_func_gpu_batch(a, out):
+        m, i, j = cuda.grid(3)
+        M, H, W = a.shape
+        if m < M and n <= i < H - n and n <= j < W - n:
             cumul = dtype(0.0)
             for k in range(-n, n + 1):
-                cumul += c[k] * a[i + k, j] + c[k] * a[i, j + k]
-            out[i, j] = cumul
-
-    @njit(parallel=True, fastmath=True)
-    def _laplace_stencil_cpu(a):
-        return stencil_func(a)
+                cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
+            out[m, i, j] = cumul
 
     def _laplace_stencil_gpu(a):
         xp = get_array_module(a)
         out = xp.zeros_like(a)
-        threadsperblock = (16, 16)  # ToDo: threadsperblock hardcoded
-        blockspergrid_x = math.ceil(a.shape[0] / threadsperblock[0])
-        blockspergrid_y = math.ceil(a.shape[1] / threadsperblock[1])
-        blockspergrid = (blockspergrid_x, blockspergrid_y)
-        stencil_func_gpu[blockspergrid, threadsperblock](a, out)
+
+        M, H, W = a.shape
+
+        threads_x = 32
+        threads_y = 32
+        max_threads = 1024
+        threads_m = max_threads // (threads_x * threads_y)
+        threadsperblock = (threads_m, threads_x, threads_y)
+
+        blockspergrid_m = math.ceil(a.shape[0] / threadsperblock[0])
+        blockspergrid_x = math.ceil(a.shape[1] / threadsperblock[1])
+        blockspergrid_y = math.ceil(a.shape[2] / threadsperblock[2])
+        blockspergrid = (blockspergrid_m, blockspergrid_x, blockspergrid_y)
+        stencil_func_gpu_batch[blockspergrid, threadsperblock](a, out)
+
         return out
 
     def _laplace_stencil(a):
+        # Store original shape and reshape to 3D
+        original_shape = a.shape
+        if a.ndim == 2:
+            a = a.reshape(1, *a.shape)
+        elif a.ndim > 3:
+            a = a.reshape(-1, *a.shape[-2:])
+        elif a.ndim != 3:
+            raise ValueError(f"Array must have at least 2 dimensions, got {a.ndim}")
+
+        # Apply stencil
         if device == "cpu":
-            return _laplace_stencil_cpu(a)
+            result = _laplace_stencil_cpu_batch(a)
         elif device == "gpu":
-            return _laplace_stencil_gpu(a)
+            result = _laplace_stencil_gpu(a)
         else:
-            raise ValueError()
+            raise ValueError(f"Unsupported device: {device}")
+
+        # Reshape back to original shape
+        return result.reshape(original_shape)
 
     def _apply_boundary(mode, padding):
-        pad_width = [(padding,) * 2, (padding,) * 2]
-
         def stencil_with_boundary(func):
             def func_wrapper(a):
                 xp = get_array_module(a)
+
+                # Build pad_width for arbitrary dimensions
+                # Only pad the last two spatial dimensions
+                pad_width = [(0, 0)] * (a.ndim - 2) + [(padding,) * 2, (padding,) * 2]
+
+                # Build slicing to remove padding from last two dimensions
+                slicing = tuple([slice(None)] * (a.ndim - 2) +
+                               [slice(padding, -padding), slice(padding, -padding)])
+
                 a = xp.pad(a, pad_width=pad_width, mode=mode)
                 res = func(a)
-                return res[padding:-padding, padding:-padding]
+                return res[slicing]
 
             return func_wrapper
 
@@ -323,40 +354,44 @@ def _multislice_exponential_series(
     laplace: Callable,
     wavelength: float,
     thickness: float,
-    sampling: tuple[float, float],
     tolerance: float = 1e-16,
     max_terms: int = 300,
     order: int = 1,
+    fully_corrected: bool = False,
 ):
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
-    temp = (
-        propagator_taylor_series(
-            waves,
-            order=order,
-            laplace=laplace,
-            wavelength=wavelength,
-            thickness=thickness,
-            sampling=sampling,
+    if fully_corrected:
+        temp = full_series(waves, laplace, transmission_function, order, wavelength, thickness)
+    else:
+        temp = (
+            propagator_taylor_series(
+                waves,
+                order=order,
+                laplace=laplace,
+                transmission_function=transmission_function,
+                wavelength=wavelength,
+                thickness=thickness,
+            )  
         )
-        + waves * transmission_function
-    )
 
     waves += temp
 
     for i in range(2, max_terms + 1):
-        temp = (
-            propagator_taylor_series(
-                temp,
-                order=order,
-                laplace=laplace,
-                wavelength=wavelength,
-                thickness=thickness,
-                sampling=sampling,
-            )
-            + temp * transmission_function
-        ) / i
+        if fully_corrected:
+            temp = full_series(temp, laplace, transmission_function, order, wavelength, thickness) / i
+        else:
+            temp = (
+                propagator_taylor_series(
+                    temp,
+                    order=order,
+                    laplace=laplace,
+                    transmission_function=transmission_function,
+                    wavelength=wavelength,
+                    thickness=thickness,
+                ) 
+            ) / i
 
         waves += temp
         temp_amplitude = xp.abs(temp).sum()
@@ -376,36 +411,65 @@ def propagator_taylor_series(
     waves: np.ndarray,
     order: int,
     laplace: Callable,
+    transmission_function: np.ndarray,
     wavelength: float,
     thickness: float,
-    sampling: tuple[float, float],
 ):
     if order < 1:
         raise ValueError("order must be a positive integer and at least 1")
 
     laplace_waves = laplace(waves)
     if order == 1:
-        return laplace_waves
+        return laplace_waves + waves * transmission_function
 
     series = laplace_waves.copy()
     temp = laplace_waves.copy()
 
-    alpha = np.prod(sampling) / (1.0j * thickness)  # removes laplace prefactor
+    alpha = 1 / (1.0j * thickness)  # removes laplace prefactor
     for i in range(2, order + 1):
         prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
         temp = laplace(temp) * alpha
         series += temp * prefactor
 
-    return series
+    return series + waves * transmission_function
 
 
+def full_series(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, order: int, wavelength: float, thickness: float,):
+    transmission_function = transmission_function / 1.0j / thickness
+    series = conventional_step(waves, laplace, transmission_function, thickness)
+    temp = series.copy()
+    for i in range(2, order + 1):
+        prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
+        temp = conventional_step(temp, laplace, transmission_function, thickness) 
+        series += temp * prefactor
+    return series * 1.0j * thickness
+        
+def conventional_step(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, thickness: float,):
+    return laplace_without_scaling(waves, laplace, thickness) + transmission_function * waves
+
+def laplace_without_scaling(waves: np.ndarray, laplace: Callable, thickness: float,):
+    alpha = 1 / (1.0j * thickness) 
+    return alpha * laplace(waves) 
+
+def k_operator_firstOrder(waves: Waves, potential_slice: PotentialArray, laplace: Callable, thickness: float):
+    K0 = 1 / energy2wavelength(waves._valid_energy)
+    sigma = energy2sigma(waves._valid_energy)
+    return K0 * waves._eager_array + laplace_without_scaling(waves._eager_array, laplace, thickness) / (2 * np.pi) + sigma * potential_slice / (2*np.pi) * waves._eager_array
+
+def k2_denominator_firstOrder(waves: Waves, potential_slice: PotentialArray, laplace: Callable, thickness: float):
+    K0 = 1 / energy2wavelength(waves._valid_energy)
+    sigma = energy2sigma(waves._valid_energy)
+    return (waves._eager_array - 0.5 * (laplace_without_scaling(waves._eager_array, laplace, thickness) * 2 / (K0 * np.pi) + sigma * potential_slice / (np.pi * K0) * waves._eager_array)) / (2 * K0)
+    
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
+    next_slice: PotentialArray,
     laplace: LaplaceOperator,
     tolerance: float = 1e-16,
     max_terms: int = 300,
     order: int = 1,
+    fully_corrected: bool = False,
 ) -> Waves:
     if max_terms < 1:
         raise ValueError()
@@ -437,11 +501,20 @@ def multislice_step(
         laplace_stencil,
         wavelength,
         thickness,
-        waves.sampling,
         tolerance,
         max_terms,
         order,
+        fully_corrected
     )
+    # if fully_corrected and next_slice is not None:
+    #     backscatter = k_operator_firstOrder(waves, next_slice.array[0], laplace_stencil, thickness) - k_operator_firstOrder(waves, potential_slice.array[0], laplace_stencil, thickness)
+    #     backscatter *= k2_denominator_firstOrder(waves, next_slice.array[0], laplace_stencil, thickness)
+    #     print(np.max(np.real(backscatter)))
+    #     transmitted = 1 - backscatter
+    #     waves._array = transmitted * waves._array
 
     aperture = AntialiasAperture()  # bandlimit to compare with Fourier
     return aperture.bandlimit(waves)
+
+def test():
+    print("test123")

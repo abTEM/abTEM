@@ -463,6 +463,22 @@ def _generate_potential_configurations(potential):
 
         yield potential_index, potential_configuration
 
+def lookahead(iterable):
+    """
+    Generator that yields (current, next) items from an iterable.
+    The last item is yielded as (last, None).
+    """
+    it = iter(iterable)
+    try:
+        current_item = next(it)
+    except StopIteration:
+        return
+
+    for next_item in it:
+        yield current_item, next_item
+        current_item = next_item
+    
+    yield current_item, None
 
 def multislice_and_detect(
     waves: Waves,
@@ -473,43 +489,27 @@ def multislice_and_detect(
     pbar: bool = False,
     method: str = "conventional",
     order: int = 1,
+    fully_corrected: bool = False,
     **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions
     through a given potential, detecting at each of the exit planes specified in the
     potential.
-
-    Parameters
-    ----------
-    waves : Waves
-        A batch of wave functions as a :class:`.Waves` object.
-    potential : BasePotential
-        A potential as :class:`.BasePotential` object.
-    detectors : (list of) BaseDetector, optional
-        A detector or a list of detectors defining how the wave functions should be
-        converted to measurements after running the multislice algorithm.
-    conjugate : bool, optional
-        If True, use the complex conjugate of the transmission function
-        (default is False).
-    transpose : bool, optional
-        If True, reverse the order of propagation and transmission (default is False).
-
-    Returns
-    -------
-    measurements : Waves or tuple of :class:`.BaseMeasurement`
-        Exit waves or detected measurements or lists of measurements.
     """
 
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
     waves = waves.copy()
 
+    # --- 1. Define Step Functions (Modified to accept next_slice) ---
+    
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
 
-        def multislice_step(waves, potential_slice):
+        # Wrapper ignores next_slice for conventional method
+        def multislice_step(waves, potential_slice, next_slice=None):
             return conventional_multislice_step(
                 waves,
                 potential_slice=potential_slice,
@@ -525,17 +525,22 @@ def multislice_and_detect(
         laplace_operator = LaplaceOperator(derivative_accuracy)
         max_terms = kwargs.get("max_terms", 80)
 
-        def multislice_step(waves, potential_slice):
+        # Wrapper passes next_slice to realspace method
+        def multislice_step(waves, potential_slice, next_slice=None):
             return realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
+                next_slice=next_slice,  # <--- Added here
                 laplace=laplace_operator,
                 max_terms=max_terms,
                 order=order,
+                fully_corrected=fully_corrected,
             )
 
     else:
-        raise ValueError()
+        raise ValueError(f"Unknown method: {method}")
+
+    # --- 2. Setup Measurements ---
 
     (
         extra_ensemble_axes_shape,
@@ -559,11 +564,14 @@ def multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
+    # --- 3. Main Loop (Modified for Look-Ahead) ---
+
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
         exit_plane_index = 0
 
+        # Handle entrance plane detection (before first slice)
         if potential.exit_planes[0] == -1:
             measurement_index = _validate_potential_ensemble_indices(
                 potential_index, exit_plane_index, potential
@@ -576,12 +584,14 @@ def multislice_and_detect(
 
         depth = 0.0
 
-        for potential_slice in potential_configuration.generate_slices():
+        # Use lookahead iterator to get current and next slice
+        for potential_slice, next_slice in lookahead(potential_configuration.generate_slices()):
+            
+            # Pass both slices to the step function
             waves = multislice_step(
                 waves,
                 potential_slice,
-                # conjugate=conjugate,
-                # transpose=transpose,
+                next_slice=next_slice
             )
 
             tqdm_pbar.update_if_exists(int(n_waves))
