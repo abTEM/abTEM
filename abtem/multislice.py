@@ -490,25 +490,27 @@ def multislice_and_detect(
     method: str = "conventional",
     order: int = 1,
     fully_corrected: bool = False,
+    show_backscatter: bool = False,
     **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
-    Calculate the full multislice algorithm for the given batch of wave functions
-    through a given potential, detecting at each of the exit planes specified in the
-    potential.
+    Calculate the full multislice algorithm, storing both forward and backscattered
+    waves if fully_corrected is True.
     """
-
     waves = waves.ensure_real_space()
+    xp = get_array_module(waves.device)
     detectors = validate_detectors(detectors)
     waves = waves.copy()
-
-    # --- 1. Define Step Functions (Modified to accept next_slice) ---
-    
+    if show_backscatter:
+        if len(detectors) != 1:
+            raise ValueError("More than 1 detector is not yet supported for backscattering")
+        if not isinstance(detectors[0], WavesDetector):
+            raise Exception("Backscattering only works for the WavesDetector")
+    # --- 1. Define Step Functions ---
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
 
-        # Wrapper ignores next_slice for conventional method
         def multislice_step(waves, potential_slice, next_slice=None):
             return conventional_multislice_step(
                 waves,
@@ -525,23 +527,20 @@ def multislice_and_detect(
         laplace_operator = LaplaceOperator(derivative_accuracy)
         max_terms = kwargs.get("max_terms", 80)
 
-        # Wrapper passes next_slice to realspace method
         def multislice_step(waves, potential_slice, next_slice=None):
             return realspace_multislice_step(
                 waves,
                 potential_slice=potential_slice,
-                next_slice=next_slice,  # <--- Added here
+                next_slice=next_slice,
                 laplace=laplace_operator,
                 max_terms=max_terms,
                 order=order,
                 fully_corrected=fully_corrected,
             )
-
     else:
         raise ValueError(f"Unknown method: {method}")
 
     # --- 2. Setup Measurements ---
-
     (
         extra_ensemble_axes_shape,
         extra_ensemble_axes_metadata,
@@ -559,13 +558,13 @@ def multislice_and_detect(
 
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
-
+    if show_backscatter and n_slices != len(potential.exit_planes) - 1:
+        raise ValueError("exit_planes not setup correctly for backscattering. Setup exit_planes=1 in potential")
     tqdm_pbar = TqdmWrapper(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
-    # --- 3. Main Loop (Modified for Look-Ahead) ---
-
+    # --- 3. Main Loop ---
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
@@ -584,15 +583,22 @@ def multislice_and_detect(
 
         depth = 0.0
 
-        # Use lookahead iterator to get current and next slice
         for potential_slice, next_slice in lookahead(potential_configuration.generate_slices()):
             
-            # Pass both slices to the step function
-            waves = multislice_step(
-                waves,
-                potential_slice,
-                next_slice=next_slice
-            )
+            # Run the step
+            if fully_corrected:
+                # Returns both waves
+                waves, backscatter = multislice_step(
+                    waves,
+                    potential_slice,
+                    next_slice=next_slice
+                )
+            else:
+                waves = multislice_step(
+                    waves,
+                    potential_slice,
+                    next_slice=None
+                )
 
             tqdm_pbar.update_if_exists(int(n_waves))
 
@@ -606,21 +612,78 @@ def multislice_and_detect(
                 )
 
                 if measurements is not None:
-                    _update_measurements(
-                        waves, detectors, measurements, measurement_index
-                    )
+                    if fully_corrected and show_backscatter and next_slice is not None:
+                        kwargs = waves._copy_kwargs(exclude=("array",))
+                        backscatter_waves = waves.__class__(backscatter, **kwargs)
+                        _update_measurements(
+                            backscatter_waves, 
+                            detectors, 
+                            measurements, 
+                            measurement_index
+                        )
+                    else:
+                        _update_measurements(
+                            waves, detectors, measurements, measurement_index
+                        )
 
                 exit_plane_index += 1
 
+    # Handle final output if not using intermediate measurements
     if measurements is None:
         measurements = [
             detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
             for detector in detectors
         ]
+    elif show_backscatter:
+        if potential.exit_planes[0] == -1:
+            backscatted_waves = generate_backscatterd_wave(waves, potential, multislice_step, measurements[0][1:])
+        else:
+            backscatted_waves = generate_backscatterd_wave(waves, potential, multislice_step, measurements[0])
+        measurements[0].array[0] = backscatted_waves.array
+        
 
     tqdm_pbar.close_if_exists()
 
     return measurements
+
+def generate_backscatterd_wave(
+        final_wave: Waves,
+        potential: BasePotential,
+        multislice_step: Callable,
+        backscatter_array: list,
+) -> Waves:
+    """
+    For each slice in the multislice step, a small part of the wave get backscattered. This function runs 
+    the multislice in reverse for each backscattered wave summing them for a final backscattered wave result.
+    """
+
+    xp = get_array_module(final_wave.device)
+    potential_slices = [
+        slice 
+        for _, config in _generate_potential_configurations(potential)
+        for slice in config.generate_slices()
+    ]
+    
+    num_slices = len(potential_slices)
+    if len(backscatter_array) != num_slices:
+        print(len(backscatter_array), num_slices)
+        raise ValueError("Wrong shapes")
+    
+    kwargs = final_wave._copy_kwargs(exclude=("array",))
+    
+    # Start with a blank wave (zeros)
+    total_backscatter_wave = final_wave.__class__(
+        xp.zeros_like(final_wave.array), 
+        **kwargs
+    )
+    #Go through potential in reverse
+    for i in range(num_slices-2, -1, -1):
+        total_backscatter_wave.array = total_backscatter_wave.array + backscatter_array[i].array
+        total_backscatter_wave, _ = multislice_step(
+                    total_backscatter_wave,
+                    potential_slices[i],
+                    next_slice=None)
+    return total_backscatter_wave
 
 
 def transition_potential_multislice_and_detect(

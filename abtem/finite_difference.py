@@ -306,10 +306,7 @@ class LaplaceOperator:
     def _get_new_stencil(self, key, device: str = "cpu"):
         wavelength, sampling, thickness = key
         prefactor = (
-            1j
-            * float(wavelength)
-            * float(thickness)
-            / (4 * np.pi)
+            1
             / np.prod(np.array(sampling, dtype=float))
         )
         return _laplace_operator_stencil(
@@ -417,50 +414,39 @@ def propagator_taylor_series(
 ):
     if order < 1:
         raise ValueError("order must be a positive integer and at least 1")
-
-    laplace_waves = laplace(waves)
+    
     if order == 1:
-        return laplace_waves + waves * transmission_function
-
+        return conventional_step(waves, laplace, transmission_function, thickness, wavelength) * 1.0j * thickness
+    
+    K0 = 1/wavelength
+    laplace_waves = laplace(waves) / (4 * np.pi * K0) 
     series = laplace_waves.copy()
     temp = laplace_waves.copy()
 
-    alpha = 1 / (1.0j * thickness)  # removes laplace prefactor
     for i in range(2, order + 1):
         prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
-        temp = laplace(temp) * alpha
+        temp = laplace(temp) / (4 * np.pi * K0)
         series += temp * prefactor
 
-    return series + waves * transmission_function
+    return (series + waves * transmission_function) * 1.0j * thickness
 
 
-def full_series(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, order: int, wavelength: float, thickness: float,):
-    transmission_function = transmission_function / 1.0j / thickness
-    series = conventional_step(waves, laplace, transmission_function, thickness)
+def full_series(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, order: int, wavelength: float, thickness: float, override_prefactor: list[float] = []):
+    series = conventional_step(waves, laplace, transmission_function, thickness, wavelength)
     temp = series.copy()
     for i in range(2, order + 1):
-        prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
-        temp = conventional_step(temp, laplace, transmission_function, thickness) 
+        if override_prefactor:
+            prefactor = override_prefactor[i-1] #Note that the first prefactor always gets skipped and is always 1
+        else:
+            prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5   
+        temp = conventional_step(temp, laplace, transmission_function, thickness, wavelength) 
         series += temp * prefactor
     return series * 1.0j * thickness
         
-def conventional_step(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, thickness: float,):
-    return laplace_without_scaling(waves, laplace, thickness) + transmission_function * waves
+def conventional_step(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, thickness: float, wavelength: float):
+    K0 = 1/wavelength
+    return laplace(waves) / (4 * np.pi * K0) + transmission_function * waves
 
-def laplace_without_scaling(waves: np.ndarray, laplace: Callable, thickness: float,):
-    alpha = 1 / (1.0j * thickness) 
-    return alpha * laplace(waves) 
-
-def k_operator_firstOrder(waves: Waves, potential_slice: PotentialArray, laplace: Callable, thickness: float):
-    K0 = 1 / energy2wavelength(waves._valid_energy)
-    sigma = energy2sigma(waves._valid_energy)
-    return K0 * waves._eager_array + laplace_without_scaling(waves._eager_array, laplace, thickness) / (2 * np.pi) + sigma * potential_slice / (2*np.pi) * waves._eager_array
-
-def k2_denominator_firstOrder(waves: Waves, potential_slice: PotentialArray, laplace: Callable, thickness: float):
-    K0 = 1 / energy2wavelength(waves._valid_energy)
-    sigma = energy2sigma(waves._valid_energy)
-    return (waves._eager_array - 0.5 * (laplace_without_scaling(waves._eager_array, laplace, thickness) * 2 / (K0 * np.pi) + sigma * potential_slice / (np.pi * K0) * waves._eager_array)) / (2 * K0)
-    
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
@@ -476,6 +462,8 @@ def multislice_step(
 
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
+        if next_slice is not None:
+            next_slice = next_slice.copy_to_device(device=waves.device)
 
     # if isinstance(potential_slice, TransmissionFunction):
     #     transmission_function = potential_slice
@@ -487,8 +475,12 @@ def multislice_step(
 
     thickness = potential_slice.thickness
     transmission_function_array = (
-        1.0j * potential_slice.array[0] * energy2sigma(waves._valid_energy)
+        potential_slice.array[0] * energy2sigma(waves._valid_energy) / thickness
     )
+    if fully_corrected and next_slice is not None:
+        transmission_function_array_next_slice = (
+            next_slice.array[0] * energy2sigma(waves._valid_energy) / thickness
+        )
 
     # waves = transmission_function.transmit(waves)
     laplace_stencil = laplace.get_stencil(waves, thickness, device=waves.device)
@@ -506,15 +498,23 @@ def multislice_step(
         order,
         fully_corrected
     )
-    # if fully_corrected and next_slice is not None:
-    #     backscatter = k_operator_firstOrder(waves, next_slice.array[0], laplace_stencil, thickness) - k_operator_firstOrder(waves, potential_slice.array[0], laplace_stencil, thickness)
-    #     backscatter *= k2_denominator_firstOrder(waves, next_slice.array[0], laplace_stencil, thickness)
-    #     print(np.max(np.real(backscatter)))
-    #     transmitted = 1 - backscatter
-    #     waves._array = transmitted * waves._array
+    xp = get_array_module(waves.array)
+    backscatter = xp.zeros_like(waves._array)
+    if fully_corrected and next_slice is not None:
+        K0 = 1/wavelength
+        backscatter = 1/(2*np.pi*1.0j*thickness) * (full_series(waves._array, laplace_stencil, transmission_function_array_next_slice, order, wavelength, thickness) - full_series(waves._array, laplace_stencil, transmission_function_array, order, wavelength, thickness)) 
+        prefactors = [1]
+        for i in range(1, order+1):
+            prefactors.append(prefactors[-1] * (1 - 2*i) / (2*i))
+        for i in range(len(prefactors)):
+            prefactors[i] = prefactors[i] / (1.0j * thickness) / (np.pi * K0)**i
+        backscatter *= 1/(2*K0) * (1 + full_series(waves._array, laplace_stencil, transmission_function_array_next_slice, order, wavelength, thickness, override_prefactor=prefactors))
+        waves._array = waves._array - backscatter
+    #     print("backscatter", xp.sum(xp.abs(backscatter))/np.prod(waves._array.shape))
+    # print("wave", xp.sum(xp.abs(waves._array))/np.prod(waves._array.shape))
 
     aperture = AntialiasAperture()  # bandlimit to compare with Fourier
+    if fully_corrected:
+        return aperture.bandlimit(waves), backscatter
     return aperture.bandlimit(waves)
 
-def test():
-    print("test123")
