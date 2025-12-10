@@ -251,7 +251,7 @@ class BaseSMatrix(BaseWaves):
         )
 
         if scan is not None:
-            probes._positions = scan
+            probes.scan_positions = scan
 
         return probes
 
@@ -1300,23 +1300,21 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         pbar = config.get("diagnostics.task_progress", False)
 
         if self.is_lazy:
-            if reduction_scheme == "multiple-rechunk":
-                sssss
-                measurements = _multiple_rechunk_reduce(
-                    self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
-                )
-            elif reduction_scheme == "single-rechunk":
-                raise NotImplementedError
-                measurements = _single_rechunk_reduce(
-                    self, scan, detectors, ctf, max_batch_reduction
-                )
-            elif reduction_scheme == "no-chunks":
-                measurements = _no_chunks_reduce(
-                    self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
-                )
-
-            else:
-                raise ValueError()
+            measurements = _no_chunks_reduce(
+                self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
+            )
+            # if reduction_scheme == "multiple-rechunk":
+            #     measurements = _multiple_rechunk_reduce(
+            #         self, scan, detectors, ctf, max_batch_reduction, pbar=pbar
+            #     )
+            # elif reduction_scheme == "single-rechunk":
+            #     raise NotImplementedError
+            #     measurements = _single_rechunk_reduce(
+            #         self, scan, detectors, ctf, max_batch_reduction
+            #     )
+            # elif reduction_scheme == "no-chunks":
+            # else:
+            #     raise ValueError()
         else:
             measurements = self._batch_reduce_to_measurements(
                 scan, ctf, detectors, max_batch_reduction, pbar=pbar
@@ -1673,7 +1671,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         if self.potential is not None:
             return self.potential._partition_args(chunks, lazy=lazy)
         else:
-            array = np.empty((1,), dtype=object)
+            array = np.empty((), dtype=object)
             if lazy:
                 array = da.from_array(array, chunks=1)
             return (array,)
@@ -1794,6 +1792,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
             if not hasattr(s_matrix_blocks, "len"):
                 s_matrix_blocks = s_matrix_blocks[None]
+
+            if self.potential is not None and self.potential.ensemble_shape:
+                s_matrix_blocks = s_matrix_blocks[0]
 
             wave_vector_blocks = np.tile(
                 wave_vector_blocks[None], (len(s_matrix_blocks), 1)
@@ -1956,7 +1957,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         if detectors is None:
             detectors = FlexibleAnnularDetector()
-
         return self.reduce(
             scan=scan,
             detectors=detectors,

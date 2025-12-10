@@ -264,7 +264,7 @@ def soft_aperture(
     """
     xp = get_array_module(alpha)
 
-    semiangle_cutoff_array = xp.array(semiangle_cutoff, dtype=get_dtype(complex=False))
+    semiangle_cutoff_array = xp.asarray(semiangle_cutoff, dtype=get_dtype(complex=False))
 
     base_ndims = len(alpha.shape)
 
@@ -276,7 +276,7 @@ def soft_aperture(
         semiangle_cutoff_array, phi, match_dims=((-2, -1), (-2, -1))
     )
 
-    angular_sampling = xp.array(angular_sampling, dtype=get_dtype(complex=False)) * 1e-3
+    angular_sampling = xp.asarray(angular_sampling, dtype=get_dtype(complex=False)) * 1e-3
 
     denominator = xp.sqrt(
         (xp.cos(phi) * angular_sampling[0]) ** 2
@@ -393,7 +393,7 @@ class Aperture(BaseAperture):
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
-        semiangle_cutoff = xp.array(self.semiangle_cutoff) * 1e-3
+        semiangle_cutoff = xp.asarray(self.semiangle_cutoff) * 1e-3
 
         if (
             self.soft

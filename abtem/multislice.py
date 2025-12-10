@@ -1120,7 +1120,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         if self.potential.num_exit_planes > 1:
             chunks = chunks[:-1] + ((self.potential.num_exit_planes,),)
 
-        print(self.ensemble_shape)
         return chunks
 
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
