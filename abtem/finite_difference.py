@@ -411,6 +411,19 @@ def _multislice_exponential_series(
     return waves
 
 
+def conventional_operator(
+    waves: np.ndarray,
+    laplace: Callable,
+    transmission_function: np.ndarray,
+    wavelength: float,
+):
+    """
+    Real-space multislice operator used in all higher-order expansions.
+    """
+    K0 = 1 / wavelength
+    return laplace(waves) / (4 * np.pi * K0) + transmission_function * waves
+
+
 def propagator_taylor_series(
     waves: np.ndarray,
     order: int,
@@ -419,6 +432,10 @@ def propagator_taylor_series(
     wavelength: float,
     thickness: float,
 ):
+    """
+    Taylor series expansion of the propagator term in the MS equation.
+    Eq.(8) in Ultramicroscopy 134 (2013) 135-143.
+    """
     if order < 1:
         raise ValueError("order must be a positive integer and at least 1")
 
@@ -451,6 +468,10 @@ def full_series(
     thickness: float,
     override_prefactor: list[float] = [],
 ):
+    """
+    Full Taylor series expansion of the MS Eq.(14) in Ultramicrscopy 134 (2013) 135-143.
+    override_prefactor used in backscatter call, Eq. (13) in Micron 190 (2025) 103778.
+    """
     series = conventional_operator(waves, laplace, transmission_function, wavelength)
     temp = series.copy()
     for i in range(2, order + 1):
@@ -465,26 +486,21 @@ def full_series(
     return series * 1.0j * thickness
 
 
-def conventional_operator(
-    waves: np.ndarray,
-    laplace: Callable,
-    transmission_function: np.ndarray,
-    wavelength: float,
-):
-    K0 = 1 / wavelength
-    return laplace(waves) / (4 * np.pi * K0) + transmission_function * waves
-
-
 def multislice_step(
     waves: Waves,
     potential_slice: PotentialArray,
-    next_slice: PotentialArray,
+    next_slice: PotentialArray | None,
     laplace: LaplaceOperator,
     tolerance: float = 1e-16,
     max_terms: int = 300,
     order: int = 1,
     fully_corrected: bool = False,
 ) -> Waves:
+    """
+    Performs a single multislice step.
+    If next_slice is not None, the backscattering
+    """
+    xp = get_array_module(waves.array)
     if max_terms < 1:
         raise ValueError()
 
@@ -492,14 +508,6 @@ def multislice_step(
         potential_slice = potential_slice.copy_to_device(device=waves.device)
         if next_slice is not None:
             next_slice = next_slice.copy_to_device(device=waves.device)
-
-    # if isinstance(potential_slice, TransmissionFunction):
-    #     transmission_function = potential_slice
-
-    # else:
-    #     transmission_function = potential_slice.transmission_function(
-    #         energy=waves._valid_energy
-    #     )
 
     thickness = potential_slice.thickness
     transmission_function_array = (
@@ -510,11 +518,11 @@ def multislice_step(
             next_slice.array[0] * energy2sigma(waves._valid_energy) / thickness
         )
 
-    # waves = transmission_function.transmit(waves)
     laplace_stencil = laplace.get_stencil(waves, thickness, device=waves.device)
 
     wavelength = energy2wavelength(waves._valid_energy)
 
+    # Forward scattering term
     waves._array = _multislice_exponential_series(
         waves._eager_array,
         transmission_function_array,
@@ -526,10 +534,15 @@ def multislice_step(
         order,
         fully_corrected,
     )
-    xp = get_array_module(waves.array)
+
+    # Backward scattering contributions
     backscatter = xp.zeros_like(waves._array)
+
     if fully_corrected and next_slice is not None:
+        # constants and prefactors
         K0 = 1 / wavelength
+
+        # Eq. 7 in Micron 190 (2025) 103778.
         backscatter = (
             1
             / (2 * np.pi * 1.0j * thickness)
@@ -552,11 +565,14 @@ def multislice_step(
                 )
             )
         )
+
+        # 1/k series with custom prefactors
         prefactors = [1]
         for i in range(1, order + 1):
             prefactors.append(prefactors[-1] * (1 - 2 * i) / (2 * i))
         for i in range(len(prefactors)):
             prefactors[i] = prefactors[i] / (1.0j * thickness) / (np.pi * K0) ** i
+
         backscatter *= (
             1
             / (2 * K0)
@@ -573,11 +589,13 @@ def multislice_step(
                 )
             )
         )
-        waves._array = waves._array - backscatter
-    #     print("backscatter", xp.sum(xp.abs(backscatter))/np.prod(waves._array.shape))
-    # print("wave", xp.sum(xp.abs(waves._array))/np.prod(waves._array.shape))
 
-    aperture = AntialiasAperture()  # bandlimit to compare with Fourier
+        # Eq.10 in Micron 190 (2025) 103778.
+        waves._array = waves._array - backscatter
+
+    # Bandlimit to compare with Fourier CMS
+    aperture = AntialiasAperture()
     if fully_corrected:
         return aperture.bandlimit(waves), backscatter
+
     return aperture.bandlimit(waves)
