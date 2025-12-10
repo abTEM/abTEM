@@ -679,10 +679,12 @@ def generate_backscatterd_wave(
     #Go through potential in reverse
     for i in range(num_slices-2, -1, -1):
         total_backscatter_wave.array = total_backscatter_wave.array + backscatter_array[i].array
+        total_backscatter_wave.array = xp.conj(total_backscatter_wave.array)
         total_backscatter_wave, _ = multislice_step(
                     total_backscatter_wave,
                     potential_slices[i],
                     next_slice=None)
+        total_backscatter_wave.array = xp.conj(total_backscatter_wave.array)
     return total_backscatter_wave
 
 

@@ -226,10 +226,12 @@ def _laplace_operator_stencil(
 
         M, H, W = a.shape
 
-        threads_x = 32
-        threads_y = 32
-        max_threads = 1024
-        threads_m = max_threads // (threads_x * threads_y)
+        threads_x = 8
+        threads_y = 8
+        
+        target_threads = 256
+        threads_m = max(1, target_threads // (threads_x * threads_y)) 
+        
         threadsperblock = (threads_m, threads_x, threads_y)
 
         blockspergrid_m = math.ceil(a.shape[0] / threadsperblock[0])
@@ -416,7 +418,7 @@ def propagator_taylor_series(
         raise ValueError("order must be a positive integer and at least 1")
     
     if order == 1:
-        return conventional_step(waves, laplace, transmission_function, thickness, wavelength) * 1.0j * thickness
+        return conventional_operator(waves, laplace, transmission_function, wavelength) * 1.0j * thickness
     
     K0 = 1/wavelength
     laplace_waves = laplace(waves) / (4 * np.pi * K0) 
@@ -432,18 +434,18 @@ def propagator_taylor_series(
 
 
 def full_series(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, order: int, wavelength: float, thickness: float, override_prefactor: list[float] = []):
-    series = conventional_step(waves, laplace, transmission_function, thickness, wavelength)
+    series = conventional_operator(waves, laplace, transmission_function, wavelength)
     temp = series.copy()
     for i in range(2, order + 1):
         if override_prefactor:
             prefactor = override_prefactor[i-1] #Note that the first prefactor always gets skipped and is always 1
         else:
             prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5   
-        temp = conventional_step(temp, laplace, transmission_function, thickness, wavelength) 
+        temp = conventional_operator(temp, laplace, transmission_function, wavelength) 
         series += temp * prefactor
     return series * 1.0j * thickness
         
-def conventional_step(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, thickness: float, wavelength: float):
+def conventional_operator(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, wavelength: float):
     K0 = 1/wavelength
     return laplace(waves) / (4 * np.pi * K0) + transmission_function * waves
 
@@ -517,4 +519,3 @@ def multislice_step(
     if fully_corrected:
         return aperture.bandlimit(waves), backscatter
     return aperture.bandlimit(waves)
-
