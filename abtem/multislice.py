@@ -67,6 +67,8 @@ def _fresnel_propagator_array(
         -(kx**2) * np.pi * thickness * wavelength
     ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
 
+    # Propagator corrected in Fourier-space, only valid for order=2
+    # Eq. (4) from Microscopy and Microanalysis (2020), 26, 1147-1157
     if order == 2:
         f = f * complex_exponential(
             (-np.pi * thickness * wavelength**3) / 4.0 * (kx**4 + ky**4)
@@ -499,12 +501,52 @@ def multislice_and_detect(
     **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
-    Calculate the full multislice algorithm, storing both forward and backscattered
-    waves if fully_corrected is True.
+    Calculate the full multislice algorithm for the given batch of wave functions
+    through a given potential, detecting at each of the exit planes specified in the
+    potential.
+
+    Parameters
+    ----------
+    waves : Waves
+        A batch of wave functions as a :class:`.Waves` object.
+    potential : BasePotential
+        A potential as :class:`.BasePotential` object.
+    detectors : (list of) BaseDetector, optional
+        A detector or a list of detectors defining how the wave functions should be
+        converted to measurements after running the multislice algorithm.
+    conjugate : bool, optional
+        If True, use the complex conjugate of the transmission function
+        (default is False).
+    transpose : bool, optional
+        If True, reverse the order of propagation and transmission (default is False).
+    method: str
+        Whether the multislice operator should be computed in real/Fourier space.
+        One of ['fft' or 'conventional', 'realspace']. Default is 'conventional',
+    order: int
+        The order of the MS/propagator Taylor series expansion. Default is 1,
+    fully_corrected: bool
+        If fully_corrected is True, the full MS operator, not simply the propagator
+        is Taylor expanded to the specified order. Default is False.
+        Only compatible with method='realspace'.
+    show_backscatter: bool
+        If fully_corrected is True and show_backscatter is True, the backscattered
+        wave is returned. Only compatible with method='realspace' and exit_planes=1.
+
+    Returns
+    -------
+    measurements : Waves or tuple of :class:`.BaseMeasurement`
+        Exit waves or detected measurements or lists of measurements.
+        If show_backscatter is True, the returned measurement has shape (N+1,gpts)
+        where N is the number of slices.
+        measurements[N] is the forward-scattered exit-wave
+        measurements[i] for i [N-1 ... 1] is the backscattered wave at each slice
+        measurements[0] is the total backscattered wave at the entrance surface
+
     """
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
     waves = waves.copy()
+
     if show_backscatter:
         if len(detectors) != 1:
             raise ValueError(
@@ -512,6 +554,7 @@ def multislice_and_detect(
             )
         if not isinstance(detectors[0], WavesDetector):
             raise Exception("Backscattering only works for the WavesDetector")
+
     # --- 1. Define Step Functions ---
     if method in ("conventional", "fft"):
         antialias_aperture = AntialiasAperture()
@@ -571,6 +614,7 @@ def multislice_and_detect(
             Setup exit_planes=1 in potential.
             """
         )
+
     tqdm_pbar = TqdmWrapper(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
@@ -618,6 +662,8 @@ def multislice_and_detect(
                 )
 
                 if measurements is not None:
+                    # replace forward-scattered exit waves at each slice with
+                    # corresponding backscattered exit-wave
                     if fully_corrected and show_backscatter and next_slice is not None:
                         kwargs = waves._copy_kwargs(exclude=("array",))
                         backscatter_waves = waves.__class__(backscatter, **kwargs)
@@ -640,13 +686,17 @@ def multislice_and_detect(
             detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
             for detector in detectors
         ]
+
     elif show_backscatter:
+        # measurements[N] is the forward-scattered exit-wave
+        # measurements[i] for i [N-1 ... 1] is the backscattered wave at each slice
+        # measurements[0] is the total backscattered wave at the entrance surface
         if potential.exit_planes[0] == -1:
-            backscatted_waves = generate_backscatterd_wave(
+            backscatted_waves = generate_backscattered_wave(
                 waves, potential, multislice_step, measurements[0][1:]
             )
         else:
-            backscatted_waves = generate_backscatterd_wave(
+            backscatted_waves = generate_backscattered_wave(
                 waves, potential, multislice_step, measurements[0]
             )
         measurements[0].array[0] = backscatted_waves.array
@@ -656,7 +706,7 @@ def multislice_and_detect(
     return measurements
 
 
-def generate_backscatterd_wave(
+def generate_backscattered_wave(
     final_wave: Waves,
     potential: BasePotential,
     multislice_step: Callable,
@@ -682,7 +732,7 @@ def generate_backscatterd_wave(
 
     kwargs = final_wave._copy_kwargs(exclude=("array",))
 
-    # Start with a blank wave (zeros)
+    # Start with an empty wave (zeros)
     total_backscatter_wave = final_wave.__class__(
         xp.zeros_like(final_wave.array), **kwargs
     )
@@ -696,6 +746,7 @@ def generate_backscatterd_wave(
             total_backscatter_wave, potential_slices[i], next_slice=None
         )
         total_backscatter_wave.array = xp.conj(total_backscatter_wave.array)
+
     return total_backscatter_wave
 
 
