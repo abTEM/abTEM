@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import scipy.ndimage  # type: ignore
-from numba import njit, stencil, cuda  # type: ignore
+from numba import cuda, njit, stencil  # type: ignore
 
-from abtem.core.backend import get_array_module, get_scipy_module
-from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.antialias import AntialiasAperture
+from abtem.core.backend import get_array_module
+from abtem.core.energy import energy2sigma, energy2wavelength
 
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
@@ -288,7 +288,6 @@ def _laplace_operator_stencil(
         return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
     else:
         return _laplace_stencil
-
 
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
