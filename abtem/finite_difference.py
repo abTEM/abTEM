@@ -186,6 +186,7 @@ def _laplace_stencil_array(accuracy):
     stencil[:, len(coefficients) // 2] += coefficients
     return stencil
 
+
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=np.complex64, device: str = "cpu"
 ):
@@ -228,10 +229,10 @@ def _laplace_operator_stencil(
 
         threads_x = 8
         threads_y = 8
-        
+
         target_threads = 256
-        threads_m = max(1, target_threads // (threads_x * threads_y)) 
-        
+        threads_m = max(1, target_threads // (threads_x * threads_y))
+
         threadsperblock = (threads_m, threads_x, threads_y)
 
         blockspergrid_m = math.ceil(a.shape[0] / threadsperblock[0])
@@ -273,8 +274,10 @@ def _laplace_operator_stencil(
                 pad_width = [(0, 0)] * (a.ndim - 2) + [(padding,) * 2, (padding,) * 2]
 
                 # Build slicing to remove padding from last two dimensions
-                slicing = tuple([slice(None)] * (a.ndim - 2) +
-                               [slice(padding, -padding), slice(padding, -padding)])
+                slicing = tuple(
+                    [slice(None)] * (a.ndim - 2)
+                    + [slice(padding, -padding), slice(padding, -padding)]
+                )
 
                 a = xp.pad(a, pad_width=pad_width, mode=mode)
                 res = func(a)
@@ -288,6 +291,7 @@ def _laplace_operator_stencil(
         return _apply_boundary(mode="wrap", padding=padding)(_laplace_stencil)
     else:
         return _laplace_stencil
+
 
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
@@ -306,10 +310,7 @@ class LaplaceOperator:
 
     def _get_new_stencil(self, key, device: str = "cpu"):
         wavelength, sampling, thickness = key
-        prefactor = (
-            1
-            / np.prod(np.array(sampling, dtype=float))
-        )
+        prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
             self._accuracy, prefactor, mode="wrap", device=device
         )
@@ -361,24 +362,29 @@ def _multislice_exponential_series(
     initial_amplitude = xp.abs(waves).sum()
 
     if fully_corrected:
-        temp = full_series(waves, laplace, transmission_function, order, wavelength, thickness)
+        temp = full_series(
+            waves, laplace, transmission_function, order, wavelength, thickness
+        )
     else:
-        temp = (
-            propagator_taylor_series(
-                waves,
-                order=order,
-                laplace=laplace,
-                transmission_function=transmission_function,
-                wavelength=wavelength,
-                thickness=thickness,
-            )  
+        temp = propagator_taylor_series(
+            waves,
+            order=order,
+            laplace=laplace,
+            transmission_function=transmission_function,
+            wavelength=wavelength,
+            thickness=thickness,
         )
 
     waves += temp
 
     for i in range(2, max_terms + 1):
         if fully_corrected:
-            temp = full_series(temp, laplace, transmission_function, order, wavelength, thickness) / i
+            temp = (
+                full_series(
+                    temp, laplace, transmission_function, order, wavelength, thickness
+                )
+                / i
+            )
         else:
             temp = (
                 propagator_taylor_series(
@@ -388,7 +394,7 @@ def _multislice_exponential_series(
                     transmission_function=transmission_function,
                     wavelength=wavelength,
                     thickness=thickness,
-                ) 
+                )
             ) / i
 
         waves += temp
@@ -415,12 +421,16 @@ def propagator_taylor_series(
 ):
     if order < 1:
         raise ValueError("order must be a positive integer and at least 1")
-    
+
     if order == 1:
-        return conventional_operator(waves, laplace, transmission_function, wavelength) * 1.0j * thickness
-    
-    K0 = 1/wavelength
-    laplace_waves = laplace(waves) / (4 * np.pi * K0) 
+        return (
+            conventional_operator(waves, laplace, transmission_function, wavelength)
+            * 1.0j
+            * thickness
+        )
+
+    K0 = 1 / wavelength
+    laplace_waves = laplace(waves) / (4 * np.pi * K0)
     series = laplace_waves.copy()
     temp = laplace_waves.copy()
 
@@ -432,21 +442,38 @@ def propagator_taylor_series(
     return (series + waves * transmission_function) * 1.0j * thickness
 
 
-def full_series(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, order: int, wavelength: float, thickness: float, override_prefactor: list[float] = []):
+def full_series(
+    waves: np.ndarray,
+    laplace: Callable,
+    transmission_function: np.ndarray,
+    order: int,
+    wavelength: float,
+    thickness: float,
+    override_prefactor: list[float] = [],
+):
     series = conventional_operator(waves, laplace, transmission_function, wavelength)
     temp = series.copy()
     for i in range(2, order + 1):
         if override_prefactor:
-            prefactor = override_prefactor[i-1] #Note that the first prefactor always gets skipped and is always 1
+            prefactor = override_prefactor[
+                i - 1
+            ]  # Note that the first prefactor always gets skipped and is always 1
         else:
-            prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5   
-        temp = conventional_operator(temp, laplace, transmission_function, wavelength) 
+            prefactor = (wavelength / (-2.0 * np.pi)) ** (i - 1) * 0.5
+        temp = conventional_operator(temp, laplace, transmission_function, wavelength)
         series += temp * prefactor
     return series * 1.0j * thickness
-        
-def conventional_operator(waves: np.ndarray, laplace: Callable, transmission_function: np.ndarray, wavelength: float):
-    K0 = 1/wavelength
+
+
+def conventional_operator(
+    waves: np.ndarray,
+    laplace: Callable,
+    transmission_function: np.ndarray,
+    wavelength: float,
+):
+    K0 = 1 / wavelength
     return laplace(waves) / (4 * np.pi * K0) + transmission_function * waves
+
 
 def multislice_step(
     waves: Waves,
@@ -497,19 +524,55 @@ def multislice_step(
         tolerance,
         max_terms,
         order,
-        fully_corrected
+        fully_corrected,
     )
     xp = get_array_module(waves.array)
     backscatter = xp.zeros_like(waves._array)
     if fully_corrected and next_slice is not None:
-        K0 = 1/wavelength
-        backscatter = 1/(2*np.pi*1.0j*thickness) * (full_series(waves._array, laplace_stencil, transmission_function_array_next_slice, order, wavelength, thickness) - full_series(waves._array, laplace_stencil, transmission_function_array, order, wavelength, thickness)) 
+        K0 = 1 / wavelength
+        backscatter = (
+            1
+            / (2 * np.pi * 1.0j * thickness)
+            * (
+                full_series(
+                    waves._array,
+                    laplace_stencil,
+                    transmission_function_array_next_slice,
+                    order,
+                    wavelength,
+                    thickness,
+                )
+                - full_series(
+                    waves._array,
+                    laplace_stencil,
+                    transmission_function_array,
+                    order,
+                    wavelength,
+                    thickness,
+                )
+            )
+        )
         prefactors = [1]
-        for i in range(1, order+1):
-            prefactors.append(prefactors[-1] * (1 - 2*i) / (2*i))
+        for i in range(1, order + 1):
+            prefactors.append(prefactors[-1] * (1 - 2 * i) / (2 * i))
         for i in range(len(prefactors)):
-            prefactors[i] = prefactors[i] / (1.0j * thickness) / (np.pi * K0)**i
-        backscatter *= 1/(2*K0) * (1 + full_series(waves._array, laplace_stencil, transmission_function_array_next_slice, order, wavelength, thickness, override_prefactor=prefactors))
+            prefactors[i] = prefactors[i] / (1.0j * thickness) / (np.pi * K0) ** i
+        backscatter *= (
+            1
+            / (2 * K0)
+            * (
+                1
+                + full_series(
+                    waves._array,
+                    laplace_stencil,
+                    transmission_function_array_next_slice,
+                    order,
+                    wavelength,
+                    thickness,
+                    override_prefactor=prefactors,
+                )
+            )
+        )
         waves._array = waves._array - backscatter
     #     print("backscatter", xp.sum(xp.abs(backscatter))/np.prod(waves._array.shape))
     # print("wave", xp.sum(xp.abs(waves._array))/np.prod(waves._array.shape))
