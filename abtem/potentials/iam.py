@@ -1515,7 +1515,7 @@ class CrystalPotential(_PotentialBuilder):
             chunks = 1
 
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        print(self.ensemble_shape)
+        #print(self.ensemble_shape)
 
         if chunks == ():
             old_chunks = ()

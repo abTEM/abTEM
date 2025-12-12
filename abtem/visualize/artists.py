@@ -872,7 +872,7 @@ class ScatterArtist(Artist2D):
         else:
             self._annotations = None
 
-        if caxes:
+        if caxes is not None and len(caxes):
             cbar_label = measurement._scale_axis_from_metadata().format_label()
             self.set_cbars(caxes=caxes, label=cbar_label)
 
