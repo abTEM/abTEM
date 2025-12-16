@@ -1,4 +1,5 @@
 """Module for reconstructing phase objects from far-field intensity measurements using iterative ptychography."""
+
 from abc import ABCMeta, abstractmethod
 from copy import copy
 from functools import partial
@@ -217,7 +218,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @abstractmethod
     def _prepare_functions_queue(self, max_iterations, **kwargs):
-        """Abstract method all subclasses must define to precompute the order of function calls during reconstruction."""
+        """Abstract method subclasses must define to precompute the order of function calls during reconstruction."""
         pass
 
     @abstractmethod
@@ -470,7 +471,7 @@ def _validate_experimental_parameter(parameter, parameter_name, diffraction_patt
 class RegularizedPtychographicOperator(AbstractPtychographicOperator):
     """
     Regularized Ptychographic Iterative Engine (r-PIE).
-    Used to reconstruct weak-phase objects using a set of measured far-field CBED patterns with the following array dimensions:
+    Used to reconstruct weak-phase objects using a set of measured CBED patterns with the following array dimensions:
 
     CBED pattern dimensions     : (J,M,N)
     objects dimensions          : (P,Q)
@@ -502,7 +503,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
     device: str, optional
         Device to perform Fourier-based reconstructrions - Either 'cpu' or 'gpu'
     parameters: dict, optional
-       Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
+       Dictionary specifying any of abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
        Additionally, these can also be specified using kwargs
     """
 
@@ -599,9 +600,9 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         )
 
         if len(self._diffraction_patterns.shape) == 4:
-            self._experimental_parameters[
-                "grid_scan_shape"
-            ] = self._diffraction_patterns.shape[:2]
+            self._experimental_parameters["grid_scan_shape"] = (
+                self._diffraction_patterns.shape[:2]
+            )
             self._diffraction_patterns = self._diffraction_patterns.reshape(
                 (-1,) + self._diffraction_patterns.shape[-2:]
             )
@@ -792,8 +793,10 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         r"""
         Regularized-PIE objects and probes update static method:
         .. math::
-            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^*(r)}{\left(1-\alpha\right)|P(r)|^2 + \alpha|P(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
-            P'(r)          &= P(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2 + \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right)
+            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^*(r)}{\left(1-\alpha\right)|P(r)|^2
+                           &+ \alpha|P(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
+            P'(r)          &= P(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2
+                           &+ \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right)
 
 
         Parameters
@@ -1072,7 +1075,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += "\n--Probe correction is disabled"
         else:
-            queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
+            queue_summary += f"\n--Probe correction enabled after the first {pre_probe_correction_update_steps} steps"
 
         functions_queue = [
             functions_queue[x : x + self._num_diffraction_patterns]
@@ -1094,7 +1097,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
     ):
         """
         Main reconstruction loop method to do the following:
-        - Precompute the order of function calls using the RegularizedPtychographicOperator._prepare_functions_queue method
+        - Precompute order of function calls using the RegularizedPtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
         - Pass reconstruction outputs to the RegularizedPtychographicOperator._prepare_measurement_outputs method
 
@@ -1162,15 +1165,14 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                 functions_queue = [
                     functions_queue[x : x + self._num_diffraction_patterns]
                     for x in range(
-                        0, total_update_steps, self._num_diffraction_patterns
+                        0, len(functions_queue), self._num_diffraction_patterns
                     )
                 ]
             else:
                 raise ValueError()
-
         self._functions_queue = functions_queue
 
-        ### Main Loop
+        # Main Loop
         xp = get_array_module(self._device)
         # outer_pbar = ProgressBar(total=max_iterations, leave=False)
         # inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
@@ -1235,8 +1237,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                     _position_correction,
                 ) = update_step
 
-                #print(_position_correction)
-                #sss
+                # print(_position_correction)
 
                 self._probes, exit_wave = _overlap_projection(
                     self._objects, self._probes, position, old_position, xp=xp
@@ -1387,7 +1388,8 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     """
     Simultaneous Ptychographic Iterative Engine (sim-PIE).
-    Used to reconstruct the electrostatic phase and magnetic phase objects simultaneously using two set of measured far-field CBED patterns with the following array dimensions:
+    Used to reconstruct the electrostatic phase and magnetic phase objects simultaneously using two set of measured
+    far-field CBED patterns with the following array dimensions:
 
     CBED pattern dimensions     : (2,) Sequence of dimensions (J,M,N) each
     objects dimensions          : (2,) Sequence of dimensions (P,Q) each
@@ -1419,7 +1421,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     device: str, optional
         Device to perform Fourier-based reconstructrions - Either 'cpu' or 'gpu'
     parameters: dict, optional
-       Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
+       Dictionary specifying any of abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
        Additionally, these can also be specified using kwargs
     """
 
@@ -1442,9 +1444,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         if len(diffraction_patterns) != 2:
             raise NotImplementedError(
-                "Simultaneous ptychographic reconstruction is currently only implemented for two sets of diffraction patterns"
-                "allowing reconstruction of the electrostatic and magnetic phase contributions."
-                "See the documentation for AbstractPtychographicOperator to implement your own class to handle more cases."
+                "Simultaneous ptychographic reconstruction is currently only implemented for two sets of diffraction "
+                "patterns allowing reconstruction of the electrostatic and magnetic phase contributions."
+                "See documentation for AbstractPtychographicOperator to implement your own class to handle more cases."
             )
 
         for key in kwargs.keys():
@@ -1521,9 +1523,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             _dp = self._pad_diffraction_patterns(_dp, self._region_of_interest_shape)
 
             if self._experimental_parameters["background_counts_cutoff"] is not None:
-                _dp[
-                    _dp < self._experimental_parameters["background_counts_cutoff"]
-                ] = 0.0
+                _dp[_dp < self._experimental_parameters["background_counts_cutoff"]] = (
+                    0.0
+                )
 
             if self._experimental_parameters["counts_scaling_factor"] is not None:
                 _dp /= self._experimental_parameters["counts_scaling_factor"]
@@ -1903,8 +1905,10 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         r"""
         Regularized-PIE objects and probes update static method:
         .. math::
-            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^*(r)}{\left(1-\alpha\right)|P(r)|^2 + \alpha|P(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
-            P'(r)          &= P(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2 + \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right)
+            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^*(r)}{\left(1-\alpha\right)|P(r)|^2
+                           &+ \alpha|P(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
+            P'(r)          &= P(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2
+                           &+ \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right)
 
 
         Parameters
@@ -2401,8 +2405,8 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         electrostatic_object, magnetic_object = objects
         probe_forward, probe_reverse = probes
-        exit_wave_forward, exit_wave_reverse = exit_waves
-        modified_exit_wave_forward, modified_exit_wave_reverse = modified_exit_waves
+        exit_wave_forward, exit_wave_reverse = exit_wave
+        modified_exit_wave_forward, modified_exit_wave_reverse = modified_exit_wave
         exit_wave_diff_forward = modified_exit_wave_forward - exit_wave_forward
 
         object_dx = sobel(electrostatic_object, axis=0, mode="wrap")
@@ -2414,7 +2418,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         exit_wave_dx = object_dx[object_indices] * probe_forward
         exit_wave_dy = object_dy[object_indices] * probe_forward
 
-        exit_wave_diff = modified_exit_wave - exit_wave
+        # exit_wave_diff = modified_exit_wave - exit_wave
         displacement_x = xp.sum(
             xp.real(xp.conj(exit_wave_dx) * exit_wave_diff_forward)
         ) / xp.sum(xp.abs(exit_wave_dx) ** 2)
@@ -2585,7 +2589,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += "\n--Probe correction is disabled"
         else:
-            queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
+            queue_summary += f"\n--Probe correction enabled after the first {pre_probe_correction_update_steps} steps"
 
         if common_probe:
             queue_summary += (
@@ -2614,7 +2618,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     ):
         r"""
         Main reconstruction loop method to do the following:
-        - Precompute the order of function calls using the SimultaneousPtychographicOperator._prepare_functions_queue method
+        - Precompute order of function calls using the SimultaneousPtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
         - Pass reconstruction outputs to the SimultaneousPtychographicOperator._prepare_measurement_outputs method
 
@@ -2688,7 +2692,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                 functions_queue = [
                     functions_queue[x : x + self._num_diffraction_patterns]
                     for x in range(
-                        0, total_update_steps, self._num_diffraction_patterns
+                        0, len(functions_queue), self._num_diffraction_patterns
                     )
                 ]
             else:
@@ -2696,7 +2700,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 
         self._functions_queue = functions_queue
 
-        ### Main Loop
+        # Main Loop
         xp = get_array_module(self._device)
         outer_pbar = ProgressBar(total=max_iterations, leave=False)
         inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
@@ -2912,7 +2916,8 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
 class MixedStatePtychographicOperator(AbstractPtychographicOperator):
     """
     Mixed-State Ptychographic Iterative Engine (mix-PIE).
-    Used to reconstruct weak-phase objects with partial coherence of the illuminating probe using a set of measured far-field CBED patterns with the following array dimensions:
+    Used to reconstruct weak-phase objects with partial coherence of the illuminating probe using a set of measured
+    far-field CBED patterns with the following array dimensions:
 
     CBED pattern dimensions     : (J,M,N)
     objects dimensions          : (P,Q)
@@ -2945,7 +2950,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
     device: str, optional
         Device to perform Fourier-based reconstructrions - Either 'cpu' or 'gpu'
     parameters: dict, optional
-       Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
+       Dictionary specifying any of abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters.
        Additionally, these can also be specified using kwargs
     """
 
@@ -3036,9 +3041,9 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         )
 
         if len(self._diffraction_patterns.shape) == 4:
-            self._experimental_parameters[
-                "grid_scan_shape"
-            ] = self._diffraction_patterns.shape[:2]
+            self._experimental_parameters["grid_scan_shape"] = (
+                self._diffraction_patterns.shape[:2]
+            )
             self._diffraction_patterns = self._diffraction_patterns.reshape(
                 (-1,) + self._diffraction_patterns.shape[-2:]
             )
@@ -3329,8 +3334,10 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         r"""
         Regularized-PIE objects and probes update static method using a single probe:
         .. math::
-            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^{0*}(r)}{\left(1-\alpha\right)|P^0(r)|^2 + \alpha|P^0(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
-            P^{0'}(r)          &= P^0(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2 + \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right)
+            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^{0*}(r)}{\left(1-\alpha\right)|P^0(r)|^2
+                           &+ \alpha|P^0(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
+            P^{0'}(r)      &= P^0(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2
+                           &+ \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right)
 
 
         Parameters
@@ -3434,8 +3441,11 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         r"""
         Mixed-State-PIE objects and probes update static method:
         .. math::
-            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{1}{\left(1-\alpha\right)\sum_k|P^k(r)|^2 + \alpha\sum_k|P^k(r)|_{\mathrm{max}}^2} \left(\sum_k P^{k*}\psi^{k'}_{R_j}(r) - \psi^k_{R_j}(r)\right) \\
-            P^{k'}(r)          &= P^k(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2 + \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi^{k'}_{R_j}(r) - \psi^k_{R_j}(r)\right)
+            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{1}{\left(1-\alpha\right)\sum_k|P^k(r)|^2
+                           &+ \alpha\sum_k|P^k(r)|_{\mathrm{max}}^2} \left(\sum_k P^{k*}\psi^{k'}_{R_j}(r)
+                           &- \psi^k_{R_j}(r)\right) \\
+            P^{k'}(r)      &= P^k(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2
+                           &+ \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi^{k'}_{R_j}(r) - \psi^k_{R_j}(r)\right)
 
 
         Parameters
@@ -3736,7 +3746,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += "\n--Probe correction is disabled"
         else:
-            queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
+            queue_summary += f"\n--Probe correction enabled after the first {pre_probe_correction_update_steps} steps"
 
         functions_queue = [
             functions_queue[x : x + self._num_diffraction_patterns]
@@ -3760,7 +3770,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
     ):
         r"""
         Main reconstruction loop method to do the following:
-        - Precompute the order of function calls using the MixedStatePtychographicOperator._prepare_functions_queue method
+        - Precompute order of function calls using the MixedStatePtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
         - Pass reconstruction outputs to the MixedStatePtychographicOperator._prepare_measurement_outputs method
 
@@ -3835,7 +3845,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                 functions_queue = [
                     functions_queue[x : x + self._num_diffraction_patterns]
                     for x in range(
-                        0, total_update_steps, self._num_diffraction_patterns
+                        0, len(functions_queue), self._num_diffraction_patterns
                     )
                 ]
             else:
@@ -3843,7 +3853,7 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 
         self._functions_queue = functions_queue
 
-        ### Main Loop
+        # Main Loop
         xp = get_array_module(self._device)
         outer_pbar = ProgressBar(total=max_iterations, leave=False)
         inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
@@ -4060,7 +4070,8 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
 class MultislicePtychographicOperator(AbstractPtychographicOperator):
     r"""
     Multislice Ptychographic Iterative Engine (MS-PIE).
-    Used to reconstruct _thick_ weak-phase objects using a set of measured far-field CBED patterns with the following array dimensions:
+    Used to reconstruct _thick_ weak-phase objects using a set of measured far-field CBED patterns with
+    the following array dimensions:
 
     CBED pattern dimensions     : (J,M,N)
     objects dimensions          : (T,P,Q)
@@ -4096,7 +4107,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
     device: str, optional
         Device to perform Fourier-based reconstructrions - Either 'cpu' or 'gpu'
     parameters: dict, optional
-       Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
+       Dictionary specifying any of abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters.
        Additionally, these can also be specified using kwargs
     """
 
@@ -4193,9 +4204,9 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         )
 
         if len(self._diffraction_patterns.shape) == 4:
-            self._experimental_parameters[
-                "grid_scan_shape"
-            ] = self._diffraction_patterns.shape[:2]
+            self._experimental_parameters["grid_scan_shape"] = (
+                self._diffraction_patterns.shape[:2]
+            )
             self._diffraction_patterns = self._diffraction_patterns.reshape(
                 (-1,) + self._diffraction_patterns.shape[-2:]
             )
@@ -4414,6 +4425,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         slice_thicknesses: Sequence[float] = None,
         sampling: Sequence[float] = None,
         wavelength: float = None,
+        position_step_size: float = 1.0,
         xp=np,
         **kwargs,
     ):
@@ -4673,7 +4685,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += "\n--Probe correction is disabled"
         else:
-            queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
+            queue_summary += f"\n--Probe correction enabled after the first {pre_probe_correction_update_steps} steps"
 
         functions_queue = [
             functions_queue[x : x + self._num_diffraction_patterns]
@@ -4696,7 +4708,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
     ):
         r"""
         Main reconstruction loop method to do the following:
-        - Precompute the order of function calls using the MultislicePtychographicOperator._prepare_functions_queue method
+        - Precompute order of function calls using the MultislicePtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
         - Pass reconstruction outputs to the MultislicePtychographicOperator._prepare_measurement_outputs method
 
@@ -4764,7 +4776,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                 functions_queue = [
                     functions_queue[x : x + self._num_diffraction_patterns]
                     for x in range(
-                        0, total_update_steps, self._num_diffraction_patterns
+                        0, len(functions_queue), self._num_diffraction_patterns
                     )
                 ]
             else:
@@ -4772,7 +4784,7 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
 
         self._functions_queue = functions_queue
 
-        ### Main Loop
+        # Main Loop
         xp = get_array_module(self._device)
         outer_pbar = ProgressBar(total=max_iterations, leave=False)
         inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)

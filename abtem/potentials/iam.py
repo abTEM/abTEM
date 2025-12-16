@@ -433,7 +433,7 @@ class _FieldBuilder(BaseField):
             else:
                 new_axis = tuple(range(0, len(self.base_shape)))
 
-            #new_axis = (0, 1, 2) # This was causing problems with FrozenPhonons
+            # new_axis = (0, 1, 2) # This was causing problems with FrozenPhonons
 
             array = da.map_blocks(
                 self._wrap_build_potential,
@@ -1515,7 +1515,7 @@ class CrystalPotential(_PotentialBuilder):
             chunks = 1
 
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        #print(self.ensemble_shape)
+        # print(self.ensemble_shape)
 
         if chunks == ():
             old_chunks = ()

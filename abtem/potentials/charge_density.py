@@ -507,9 +507,9 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         args["atoms"] = frozen_phonons_partial(args["atoms"])
 
-        #if isinstance(args["atoms"], np.ndarray):
+        # if isinstance(args["atoms"], np.ndarray):
         #    args["atoms"] = AtomsEnsemble(args["atoms"])
-        args["atoms"] = atoms # Hack to avoid issues with non-existent FrozenPhonons
+        args["atoms"] = atoms  # Hack to avoid issues with non-existent FrozenPhonons
         kwargs.update(args)
         potential = ChargeDensityPotential(**kwargs)
 
@@ -525,7 +525,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         )
         new_potential = partial(
             self._charge_density_potential,
-            atoms=self._ewald_potential().frozen_phonons.atoms, #Hack to make atoms explicit
+            atoms=self._ewald_potential().frozen_phonons.atoms,  # Hack to make atoms explicit
             frozen_phonons_partial=frozen_phonons_partial,
             **kwargs,
         )
@@ -552,7 +552,9 @@ class ChargeDensityPotential(_PotentialBuilder):
         return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
     def _ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(width=3) #Changed to match GPAWPotential
+        ewald_parametrization = EwaldParametrization(
+            width=3
+        )  # Changed to match GPAWPotential
 
         return Potential(
             atoms=self.frozen_phonons,

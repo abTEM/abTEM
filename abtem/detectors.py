@@ -36,7 +36,6 @@ from abtem.visualize.visualizations import discrete_cmap
 
 if TYPE_CHECKING:
     from abtem.array import ArrayObject, ArrayObjectType
-    from abtem.measurements import BaseMeasurements
     from abtem.waves import BaseWaves, Waves
 else:
     Waves = object
@@ -182,7 +181,7 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         measurements = waves.apply_transform(self)
         assert isinstance(measurements, (BaseMeasurements, Waves))
         return measurements
-    
+
     @abstractmethod
     def angular_limits(self, waves: Waves) -> tuple[float, float]:
         """

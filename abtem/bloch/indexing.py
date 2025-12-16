@@ -312,7 +312,7 @@ def miller_to_miller_bravais(hkl: tuple[int, int, int]) -> tuple[int, int, int, 
     tuple
         The Miller-Bravais indices (H, K, I, L).
     """
-    h, k, l = hkl  #  noqa: E741
+    h, k, l = hkl  # noqa: E741
 
     H = 2 * h - k
     K = 2 * k - h
