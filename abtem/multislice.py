@@ -497,6 +497,7 @@ def multislice_and_detect(
     method: str = "conventional",
     order: int = 1,
     fully_corrected: bool = False,
+    return_backscattered_wave: str | None = None,
     show_backscatter: bool = False,
     **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
@@ -528,9 +529,9 @@ def multislice_and_detect(
         If fully_corrected is True, the full MS operator, not simply the propagator
         is Taylor expanded to the specified order. Default is False.
         Only compatible with method='realspace'.
-    show_backscatter: bool
-        If fully_corrected is True and show_backscatter is True, the backscattered
-        wave is returned. Only compatible with method='realspace' and exit_planes=1.
+    return_backscattered_wave: str | None
+        One of 'coherent', 'incoherent' or None
+        Only compatible with method='realspace' and exit_planes=1.
 
     Returns
     -------
@@ -547,7 +548,7 @@ def multislice_and_detect(
     detectors = validate_detectors(detectors)
     waves = waves.copy()
 
-    if show_backscatter:
+    if return_backscattered_wave is not None:
         if len(detectors) != 1:
             raise ValueError(
                 "More than 1 detector is not yet supported for backscattering"
@@ -607,7 +608,10 @@ def multislice_and_detect(
 
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
-    if show_backscatter and potential.num_slices != len(potential.exit_planes) - 1:
+    if (
+        return_backscattered_wave is not None
+        and potential.num_slices != len(potential.exit_planes) - 1
+    ):
         raise ValueError(
             """
             exit_planes not setup correctly for backscattering.
@@ -664,7 +668,11 @@ def multislice_and_detect(
                 if measurements is not None:
                     # replace forward-scattered exit waves at each slice with
                     # corresponding backscattered exit-wave
-                    if fully_corrected and show_backscatter and next_slice is not None:
+                    if (
+                        fully_corrected
+                        and return_backscattered_wave is not None
+                        and next_slice is not None
+                    ):
                         kwargs = waves._copy_kwargs(exclude=("array",))
                         backscatter_waves = waves.__class__(backscatter, **kwargs)
                         _update_measurements(
@@ -687,26 +695,34 @@ def multislice_and_detect(
             for detector in detectors
         ]
 
-    elif show_backscatter:
+    elif return_backscattered_wave is not None:
         # measurements[N] is the forward-scattered exit-wave
         # measurements[i] for i [N-1 ... 1] is the backscattered wave at each slice
         # measurements[0] is the total backscattered wave at the entrance surface
+
+        if return_backscattered_wave == "coherent":
+            bs_func = generate_coherent_backscattered_wave
+        elif return_backscattered_wave == "incoherent":
+            bs_func = generate_incoherent_backscattered_wave
+        else:
+            raise ValueError()
+
         if potential.exit_planes[0] == -1:
-            backscatted_waves = generate_backscattered_wave(
+            backscattered_waves = bs_func(
                 waves, potential, multislice_step, measurements[0][1:]
             )
         else:
-            backscatted_waves = generate_backscattered_wave(
+            backscattered_waves = bs_func(
                 waves, potential, multislice_step, measurements[0]
             )
-        measurements[0].array[0] = backscatted_waves.array
+        measurements[0].array[0] = backscattered_waves.array
 
     tqdm_pbar.close_if_exists()
 
     return measurements
 
 
-def generate_backscattered_wave(
+def generate_coherent_backscattered_wave(
     final_wave: Waves,
     potential: BasePotential,
     multislice_step: Callable,
@@ -738,9 +754,7 @@ def generate_backscattered_wave(
     )
     # Go through potential in reverse
     for i in range(num_slices - 2, -1, -1):
-        total_backscatter_wave.array = (
-            total_backscatter_wave.array + backscatter_array[i].array
-        )
+        total_backscatter_wave.array += backscatter_array[i].array
         total_backscatter_wave.array = xp.conj(total_backscatter_wave.array)
         total_backscatter_wave, _ = multislice_step(
             total_backscatter_wave, potential_slices[i], next_slice=None
@@ -748,6 +762,57 @@ def generate_backscattered_wave(
         total_backscatter_wave.array = xp.conj(total_backscatter_wave.array)
 
     return total_backscatter_wave
+
+
+def generate_incoherent_backscattered_wave(
+    final_wave: Waves,
+    potential: BasePotential,
+    multislice_step: Callable,
+    backscatter_array: list,
+) -> Waves:
+    """
+    For each slice in the multislice step, a small part of the wave get backscattered.
+    This function runs the multislice in reverse for each backscattered wave summing
+    them for a final backscattered wave result.
+    """
+
+    xp = get_array_module(final_wave.device)
+    potential_slices = [
+        slice
+        for _, config in _generate_potential_configurations(potential)
+        for slice in config.generate_slices()
+    ]
+
+    num_slices = len(potential_slices)
+    if len(backscatter_array) != num_slices:
+        print(len(backscatter_array), num_slices)
+        raise ValueError("Wrong shapes")
+
+    kwargs = final_wave._copy_kwargs(exclude=("array",))
+
+    # Start with an empty wave (zeros)
+    total_backscatter_intensity = final_wave.__class__(
+        xp.zeros_like(final_wave.array), **kwargs
+    )
+
+    # Loop over backscattering slice
+    for i in range(num_slices - 2, -1, -1):
+        # Start from slice-local backscattered contribution
+        wave = backscatter_array[i].copy()
+
+        # Propagate coherently back to entrance surface
+        for j in range(i, -1, -1):
+            wave.array = xp.conj(wave.array)
+            wave, _ = multislice_step(wave, potential_slices[j], next_slice=None)
+            wave.array = xp.conj(wave.array)
+
+        # Accumulate intensity
+        total_backscatter_intensity.array += xp.abs(wave.array) ** 2
+
+    # sqrt to return effective amplitude
+    total_backscatter_intensity.array = xp.sqrt(total_backscatter_intensity.array)
+
+    return total_backscatter_intensity
 
 
 def transition_potential_multislice_and_detect(
