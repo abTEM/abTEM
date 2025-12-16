@@ -607,7 +607,7 @@ def multislice_and_detect(
 
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
-    if show_backscatter and n_slices != len(potential.exit_planes) - 1:
+    if show_backscatter and potential.num_slices != len(potential.exit_planes) - 1:
         raise ValueError(
             """
             exit_planes not setup correctly for backscattering.
