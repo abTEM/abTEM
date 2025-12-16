@@ -608,16 +608,6 @@ def multislice_and_detect(
 
     n_waves = np.prod(waves.shape[:-2])
     n_slices = n_waves * potential.num_slices * potential.num_configurations
-    if (
-        return_backscattered_wave is not None
-        and potential.num_slices != len(potential.exit_planes) - 1
-    ):
-        raise ValueError(
-            """
-            exit_planes not setup correctly for backscattering.
-            Setup exit_planes=1 in potential.
-            """
-        )
 
     tqdm_pbar = TqdmWrapper(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
@@ -707,19 +697,52 @@ def multislice_and_detect(
         else:
             raise ValueError()
 
-        if potential.exit_planes[0] == -1:
-            backscattered_waves = bs_func(
-                waves, potential, multislice_step, measurements[0][1:]
-            )
-        else:
-            backscattered_waves = bs_func(
-                waves, potential, multislice_step, measurements[0]
-            )
+        backscattered_waves = bs_func(
+            waves, potential, multislice_step, measurements[0][1:]
+        )
         measurements[0].array[0] = backscattered_waves.array
 
     tqdm_pbar.close_if_exists()
 
     return measurements
+
+
+def _aggregate_slices_by_exit_planes(potential_slices, exit_planes):
+    """
+    Group potential slices between exit_planes, summing their thicknesses.
+
+    Parameters
+    ----------
+    potential_slices : list of PotentialSlice
+        Original slices along the beam direction.
+    exit_planes : list of int
+        Indices of exit planes (first can be -1 for entrance plane).
+
+    Returns
+    -------
+    effective_slices : list of PotentialSlice
+        Aggregated slices with summed potential arrays and summed thicknesses.
+    """
+
+    effective_slices = []
+
+    for i in range(0, len(exit_planes) - 1):
+        idx_start = exit_planes[i] + 1  # slice after previous exit plane
+        idx_end = exit_planes[i + 1] + 1  # include this exit plane
+
+        # Aggregate slices in this block
+        combined_slice = potential_slices[idx_start].copy()
+        thickness = combined_slice.slice_thickness[0]
+        # Add remaining slices in the block
+        for in_bw_slice in potential_slices[idx_start + 1 : idx_end]:
+            combined_slice += in_bw_slice
+            thickness += in_bw_slice.slice_thickness[0]
+            combined_slice._slice_thickness = (thickness,)
+            combined_slice._slice_limits = [(0, thickness)]
+
+        effective_slices.append(combined_slice)
+
+    return effective_slices
 
 
 def generate_coherent_backscattered_wave(
@@ -741,9 +764,12 @@ def generate_coherent_backscattered_wave(
         for slice in config.generate_slices()
     ]
 
-    num_slices = len(potential_slices)
+    effective_slices = _aggregate_slices_by_exit_planes(
+        potential_slices, potential.exit_planes
+    )
+
+    num_slices = len(effective_slices)
     if len(backscatter_array) != num_slices:
-        print(len(backscatter_array), num_slices)
         raise ValueError("Wrong shapes")
 
     kwargs = final_wave._copy_kwargs(exclude=("array",))
@@ -757,7 +783,7 @@ def generate_coherent_backscattered_wave(
         total_backscatter_wave.array += backscatter_array[i].array
         total_backscatter_wave.array = xp.conj(total_backscatter_wave.array)
         total_backscatter_wave, _ = multislice_step(
-            total_backscatter_wave, potential_slices[i], next_slice=None
+            total_backscatter_wave, effective_slices[i], next_slice=None
         )
         total_backscatter_wave.array = xp.conj(total_backscatter_wave.array)
 
@@ -783,9 +809,12 @@ def generate_incoherent_backscattered_wave(
         for slice in config.generate_slices()
     ]
 
-    num_slices = len(potential_slices)
+    effective_slices = _aggregate_slices_by_exit_planes(
+        potential_slices, potential.exit_planes
+    )
+
+    num_slices = len(effective_slices)
     if len(backscatter_array) != num_slices:
-        print(len(backscatter_array), num_slices)
         raise ValueError("Wrong shapes")
 
     kwargs = final_wave._copy_kwargs(exclude=("array",))
@@ -803,7 +832,7 @@ def generate_incoherent_backscattered_wave(
         # Propagate coherently back to entrance surface
         for j in range(i, -1, -1):
             wave.array = xp.conj(wave.array)
-            wave, _ = multislice_step(wave, potential_slices[j], next_slice=None)
+            wave, _ = multislice_step(wave, effective_slices[j], next_slice=None)
             wave.array = xp.conj(wave.array)
 
         # Accumulate intensity
