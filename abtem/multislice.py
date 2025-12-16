@@ -549,12 +549,10 @@ def multislice_and_detect(
     waves = waves.copy()
 
     if return_backscattered_wave is not None:
-        if len(detectors) != 1:
-            raise ValueError(
-                "More than 1 detector is not yet supported for backscattering"
-            )
-        if not isinstance(detectors[0], WavesDetector):
-            raise Exception("Backscattering only works for the WavesDetector")
+        if detectors is None:
+            detectors = [WavesDetector]
+        elif len(detectors) > 1 or not isinstance(detectors[0], WavesDetector):
+            raise ValueError("Backscattering only works for a single WavesDetector")
 
     # --- 1. Define Step Functions ---
     if method in ("conventional", "fft"):
