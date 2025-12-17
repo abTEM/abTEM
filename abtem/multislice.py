@@ -549,6 +549,9 @@ def multislice_and_detect(
     waves = waves.copy()
 
     if return_backscattered_wave is not None:
+        if return_backscattered_wave == "incoherent":
+            raise NotImplementedError()
+
         if detectors is None:
             detectors = [WavesDetector]
         elif len(detectors) > 1 or not isinstance(detectors[0], WavesDetector):
