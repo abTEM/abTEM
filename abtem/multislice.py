@@ -27,7 +27,7 @@ from abtem.finite_difference import LaplaceOperator
 from abtem.finite_difference import multislice_step as realspace_multislice_step
 from abtem.inelastic.core_loss import TransitionPotential, TransitionPotentialArray
 from abtem.inelastic.plasmons import _update_plasmon_axes
-from abtem.measurements import BaseMeasurements
+from abtem.measurements import BaseMeasurements, stack
 from abtem.potentials.iam import (
     BasePotential,
     PotentialArray,
@@ -815,31 +815,29 @@ def generate_incoherent_backscattered_wave(
     if len(backscatter_array) != num_slices:
         raise ValueError("Wrong shapes")
 
-    kwargs = final_wave._copy_kwargs(exclude=("array",))
-
-    # Start with an empty wave (zeros)
-    total_backscatter_intensity = final_wave.__class__(
-        xp.zeros_like(final_wave.array), **kwargs
-    )
+    bs_stack = stack(backscatter_array[:-1])
 
     # Loop over backscattering slice
     for i in range(num_slices - 2, -1, -1):
-        # Start from slice-local backscattered contribution
-        wave = backscatter_array[i].copy()
+        active = bs_stack[i:]
+        if active.shape[0] == 0:
+            continue
 
-        # Propagate coherently back to entrance surface
-        for j in range(i, -1, -1):
-            wave.array = xp.conj(wave.array)
-            wave, _ = multislice_step(wave, effective_slices[j], next_slice=None)
-            wave.array = xp.conj(wave.array)
+        active.array = xp.conj(active.array)
+        active, _ = multislice_step(active, effective_slices[i], next_slice=None)
+        bs_stack[i:].array = xp.conj(active.array)
 
-        # Accumulate intensity
-        total_backscatter_intensity.array += xp.abs(wave.array) ** 2
+    total_fourier_intensity = xp.sum(
+        xp.abs(xp.fft.fft2(bs_stack.array, axes=(-1, -2))) ** 2, axis=0
+    )
 
-    # sqrt to return effective amplitude
-    total_backscatter_intensity.array = xp.sqrt(total_backscatter_intensity.array)
+    # Note this is a hack to return Waves s.t. their diffraction_patterns() match above
+    total_effective_wave = xp.fft.ifft2(xp.sqrt(total_fourier_intensity), axes=(-1, -2))
 
-    return total_backscatter_intensity
+    kwargs = final_wave._copy_kwargs(exclude=("array",))
+    total_backscatter_amplitude = final_wave.__class__(total_effective_wave, **kwargs)
+
+    return total_backscatter_amplitude
 
 
 def transition_potential_multislice_and_detect(
