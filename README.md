@@ -31,7 +31,7 @@ see [the installation guide](https://abtem.github.io/doc/intro.html).
 ## Getting started
 
 To get started using *ab*TEM, please visit
-our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html).
+our [walkthrough](https://abtem.github.io/doc/user_guide/walkthrough/walkthrough.html).
 
 <!---To try *ab*TEM in your web browser, please click on the following Binder link:
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)--->
@@ -45,7 +45,7 @@ For a pedagogical guide into numerical transmission electron microscopy simulati
 If you find *ab*TEM useful in your research, please cite our methods article:
 
 J. Madsen & T. Susi, "The abTEM code: transmission electron microscopy from first principles", Open Research Europe 1:
-24 (2021), doi:[10.12688/openreseurope.13015.1](https://doi.org/10.12688/openreseurope.13015.1).
+24 (2021), doi:[10.12688/openreseurope.13015.2](https://doi.org/10.12688/openreseurope.13015.2).
 
 ## Usage poll
 
