@@ -30,7 +30,7 @@ jobs:
         run: |
           # NOTE: put your own distribution build steps here.
           python -m pip install wheel setuptools
-          python -m setup.py build
+          python3 -m build
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
