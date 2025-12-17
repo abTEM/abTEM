@@ -1,9 +1,9 @@
 # *ab*TEM: transmission electron microscopy from first principles
 
-[![PyPI version](https://badge.fury.io/py/abtem.svg)](https://badge.fury.io/py/abtem)
+[![PyPI version](https://badge.fury.io/py/abTEM.svg)](https://badge.fury.io/py/abTEM)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 <!--- [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)--->
-[![DOI](https://zenodo.org/badge/205110910.svg)](https://zenodo.org/badge/latestdoi/205110910)
+<!---[[[[![DOI](https://zenodo.org/badge/205110910.svg)g(https://zenodo.org/badge/latestdoi/2051109--->
 
 [**Docs**](https://abtem.github.io/doc/intro.html)
 | [**Install Guide**](https://abtem.github.io/doc/getting_started/install.html)
@@ -34,7 +34,6 @@ To get started using *ab*TEM, please visit
 our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html).
 
 <!---To try *ab*TEM in your web browser, please click on the following Binder link:
-
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)--->
 
 ## Practical guide to simulations
@@ -47,9 +46,6 @@ If you find *ab*TEM useful in your research, please cite our methods article:
 
 J. Madsen & T. Susi, "The abTEM code: transmission electron microscopy from first principles", Open Research Europe 1:
 24 (2021), doi:[10.12688/openreseurope.13015.1](https://doi.org/10.12688/openreseurope.13015.1).
-
-Open code from articles using *ab*TEM is available in
-our [repository](https://github.com/jacobjma/abTEM/tree/master/articles).
 
 ## Usage poll
 
