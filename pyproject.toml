@@ -122,6 +122,7 @@ filterwarnings = [
     "ignore:Axis.*not supported by hyperspy.*:UserWarning",
     "ignore:'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons:UserWarning",
     "ignore:ignoring keyword argument 'read_only':UserWarning",
+    "ignore:Passing storage-related arguments:FutureWarning"
 ]
 
 [tool.numpydoc_validation]
