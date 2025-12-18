@@ -57,7 +57,7 @@ docs = [
     "jupyter-book",
     "sphinx_autodoc_typehints",
 ]
-gpu = ["cupy"]
+gpu = ["cupy"] # You may need to replace this with the correct CUDA toolkit version, e.g. cupy-cuda13x!
 extra = [
     "pandas",
     "ipycytoscape",
