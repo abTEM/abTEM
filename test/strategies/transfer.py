@@ -13,7 +13,8 @@ from abtem.transfer import (
 # from abtem.transform import CompositeArrayObjectTransform # This class no longer exists
 
 from . import core as core_st
-from . import scan as scan_st
+
+# from . import scan as scan_st
 
 
 @st.composite
@@ -56,7 +57,7 @@ def aperture(draw, allow_distribution=True):
         parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)
     )
     energy = draw(core_st.energy())
-    taper = draw(st.floats(min_value=0.0, max_value=1.0))
+    # soft = draw(st.floats(min_value=0.0, max_value=1.0))
     return Aperture(semiangle_cutoff=semiangle_cutoff, energy=energy)
 
 
@@ -80,24 +81,24 @@ def spatial_envelope(draw, allow_distribution=True):
     )
 
 
-@st.composite
-def composite_wave_transform(draw, allow_distribution=True):
-    n = draw(st.integers(min_value=1, max_value=2))
-    wave_transforms = [
-        aberrations(allow_distribution=allow_distribution),
-        aperture(allow_distribution=allow_distribution),
-        temporal_envelope(allow_distribution=allow_distribution),
-        spatial_envelope(allow_distribution=allow_distribution),
-        scan_st.grid_scan(),
-        scan_st.line_scan(),
-        scan_st.custom_scan(),
-    ]
-    sampled_wave_transforms = draw(
-        st.lists(st.one_of(wave_transforms), min_size=1, max_size=n)
-    )
-    return CompositeArrayObjectTransform(
-        sampled_wave_transforms
-    )  # This class no longer exists
+# @st.composite
+# def composite_wave_transform(draw, allow_distribution=True):
+#     n = draw(st.integers(min_value=1, max_value=2))
+#     wave_transforms = [
+#         aberrations(allow_distribution=allow_distribution),
+#         aperture(allow_distribution=allow_distribution),
+#         temporal_envelope(allow_distribution=allow_distribution),
+#         spatial_envelope(allow_distribution=allow_distribution),
+#         scan_st.grid_scan(),
+#         scan_st.line_scan(),
+#         scan_st.custom_scan(),
+#     ]
+#     sampled_wave_transforms = draw(
+#         st.lists(st.one_of(wave_transforms), min_size=1, max_size=n)
+#     )
+#     return CompositeArrayObjectTransform(
+#         sampled_wave_transforms
+#     )  # This class no longer exists
 
 
 @st.composite

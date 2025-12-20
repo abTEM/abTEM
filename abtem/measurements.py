@@ -57,7 +57,8 @@ from abtem.core.utils import (
     is_broadcastable,
     label_to_index,
 )
-from abtem.distributions import BaseDistribution
+
+# from abtem.distributions import BaseDistribution
 from abtem.noise import NoiseTransform, ScanNoiseTransform
 from abtem.visualize.artists import LinesArtist
 from abtem.visualize.visualizations import Visualization
@@ -572,7 +573,7 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
 
         total_dose = np.array(total_dose, dtype=dtype)
 
-        #print(seed, samples)
+        # print(seed, samples)
         transform = NoiseTransform(dose=total_dose, samples=samples, seeds=seed)
 
         measurement = transform.apply(self)
