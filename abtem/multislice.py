@@ -762,8 +762,7 @@ def transition_potential_multislice_and_detect(
     double_channel: bool = True,
     threshold: float = 1.0,
     sites: Optional[SliceIndexedAtoms | Atoms] = None,
-    conjugate: bool = False,
-    transpose: bool = False,
+    algorithm: ConventionalMultislice | RealSpaceMultislice = ConventionalMultislice(),
     pbar: bool = False,
 ) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
@@ -780,11 +779,7 @@ def transition_potential_multislice_and_detect(
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    conjugate : bool, optional
-        If True, use the complex conjugate of the transmission function
-        (default is False).
-    transpose : bool, optional
-        If True, reverse the order of propagation and transmission (default is False).
+    algorithm: ConventionalMultislice or RealSpaceMultislice, optional
 
     Returns
     -------
@@ -809,8 +804,34 @@ def transition_potential_multislice_and_detect(
 
     waves = waves.ensure_real_space()
 
-    antialias_aperture = AntialiasAperture()
-    propagator = FresnelPropagator()
+    if isinstance(algorithm, ConventionalMultislice):
+        antialias_aperture = AntialiasAperture()
+        propagator = FresnelPropagator()
+
+        def multislice_step(waves, potential_slice):
+            return conventional_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                antialias_aperture=antialias_aperture,
+                propagator=propagator,
+                conjugate=algorithm.conjugate,
+                transpose=algorithm.transpose,
+                order=algorithm.order,
+            )
+
+    else:
+        laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
+
+        def multislice_step(waves, potential_slice):
+            return realspace_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                next_slice=None,
+                laplace=laplace_operator,
+                max_terms=algorithm.max_terms,
+                order=algorithm.order,
+                fully_corrected=algorithm.expansion_scope == "full",
+            )
 
     if detectors is None:
         detectors = [WavesDetector()]
@@ -878,13 +899,9 @@ def transition_potential_multislice_and_detect(
         for scatter_index, potential_slice in enumerate(
             potential_configuration.generate_slices()
         ):
-            waves = conventional_multislice_step(
+            waves = multislice_step(
                 waves,
                 potential_slice,
-                propagator,
-                antialias_aperture,
-                conjugate=conjugate,
-                transpose=transpose,
             )
             depth += potential_slice.axes_metadata[0].values[0]
 
@@ -926,13 +943,9 @@ def transition_potential_multislice_and_detect(
                             first_slice=scatter_index + 1
                         )
                     ):
-                        scattered_waves = conventional_multislice_step(
+                        scattered_waves = multislice_step(
                             scattered_waves,
                             inner_potential_slice,
-                            propagator,
-                            antialias_aperture,
-                            conjugate=conjugate,
-                            transpose=transpose,
                         )
 
                         _update_plasmon_axes(waves, depth)
@@ -1007,11 +1020,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    conjugate : bool, optional
-        If True, use the complex conjugate of the transmission function
-        (default is False).
-    transpose : bool, optional
-        If True, reverse the order of propagation and transmission (default is False).
     multislice_func : callable, optional
         The multislice function defining the multislice algorithm used
         (default is :func:`.multislice_and_detect`).
@@ -1064,15 +1072,15 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         measurements."""
         return self._detectors
 
-    @property
-    def conjugate(self) -> bool:
-        """Use the complex conjugate of the transmission function."""
-        return self._conjugate
+    # @property
+    # def conjugate(self) -> bool:
+    #     """Use the complex conjugate of the transmission function."""
+    #     return self._conjugate
 
-    @property
-    def transpose(self) -> bool:
-        """Reverse the order of propagation and transmission."""
-        return self._transpose
+    # @property
+    # def transpose(self) -> bool:
+    #     """Reverse the order of propagation and transmission."""
+    #     return self._transpose
 
     # @property
     # def _default_ensemble_chunks(self):

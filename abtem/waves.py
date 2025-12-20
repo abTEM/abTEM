@@ -1016,6 +1016,7 @@ class Waves(BaseWaves, ArrayObject):
         transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
+        **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements:
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
@@ -1030,6 +1031,7 @@ class Waves(BaseWaves, ArrayObject):
                 multislice_func=transition_potential_multislice_and_detect,
                 transition_potential=transition_potential,
                 sites=sites,
+                **multislice_func_kwargs,
             )
             new_measurements = self.apply_transform(multislice_transform)
             assert isinstance(new_measurements, (Waves, BaseMeasurements))
