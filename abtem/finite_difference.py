@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 import scipy.ndimage  # type: ignore
@@ -495,7 +495,7 @@ def multislice_step(
     max_terms: int = 300,
     order: int = 1,
     fully_corrected: bool = False,
-) -> Waves:
+) -> Waves | Sequence[Waves]:
     """
     Performs a single multislice step.
     If next_slice is not None, the backscattering
@@ -596,6 +596,8 @@ def multislice_step(
     # Bandlimit to compare with Fourier CMS
     aperture = AntialiasAperture()
     if fully_corrected:
-        return aperture.bandlimit(waves), backscatter
+        kwargs = waves._copy_kwargs(exclude=("array",))
+        backscatter_waves = waves.__class__(backscatter, **kwargs)
+        return aperture.bandlimit(waves), aperture.bandlimit(backscatter_waves)
 
     return aperture.bandlimit(waves)
