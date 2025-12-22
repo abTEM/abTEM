@@ -1016,6 +1016,7 @@ class Waves(BaseWaves, ArrayObject):
         transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         sites: Optional[SliceIndexedAtoms | Atoms] = None,
+        **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements:
         if not isinstance(transition_potentials, (list, tuple)):
             transition_potentials = [transition_potentials]
@@ -1030,6 +1031,7 @@ class Waves(BaseWaves, ArrayObject):
                 multislice_func=transition_potential_multislice_and_detect,
                 transition_potential=transition_potential,
                 sites=sites,
+                **multislice_func_kwargs,
             )
             new_measurements = self.apply_transform(multislice_transform)
             assert isinstance(new_measurements, (Waves, BaseMeasurements))
@@ -1065,6 +1067,7 @@ class Waves(BaseWaves, ArrayObject):
         self,
         potential: Atoms | BasePotential,
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
+        **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """Propagate and transmit wave function through the provided potential using the
         multislice algorithm. When detector(s) are given, output will be the
@@ -1080,6 +1083,8 @@ class Waves(BaseWaves, ArrayObject):
             converted to measurements after running the multislice algorithm.
             See `abtem.measurements.detect` for a list of implemented detectors. If
             not given, returns the wave functions themselves.
+        **multislice_func_kwargs
+            Additional keyword arguments passed to the multislice function.
 
 
         Returns
@@ -1093,7 +1098,7 @@ class Waves(BaseWaves, ArrayObject):
         potential = validate_potential(potential, self)
 
         multislice_transform = MultisliceTransform(
-            potential=potential, detectors=detectors
+            potential=potential, detectors=detectors, **multislice_func_kwargs
         )
 
         waves = multislice_transform.apply(self)
@@ -1106,6 +1111,7 @@ class Waves(BaseWaves, ArrayObject):
         potential: Optional[Atoms | BasePotential] = None,
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         max_batch: int | str = "auto",
+        **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """Run the multislice algorithm from probe wave functions over the provided
         scan.
@@ -1126,6 +1132,8 @@ class Waves(BaseWaves, ArrayObject):
             If 'auto' (default), the batch size is automatically chosen based on the
             abtem user configuration settings "dask.chunk-size" and
             "dask.chunk-size-gpu".
+        **multislice_func_kwargs
+            Additional keyword arguments passed to the multislice function.
 
         Returns
         -------
@@ -1143,8 +1151,7 @@ class Waves(BaseWaves, ArrayObject):
             return waves
 
         measurements = waves.multislice(
-            potential=potential,
-            detectors=detectors,
+            potential=potential, detectors=detectors, **multislice_func_kwargs
         )
 
         return measurements
@@ -1503,6 +1510,7 @@ class PlaneWave(WavesBuilder):
         detectors: Optional[BaseDetector] = None,
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
+        **multislice_func_kwargs,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """Run the multislice algorithm, after building the plane-wave wave function as
         needed. The grid of the wave functions will be set to the grid of the potential.
@@ -1523,6 +1531,8 @@ class PlaneWave(WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
+        **multislice_func_kwargs
+            Additional keyword arguments passed to the multislice function.
 
         Returns
         -------
@@ -1538,7 +1548,7 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
-        multislice = MultisliceTransform(potential, detectors)
+        multislice = MultisliceTransform(potential, detectors, **multislice_func_kwargs)
 
         measurements = multislice.apply(waves)
 
@@ -1793,6 +1803,7 @@ class Probe(WavesBuilder):
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
+        **multislice_func_kwargs,
     ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
         """Run the multislice algorithm for probe wave functions at the provided
         positions.
@@ -1816,6 +1827,8 @@ class Probe(WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
+        **multislice_func_kwargs
+            Additional keyword arguments passed to the multislice function.
 
         Returns
         -------
@@ -1829,7 +1842,7 @@ class Probe(WavesBuilder):
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
-        multislice = MultisliceTransform(potential, detectors)
+        multislice = MultisliceTransform(potential, detectors, **multislice_func_kwargs)
 
         measurements = multislice.apply(waves)
 
@@ -1924,6 +1937,7 @@ class Probe(WavesBuilder):
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
         max_batch: int | str = "auto",
         lazy: Optional[bool] = None,
+        **multislice_func_kwargs,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """Run the multislice algorithm from probe wave functions over the provided
         scan.
@@ -1947,6 +1961,8 @@ class Probe(WavesBuilder):
         lazy : bool, optional
             If True, create the measurements lazily, otherwise, calculate instantly.
             If None, this defaults to the value set in the configuration file.
+        **multislice_func_kwargs
+            Additional keyword arguments passed to the multislice function.
 
         Returns
         -------
@@ -1969,6 +1985,7 @@ class Probe(WavesBuilder):
             detectors=detectors,
             lazy=lazy,
             max_batch=max_batch,
+            **multislice_func_kwargs,
         )
 
         return measurements
