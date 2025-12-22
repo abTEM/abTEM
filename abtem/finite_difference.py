@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
     from abtem.waves import Waves
 
+# 1D second-derivative centered stencils
 fd_coefficients = {
     2: [1.0, -2.0, 1.0],
     4: [
@@ -304,24 +305,45 @@ def _laplace_operator_func_slow(accuracy, prefactor):
 
 class LaplaceOperator:
     def __init__(self, accuracy):
+        """
+        Centered finite-difference laplacian operator.
+
+        Parameters
+        ----------
+        accuracy: int
+            centered finite-difference stencil accuracy
+        """
         self._accuracy = accuracy
         self._key = None
         self._stencil = None
 
     def _get_new_stencil(self, key, device: str = "cpu"):
-        wavelength, sampling, thickness = key
+        wavelength, sampling = key
         prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
             self._accuracy, prefactor, mode="wrap", device=device
         )
 
-    def get_stencil(
-        self, waves: Waves, thickness: float, device: str = "cpu"
-    ) -> Callable:
+    def get_stencil(self, waves: Waves, device: str = "cpu") -> Callable:
+        """
+        Cached method to return finite-difference stencil using specified
+        waves parameters, namely wavelength and sampling for the prefactor.
+
+        Parameters
+        ----------
+        waves: Waves
+            Waves object stencil will ultimately be applied to
+        device: str, optional
+            Device to evaluate stencil on, "cpu" or "gpu"
+
+        Returns
+        ----------
+        stencil: Callable
+            Cached stencil function with waves prefactor, on specified device
+        """
         key = (
             waves.wavelength,
             waves.sampling,
-            thickness,
         )
 
         if key == self._key:
@@ -331,8 +353,8 @@ class LaplaceOperator:
         self._key = key
         return self._stencil
 
-    def apply(self, waves, thickness):
-        laplace_stencil = self.get_stencil(waves, thickness, device=waves.device)
+    def apply(self, waves):
+        laplace_stencil = self.get_stencil(waves, device=waves.device)
         waves._array = laplace_stencil(waves._array)
         return waves
 
@@ -418,7 +440,18 @@ def conventional_operator(
     wavelength: float,
 ):
     """
-    Real-space multislice operator used in all higher-order expansions.
+    Split-step real-space multislice operator used in all higher-order expansions.
+
+    Parameters
+    ----------
+    waves: Waves
+        Waves object to apply multislice operator on
+    laplace: Callable
+        Fast laplace operator stencil function
+    transmission_function: np.ndarray,
+        Scaled potential slice to multiply incoming waves with
+    wavelength: float
+        Waves wavelength
     """
     K0 = 1 / wavelength
     return laplace(waves) / (4 * np.pi * K0) + transmission_function * waves
@@ -498,7 +531,27 @@ def multislice_step(
 ) -> Waves | Sequence[Waves]:
     """
     Performs a single multislice step.
-    If next_slice is not None, the backscattering
+
+    Parameters
+    ----------
+    waves: Waves
+        Waves object to apply multislice operator on
+    potential_slice: PotentialArray
+        PotentialArray of slice to be used in transmission operator
+    next_slice: PotentialArray | None
+        PotentialArray of next slice (used to 'look ahead' for backscattered waves)
+    laplace: Callable
+        Fast laplace operator stencil function
+    tolerance: float
+        Convergence tolerance for exponent Taylor series amplitude
+    max_terms: int
+        Maximum terms in exponent Taylor series
+    order: int
+        Multislice operator expansion order
+    fully_corrected: bool
+        If True, transmission and propagator operators are expanded to specified order.
+        If next_slice is not None, the backscattered wave component is also computed.
+
     """
     xp = get_array_module(waves.array)
     if max_terms < 1:
@@ -518,7 +571,7 @@ def multislice_step(
             next_slice.array[0] * energy2sigma(waves._valid_energy) / thickness
         )
 
-    laplace_stencil = laplace.get_stencil(waves, thickness, device=waves.device)
+    laplace_stencil = laplace.get_stencil(waves, device=waves.device)
 
     wavelength = energy2wavelength(waves._valid_energy)
 
