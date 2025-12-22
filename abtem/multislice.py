@@ -54,8 +54,8 @@ def _fresnel_propagator_array(
     if order > 2:
         raise ValueError(
             """
-            Only orders 1 and 2 are supported in fourier space.
-            For higher-orders, use the realspace multislice instead.
+            Only orders 1 and 2 are supported in Fourier space.
+            For higher orders, use the realspace multislice instead.
             """
         )
 
@@ -489,7 +489,22 @@ def lookahead(iterable):
 
 
 @dataclass(frozen=True)
-class ConventionalMultislice:
+class FourierMultislice:
+    """
+    Multislice algorithm computed fast in Fourier space.
+
+    Parameters
+    ----------
+    order : int, optional
+        Propagator order, one of 1 or 2 (default 1)
+    expansion_scope: str
+        Specified for compatibility. Must be "propagator" (default "propagator")
+    conjugate : bool, optional
+        If True, use the conjugate of the transmission function (default is False)
+    transpose : bool, optional
+        If True, reverse the order of propagation and transmission (default is False)
+    """
+
     order: Literal[1, 2] = 1
     expansion_scope: Literal["propagator"] = "propagator"
     conjugate: bool = False
@@ -498,6 +513,22 @@ class ConventionalMultislice:
 
 @dataclass(frozen=True)
 class RealSpaceMultislice:
+    """
+    Multislice algorithm computed in real-space.
+
+    Parameters
+    ----------
+    order : int, optional
+        Propagator and/or transmission operator order (default 1)
+    expansion_scope: str
+        If "propagator" (default) only the propagator operator is expanded to order
+        If "full" both the propagator and transmission operators are expanded to order
+    derivative_accuracy : int, optional
+        Finite-difference accuracy for Laplace operator (default 6)
+    max_terms: int, optional
+        Max terms in exponent Taylor series expansion (default 80)
+    """
+
     order: int = 1
     expansion_scope: Literal["propagator", "full"] = "propagator"
     derivative_accuracy: int = 6
@@ -508,7 +539,7 @@ def multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
     detectors: Optional[list[BaseDetector]] = None,
-    algorithm: ConventionalMultislice | RealSpaceMultislice = ConventionalMultislice(),
+    algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     return_backscattered: bool = False,
     pbar: bool = False,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
@@ -526,7 +557,8 @@ def multislice_and_detect(
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    algorithm: ConventionalMultislice or RealSpaceMultislice, optional
+    algorithm: FourierMultislice or RealSpaceMultislice, optional
+        Algorithm used for multislice operator (default is FourierMultislice())
     return_backscattered: bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
         backscattered components are also returned. Requires potential exit_planes
@@ -548,7 +580,7 @@ def multislice_and_detect(
 
         detectors += [WavesDetector()]
 
-    if isinstance(algorithm, ConventionalMultislice):
+    if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
 
@@ -762,7 +794,7 @@ def transition_potential_multislice_and_detect(
     double_channel: bool = True,
     threshold: float = 1.0,
     sites: Optional[SliceIndexedAtoms | Atoms] = None,
-    algorithm: ConventionalMultislice | RealSpaceMultislice = ConventionalMultislice(),
+    algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     pbar: bool = False,
 ) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
@@ -779,7 +811,8 @@ def transition_potential_multislice_and_detect(
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    algorithm: ConventionalMultislice or RealSpaceMultislice, optional
+    algorithm: FourierMultislice or RealSpaceMultislice, optional
+        Algorithm used for multislice operator (default is FourierMultislice())
 
     Returns
     -------
@@ -804,7 +837,7 @@ def transition_potential_multislice_and_detect(
 
     waves = waves.ensure_real_space()
 
-    if isinstance(algorithm, ConventionalMultislice):
+    if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
 
