@@ -13,3 +13,4 @@ CLAUDE.md
 *.zarr/**
 build
 dist
+.venv
