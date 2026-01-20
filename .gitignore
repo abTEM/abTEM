@@ -11,3 +11,4 @@
 *.zarr/**
 build
 dist
+.venv

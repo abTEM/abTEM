@@ -1,0 +1,21 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
+{
+	"name": "Ubuntu 24.04 ROCm 7.1",
+	"build": {
+                "dockerfile": "Dockerfile",
+                "context": "../.."
+             },
+	"postCreateCommand": "uv pip install --no-cache-dir -e . && uv pip install --no-cache-dir xarray jupyterlab",
+	
+	"runArgs": ["--cap-add=SYS_PTRACE",
+	            "--security-opt",
+				"seccomp=unconfined",
+				"--device=/dev/kfd",
+				"--device=/dev/dri",
+				"--group-add=video",
+				"--ipc=host",
+				"--shm-size",
+				"16G"]
+
+}
