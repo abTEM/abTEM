@@ -1,7 +1,7 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
 {
-	"name": "Ubuntu 24.04 ROCm 7.1",
+	"name": "Ubuntu 24.04 ROCm 6.",
 	"build": {
                 "dockerfile": "Dockerfile",
                 "context": "../.."
