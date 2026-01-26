@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     import cupy as cp  # type: ignore
     import cupyx  # type: ignore
     import torch  # type: ignore
+    # Necessary for fully deterministic outputs! https://docs.pytorch.org/docs/stable/generated/torch.use_deterministic_algorithms.html
+    torch.use_deterministic_algorithms(True)
 else:
     try:
         import array_api_compat.cupy as cupy_compat
@@ -58,6 +60,7 @@ else:
 
     try:
         import torch  # type: ignore
+        torch.use_deterministic_algorithms(True)
     except ImportError:
         torch = None
 
