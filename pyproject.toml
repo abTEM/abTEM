@@ -8,14 +8,13 @@ authors = [{name = "abTEM developers", email = "toma.susi@univie.ac.at"}]
 description = "*ab*TEM: transmission electron microscopy from first principles"
 readme = "README.md"
 urls = {Homepage = "https://github.com/abtem/abtem"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Operating System :: OS Independent",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -47,6 +46,7 @@ dynamic = ["version"]
 [project.optional-dependencies]
 testing = [
     "pytest",
+    "pytest-cov",
     "tox",
     "hypothesis",
     "jupyter-client",
