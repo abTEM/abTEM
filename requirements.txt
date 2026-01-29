@@ -4,7 +4,7 @@ matplotlib>=3.6
 pyfftw
 scipy
 numba
-dask>=2022.12.1
+dask>=2022.12.1,!=2025.12.*,!=2026.1.*
 distributed
 zarr
 ase
