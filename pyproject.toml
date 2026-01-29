@@ -45,6 +45,7 @@ dynamic = ["version"]
 [project.optional-dependencies]
 testing = [
     "pytest",
+    "pytest-cov",
     "tox",
     "hypothesis",
     "jupyter-client",
