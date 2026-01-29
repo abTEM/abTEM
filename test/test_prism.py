@@ -8,6 +8,12 @@ from utils import assert_array_matches_device, gpu
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
 
+from hypothesis import HealthCheck, settings
+
+settings.register_profile(
+    "my_profile", suppress_health_check=[HealthCheck.filter_too_much]
+)
+settings.load_profile("my_profile")
 
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
