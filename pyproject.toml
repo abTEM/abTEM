@@ -24,7 +24,7 @@ license = "GPL-3.0-or-later"
 license-files = ["LICENCE"]
 
 dependencies = [
-    "numpy",
+    "numpy >= 2.0.0",
     "pandas",
     "matplotlib>=3.6",
     "pyfftw",
