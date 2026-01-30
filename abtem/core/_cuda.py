@@ -3,7 +3,14 @@ import warnings
 
 import cupy as cp  # type: ignore
 import numpy as np
-from numba import NumbaPerformanceWarning, cuda  # type: ignore
+
+import importlib.util
+spec = importlib.util.find_spec("numba.hip")
+if spec is not None:
+    from numba import hip
+    hip.pose_as_cuda()
+
+from numba import NumbaPerformanceWarning, cuda # type: ignore
 
 
 @cuda.jit
