@@ -13,6 +13,7 @@ from abtem.core.utils import get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.inelastic.phonons import validate_seeds
 from abtem.transform import EnsembleTransform
+from abtem.core.backend import get_array_module
 
 if TYPE_CHECKING:
     from abtem.array import ArrayObject
@@ -96,7 +97,7 @@ class NoiseTransform(EnsembleTransform):
                 dose, tuple(range(1, len(array.shape) + 1))
             )
         else:
-            array = array * xp.asarray(self.dose, dtype=get_dtype())
+            array = array * xp.array(self.dose, dtype=get_dtype())
 
         if isinstance(self.seeds, BaseDistribution):
             seed = sum(self.seeds.values)
@@ -107,12 +108,10 @@ class NoiseTransform(EnsembleTransform):
 
         randomized_seed = int(seed_rng.integers(np.iinfo(np.int32).max))
 
-        poisson_rng = np.random.RandomState(seed=randomized_seed)
+        poisson_rng = xp.random.RandomState(seed=randomized_seed)
 
-        # Poisson sampling requires CPU arrays; move back to GPU afterwards
-        array_cpu = array.get() if hasattr(array, "get") else np.asarray(array)
-        array_cpu = np.clip(array_cpu, a_min=0.0, a_max=None)
-        array_cpu = poisson_rng.poisson(array_cpu).astype(get_dtype())
+        array = xp.clip(array, a_min=0.0, a_max=None)
+        array = poisson_rng.poisson(array_cpu).astype(get_dtype())
 
         return xp.asarray(array_cpu)
 
