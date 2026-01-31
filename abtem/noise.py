@@ -12,6 +12,7 @@ from abtem.core.utils import get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
 from abtem.inelastic.phonons import validate_seeds
 from abtem.transform import EnsembleTransform
+from abtem.core.backend import get_array_module
 
 if TYPE_CHECKING:
     from abtem.array import ArrayObject
@@ -84,17 +85,18 @@ class NoiseTransform(EnsembleTransform):
 
     def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
         array = array_object._eager_array
+        xp = get_array_module(array)
 
         if isinstance(self.seeds, BaseDistribution):
-            array = np.tile(array[None], (self.samples,) + (1,) * len(array.shape))
+            array = xp.tile(array[None], (self.samples,) + (1,) * len(array.shape))
 
         if isinstance(self.dose, BaseDistribution):
-            dose = np.array(self.dose.values, dtype=get_dtype())
-            array = array[None] * np.expand_dims(
+            dose = xp.array(self.dose.values, dtype=get_dtype())
+            array = array[None] * xp.expand_dims(
                 dose, tuple(range(1, len(array.shape) + 1))
             )
         else:
-            array = array * np.array(self.dose, dtype=get_dtype())
+            array = array * xp.array(self.dose, dtype=get_dtype())
 
         if isinstance(self.seeds, BaseDistribution):
             seed = sum(self.seeds.values)
@@ -105,9 +107,9 @@ class NoiseTransform(EnsembleTransform):
 
         randomized_seed = int(seed_rng.integers(np.iinfo(np.int32).max))
 
-        poisson_rng = np.random.RandomState(seed=randomized_seed)
+        poisson_rng = xp.random.RandomState(seed=randomized_seed)
 
-        array = np.clip(array, a_min=0.0, a_max=None)
+        array = xp.clip(array, a_min=0.0, a_max=None)
 
         array = poisson_rng.poisson(array).astype(get_dtype())
 
