@@ -381,13 +381,15 @@ def superpose_deltas(
 
     if weights is not None:
         v = v * weights[None]
-
-    if device_name_from_array_module(xp) == "cpu":
+    
+    try:
         xp.add.at(array, (i, j), v)
-    elif device_name_from_array_module(xp) == "gpu":
-        cupyx.scatter_add(array, (i, j), v)
-    else:
-        raise RuntimeError()
+    except AttributeError:
+        
+        if device_name_from_array_module(xp) == "gpu":
+            cupyx.scatter_add(array, (i, j), v)
+        else:
+            raise RuntimeError()
 
     return array
 

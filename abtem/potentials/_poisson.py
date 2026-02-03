@@ -2,7 +2,25 @@ from numbers import Number
 
 import numpy as np
 from ase import units
-from scipy.special import sph_harm
+
+# ---------
+# This is a version check for scipy >=v1.17.0
+from importlib.metadata import version, PackageNotFoundError
+from packaging.version import Version
+try:
+    import scipy
+    _SCIPY_VERSION = Version(version("scipy"))
+except PackageNotFoundError:
+    scipy = None
+    _SCIPY_VERSION = None
+
+if _SCIPY_VERSION is not None and _SCIPY_VERSION >= Version("1.17.0"):
+    from scipy.special import spherical_jn, sph_harm_y
+else:
+    from scipy.special import spherical_jn, sph_harm
+    def sph_harm_y(n, m, theta, phi):
+        return sph_harm(m, n, phi, theta)
+# ---------
 
 from abtem.potentials.gpaw import unpack2
 
@@ -43,17 +61,17 @@ def spline_orders(splines):
 # sph_harm(order, degree, theta, phi))).real
 
 
-def real_sph_harm(order, degree, theta, phi):
+def real_sph_harm(degree, order, theta, phi):
     if order < 0:
         return (
             np.sqrt(2)
             * (-1) ** order
-            * sph_harm(np.abs(order), degree, theta, phi).imag
+            * sph_harm_y(degree, np.abs(order), theta, phi).imag
         )
     elif order == 0:
-        return sph_harm(order, degree, theta, phi).real
+        return sph_harm_y(degree, order, theta, phi).real
     else:
-        return np.sqrt(2) * (-1) ** order * sph_harm(order, degree, theta, phi).imag
+        return np.sqrt(2) * (-1) ** order * sph_harm_y(degree, order, theta, phi).imag
 
 
 def unpack_density_matrix(packed_density_matrix):
@@ -79,8 +97,8 @@ def sum_spherical_basis_functions(splines, density_matrix, r, theta, phi):
             * spline_i.map(r)
             * spline_j.map(r)
             * r ** (degree_i + degree_j)
-            * real_sph_harm(order_i, degree_i, phi, theta)
-            * real_sph_harm(order_j, degree_j, phi, theta)
+            * real_sph_harm(degree_i, order_i, theta, phi)
+            * real_sph_harm(degree_j, order_j, theta, phi)
         )
     return density
 

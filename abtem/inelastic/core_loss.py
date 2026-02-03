@@ -11,7 +11,26 @@ from ase import Atom, Atoms, units
 from ase.data import chemical_symbols
 from numba import jit
 from scipy.interpolate import interp1d
-from scipy.special import sph_harm, spherical_jn
+
+# ---------
+# This is a version check for scipy >=v1.17.0
+from importlib.metadata import version, PackageNotFoundError
+from packaging.version import Version
+try:
+    import scipy
+    _SCIPY_VERSION = Version(version("scipy"))
+except PackageNotFoundError:
+    scipy = None
+    _SCIPY_VERSION = None
+
+if _SCIPY_VERSION is not None and _SCIPY_VERSION >= Version("1.17.0"):
+    from scipy.special import spherical_jn, sph_harm_y
+else:
+    from scipy.special import spherical_jn, sph_harm
+    def sph_harm_y(n, m, theta, phi):
+        return sph_harm(m, n, phi, theta)
+# ---------
+
 
 from abtem.array import ArrayObject
 from abtem.core.axes import AxisMetadata, OrdinalAxis
@@ -582,7 +601,7 @@ class TransitionPotential(BaseTransitionPotential):
                 if np.abs(prefactor) < 1e-12:
                     continue
 
-                Ylm = sph_harm(mlprimeprime, lprimeprime, phi, theta)
+                Ylm = sph_harm_y(lprimeprime, mlprimeprime, theta, phi)
                 Hn0[mask] += prefactor * (jq * Ylm)[mask]
 
         return Hn0
