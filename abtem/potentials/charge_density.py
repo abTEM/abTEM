@@ -542,13 +542,13 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         pixel_thickness = slice_shape[-1] - 1
 
-        return np.trapz(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
+        return np.trapzezoid(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
 
     def _integrate_slice(self, array, a, b):
         dz = self.box[2] / array.shape[2]
         na = int(np.floor(a / dz))
         nb = int(np.floor(b / dz))
-        slice_array = np.trapz(array[..., na:nb], axis=-1, dx=(b - a) / (nb - na - 1))
+        slice_array = np.trapzezoid(array[..., na:nb], axis=-1, dx=(b - a) / (nb - na - 1))
         return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
     def _ewald_potential(self):
