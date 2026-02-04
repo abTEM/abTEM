@@ -556,7 +556,7 @@ class TransitionPotential(BaseTransitionPotential):
             * excited(integration_grid)
         )
 
-        integral = np.trapz(values, integration_grid, axis=1) / (
+        integral = np.trapezoid(values, integration_grid, axis=1) / (
             units.Bohr * np.sqrt(units.Rydberg)
         )
 

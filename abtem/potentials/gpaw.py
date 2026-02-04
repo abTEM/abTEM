@@ -765,8 +765,8 @@ class GPAWParametrization:
 
         r = np.linspace(0, 20, 10000)
 
-        Z = np.trapz(4 * np.pi * r**2 * n(r), dx=np.diff(r))
-        fe0 = np.trapz(4 * np.pi * r**4 * n(r), dx=np.diff(r)) / units.Bohr / 3
+        Z = np.trapezoid(4 * np.pi * r**2 * n(r), dx=np.diff(r))
+        fe0 = np.trapezoid(4 * np.pi * r**4 * n(r), dx=np.diff(r)) / units.Bohr / 3
 
         k = np.linspace(0.0, 12, 100)
         fe = np.zeros(len(k))
