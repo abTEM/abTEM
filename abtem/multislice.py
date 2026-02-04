@@ -578,7 +578,8 @@ def multislice_and_detect(
                 "Backscattering contributions require potential.exit_planes."
             )
 
-        detectors += [WavesDetector()]
+        # moved to MultisliceTransform
+        # detectors = list(detectors) + [WavesDetector()]
 
     if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
@@ -694,7 +695,6 @@ def multislice_and_detect(
         ]
 
     elif return_backscattered:
-        # note: modifies backscattered waves in-place
         _back_propagate_backscattered_waves(
             measurements[-1],  # type: ignore
             potential,
@@ -1075,6 +1075,10 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         self._potential = potential
 
         detectors = validate_detectors(detectors)
+        self._user_detectors = detectors
+
+        if multislice_func_kwargs.get("return_backscattered", False):
+            detectors = detectors + [WavesDetector()]
 
         if "pbar" not in multislice_func_kwargs:
             multislice_func_kwargs["pbar"] = config.get(
@@ -1104,24 +1108,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         """List of detectors defining how the wave functions should be converted to
         measurements."""
         return self._detectors
-
-    # @property
-    # def conjugate(self) -> bool:
-    #     """Use the complex conjugate of the transmission function."""
-    #     return self._conjugate
-
-    # @property
-    # def transpose(self) -> bool:
-    #     """Reverse the order of propagation and transmission."""
-    #     return self._transpose
-
-    # @property
-    # def _default_ensemble_chunks(self):
-    #     chunks = self._potential._default_ensemble_chunks
-    #     num_exit_planes = len(self._potential.exit_planes)
-    #     if num_exit_planes > 1:
-    #         chunks = chunks + (num_exit_planes,)
-    #     return chunks
 
     @property
     def ensemble_axes_metadata(self):
@@ -1254,7 +1240,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return partial(
             self._multislice_transform_member,
             potential_partial=potential_partial,
-            detectors=self.detectors,
+            detectors=self._user_detectors,
             multislice_func=self.multislice_func,
             **self._multislice_func_kwargs,
         )
@@ -1266,8 +1252,13 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             detectors=self.detectors,
             **self._multislice_func_kwargs,
         )
-        arrays = tuple(measurement.array for measurement in measurements)
 
+        if len(measurements) != len(self.detectors):
+            raise RuntimeError(
+                f"Expected {len(self.detectors)} outputs, got {len(measurements)}"
+            )
+
+        arrays = tuple(measurement.array for measurement in measurements)
         if len(arrays) == 1:
             arrays = arrays[0]
 

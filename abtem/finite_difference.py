@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
     from abtem.waves import Waves
 
+import dask.array as da
+
 # 1D second-derivative centered stencils
 fd_coefficients = {
     2: [1.0, -2.0, 1.0],
@@ -370,7 +372,7 @@ class NotConvergedError(Exception):
 
 
 def _multislice_exponential_series(
-    waves: np.ndarray,
+    waves: np.ndarray | da.core.Array,
     transmission_function: np.ndarray,
     laplace: Callable,
     wavelength: float,
@@ -434,7 +436,7 @@ def _multislice_exponential_series(
 
 
 def conventional_operator(
-    waves: np.ndarray,
+    waves: np.ndarray | da.core.Array,
     laplace: Callable,
     transmission_function: np.ndarray,
     wavelength: float,
@@ -458,7 +460,7 @@ def conventional_operator(
 
 
 def propagator_taylor_series(
-    waves: np.ndarray,
+    waves: np.ndarray | da.core.Array,
     order: int,
     laplace: Callable,
     transmission_function: np.ndarray,
@@ -493,7 +495,7 @@ def propagator_taylor_series(
 
 
 def full_series(
-    waves: np.ndarray,
+    waves: np.ndarray | da.core.Array,
     laplace: Callable,
     transmission_function: np.ndarray,
     order: int,
@@ -577,7 +579,7 @@ def multislice_step(
 
     # Forward scattering term
     waves._array = _multislice_exponential_series(
-        waves._eager_array,
+        waves._array,
         transmission_function_array,
         laplace_stencil,
         wavelength,
