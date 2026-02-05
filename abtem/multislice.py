@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import copy
 from bisect import bisect_left
+from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Callable, Optional, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeGuard, cast
 
 import numpy as np
 from ase import Atoms
@@ -48,7 +49,16 @@ def _fresnel_propagator_array(
     sampling: tuple[float, float],
     energy: float,
     device: str,
+    order: int = 1,
 ):
+    if order > 2:
+        raise ValueError(
+            """
+            Only orders 1 and 2 are supported in Fourier space.
+            For higher orders, use the realspace multislice instead.
+            """
+        )
+
     xp = get_array_module(device)
     wavelength = energy2wavelength(energy)
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
@@ -57,6 +67,13 @@ def _fresnel_propagator_array(
     f = complex_exponential(
         -(kx**2) * np.pi * thickness * wavelength
     ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+
+    # Propagator corrected in Fourier-space, only valid for order=2
+    # Eq. (4) from Microscopy and Microanalysis (2020), 26, 1147-1157
+    if order == 2:
+        f = f * complex_exponential(
+            (-np.pi * thickness * wavelength**3) / 4.0 * (kx**4 + ky**4)
+        )
     return f
 
 
@@ -104,7 +121,7 @@ class FresnelPropagator:
         self._key = None
         self._cached_fftw_convolution = CachedFFTWConvolution()
 
-    def get_array(self, waves: Waves, thickness: float) -> np.ndarray:
+    def get_array(self, waves: Waves, thickness: float, order: int = 1) -> np.ndarray:
         """
         Get the Fresnel propagator as an array for the given wave functions and
         thickness.
@@ -137,19 +154,20 @@ class FresnelPropagator:
         if key == self._key:
             return self._array
 
-        self._array = self._calculate_array(waves, thickness)
+        self._array = self._calculate_array(waves, thickness, order=order)
         self._key = key
 
         return self._array
 
     @staticmethod
-    def _calculate_array(waves: Waves, thickness: float) -> np.ndarray:
+    def _calculate_array(waves: Waves, thickness: float, order: int = 1) -> np.ndarray:
         array = _fresnel_propagator_array(
             thickness=thickness,
             gpts=waves._valid_gpts,
             sampling=waves._valid_sampling,
             energy=waves._valid_energy,
             device=waves.device,
+            order=order,
         )
 
         array *= antialias_aperture(
@@ -188,7 +206,7 @@ class FresnelPropagator:
         return array
 
     def propagate(
-        self, waves: Waves, thickness: float, in_place: bool = False
+        self, waves: Waves, thickness: float, in_place: bool = False, order: int = 1
     ) -> Waves:
         """
         Propagate wave functions through free space.
@@ -207,8 +225,7 @@ class FresnelPropagator:
         propagated_wave_functions : Waves
             Propagated wave functions.
         """
-        kernel = self.get_array(waves, thickness)
-
+        kernel = self.get_array(waves, thickness, order=order)
         if (config.get("fft") == "fftw") and isinstance(waves._array, np.ndarray):
             array = self._cached_fftw_convolution(
                 waves._array, kernel, overwrite_x=in_place
@@ -338,6 +355,7 @@ def conventional_multislice_step(
     antialias_aperture: AntialiasAperture,
     conjugate: bool = False,
     transpose: bool = False,
+    order: int = 1,
 ) -> Waves:
     """
     Calculate one step of the multislice algorithm for the given batch of wave functions
@@ -388,11 +406,15 @@ def conventional_multislice_step(
         thickness = -thickness
 
     if transpose:
-        waves = propagator.propagate(waves, thickness=thickness, in_place=True)
+        waves = propagator.propagate(
+            waves, thickness=thickness, in_place=True, order=order
+        )
         waves = transmission_function.transmit(waves, conjugate=conjugate)
     else:
         waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves, thickness=thickness, in_place=True)
+        waves = propagator.propagate(
+            waves, thickness=thickness, in_place=True, order=order
+        )
 
     return waves
 
@@ -448,15 +470,78 @@ def _generate_potential_configurations(potential):
         yield potential_index, potential_configuration
 
 
+def lookahead(iterable):
+    """
+    Generator that yields (current, next) items from an iterable.
+    The last item is yielded as (last, None).
+    """
+    it = iter(iterable)
+    try:
+        current_item = next(it)
+    except StopIteration:
+        return
+
+    for next_item in it:
+        yield current_item, next_item
+        current_item = next_item
+
+    yield current_item, None
+
+
+@dataclass(frozen=True)
+class FourierMultislice:
+    """
+    Multislice algorithm computed fast in Fourier space.
+
+    Parameters
+    ----------
+    order : int, optional
+        Propagator order, one of 1 or 2 (default 1)
+    expansion_scope: str
+        Specified for compatibility. Must be "propagator" (default "propagator")
+    conjugate : bool, optional
+        If True, use the conjugate of the transmission function (default is False)
+    transpose : bool, optional
+        If True, reverse the order of propagation and transmission (default is False)
+    """
+
+    order: Literal[1, 2] = 1
+    expansion_scope: Literal["propagator"] = "propagator"
+    conjugate: bool = False
+    transpose: bool = False
+
+
+@dataclass(frozen=True)
+class RealSpaceMultislice:
+    """
+    Multislice algorithm computed in real-space.
+
+    Parameters
+    ----------
+    order : int, optional
+        Propagator and/or transmission operator order (default 1)
+    expansion_scope: str
+        If "propagator" (default) only the propagator operator is expanded to order
+        If "full" both the propagator and transmission operators are expanded to order
+    derivative_accuracy : int, optional
+        Finite-difference accuracy for Laplace operator (default 6)
+    max_terms: int, optional
+        Max terms in exponent Taylor series expansion (default 80)
+    """
+
+    order: int = 1
+    expansion_scope: Literal["propagator", "full"] = "propagator"
+    derivative_accuracy: int = 6
+    max_terms: int = 80
+
+
 def multislice_and_detect(
     waves: Waves,
     potential: BasePotential,
     detectors: Optional[list[BaseDetector]] = None,
-    conjugate: bool = False,
-    transpose: bool = False,
+    algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
+    return_backscattered: bool = False,
     pbar: bool = False,
-    method: str = "conventional",
-    **kwargs,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions
@@ -472,51 +557,58 @@ def multislice_and_detect(
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    conjugate : bool, optional
-        If True, use the complex conjugate of the transmission function
-        (default is False).
-    transpose : bool, optional
-        If True, reverse the order of propagation and transmission (default is False).
+    algorithm: FourierMultislice or RealSpaceMultislice, optional
+        Algorithm used for multislice operator (default is FourierMultislice())
+    return_backscattered: bool, optional
+        If algorithm.expansion_scope="full" and return_backscatter is True, then the
+        backscattered components are also returned. Requires potential exit_planes
 
-    Returns
-    -------
-    measurements : Waves or tuple of :class:`.BaseMeasurement`
-        Exit waves or detected measurements or lists of measurements.
     """
-
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
     waves = waves.copy()
 
-    if method in ("conventional", "fft"):
+    if return_backscattered:
+        if algorithm.expansion_scope != "full":
+            raise ValueError(
+                "Backscattering contributions require expansion_scope='full'."
+            )
+        if potential.num_exit_planes == 1:
+            raise ValueError(
+                "Backscattering contributions require potential.exit_planes."
+            )
+
+        # moved to MultisliceTransform
+        # detectors = list(detectors) + [WavesDetector()]
+
+    if isinstance(algorithm, FourierMultislice):
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
 
-        def multislice_step(waves, potential_slice):
+        def multislice_step(waves, potential_slice, next_slice=None):
             return conventional_multislice_step(
                 waves,
                 potential_slice=potential_slice,
                 antialias_aperture=antialias_aperture,
                 propagator=propagator,
-                conjugate=conjugate,
-                transpose=transpose,
-            )
-
-    elif method in ("realspace",):
-        derivative_accuracy = kwargs.get("derivative_accuracy", 6)
-        laplace_operator = LaplaceOperator(derivative_accuracy)
-        max_terms = kwargs.get("max_terms", 80)
-
-        def multislice_step(waves, potential_slice):
-            return realspace_multislice_step(
-                waves,
-                potential_slice=potential_slice,
-                laplace=laplace_operator,
-                max_terms=max_terms,
+                conjugate=algorithm.conjugate,
+                transpose=algorithm.transpose,
+                order=algorithm.order,
             )
 
     else:
-        raise ValueError()
+        laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
+
+        def multislice_step(waves, potential_slice, next_slice=None):
+            return realspace_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                next_slice=next_slice,
+                laplace=laplace_operator,
+                max_terms=algorithm.max_terms,
+                order=algorithm.order,
+                fully_corrected=algorithm.expansion_scope == "full",
+            )
 
     (
         extra_ensemble_axes_shape,
@@ -545,6 +637,7 @@ def multislice_and_detect(
     ):
         exit_plane_index = 0
 
+        # Handle entrance plane detection (before first slice)
         if potential.exit_planes[0] == -1:
             measurement_index = _validate_potential_ensemble_indices(
                 potential_index, exit_plane_index, potential
@@ -557,14 +650,15 @@ def multislice_and_detect(
 
         depth = 0.0
 
-        for potential_slice in potential_configuration.generate_slices():
-            waves = multislice_step(
-                waves,
-                potential_slice,
-                # conjugate=conjugate,
-                # transpose=transpose,
-            )
-
+        for potential_slice, next_slice in lookahead(
+            potential_configuration.generate_slices()
+        ):
+            if algorithm.expansion_scope == "full":
+                waves, backscatter_waves = multislice_step(
+                    waves, potential_slice, next_slice=next_slice
+                )
+            else:
+                waves = multislice_step(waves, potential_slice, next_slice=None)
             tqdm_pbar.update_if_exists(int(n_waves))
 
             depth += potential_slice.axes_metadata[0].values[0]
@@ -577,21 +671,118 @@ def multislice_and_detect(
                 )
 
                 if measurements is not None:
-                    _update_measurements(
-                        waves, detectors, measurements, measurement_index
-                    )
-
+                    if algorithm.expansion_scope == "full" and return_backscattered:
+                        _update_measurements(
+                            waves, detectors[:-1], measurements[:-1], measurement_index
+                        )
+                        _update_measurements(
+                            backscatter_waves,
+                            detectors[-1:],
+                            measurements[-1:],
+                            measurement_index,
+                        )
+                    else:
+                        _update_measurements(
+                            waves, detectors, measurements, measurement_index
+                        )
                 exit_plane_index += 1
 
+    # Handle final output if not using intermediate measurements
     if measurements is None:
         measurements = [
             detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
             for detector in detectors
         ]
 
+    elif return_backscattered:
+        _back_propagate_backscattered_waves(
+            measurements[-1],  # type: ignore
+            potential,
+            multislice_step,
+        )
+
     tqdm_pbar.close_if_exists()
 
     return measurements
+
+
+def _aggregate_slices_by_exit_planes(potential_slices, exit_planes):
+    """
+    Group potential slices between exit_planes, summing their thicknesses.
+
+    Parameters
+    ----------
+    potential_slices : list of PotentialSlice
+        Original slices along the beam direction.
+    exit_planes : list of int
+        Indices of exit planes (first can be -1 for entrance plane).
+
+    Returns
+    -------
+    effective_slices : list of PotentialSlice
+        Aggregated slices with summed potential arrays and summed thicknesses.
+    """
+
+    effective_slices = []
+
+    for i in range(0, len(exit_planes) - 1):
+        idx_start = exit_planes[i] + 1  # slice after previous exit plane
+        idx_end = exit_planes[i + 1] + 1  # include this exit plane
+
+        # Aggregate slices in this block
+        combined_slice = potential_slices[idx_start].copy()
+        thickness = combined_slice.slice_thickness[0]
+        # Add remaining slices in the block
+        for in_bw_slice in potential_slices[idx_start + 1 : idx_end]:
+            combined_slice += in_bw_slice
+            thickness += in_bw_slice.slice_thickness[0]
+            combined_slice._slice_thickness = (thickness,)
+            combined_slice._slice_limits = [(0, thickness)]
+
+        effective_slices.append(combined_slice)
+
+    return effective_slices
+
+
+def _back_propagate_backscattered_waves(
+    backscattered_waves: Waves,
+    potential: BasePotential,
+    multislice_step: Callable,
+) -> Waves:
+    """
+    For each slice in the multislice step, a small part of the wave get backscattered.
+    This function runs the multislice in reverse for each backscattered wave summing
+    them for a final backscattered wave result.
+    """
+
+    xp = get_array_module(backscattered_waves.device)
+    potential_slices = [
+        slice
+        for _, config in _generate_potential_configurations(potential)
+        for slice in config.generate_slices()
+    ]
+
+    effective_slices = _aggregate_slices_by_exit_planes(
+        potential_slices, potential.exit_planes
+    )
+
+    num_slices = len(effective_slices)
+    if len(backscattered_waves) != num_slices + 1:
+        raise ValueError("Wrong shapes")
+
+    # zero intensity in incoming wave
+    backscattered_waves[0]._array[:] = 0
+
+    # Go through potential in reverse
+    for i in range(num_slices - 2, -1, -1):
+        contribution_at_slice = backscattered_waves[i + 1].copy()
+        contribution_at_slice.array = xp.conj(contribution_at_slice.array)
+        contribution_at_slice, _ = multislice_step(
+            contribution_at_slice, effective_slices[i + 1], next_slice=None
+        )
+        backscattered_waves[i].array += xp.conj(contribution_at_slice.array)
+
+    return backscattered_waves
 
 
 def transition_potential_multislice_and_detect(
@@ -603,8 +794,7 @@ def transition_potential_multislice_and_detect(
     double_channel: bool = True,
     threshold: float = 1.0,
     sites: Optional[SliceIndexedAtoms | Atoms] = None,
-    conjugate: bool = False,
-    transpose: bool = False,
+    algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     pbar: bool = False,
 ) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
@@ -621,11 +811,8 @@ def transition_potential_multislice_and_detect(
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    conjugate : bool, optional
-        If True, use the complex conjugate of the transmission function
-        (default is False).
-    transpose : bool, optional
-        If True, reverse the order of propagation and transmission (default is False).
+    algorithm: FourierMultislice or RealSpaceMultislice, optional
+        Algorithm used for multislice operator (default is FourierMultislice())
 
     Returns
     -------
@@ -650,8 +837,34 @@ def transition_potential_multislice_and_detect(
 
     waves = waves.ensure_real_space()
 
-    antialias_aperture = AntialiasAperture()
-    propagator = FresnelPropagator()
+    if isinstance(algorithm, FourierMultislice):
+        antialias_aperture = AntialiasAperture()
+        propagator = FresnelPropagator()
+
+        def multislice_step(waves, potential_slice):
+            return conventional_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                antialias_aperture=antialias_aperture,
+                propagator=propagator,
+                conjugate=algorithm.conjugate,
+                transpose=algorithm.transpose,
+                order=algorithm.order,
+            )
+
+    else:
+        laplace_operator = LaplaceOperator(algorithm.derivative_accuracy)
+
+        def multislice_step(waves, potential_slice):
+            return realspace_multislice_step(
+                waves,
+                potential_slice=potential_slice,
+                next_slice=None,
+                laplace=laplace_operator,
+                max_terms=algorithm.max_terms,
+                order=algorithm.order,
+                fully_corrected=algorithm.expansion_scope == "full",
+            )
 
     if detectors is None:
         detectors = [WavesDetector()]
@@ -719,13 +932,9 @@ def transition_potential_multislice_and_detect(
         for scatter_index, potential_slice in enumerate(
             potential_configuration.generate_slices()
         ):
-            waves = conventional_multislice_step(
+            waves = multislice_step(
                 waves,
                 potential_slice,
-                propagator,
-                antialias_aperture,
-                conjugate=conjugate,
-                transpose=transpose,
             )
             depth += potential_slice.axes_metadata[0].values[0]
 
@@ -767,13 +976,9 @@ def transition_potential_multislice_and_detect(
                             first_slice=scatter_index + 1
                         )
                     ):
-                        scattered_waves = conventional_multislice_step(
+                        scattered_waves = multislice_step(
                             scattered_waves,
                             inner_potential_slice,
-                            propagator,
-                            antialias_aperture,
-                            conjugate=conjugate,
-                            transpose=transpose,
                         )
 
                         _update_plasmon_axes(waves, depth)
@@ -848,11 +1053,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    conjugate : bool, optional
-        If True, use the complex conjugate of the transmission function
-        (default is False).
-    transpose : bool, optional
-        If True, reverse the order of propagation and transmission (default is False).
     multislice_func : callable, optional
         The multislice function defining the multislice algorithm used
         (default is :func:`.multislice_and_detect`).
@@ -864,8 +1064,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         self,
         potential: BasePotential,
         detectors: Optional[BaseDetector | list[BaseDetector]] = None,
-        conjugate: bool = False,
-        transpose: bool = False,
         multislice_func: Optional[Callable] = None,
         **multislice_func_kwargs,
     ):
@@ -877,6 +1075,10 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         self._potential = potential
 
         detectors = validate_detectors(detectors)
+        self._user_detectors = detectors
+
+        if multislice_func_kwargs.get("return_backscattered", False):
+            detectors = detectors + [WavesDetector()]
 
         if "pbar" not in multislice_func_kwargs:
             multislice_func_kwargs["pbar"] = config.get(
@@ -884,8 +1086,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             )
 
         self._detectors = detectors
-        self._conjugate = conjugate
-        self._transpose = transpose
         self._multislice_func = multislice_func
         self._multislice_func_kwargs = multislice_func_kwargs
 
@@ -908,24 +1108,6 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         """List of detectors defining how the wave functions should be converted to
         measurements."""
         return self._detectors
-
-    @property
-    def conjugate(self) -> bool:
-        """Use the complex conjugate of the transmission function."""
-        return self._conjugate
-
-    @property
-    def transpose(self) -> bool:
-        """Reverse the order of propagation and transmission."""
-        return self._transpose
-
-    # @property
-    # def _default_ensemble_chunks(self):
-    #     chunks = self._potential._default_ensemble_chunks
-    #     num_exit_planes = len(self._potential.exit_planes)
-    #     if num_exit_planes > 1:
-    #         chunks = chunks + (num_exit_planes,)
-    #     return chunks
 
     @property
     def ensemble_axes_metadata(self):
@@ -1058,9 +1240,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return partial(
             self._multislice_transform_member,
             potential_partial=potential_partial,
-            detectors=self.detectors,
-            conjugate=self.conjugate,
-            transpose=self.transpose,
+            detectors=self._user_detectors,
             multislice_func=self.multislice_func,
             **self._multislice_func_kwargs,
         )
@@ -1070,12 +1250,15 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             waves=waves,
             potential=self.potential,
             detectors=self.detectors,
-            conjugate=self.conjugate,
-            transpose=self.transpose,
             **self._multislice_func_kwargs,
         )
-        arrays = tuple(measurement.array for measurement in measurements)
 
+        if len(measurements) != len(self.detectors):
+            raise RuntimeError(
+                f"Expected {len(self.detectors)} outputs, got {len(measurements)}"
+            )
+
+        arrays = tuple(measurement.array for measurement in measurements)
         if len(arrays) == 1:
             arrays = arrays[0]
 
