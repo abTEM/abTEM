@@ -1,6 +1,7 @@
 import ase
 import numpy as np
 import pytest
+from utils import gpu
 
 import abtem
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
@@ -25,8 +26,11 @@ def create_sto_atoms():
 
 
 @pytest.fixture
-def test_system():
+def test_system(request):
     """Create complete test system with atoms, potential, probe, and scans."""
+    # Get device from parametrization if available, otherwise default to "cpu"
+    device = getattr(request, "param", "cpu")
+
     atoms, unit_cell = create_sto_atoms()
 
     # Standard potential
@@ -35,6 +39,7 @@ def test_system():
         gpts=(80, 80),
         slice_thickness=0.75,
         projection="finite",
+        device=device,
     )
 
     # Potential with exit planes
@@ -44,12 +49,14 @@ def test_system():
         slice_thickness=0.75,
         exit_planes=1,
         projection="finite",
+        device=device,
     )
 
     # Probe
     probe = abtem.Probe(
         semiangle_cutoff=20,
         energy=30e3,
+        device=device,
     ).match_grid(potential)
 
     # Scans
@@ -68,12 +75,14 @@ def test_system():
         "probe": probe,
         "single_point_scan": single_point_scan,
         "grid_scan": grid_scan,
+        "device": device,
     }
 
 
 class TestLazyVsEager:
     """Test that lazy and eager computations produce similar results."""
 
+    @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     @pytest.mark.parametrize(
         "algorithm",
         [
@@ -169,6 +178,7 @@ class TestFourierMultislice:
 class TestRealSpaceMultislice:
     """Test RealSpaceMultislice algorithm with various configurations."""
 
+    @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     @pytest.mark.parametrize("expansion_scope", ["propagator", "full"])
     def test_realspace_expansion_scope(self, test_system, expansion_scope):
         """Test different expansion scopes."""
@@ -382,6 +392,7 @@ class TestBackscattering:
                 return_backscattered=True,
             )
 
+    @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     def test_backscattering_returns_extra_waves(self, test_system):
         """Test that backscattering adds an extra detector (WavesDetector)."""
         probe = test_system["probe"]
@@ -400,6 +411,7 @@ class TestBackscattering:
         assert isinstance(result, (list, tuple))
         assert len(result) == 2
 
+    @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     def test_backscattering_with_detectors(self, test_system):
         """Test backscattering with additional detectors."""
         probe = test_system["probe"]
@@ -423,6 +435,7 @@ class TestBackscattering:
         assert isinstance(results, (list, tuple))
         assert len(results) == len(detectors) + 1
 
+    @pytest.mark.parametrize("test_system", ["cpu", gpu], indirect=True)
     def test_backscattering_shape_consistency(self, test_system):
         """Test that forward and backward waves have consistent shapes."""
         probe = test_system["probe"]
