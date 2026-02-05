@@ -43,35 +43,36 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
-testing = [
-    "pytest",
-    "pytest-cov",
-    "tox",
-    "hypothesis",
-    "jupyter-client",
-    "deepdiff",
-    "imageio",
-]
-docs = [
-    "jupyter-book",
-    "sphinx_autodoc_typehints",
-]
-gpu = ["cupy"] # You may need to replace this with the correct CUDA toolkit version, e.g. cupy-cuda13x!
 extra = [
     "pandas",
     "ipycytoscape",
     "dask-labextension",
     "bokeh",
 ]
+
+[dependency-groups]
 dev = [
-    "types-PyYAML",
-    "types-tqdm",
-    "black",
-    "isort",
-    "ruff",
-    "mypy",
-    "jupyterlab_code_formatter",
-    "pre-commit",
+    "black>=26.1.0",
+    "isort>=7.0.0",
+    "jupyterlab-code-formatter>=3.0.2",
+    "mypy>=1.19.1",
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.0",
+    "types-pyyaml>=6.0.12.20250915",
+    "types-tqdm>=4.67.2.20260202",
+]
+docs = [
+    "jupyter-book>=2.1.2",
+    "sphinx-autodoc-typehints>=3.6.1",
+]
+test = [
+    "deepdiff>=8.6.1",
+    "hypothesis>=6.151.5",
+    "imageio>=2.37.2",
+    "jupyter-client>=8.8.0",
+    "py>=1.11.0",
+    "pytest-cov>=7.0.0",
+    "tox>=4.34.1",
 ]
 
 [tool.setuptools]
@@ -131,3 +132,4 @@ checks = [
     "SA01",
     "ES01",
 ]
+
