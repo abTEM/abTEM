@@ -6,6 +6,18 @@ from utils import gpu
 import abtem
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
+# Suppress Numba performance warnings during tests
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::numba.core.errors.NumbaPerformanceWarning"
+)
+
+
+def to_numpy(array):
+    """Convert array to numpy, handling both CPU and GPU arrays."""
+    if hasattr(array, "get"):  # CuPy array
+        return np.asarray(array.get())
+    return np.asarray(array)
+
 
 def create_sto_atoms():
     """Create a SrTiO3 unit cell and supercell."""
@@ -118,8 +130,8 @@ class TestLazyVsEager:
 
         # Check values are close (allowing for numerical differences)
         np.testing.assert_allclose(
-            lazy_result.array,
-            eager_result.array,
+            to_numpy(lazy_result.array),
+            to_numpy(eager_result.array),
             rtol=1e-5,
             atol=1e-8,
         )
@@ -481,8 +493,8 @@ class TestAlgorithmComparison:
         assert fourier_result.array.shape == realspace_result.array.shape
 
         # Both should produce non-zero results (sanity check)
-        assert np.abs(fourier_result.array).sum() > 0
-        assert np.abs(realspace_result.array).sum() > 0
+        assert np.abs(to_numpy(fourier_result.array)).sum() > 0
+        assert np.abs(to_numpy(realspace_result.array)).sum() > 0
 
     def test_higher_orders_differ(self, test_system):
         """Test that higher orders produce different results."""
@@ -508,7 +520,9 @@ class TestAlgorithmComparison:
         assert order1_result.array.shape == order3_result.array.shape
 
         # Results should be different (if identical, something's wrong)
-        assert not np.allclose(order1_result.array, order3_result.array, rtol=1e-10)
+        assert not np.allclose(
+            to_numpy(order1_result.array), to_numpy(order3_result.array), rtol=1e-10
+        )
 
     def test_fourier_order2_differs_from_order1(self, test_system):
         """Test that Fourier order 2 differs from order 1."""
@@ -534,7 +548,9 @@ class TestAlgorithmComparison:
         assert order1_result.array.shape == order2_result.array.shape
 
         # Results should be different
-        assert not np.allclose(order1_result.array, order2_result.array, rtol=1e-10)
+        assert not np.allclose(
+            to_numpy(order1_result.array), to_numpy(order2_result.array), rtol=1e-10
+        )
 
 
 class TestComplexWorkflows:
