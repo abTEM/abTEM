@@ -9,10 +9,10 @@ repos:
     rev: 26.1.0
     hooks:
     -   id: black
--   repo: https://github.com/gforcada/flake8-isort
-    rev: 7.0.0
-    hooks:
-    - id: isort
+#-   repo: https://github.com/gforcada/flake8-isort
+#    rev: 7.0.0
+#    hooks:
+#    - id: isort
 -   repo: https://github.com/PyCQA/flake8
     rev: 7.3.0
     hooks:

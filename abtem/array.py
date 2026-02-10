@@ -255,7 +255,7 @@ class ComputableList(list):
                 raise ValueError(
                     f"Compression_level must be between 0 and 9 instead of {compression_level}"
                 )
-            compressor = {
+            compressors = {
                 "name": "blosc",
                 "configuration": {
                     "cname": "zstd",
@@ -264,7 +264,7 @@ class ComputableList(list):
                 },
             }
         else:
-            compressor = None
+            compressors = None
 
         # Helper functions for type preservation
         def encode_types(obj):
@@ -311,7 +311,7 @@ class ComputableList(list):
                 url,
                 metadata_list,
                 overwrite,
-                compressor=compressor,
+                compressors=compressors,
             ):
 
                 if overwrite and os.path.exists(url):
@@ -339,7 +339,7 @@ class ComputableList(list):
                                 data=computed_array,
                                 chunks=computed_array.shape,
                                 overwrite=True,
-                                compressor=compressor,
+                                compressors=compressors,
                             )
                     finally:
                         store.close()
@@ -350,7 +350,7 @@ class ComputableList(list):
                 (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
             ]
             delayed_write = write_to_zipstore(
-                delayed_arrays, url, metadata_list, overwrite, compressor=compressor
+                delayed_arrays, url, metadata_list, overwrite, compressors=compressors
             )
 
         else:
