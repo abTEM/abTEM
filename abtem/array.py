@@ -10,8 +10,17 @@ from contextlib import contextmanager, nullcontext
 from functools import partial
 from numbers import Number
 from types import ModuleType
-from typing import (TYPE_CHECKING, Any, Callable, Generator, Optional, Self,
-                    Sequence, TypeVar, Union)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generator,
+    Optional,
+    Self,
+    Sequence,
+    TypeVar,
+    Union,
+)
 
 import dask
 import dask.array as da
@@ -22,17 +31,33 @@ from tqdm.dask import TqdmCallback
 
 from abtem._version import __version__
 from abtem.core import config
-from abtem.core.axes import (AxesMetadataList, AxisMetadata, LinearAxis,
-                             OrdinalAxis, UnknownAxis, axis_from_dict,
-                             axis_to_dict)
-from abtem.core.backend import (check_cupy_is_installed, copy_to_device, cp,
-                                device_name_from_array_module,
-                                get_array_module)
+from abtem.core.axes import (
+    AxesMetadataList,
+    AxisMetadata,
+    LinearAxis,
+    OrdinalAxis,
+    UnknownAxis,
+    axis_from_dict,
+    axis_to_dict,
+)
+from abtem.core.backend import (
+    check_cupy_is_installed,
+    copy_to_device,
+    cp,
+    device_name_from_array_module,
+    get_array_module,
+)
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
-from abtem.core.ensemble import (Ensemble, _wrap_with_array,
-                                 unpack_blockwise_args)
-from abtem.core.utils import (CopyMixin, EqualityMixin, interleave, itemset,
-                              normalize_axes, number_to_tuple, tuple_range)
+from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
+from abtem.core.utils import (
+    CopyMixin,
+    EqualityMixin,
+    interleave,
+    itemset,
+    normalize_axes,
+    number_to_tuple,
+    tuple_range,
+)
 from abtem.transform import TransformFromFunc
 
 if TYPE_CHECKING:
@@ -197,6 +222,7 @@ class ComputableList(list):
         compute: bool = True,
         overwrite: bool = False,
         progress_bar: Optional[bool] = None,
+        compression_level: int | None = 4,
         **kwargs: Any,
     ):
         """Write data to a zarr file.
@@ -213,12 +239,32 @@ class ComputableList(list):
         progress_bar : bool
             Display a progress bar in the terminal or notebook during computation. The
             progress bar is only displayed with a local scheduler.
+        compression_level : int or None
+            If set (0–9), applies Zstandard compression with Blosc backend at that level.
+            Level 0 disables compression. Default is 4, raises ValueError if > 9.
         kwargs :
             Keyword arguments passed to `dask.array.to_zarr`.
         """
         import os
-
         import zarr
+
+        # Validate compression level
+        # Based on quantem: https://github.com/electronmicroscopy/quantem
+        if compression_level is not None:
+            if not (0 <= compression_level <= 9):
+                raise ValueError(
+                    f"Compression_level must be between 0 and 9 instead of {compression_level}"
+                )
+            compressor = {
+                "name": "blosc",
+                "configuration": {
+                    "cname": "zstd",
+                    "clevel": int(compression_level),
+                    "shuffle": "bitshuffle",
+                },
+            }
+        else:
+            compressor = None
 
         # Helper functions for type preservation
         def encode_types(obj):
@@ -260,7 +306,13 @@ class ComputableList(list):
         if is_zip:
             # Use ZipStore for .zip files
             @dask.delayed
-            def write_to_zipstore(computed_arrays, url, metadata_list, overwrite):
+            def write_to_zipstore(
+                computed_arrays,
+                url,
+                metadata_list,
+                overwrite,
+                compressor=compressor,
+            ):
 
                 if overwrite and os.path.exists(url):
                     os.remove(url)
@@ -287,6 +339,7 @@ class ComputableList(list):
                                 data=computed_array,
                                 chunks=computed_array.shape,
                                 overwrite=True,
+                                compressor=compressor,
                             )
                     finally:
                         store.close()
@@ -297,7 +350,7 @@ class ComputableList(list):
                 (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
             ]
             delayed_write = write_to_zipstore(
-                delayed_arrays, url, metadata_list, overwrite
+                delayed_arrays, url, metadata_list, overwrite, compressor=compressor
             )
 
         else:
