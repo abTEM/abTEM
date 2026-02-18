@@ -199,214 +199,6 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         """
 
 
-class AnnularDetector(BaseDetector):
-    """
-    The annular detector integrates the intensity of the detected wave functions between
-    an inner and outer radial integration limits, i.e. over an annulus.
-
-    Parameters
-    ----------
-    inner: float
-        Inner integration limit [mrad].
-    outer: float
-        Outer integration limit [mrad].
-    offset: two float, optional
-        Center offset of the annular integration region [mrad].
-    to_cpu : bool, optional
-        If True, copy the measurement data from the calculation device to CPU memory
-        after applying the detector, otherwise the data stays on the respective devices.
-        Default is True.
-    url : str, optional
-        If this parameter is set the measurement data is saved at the specified
-        location, typically a path to a local file. A URL can also include a protocol
-        specifier like s3:// for remote data. If not set (default) the data stays in
-        memory.
-    """
-
-    def __init__(
-        self,
-        inner: float = 0.0,
-        outer: Optional[float] = None,
-        offset: tuple[float, float] = (0.0, 0.0),
-        to_cpu: bool = True,
-        url: Optional[str] = None,
-    ):
-        self._inner = inner
-        self._outer = outer
-        self._offset = offset
-        super().__init__(to_cpu=to_cpu, url=url)
-
-    @property
-    def inner(self) -> float:
-        """Inner integration limit in mrad."""
-        return self._inner
-
-    @inner.setter
-    def inner(self, value: float):
-        self._inner = value
-
-    @property
-    def outer(self) -> float | None:
-        """Outer integration limit in mrad."""
-        return self._outer
-
-    @outer.setter
-    def outer(self, value: float):
-        self._outer = value
-
-    @property
-    def offset(self) -> tuple[float, float]:
-        """Center offset of the annular integration region [mrad]."""
-        return self._offset
-
-    def _out_metadata(self, array_object: WavesType) -> tuple[dict]:
-        metadata = super()._out_metadata(array_object)[0]
-        metadata["label"] = "intensity"
-        metadata["units"] = "arb. unit"
-        return (metadata,)
-
-    def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
-        inner = self.inner
-
-        if self.outer is not None:
-            outer = self.outer
-        else:
-            outer = min(waves.cutoff_angles)
-
-        return inner, outer
-
-    def _out_ensemble_axes_metadata(
-        self, waves: WavesType
-    ) -> tuple[list[AxisMetadata]]:
-        source = _scan_axes(waves)
-        scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
-        ensemble_axes_metadata = [
-            m for i, m in enumerate(waves.ensemble_axes_metadata) if i not in source
-        ]
-        return (ensemble_axes_metadata + scan_axes_metadata,)
-
-    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
-        return ([],)
-
-    def _out_ensemble_shape(self, waves: WavesType) -> tuple[tuple[int, ...], ...]:
-        ensemble_shapes = super()._out_ensemble_shape(waves)
-
-        if len(_scan_shape(waves)) == 0:
-            return ((),)
-            # raise RuntimeError("annular detector requires a scan axis")
-
-        return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
-
-    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
-        return (_scan_shape(waves),)
-
-    def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
-        return (get_dtype(complex=False),)
-
-    def _out_type(
-        self, waves: WavesType
-    ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
-        return (_scanned_measurement_type(waves),)
-
-    def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
-        """
-        Detect the given waves producing diffraction patterns.
-
-        Parameters
-        ----------
-        waves : Waves
-            The waves to detect.
-
-        Returns
-        -------
-        measurement : DiffractionPatterns
-        """
-        if self.outer is None:
-            outer = np.floor(min(waves.cutoff_angles))
-        else:
-            outer = self.outer
-
-        diffraction_patterns = waves.diffraction_patterns(
-            max_angle="full", parity="same", fftshift=False
-        )
-        measurement = diffraction_patterns.integrate_radial(
-            inner=self.inner, outer=outer
-        )
-
-        if self.to_cpu and hasattr(measurement, "to_cpu"):
-            measurement = measurement.to_cpu()
-        return measurement._eager_array
-
-    def detect(
-        self, waves: WavesType
-    ) -> Images | RealSpaceLineProfiles | MeasurementsEnsemble:
-        """
-        Detect the given waves producing images.
-
-        Parameters
-        ----------
-        waves : Waves
-            The waves to detect.
-
-        Returns
-        -------
-        measurement : Images or RealSpaceLineProfiles
-        """
-        measurements = self.apply(waves)
-        assert isinstance(
-            measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
-        )
-        return measurements
-
-    def _get_detector_region_array(
-        self, waves: BaseWaves, fftshift: bool = True
-    ) -> np.ndarray:
-        inner, outer = self.angular_limits(waves)
-
-        array = _polar_detector_bins(
-            gpts=waves._gpts_within_angle("cutoff"),
-            sampling=waves.angular_sampling,
-            inner=inner,
-            outer=outer,
-            nbins_radial=1,
-            nbins_azimuthal=1,
-            fftshift=fftshift,
-            rotation=0.0,
-            offset=self.offset,
-            return_indices=False,
-        )
-        assert isinstance(array, np.ndarray)
-        return array >= 0
-
-    def get_detector_region(self, waves: BaseWaves, fftshift: bool = True):
-        """
-        Get the annular detector region as a diffraction pattern.
-
-        Parameters
-        ----------
-        waves : BaseWaves
-            The waves to derive the annular detector region from.
-        fftshift : bool, optional
-            If True, the zero-frequency of the detector region if shifted to the center
-            of the array, otherwise the center is at (0, 0).
-
-        Returns
-        -------
-        detector_region : DiffractionPatterns
-        """
-
-        array = self._get_detector_region_array(waves, fftshift=fftshift)
-        metadata = {
-            "energy": waves.energy,
-            "label": "detector efficiency",
-            "units": "%",
-        }
-        diffraction_patterns = DiffractionPatterns(
-            array, metadata=metadata, sampling=waves.reciprocal_space_sampling
-        )
-        return diffraction_patterns
-
-
 class _AbstractRadialDetector(BaseDetector):
     def __init__(
         self,
@@ -723,6 +515,238 @@ class _AbstractRadialDetector(BaseDetector):
         diffraction_patterns.metadata["energy"] = energy
 
         return diffraction_patterns.show(**kwargs)
+
+
+class AnnularDetector(_AbstractRadialDetector):
+    """
+    The annular detector integrates the intensity of the detected wave functions between
+    an inner and outer radial integration limits, i.e. over an annulus.
+
+    Parameters
+    ----------
+    inner: float
+        Inner integration limit [mrad].
+    outer: float
+        Outer integration limit [mrad].
+    offset: two float, optional
+        Center offset of the annular integration region [mrad].
+    to_cpu : bool, optional
+        If True, copy the measurement data from the calculation device to CPU memory
+        after applying the detector, otherwise the data stays on the respective devices.
+        Default is True.
+    url : str, optional
+        If this parameter is set the measurement data is saved at the specified
+        location, typically a path to a local file. A URL can also include a protocol
+        specifier like s3:// for remote data. If not set (default) the data stays in
+        memory.
+    """
+
+    def __init__(
+        self,
+        inner: float = 0.0,
+        outer: Optional[float] = None,
+        offset: tuple[float, float] = (0.0, 0.0),
+        to_cpu: bool = True,
+        url: Optional[str] = None,
+    ):
+        self._inner = inner
+        self._outer = outer
+        self._offset = offset
+
+        super().__init__(
+            inner=inner,
+            outer=outer,
+            rotation=0.0,  # Rotation is meaningless for standard annular detector
+            offset=offset,
+            to_cpu=to_cpu,
+            url=url,
+        )
+
+    @property
+    def inner(self) -> float:
+        """Inner integration limit in mrad."""
+        return self._inner
+
+    @inner.setter
+    def inner(self, value: float):
+        self._inner = value
+
+    @property
+    def outer(self) -> float | None:
+        """Outer integration limit in mrad."""
+        return self._outer
+
+    @outer.setter
+    def outer(self, value: float):
+        self._outer = value
+
+    @property
+    def offset(self) -> tuple[float, float]:
+        """Center offset of the annular integration region [mrad]."""
+        return self._offset
+
+    @property
+    def nbins_radial(self):
+        return 1
+
+    @property
+    def nbins_azimuthal(self):
+        return 1
+
+    @property
+    def radial_sampling(self) -> float:
+        return self._outer - self._inner
+
+    @property
+    def azimuthal_sampling(self) -> float:
+        return 2 * np.pi
+
+    def _out_metadata(self, array_object: WavesType) -> tuple[dict]:
+        metadata = super()._out_metadata(array_object)[0]
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+        return (metadata,)
+
+    def angular_limits(self, waves: BaseWaves) -> tuple[float, float]:
+        inner = self.inner
+
+        if self.outer is not None:
+            outer = self.outer
+        else:
+            outer = min(waves.cutoff_angles)
+
+        return inner, outer
+
+    def _out_ensemble_axes_metadata(
+        self, waves: WavesType
+    ) -> tuple[list[AxisMetadata]]:
+        source = _scan_axes(waves)
+        scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
+        ensemble_axes_metadata = [
+            m for i, m in enumerate(waves.ensemble_axes_metadata) if i not in source
+        ]
+        return (ensemble_axes_metadata + scan_axes_metadata,)
+
+    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        return ([],)
+
+    def _out_ensemble_shape(self, waves: WavesType) -> tuple[tuple[int, ...], ...]:
+        ensemble_shapes = super()._out_ensemble_shape(waves)
+
+        if len(_scan_shape(waves)) == 0:
+            return ((),)
+            # raise RuntimeError("annular detector requires a scan axis")
+
+        return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
+
+    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
+        return (_scan_shape(waves),)
+
+    def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
+        return (get_dtype(complex=False),)
+
+    def _out_type(
+        self, waves: WavesType
+    ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
+        return (_scanned_measurement_type(waves),)
+
+    def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
+        """
+        Detect the given waves producing diffraction patterns.
+
+        Parameters
+        ----------
+        waves : Waves
+            The waves to detect.
+
+        Returns
+        -------
+        measurement : DiffractionPatterns
+        """
+        if self.outer is None:
+            outer = np.floor(min(waves.cutoff_angles))
+        else:
+            outer = self.outer
+
+        diffraction_patterns = waves.diffraction_patterns(
+            max_angle="full", parity="same", fftshift=False
+        )
+        measurement = diffraction_patterns.integrate_radial(
+            inner=self.inner, outer=outer
+        )
+
+        if self.to_cpu and hasattr(measurement, "to_cpu"):
+            measurement = measurement.to_cpu()
+        return measurement._eager_array
+
+    def detect(
+        self, waves: WavesType
+    ) -> Images | RealSpaceLineProfiles | MeasurementsEnsemble:
+        """
+        Detect the given waves producing images.
+
+        Parameters
+        ----------
+        waves : Waves
+            The waves to detect.
+
+        Returns
+        -------
+        measurement : Images or RealSpaceLineProfiles
+        """
+        measurements = self.apply(waves)
+        assert isinstance(
+            measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
+        )
+        return measurements
+
+    def _get_detector_region_array(
+        self, waves: BaseWaves, fftshift: bool = True
+    ) -> np.ndarray:
+        inner, outer = self.angular_limits(waves)
+
+        array = _polar_detector_bins(
+            gpts=waves._gpts_within_angle("cutoff"),
+            sampling=waves.angular_sampling,
+            inner=inner,
+            outer=outer,
+            nbins_radial=1,
+            nbins_azimuthal=1,
+            fftshift=fftshift,
+            rotation=0.0,
+            offset=self.offset,
+            return_indices=False,
+        )
+        assert isinstance(array, np.ndarray)
+        return array >= 0
+
+    def get_detector_region(self, waves: BaseWaves, fftshift: bool = True):
+        """
+        Get the annular detector region as a diffraction pattern.
+
+        Parameters
+        ----------
+        waves : BaseWaves
+            The waves to derive the annular detector region from.
+        fftshift : bool, optional
+            If True, the zero-frequency of the detector region if shifted to the center
+            of the array, otherwise the center is at (0, 0).
+
+        Returns
+        -------
+        detector_region : DiffractionPatterns
+        """
+
+        array = self._get_detector_region_array(waves, fftshift=fftshift)
+        metadata = {
+            "energy": waves.energy,
+            "label": "detector efficiency",
+            "units": "%",
+        }
+        diffraction_patterns = DiffractionPatterns(
+            array, metadata=metadata, sampling=waves.reciprocal_space_sampling
+        )
+        return diffraction_patterns
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
