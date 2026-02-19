@@ -45,7 +45,7 @@ from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
 from abtem.core.diagnostics import TqdmWrapper
-from abtem.core.energy import energy2sigma, energy2wavelength
+from abtem.core.energy import energy2sigma, energy2wavelength, reciprocal_space_sampling_to_angular_sampling
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import fft_interpolate
 from abtem.core.grid import Grid
@@ -1788,8 +1788,10 @@ class BlochWaves:
             self,
             probe: Probe,
             thickness: float,
+            output_shape: tuple[int, int] = (256, 256),
+            threshold: float = 1e-6,
             lazy: bool = True,
-    ) -> IndexedDiffractionPatterns:
+    ) -> np.ndarray:
         xp = get_array_module(probe.build().array)
         wavelength= energy2wavelength(probe.energy)
         semiangle_cutoff = probe.semiangle_cutoff
@@ -1846,7 +1848,52 @@ class BlochWaves:
             angular_positions[i,:num_beams_orientation] = xp.asarray(dp.angular_positions[:,:2]*1e-3) - theta_xy[i,None]
             intensities[i,:num_beams_orientation] = dp.intensities
 
-        return angular_positions, intensities
+        k_max = self.g_max/5
+        bins = output_shape[0]
+
+        alpha_max = reciprocal_space_sampling_to_angular_sampling(
+                (k_max,)*2,
+                self.energy
+            )[0] * 1e-3
+            
+        mask = (intensities > threshold) & (np.linalg.norm(angular_positions,axis=2) < alpha_max)
+        angular_positions_masked = angular_positions[mask]
+        intensities_masked = intensities[mask]
+
+        angular_pix = (angular_positions_masked + alpha_max) / (alpha_max / bins * 2)
+
+        x = angular_pix[:, 0]
+        y = angular_pix[:, 1]
+
+        out_H, out_W = output_shape
+        flat_size = out_H * out_W
+        
+        xF = x.floor(x).astype(xp.int32)
+        yF = xp.floor(y).astype(xp.int32)
+        dx = x - xF
+        dy = y - yF
+        
+        w0 = (1 - dx) * (1 - dy) * intensities
+        w1 = dx * (1 - dy) * intensities
+        w2 = (1 - dx) * dy * intensities
+        w3 = dx * dy * intensities
+        
+        x0 = xF % out_H
+        x1 = (xF + 1) % out_H
+        y0 = yF % out_W
+        y1 = (yF + 1) % out_W
+        
+        idx00 = x0 * out_W + y0
+        idx10 = x1 * out_W + y0
+        idx01 = x0 * out_W + y1
+        idx11 = x1 * out_W + y1
+        
+        out_flat = xp.bincount(idx00, weights=w0, minlength=flat_size)
+        out_flat += xp.bincount(idx10, weights=w1, minlength=flat_size)
+        out_flat += xp.bincount(idx01, weights=w2, minlength=flat_size)
+        out_flat += xp.bincount(idx11, weights=w3, minlength=flat_size)
+        
+        return cp.asnumpy(out_flat.reshape(output_shape))
                 
         
 
