@@ -63,7 +63,7 @@ from abtem.potentials.iam import PotentialArray
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
 
-from abtem.waves import Waves
+from abtem.waves import Waves, Probe
 
 if TYPE_CHECKING:
     pass
@@ -1783,6 +1783,72 @@ class BlochWaves:
             )
 
         return bloch_waves
+
+    def CBED_diffraction_patterns(
+            self,
+            probe: Probe,
+            thickness: float,
+            lazy: bool = True,
+    ) -> IndexedDiffractionPatterns:
+        xp = get_array_module(probe.build().array)
+        wavelength= energy2wavelength(probe.energy)
+        semiangle_cutoff = probe.semiangle_cutoff
+
+        n_pts = 64
+        theta_x = xp.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
+        theta_y = xp.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
+        # theta_x = xp.linspace(-1/probe.sampling[0],1/probe.sampling[0],probe.gpts[0]+1)
+        # theta_y = xp.linspace(-1/probe.sampling[1],1/probe.sampling[1],probe.gpts[1]+1)
+        theta_xy = xp.dstack(
+            xp.meshgrid(
+                theta_x,
+                theta_y,
+                indexing='ij'
+            )
+        ).reshape((-1,2))
+        # theta_xy = theta_xy[xp.arctan(xp.linalg.norm(theta_xy,axis=1)*wavelength) < semiangle_cutoff*1e-3]
+        # theta_xy = xp.arctan(theta_xy)*wavelength
+        theta_xy = theta_xy[xp.linalg.norm(theta_xy,axis=1) < semiangle_cutoff]*1e-3
+
+        tilted_ZAs = xp.asarray(np.array([0,0,1]) - np.insert(cp.asnumpy(theta_xy),2,0,axis=1))
+        tilted_ZAs /= xp.linalg.norm(tilted_ZAs,axis=1)[:,None]
+
+        orientation_matrices = np.array(
+            [
+                Rotation.align_vectors(
+                    np.array([0,0,1]),
+                    cp.asnumpy(ZA),
+                )[0].as_matrix() for
+                ZA in tilted_ZAs
+            ]
+        )
+     
+        dps = []
+        num_beams = len(self.calculate_diffraction_patterns(thickness))
+        angular_positions = xp.empty((len(orientation_matrices),num_beams*2,2))
+        intensities = xp.empty((len(orientation_matrices),num_beams*2))
+
+        for i in range(len(orientation_matrices)):
+            print(round(100*i/len(orientation_matrices),1))
+            bloch = BlochWaves(
+                structure_factor=self.structure_factor,
+                energy=self.energy,
+                sg_max=self.sg_max,
+                orientation_matrix=orientation_matrices[i],
+                device='gpu',
+            )
+            dp = bloch.calculate_diffraction_patterns(
+                thicknesses=[thickness],
+                lazy=False,
+            )[0]
+            num_beams_orientation = len(dp)
+            dps.append(dp)
+            angular_positions[i,:num_beams_orientation] = xp.asarray(dp.angular_positions[:,:2]*1e-3) - theta_xy[i,None]
+            intensities[i,:num_beams_orientation] = dp.intensities
+
+        return angular_positions, intensities
+                
+        
 
 
 def is_base_distribution_tuple(
