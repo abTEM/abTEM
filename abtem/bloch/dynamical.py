@@ -23,6 +23,8 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.linalg import expm as expm_scipy  # type: ignore
 from scipy.spatial.transform import Rotation  # type: ignore
+from scipy.ndimage import gaussian_filter
+
 
 from abtem.array import ArrayObject
 from abtem.atoms import is_cell_orthogonal
@@ -56,9 +58,10 @@ from abtem.inelastic.phonons import (
     validate_per_atom_property,
     validate_sigmas,
 )
-from abtem.measurements import IndexedDiffractionPatterns
+from abtem.measurements import IndexedDiffractionPatterns, DiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
+from abtem.reconstruct import ProgressBar
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
@@ -1788,56 +1791,101 @@ class BlochWaves:
             self,
             probe: Probe,
             thickness: float,
+            n_pts: int = 64,
             output_shape: tuple[int, int] = (256, 256),
             threshold: float = 1e-6,
+            max_angle: Optional[float] = None,
+            gaussian_coefficient: Optional[float] = None,
+            jitter: Optional[float] = None,
+            show_pbar: Optional[bool] = None,
             lazy: bool = True,
-    ) -> np.ndarray:
-        xp = get_array_module(probe.build().array)
+    ) -> DiffractionPatterns:
+        """
+        Calculates a converged beam electron diffraction (CBED) pattern using a grid of 
+        incident beam tilts.
+
+        Parameters
+        ----------
+        probe : abTEM.waves.Probe
+            The converged probe object to be simulated.
+        thickness : float
+            Sample thickness used in Bloch wave calculation.
+            Higher thickness will result in more dynamic scattering.
+        n_pts : int
+            The amount of gpts used for the probe constructions.
+        output_shape : tuple[int, int]
+            Shape of the final created diffraction pattern
+        threshold : float
+            Threshold value for beam intensity. Beams with a intensity below the 
+            threshold will not be used for the final image
+        max_angle : float
+            Optional maximum angle to be visible in the final image, 
+            otherwise max angle is determined by g_max/2
+        gaussian_coefficient : float
+            Optional Gaussian applied to final image. Can be used to lessen the
+            artifacts from the bilinear interpolation
+        jitter : float
+            Optional noise applied to beam orientations. Can be used to lessen the
+            artifacts from the bilinear interpolation
+        """
+        if show_pbar is None:
+            show_pbar = config.get("local_diagnostics.task_level_progress", False)
+
+        device = self.device
+        xp = get_array_module(device)
         wavelength= energy2wavelength(probe.energy)
         semiangle_cutoff = probe.semiangle_cutoff
 
-        n_pts = 64
-        theta_x = xp.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
-        theta_y = xp.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
-        # theta_x = xp.linspace(-1/probe.sampling[0],1/probe.sampling[0],probe.gpts[0]+1)
-        # theta_y = xp.linspace(-1/probe.sampling[1],1/probe.sampling[1],probe.gpts[1]+1)
-        theta_xy = xp.dstack(
-            xp.meshgrid(
+        theta_x = np.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
+        theta_y = np.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
+
+        theta_xy = np.dstack(
+            np.meshgrid(
                 theta_x,
                 theta_y,
                 indexing='ij'
             )
         ).reshape((-1,2))
-        # theta_xy = theta_xy[xp.arctan(xp.linalg.norm(theta_xy,axis=1)*wavelength) < semiangle_cutoff*1e-3]
-        # theta_xy = xp.arctan(theta_xy)*wavelength
-        theta_xy = theta_xy[xp.linalg.norm(theta_xy,axis=1) < semiangle_cutoff]*1e-3
 
-        tilted_ZAs = xp.asarray(np.array([0,0,1]) - np.insert(cp.asnumpy(theta_xy),2,0,axis=1))
-        tilted_ZAs /= xp.linalg.norm(tilted_ZAs,axis=1)[:,None]
+        if jitter is not None:
+            grid_spacing = (2 * semiangle_cutoff) / n_pts
+            jitter_values = jitter * (np.random.rand(*theta_xy.shape) - 0.5) * grid_spacing
+            theta_xy += jitter_values
+
+        theta_xy_cpu = theta_xy[np.linalg.norm(theta_xy,axis=1) < semiangle_cutoff]*1e-3
+
+        tilted_ZAs = np.array([0,0,1]) - np.insert(theta_xy_cpu,2,0,axis=1)
+        tilted_ZAs /= np.linalg.norm(tilted_ZAs,axis=1)[:,None]
 
         orientation_matrices = np.array(
             [
                 Rotation.align_vectors(
                     np.array([0,0,1]),
-                    cp.asnumpy(ZA),
+                    ZA,
                 )[0].as_matrix() for
                 ZA in tilted_ZAs
             ]
         )
-     
+
+        theta_xy = xp.asarray(theta_xy_cpu)
         dps = []
         num_beams = len(self.calculate_diffraction_patterns(thickness))
-        angular_positions = xp.empty((len(orientation_matrices),num_beams*2,2))
-        intensities = xp.empty((len(orientation_matrices),num_beams*2))
+        angular_positions = xp.zeros((len(orientation_matrices),num_beams*2,2))
+        intensities = xp.zeros((len(orientation_matrices),num_beams*2))
 
+        pbar = TqdmWrapper(
+            enabled=show_pbar,
+            total=len(orientation_matrices),
+            desc="Calculating CBED patterns",
+            leave=False,
+        )
         for i in range(len(orientation_matrices)):
-            print(round(100*i/len(orientation_matrices),1))
             bloch = BlochWaves(
                 structure_factor=self.structure_factor,
                 energy=self.energy,
                 sg_max=self.sg_max,
                 orientation_matrix=orientation_matrices[i],
-                device='gpu',
+                device=device,
             )
             dp = bloch.calculate_diffraction_patterns(
                 thicknesses=[thickness],
@@ -1847,53 +1895,79 @@ class BlochWaves:
             dps.append(dp)
             angular_positions[i,:num_beams_orientation] = xp.asarray(dp.angular_positions[:,:2]*1e-3) - theta_xy[i,None]
             intensities[i,:num_beams_orientation] = dp.intensities
+            pbar.update_if_exists(1)
 
-        k_max = self.g_max/5
+        k_max = self.g_max/2
+
+        if max_angle is not None and max_angle*1e-3/wavelength < k_max:
+            k_max = max_angle*1e-3/wavelength
+
         bins = output_shape[0]
 
         alpha_max = reciprocal_space_sampling_to_angular_sampling(
                 (k_max,)*2,
                 self.energy
             )[0] * 1e-3
-            
+        
         mask = (intensities > threshold) & (np.linalg.norm(angular_positions,axis=2) < alpha_max)
         angular_positions_masked = angular_positions[mask]
         intensities_masked = intensities[mask]
 
+        if max_angle is not None and max_angle*1e-3/wavelength > k_max:
+            k_max = max_angle*1e-3/wavelength
+
+            alpha_max = reciprocal_space_sampling_to_angular_sampling(
+                    (k_max,)*2,
+                    self.energy
+                )[0] * 1e-3
+
         angular_pix = (angular_positions_masked + alpha_max) / (alpha_max / bins * 2)
 
-        x = angular_pix[:, 0]
-        y = angular_pix[:, 1]
+        x = angular_pix[:, 0].ravel()
+        y = angular_pix[:, 1].ravel()
+        intensities = intensities_masked.ravel()
 
         out_H, out_W = output_shape
         flat_size = out_H * out_W
-        
-        xF = x.floor(x).astype(xp.int32)
+
+
+        # Bilinear interpolation
+        xF = xp.floor(x).astype(xp.int32)
         yF = xp.floor(y).astype(xp.int32)
         dx = x - xF
         dy = y - yF
-        
+
         w0 = (1 - dx) * (1 - dy) * intensities
         w1 = dx * (1 - dy) * intensities
         w2 = (1 - dx) * dy * intensities
         w3 = dx * dy * intensities
-        
-        x0 = xF % out_H
-        x1 = (xF + 1) % out_H
-        y0 = yF % out_W
-        y1 = (yF + 1) % out_W
-        
+
+        x0 = xp.clip(xF, 0, out_H - 1)
+        x1 = xp.clip(xF + 1, 0, out_H - 1)
+        y0 = xp.clip(yF, 0, out_W - 1)
+        y1 = xp.clip(yF + 1, 0, out_W - 1)
+
         idx00 = x0 * out_W + y0
         idx10 = x1 * out_W + y0
         idx01 = x0 * out_W + y1
         idx11 = x1 * out_W + y1
-        
+
         out_flat = xp.bincount(idx00, weights=w0, minlength=flat_size)
         out_flat += xp.bincount(idx10, weights=w1, minlength=flat_size)
         out_flat += xp.bincount(idx01, weights=w2, minlength=flat_size)
         out_flat += xp.bincount(idx11, weights=w3, minlength=flat_size)
+
+        if gaussian_coefficient is not None:
+            out_flat_cpu = np.asarray(
+                out_flat.get() if hasattr(out_flat, 'get') else out_flat
+            )
+            out_flat_cpu = gaussian_filter(out_flat_cpu, gaussian_coefficient)
+            out_flat = xp.asarray(out_flat_cpu)
         
-        return cp.asnumpy(out_flat.reshape(output_shape))
+        pbar.close_if_exists()
+
+        output = DiffractionPatterns(array = out_flat.reshape(output_shape), sampling=k_max*2/output_shape[0], fftshift=True, metadata={'semiangle_cutoff': semiangle_cutoff, 'energy': probe.energy})
+        return output
                 
         
 
