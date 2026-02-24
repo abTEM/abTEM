@@ -1912,7 +1912,7 @@ def _expand_dims(
 
 
 def from_zarr(url: str, chunks: Optional[Chunks] = None):
-    """Read abTEM data from zarr.
+    """Read abTEM data from zarr (supports legacy and canonical formats).
 
     Parameters
     ----------
@@ -1930,55 +1930,62 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
     """
     import zarr
 
-    import abtem
-
-    # Helper function for type restoration
+    # --- Helper: decode tuples ---
     def decode_types(obj):
-        """Recursively decode tuples from JSON."""
         if isinstance(obj, dict):
             if obj.get("_type") == "tuple":
-                return tuple(decode_types(item) for item in obj["_value"])
-            else:
-                return {key: decode_types(value) for key, value in obj.items()}
+                return tuple(decode_types(v) for v in obj["_value"])
+            return {k: decode_types(v) for k, v in obj.items()}
         elif isinstance(obj, list):
-            return [decode_types(item) for item in obj]
+            return [decode_types(v) for v in obj]
         else:
             return obj
 
-    # Determine if this is a zip file
+    # --- Open store ---
     is_zip = url.endswith(".zip")
 
     if is_zip:
         store = zarr.storage.ZipStore(url, mode="r")
-        f = zarr.open(store=store, mode="r")
+        root = zarr.open(store=store, mode="r")
     else:
-        f = zarr.open(url, mode="r")
+        root = zarr.open(url, mode="r")
 
-    # Read metadata
-    i = 0
-    metadata_entries = []
+    # --- Detect format ---
+    if "metadata0" in root.attrs:
+        return _from_zarr_canonical(root, chunks, decode_types)
+    elif "kwargs0" in root.attrs:
+        return _from_zarr_legacy(root, chunks, decode_types)
+    else:
+        raise ValueError("Zarr file does not contain recognizable abTEM metadata.")
 
-    while True:
-        try:
-            metadata_entries.append(decode_types(f.attrs[f"metadata{i}"]))
-        except KeyError:
-            break
-        i += 1
+def _from_zarr_canonical(root, chunks, decode_types):
+    import dask.array as da
+
+    import abtem
 
     imported = []
+    i = 0
 
-    for i, metadata in enumerate(metadata_entries):
-        # Extract type
+    while True:
+        key = f"metadata{i}"
+        if key not in root.attrs:
+            break
+
+        metadata = decode_types(root.attrs[key]).copy()
+
         metadata.pop("data_origin", None)
         cls_name = metadata.pop("type")
         cls = getattr(abtem.measurements, cls_name)
 
-        # Extract axes
         axes_dict = metadata.pop("axes")
-        axes_list = [abtem.core.axes.axis_from_dict(ax) for ax in axes_dict.values()]
 
-        # Get zarr array
-        zarr_array = f[f"array{i}"]
+        # Preserve axis order
+        axes_list = [
+            abtem.core.axes.axis_from_dict(axes_dict[k])
+            for k in sorted(axes_dict, key=lambda x: int(x.split("_")[1]))
+        ]
+
+        zarr_array = root[f"array{i}"]
 
         if chunks == "auto":
             array_chunks = "auto"
@@ -1997,11 +2004,51 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
             )
         )
 
-    if len(imported) == 1:
-        imported = imported[0]
+        i += 1
 
-    return imported
+    return imported[0] if len(imported) == 1 else imported
 
+def _from_zarr_legacy(root, chunks, decode_types):
+    import dask.array as da
+    from dask import config
+
+    import abtem
+
+    imported = []
+    i = 0
+    types = []
+
+    # Collect legacy types
+    while True:
+        key = f"type{i}"
+        if key not in root.attrs:
+            break
+        types.append(root.attrs[key])
+        i += 1
+
+    for i, cls_name in enumerate(types):
+        cls = getattr(abtem.measurements, cls_name)
+
+        packed_kwargs = decode_types(root.attrs[f"kwargs{i}"])
+        kwargs = cls._unpack_kwargs(packed_kwargs)
+
+        num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
+
+        zarr_array = root[f"array{i}"]
+
+        if chunks == "auto":
+            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+        elif chunks is None:
+            array_chunks = zarr_array.chunks
+        else:
+            array_chunks = chunks
+
+        array = da.from_array(zarr_array, chunks=array_chunks)
+
+        with config.set({"warnings.overspecified-grid": False}):
+            imported.append(cls(array, **kwargs))
+
+    return imported[0] if len(imported) == 1 else imported
 
 def validate_axis_metadata(
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict],
