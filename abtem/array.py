@@ -279,6 +279,16 @@ class ComputableList(list):
                 return [encode_types(item) for item in obj]
             elif isinstance(obj, dict):
                 return {key: encode_types(value) for key, value in obj.items()}
+
+            # --- NumPy scalar handling ---
+            elif isinstance(obj, (np.integer,)):
+                return int(obj)
+            elif isinstance(obj, (np.floating,)):
+                return float(obj)
+            elif isinstance(obj, (np.bool_,)):
+                return bool(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
             else:
                 return obj
 
