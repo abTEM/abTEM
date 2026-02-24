@@ -246,6 +246,7 @@ class ComputableList(list):
             Keyword arguments passed to `dask.array.to_zarr`.
         """
         import os
+
         import zarr
 
         # Validate compression level
@@ -291,17 +292,23 @@ class ComputableList(list):
             has_array = has_array.ensure_lazy()
             array = has_array.copy_to_device("cpu").array
 
-            packed_kwargs = has_array._pack_kwargs(
-                has_array._copy_kwargs(exclude=("array",))
-            )
-
+            # packed_kwargs = has_array._pack_kwargs(
+            #     has_array._copy_kwargs(exclude=("array",))
+            # )
+            #
             # Encode tuples in packed_kwargs
-            packed_kwargs = encode_types(packed_kwargs)
+            # packed_kwargs = encode_types(packed_kwargs)
+            #
+            # arrays_to_write.append((i, array))
+            # metadata_list.append(
+            #     {f"kwargs{i}": packed_kwargs, f"type{i}": has_array.__class__.__name__}
+            # )
+
+            metadata_dict = has_array._metadata_to_dict()
+            metadata_dict = encode_types(metadata_dict)
 
             arrays_to_write.append((i, array))
-            metadata_list.append(
-                {f"kwargs{i}": packed_kwargs, f"type{i}": has_array.__class__.__name__}
-            )
+            metadata_list.append({f"metadata{i}": metadata_dict})
 
         if is_zip:
             # Use ZipStore for .zip files
@@ -1939,41 +1946,46 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
 
     # Read metadata
     i = 0
-    types = []
+    metadata_entries = []
+
     while True:
         try:
-            types.append(f.attrs[f"type{i}"])
+            metadata_entries.append(decode_types(f.attrs[f"metadata{i}"]))
         except KeyError:
             break
         i += 1
 
     imported = []
-    for i, t in enumerate(types):
-        cls = getattr(abtem, t)
 
-        # Decode types before unpacking
-        packed_kwargs = decode_types(f.attrs[f"kwargs{i}"])
-        kwargs = cls._unpack_kwargs(packed_kwargs)
+    for i, metadata in enumerate(metadata_entries):
+        # Extract type
+        metadata.pop("data_origin", None)
+        cls_name = metadata.pop("type")
+        cls = getattr(abtem.measurements, cls_name)
 
-        num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
+        # Extract axes
+        axes_dict = metadata.pop("axes")
+        axes_list = [abtem.core.axes.axis_from_dict(ax) for ax in axes_dict.values()]
 
-        # Get the zarr array
+        # Get zarr array
         zarr_array = f[f"array{i}"]
 
-        # Determine chunks
         if chunks == "auto":
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
+            array_chunks = "auto"
         elif chunks is None:
-            # Use the chunks from the zarr array itself
             array_chunks = zarr_array.chunks
         else:
             array_chunks = chunks
 
-        # Create dask array from zarr array
         array = da.from_array(zarr_array, chunks=array_chunks)
 
-        with config.set({"warnings.overspecified-grid": False}):
-            imported.append(cls(array, **kwargs))
+        imported.append(
+            cls.from_array_and_metadata(
+                array,
+                axes_metadata=axes_list,
+                metadata=metadata,
+            )
+        )
 
     if len(imported) == 1:
         imported = imported[0]
