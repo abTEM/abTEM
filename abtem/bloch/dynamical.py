@@ -42,7 +42,7 @@ from abtem.bloch.utils import (
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, NonLinearAxis, ThicknessAxis
-from abtem.core.backend import cp, get_array_module, validate_device
+from abtem.core.backend import cp, get_array_module, validate_device,asnumpy
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -1787,17 +1787,12 @@ class BlochWaves:
 
         return bloch_waves
 
-    def CBED_diffraction_patterns(
+    def CBED_patterns(
             self,
             probe: Probe,
             thickness: float,
-            n_pts: int = 64,
-            output_shape: tuple[int, int] = (256, 256),
-            threshold: float = 1e-6,
-            max_angle: Optional[float] = None,
-            gaussian_coefficient: Optional[float] = None,
-            jitter: Optional[float] = None,
-            show_pbar: Optional[bool] = None,
+            jitter: float = None,
+            pbar: Optional[bool] = None,
             lazy: bool = True,
     ) -> DiffractionPatterns:
         """
@@ -1828,31 +1823,31 @@ class BlochWaves:
             Optional noise applied to beam orientations. Can be used to lessen the
             artifacts from the bilinear interpolation
         """
-        if show_pbar is None:
-            show_pbar = config.get("local_diagnostics.task_level_progress", False)
+        if pbar is None:
+            pbar = config.get("local_diagnostics.task_level_progress", False)
 
         device = self.device
         xp = get_array_module(device)
         wavelength= energy2wavelength(probe.energy)
         semiangle_cutoff = probe.semiangle_cutoff
 
-        theta_x = np.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
-        theta_y = np.linspace(-semiangle_cutoff,semiangle_cutoff,n_pts+1)
+        ap = probe.aperture
+        ap.match_grid(probe)
+        alpha, phi = probe._angular_grid()
+        alpha = asnumpy(alpha)
+        phi = asnumpy(phi)
+        aperture = ap._evaluate_from_angular_grid(alpha,phi)
+        inds = np.where(aperture)
+        weights = aperture[inds]
 
-        theta_xy = np.dstack(
-            np.meshgrid(
-                theta_x,
-                theta_y,
-                indexing='ij'
-            )
-        ).reshape((-1,2))
+        alpha_x = alpha[inds] * np.cos(phi[inds])
+        alpha_y = alpha[inds] * np.sin(phi[inds])
+
+        theta_xy_cpu = np.stack((alpha_x,alpha_y),-1)
 
         if jitter is not None:
-            grid_spacing = (2 * semiangle_cutoff) / n_pts
-            jitter_values = jitter * (np.random.rand(*theta_xy.shape) - 0.5) * grid_spacing
-            theta_xy += jitter_values
-
-        theta_xy_cpu = theta_xy[np.linalg.norm(theta_xy,axis=1) < semiangle_cutoff]*1e-3
+            jitter_values = jitter * (np.random.rand(*theta_xy_cpu.shape) - 0.5) * alpha[0,1]
+            theta_xy_cpu += jitter_values
 
         tilted_ZAs = np.array([0,0,1]) - np.insert(theta_xy_cpu,2,0,axis=1)
         tilted_ZAs /= np.linalg.norm(tilted_ZAs,axis=1)[:,None]
@@ -1868,13 +1863,13 @@ class BlochWaves:
         )
 
         theta_xy = xp.asarray(theta_xy_cpu)
-        dps = []
-        num_beams = len(self.calculate_diffraction_patterns(thickness))
-        angular_positions = xp.zeros((len(orientation_matrices),num_beams*2,2))
-        intensities = xp.zeros((len(orientation_matrices),num_beams*2))
+    
+        intensities = []
+        angular_positions = []
+        print(len(orientation_matrices))
 
-        pbar = TqdmWrapper(
-            enabled=show_pbar,
+        progressbar = TqdmWrapper(
+            enabled=pbar,
             total=len(orientation_matrices),
             desc="Calculating CBED patterns",
             leave=False,
@@ -1891,85 +1886,48 @@ class BlochWaves:
                 thicknesses=[thickness],
                 lazy=False,
             )[0]
-            num_beams_orientation = len(dp)
-            dps.append(dp)
-            angular_positions[i,:num_beams_orientation] = xp.asarray(dp.angular_positions[:,:2]*1e-3) - theta_xy[i,None]
-            intensities[i,:num_beams_orientation] = dp.intensities
-            pbar.update_if_exists(1)
+            angular_positions.append(xp.asarray(dp.angular_positions[:,:2]*1e-3) - theta_xy[i,None])
+            intensities.append(dp.intensities * weights[i])
+            
+            progressbar.update_if_exists(1)
 
-        k_max = self.g_max/2
+        alpha, phi = probe._angular_grid()
+        alpha_xx = alpha * xp.cos(phi)
+        alpha_yy = alpha * xp.sin(phi)
 
-        if max_angle is not None and max_angle*1e-3/wavelength < k_max:
-            k_max = max_angle*1e-3/wavelength
+        all_intensities = xp.concatenate(intensities)
+        all_angular_positions = xp.concatenate(angular_positions)
 
-        bins = output_shape[0]
-
-        alpha_max = reciprocal_space_sampling_to_angular_sampling(
-                (k_max,)*2,
-                self.energy
-            )[0] * 1e-3
-        
-        mask = (intensities > threshold) & (np.linalg.norm(angular_positions,axis=2) < alpha_max)
-        angular_positions_masked = angular_positions[mask]
-        intensities_masked = intensities[mask]
-
-        if max_angle is not None and max_angle*1e-3/wavelength > k_max:
-            k_max = max_angle*1e-3/wavelength
-
-            alpha_max = reciprocal_space_sampling_to_angular_sampling(
-                    (k_max,)*2,
-                    self.energy
-                )[0] * 1e-3
-
-        angular_pix = (angular_positions_masked + alpha_max) / (alpha_max / bins * 2)
-
-        x = angular_pix[:, 0].ravel()
-        y = angular_pix[:, 1].ravel()
-        intensities = intensities_masked.ravel()
-
-        out_H, out_W = output_shape
-        flat_size = out_H * out_W
-
-
-        # Bilinear interpolation
-        xF = xp.floor(x).astype(xp.int32)
-        yF = xp.floor(y).astype(xp.int32)
-        dx = x - xF
-        dy = y - yF
-
-        w0 = (1 - dx) * (1 - dy) * intensities
-        w1 = dx * (1 - dy) * intensities
-        w2 = (1 - dx) * dy * intensities
-        w3 = dx * dy * intensities
-
-        x0 = xp.clip(xF, 0, out_H - 1)
-        x1 = xp.clip(xF + 1, 0, out_H - 1)
-        y0 = xp.clip(yF, 0, out_W - 1)
-        y1 = xp.clip(yF + 1, 0, out_W - 1)
-
-        idx00 = x0 * out_W + y0
-        idx10 = x1 * out_W + y0
-        idx01 = x0 * out_W + y1
-        idx11 = x1 * out_W + y1
-
-        out_flat = xp.bincount(idx00, weights=w0, minlength=flat_size)
-        out_flat += xp.bincount(idx10, weights=w1, minlength=flat_size)
-        out_flat += xp.bincount(idx01, weights=w2, minlength=flat_size)
-        out_flat += xp.bincount(idx11, weights=w3, minlength=flat_size)
-
-        if gaussian_coefficient is not None:
-            out_flat_cpu = np.asarray(
-                out_flat.get() if hasattr(out_flat, 'get') else out_flat
+        def get_edges(centers):
+            d = centers[1] - centers[0]
+            return np.concatenate(
+            (
+                centers - d/2,
+                xp.array(centers[-1:]+d/2)
             )
-            out_flat_cpu = gaussian_filter(out_flat_cpu, gaussian_coefficient)
-            out_flat = xp.asarray(out_flat_cpu)
-        
-        pbar.close_if_exists()
+        )
 
-        output = DiffractionPatterns(array = out_flat.reshape(output_shape), sampling=k_max*2/output_shape[0], fftshift=True, metadata={'semiangle_cutoff': semiangle_cutoff, 'energy': probe.energy})
-        return output
-                
+        # Prepare your shifted vectors
+        x_centers = np.fft.fftshift(alpha_xx[:, 0])
+        y_centers = np.fft.fftshift(alpha_yy[0, :])
+
+        # Create edges that surround the centers
+        x_edges = get_edges(x_centers)
+        y_edges = get_edges(y_centers)
+
+        # Bin the data
+        griddata, _, _ = np.histogram2d(
+            all_angular_positions[:, 0], 
+            all_angular_positions[:, 1], 
+            bins=[x_edges, y_edges], 
+            weights=all_intensities
+)
+
+        progressbar.close_if_exists()
         
+        output = DiffractionPatterns(array = griddata, sampling=1/probe.extent[0], fftshift=True, metadata={'semiangle_cutoff': semiangle_cutoff, 'energy': probe.energy})
+        return output
+                 
 
 
 def is_base_distribution_tuple(
