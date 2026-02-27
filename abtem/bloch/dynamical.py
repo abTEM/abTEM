@@ -61,7 +61,7 @@ from abtem.inelastic.phonons import (
 from abtem.measurements import IndexedDiffractionPatterns, DiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
-from abtem.reconstruct import ProgressBar
+
 
 if cp is not None:
     from abtem.bloch.matrix_exponential import expm as expm_cupy
@@ -1791,9 +1791,7 @@ class BlochWaves:
             self,
             probe: Probe,
             thickness: float,
-            jitter: float = None,
             pbar: Optional[bool] = None,
-            lazy: bool = True,
     ) -> DiffractionPatterns:
         """
         Calculates a converged beam electron diffraction (CBED) pattern using a grid of 
@@ -1806,22 +1804,6 @@ class BlochWaves:
         thickness : float
             Sample thickness used in Bloch wave calculation.
             Higher thickness will result in more dynamic scattering.
-        n_pts : int
-            The amount of gpts used for the probe constructions.
-        output_shape : tuple[int, int]
-            Shape of the final created diffraction pattern
-        threshold : float
-            Threshold value for beam intensity. Beams with a intensity below the 
-            threshold will not be used for the final image
-        max_angle : float
-            Optional maximum angle to be visible in the final image, 
-            otherwise max angle is determined by g_max/2
-        gaussian_coefficient : float
-            Optional Gaussian applied to final image. Can be used to lessen the
-            artifacts from the bilinear interpolation
-        jitter : float
-            Optional noise applied to beam orientations. Can be used to lessen the
-            artifacts from the bilinear interpolation
         """
         if pbar is None:
             pbar = config.get("local_diagnostics.task_level_progress", False)
@@ -1830,7 +1812,6 @@ class BlochWaves:
         xp = get_array_module(device)
         wavelength= energy2wavelength(probe.energy)
         semiangle_cutoff = probe.semiangle_cutoff
-
         ap = probe.aperture
         ap.match_grid(probe)
         alpha, phi = probe._angular_grid()
@@ -1844,10 +1825,6 @@ class BlochWaves:
         alpha_y = alpha[inds] * np.sin(phi[inds])
 
         theta_xy_cpu = np.stack((alpha_x,alpha_y),-1)
-
-        if jitter is not None:
-            jitter_values = jitter * (np.random.rand(*theta_xy_cpu.shape) - 0.5) * alpha[0,1]
-            theta_xy_cpu += jitter_values
 
         tilted_ZAs = np.array([0,0,1]) - np.insert(theta_xy_cpu,2,0,axis=1)
         tilted_ZAs /= np.linalg.norm(tilted_ZAs,axis=1)[:,None]
@@ -1866,7 +1843,6 @@ class BlochWaves:
     
         intensities = []
         angular_positions = []
-        print(len(orientation_matrices))
 
         progressbar = TqdmWrapper(
             enabled=pbar,
@@ -1921,11 +1897,11 @@ class BlochWaves:
             all_angular_positions[:, 1], 
             bins=[x_edges, y_edges], 
             weights=all_intensities
-)
+        )   
 
         progressbar.close_if_exists()
         
-        output = DiffractionPatterns(array = griddata, sampling=1/probe.extent[0], fftshift=True, metadata={'semiangle_cutoff': semiangle_cutoff, 'energy': probe.energy})
+        output = DiffractionPatterns(array = griddata, sampling=(1/probe.extent[0], 1/probe.extent[1]), fftshift=True, metadata={'semiangle_cutoff': semiangle_cutoff, 'energy': probe.energy})
         return output
                  
 
