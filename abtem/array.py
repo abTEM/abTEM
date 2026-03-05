@@ -25,6 +25,7 @@ from typing import (
 import dask
 import dask.array as da
 import numpy as np
+import zarr  # type: ignore
 from dask.array.utils import validate_axis
 from dask.diagnostics import Profiler, ProgressBar, ResourceProfiler
 from tqdm.dask import TqdmCallback
@@ -222,15 +223,15 @@ class ComputableList(list):
         compute: bool = True,
         overwrite: bool = False,
         progress_bar: Optional[bool] = None,
-        compression_level: int | None = 4,
         **kwargs: Any,
     ):
         """Write data to a zarr file.
+
         Parameters
         ----------
         url : str
-            Location of the data. For Zarr 3 zip stores, use a .zip extension.
-            For directory stores, use .zarr extension or a directory path.
+            Location of the data, typically a path to a local file. A URL can also
+            include a protocol specifier like s3:// for remote data.
         compute : bool
             If true compute immediately; return dask.delayed.Delayed otherwise.
         overwrite : bool
@@ -239,168 +240,46 @@ class ComputableList(list):
         progress_bar : bool
             Display a progress bar in the terminal or notebook during computation. The
             progress bar is only displayed with a local scheduler.
-        compression_level : int or None
-            If set (0–9), applies Zstandard compression with Blosc backend at that level.
-            Level 0 disables compression. Default is 4, raises ValueError if > 9.
         kwargs :
             Keyword arguments passed to `dask.array.to_zarr`.
         """
-        import os
-        import zarr
+        computables = []
+        root = zarr.open(url, mode="w")
+        try:
+            for i, has_array in enumerate(self):
+                has_array = has_array.ensure_lazy()
 
-        # Validate compression level
-        # Based on quantem: https://github.com/electronmicroscopy/quantem
-        if compression_level is not None:
-            if not (0 <= compression_level <= 9):
-                raise ValueError(
-                    f"Compression_level must be between 0 and 9 instead of {compression_level}"
-                )
-            compressors = {
-                "name": "blosc",
-                "configuration": {
-                    "cname": "zstd",
-                    "clevel": int(compression_level),
-                    "shuffle": "bitshuffle",
-                },
-            }
-        else:
-            compressors = None
+                array = has_array.copy_to_device("cpu").array
 
-        # Helper functions for type preservation
-        def encode_types(obj):
-            """Recursively encode tuples for JSON serialization."""
-            if isinstance(obj, tuple):
-                return {
-                    "_type": "tuple",
-                    "_value": [encode_types(item) for item in obj],
-                }
-            elif isinstance(obj, list):
-                return [encode_types(item) for item in obj]
-            elif isinstance(obj, dict):
-                return {key: encode_types(value) for key, value in obj.items()}
-            else:
-                return obj
-
-        # Determine if this is a zip file
-        is_zip = url.endswith(".zip")
-
-        arrays_to_write = []
-        metadata_list = []
-
-        for i, has_array in enumerate(self):
-            has_array = has_array.ensure_lazy()
-            array = has_array.copy_to_device("cpu").array
-
-            packed_kwargs = has_array._pack_kwargs(
-                has_array._copy_kwargs(exclude=("array",))
-            )
-
-            # Encode tuples in packed_kwargs
-            packed_kwargs = encode_types(packed_kwargs)
-
-            arrays_to_write.append((i, array))
-            metadata_list.append(
-                {f"kwargs{i}": packed_kwargs, f"type{i}": has_array.__class__.__name__}
-            )
-
-        if is_zip:
-            # Use ZipStore for .zip files
-            @dask.delayed
-            def write_to_zipstore(
-                computed_arrays,
-                url,
-                metadata_list,
-                overwrite,
-                compressors=compressors,
-            ):
-
-                if overwrite and os.path.exists(url):
-                    os.remove(url)
-
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Duplicate name:.*zarr.json",
-                        category=UserWarning,
+                computables.append(
+                    array.to_zarr(
+                        url, compute=False, component=f"array{i}", overwrite=overwrite
                     )
+                )
+                packed_kwargs = has_array._pack_kwargs(
+                    has_array._copy_kwargs(exclude=("array",))
+                )
 
-                    store = zarr.storage.ZipStore(url, mode="w")
-
-                    try:
-                        root = zarr.group(store=store, overwrite=True)
-
-                        for metadata_dict in metadata_list:
-                            for key, value in metadata_dict.items():
-                                root.attrs[key] = value
-
-                        for i, computed_array in computed_arrays:
-                            root.create_array(
-                                name=f"array{i}",
-                                data=computed_array,
-                                chunks=computed_array.shape,
-                                overwrite=True,
-                                compressors=compressors,
-                            )
-                    finally:
-                        store.close()
-
-                return url
-
-            delayed_arrays = [
-                (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
-            ]
-            delayed_write = write_to_zipstore(
-                delayed_arrays, url, metadata_list, overwrite, compressors=compressors
-            )
-
-        else:
-            # Use directory store for non-.zip files
-            @dask.delayed
-            def write_to_directory(computed_arrays, url, metadata_list, overwrite):
-                import shutil
-
-                if overwrite and os.path.exists(url):
-                    shutil.rmtree(url)
-
-                root = zarr.open(url, mode="w")
-
-                try:
-                    for metadata_dict in metadata_list:
-                        for key, value in metadata_dict.items():
-                            root.attrs[key] = value
-
-                    for i, computed_array in computed_arrays:
-                        root.create_array(
-                            name=f"array{i}",
-                            data=computed_array,
-                            chunks=computed_array.shape,
-                            overwrite=True,
-                        )
-                finally:
-                    store = getattr(root, "store", None)
-                    if store is not None:
-                        close_fn = getattr(store, "close", None)
-                        if callable(close_fn):
-                            close_fn()
-
-                return url
-
-            delayed_arrays = [
-                (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
-            ]
-            delayed_write = write_to_directory(
-                delayed_arrays, url, metadata_list, overwrite
-            )
+                root.attrs[f"kwargs{i}"] = packed_kwargs
+                root.attrs[f"type{i}"] = has_array.__class__.__name__
+        finally:
+            # Close underlying store if it supports closing (some stores expose .close()).
+            store = getattr(root, "store", None)
+            if store is not None:
+                close_fn = getattr(store, "close", None)
+                if callable(close_fn):
+                    close_fn()
 
         if not compute:
-            return delayed_write
+            return computables
 
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            output = dask.compute(delayed_write, **kwargs)[0]
+            output = dask.compute(computables, **kwargs)[0]
 
         profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
+
         if profilers:
             return output, profilers
         else:
@@ -1416,7 +1295,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @classmethod
     def from_zarr(cls, url: str, chunks: Chunks = "auto") -> Self:
-        """Read wave functions from a Zarr file.
+        """Read wave functions from a hdf5 file.
 
         url : str
             Location of the data, typically a path to a local file. A URL can also
@@ -1901,7 +1780,7 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
     ----------
     url : str
         Location of the data. A URL can include a protocol specifier like s3:// for
-        remote data. For Zarr 3 zip stores, this should be a path to a .zip file.
+        remote data.
     chunks :  tuple of ints or tuples of ints
         Passed to dask.array.from_array(), allows setting the chunks on initialisation,
         if the chunking scheme in the on-disc dataset is not optimal for the
@@ -1911,69 +1790,40 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
     -------
     imported : ArrayObject
     """
-    import zarr
-
     import abtem
 
-    # Helper function for type restoration
-    def decode_types(obj):
-        """Recursively decode tuples from JSON."""
-        if isinstance(obj, dict):
-            if obj.get("_type") == "tuple":
-                return tuple(decode_types(item) for item in obj["_value"])
-            else:
-                return {key: decode_types(value) for key, value in obj.items()}
-        elif isinstance(obj, list):
-            return [decode_types(item) for item in obj]
-        else:
-            return obj
-
-    # Determine if this is a zip file
-    is_zip = url.endswith(".zip")
-
-    if is_zip:
-        store = zarr.storage.ZipStore(url, mode="r")
-        f = zarr.open(store=store, mode="r")
-    else:
-        f = zarr.open(url, mode="r")
-
-    # Read metadata
-    i = 0
-    types = []
-    while True:
-        try:
-            types.append(f.attrs[f"type{i}"])
-        except KeyError:
-            break
-        i += 1
-
     imported = []
-    for i, t in enumerate(types):
-        cls = getattr(abtem, t)
+    f = zarr.open(url, mode="r")
+    try:
+        i = 0
+        types = []
+        while True:
+            try:
+                types.append(f.attrs[f"type{i}"])
+            except KeyError:
+                break
+            i += 1
 
-        # Decode types before unpacking
-        packed_kwargs = decode_types(f.attrs[f"kwargs{i}"])
-        kwargs = cls._unpack_kwargs(packed_kwargs)
+        for i, t in enumerate(types):
+            cls = getattr(abtem, t)
 
-        num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
+            kwargs = cls._unpack_kwargs(f.attrs[f"kwargs{i}"])
+            num_ensemble_axes = len(kwargs["ensemble_axes_metadata"])
 
-        # Get the zarr array
-        zarr_array = f[f"array{i}"]
+            if chunks == "auto":
+                chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
 
-        # Determine chunks
-        if chunks == "auto":
-            array_chunks = ("auto",) * num_ensemble_axes + (-1,) * cls._base_dims
-        elif chunks is None:
-            # Use the chunks from the zarr array itself
-            array_chunks = zarr_array.chunks
-        else:
-            array_chunks = chunks
+            array = da.from_zarr(url, component=f"array{i}", chunks=chunks)
 
-        # Create dask array from zarr array
-        array = da.from_array(zarr_array, chunks=array_chunks)
-
-        with config.set({"warnings.overspecified-grid": False}):
-            imported.append(cls(array, **kwargs))
+            with config.set({"warnings.overspecified-grid": False}):
+                imported.append(cls(array, **kwargs))
+    finally:
+        # Close underlying store if it supports closing (some stores expose .close()).
+        store = getattr(f, "store", None)
+        if store is not None:
+            close_fn = getattr(store, "close", None)
+            if callable(close_fn):
+                close_fn()
 
     if len(imported) == 1:
         imported = imported[0]
