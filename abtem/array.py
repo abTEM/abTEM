@@ -84,6 +84,12 @@ try:
 except ImportError:
     pass
 
+em: Optional[ModuleType] = None
+try:
+    import quantem as em  # type: ignore
+except ImportError:
+    pass
+
 
 ArrayObjectType = TypeVar("ArrayObjectType", bound="ArrayObject")
 ArrayObjectTypeAlt = TypeVar("ArrayObjectTypeAlt", bound="ArrayObject")
@@ -1758,6 +1764,58 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
         return xr.DataArray(self.array, dims=dims, coords=coords, attrs=attrs)
 
+    def to_quantem(self):
+        """
+        Convert ArrayObject to quantem Dataset object.
+        """
+
+        if em is None:
+            raise ImportError(
+                "This functionality of *ab*TEM requires quantem, see https://github.com/electronmicroscopy/quantem."
+            )
+
+        def _normalize_unit(unit):
+            if unit is None:
+                return "pixels"
+
+            UNIT_MAP = {
+                "Å": "A",
+                "Ångström": "A",
+                "Angstrom": "A",
+                "1/Å": "A^-1",
+                "Å^-1": "A^-1",
+                "1/A": "A^-1",
+            }
+
+            return UNIT_MAP.get(unit, unit)
+
+        sampling = []
+        origin = []
+        units = []
+
+        for axis in self.axes_metadata:
+            sampling.append(getattr(axis, "sampling", 1.0))
+            units.append(_normalize_unit(getattr(axis, "units", None)))
+            origin.append(0.0)
+
+        if self.is_lazy:
+            self.compute()
+
+        dataset = em.core.datastructures.Dataset.from_array(
+            array=self.array,
+            name=type(self).__name__,
+            origin=tuple(origin),
+            sampling=tuple(sampling),
+            units=tuple(units),
+            signal_units=getattr(self, "units", "arb. units"),
+        )
+
+        # preserve abTEM metadata if present
+        if hasattr(self, "metadata"):
+            dataset._metadata = dict(self.metadata)
+
+        return dataset
+
     @classmethod
     def _stack(
         cls,
@@ -1958,6 +2016,7 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
     else:
         raise ValueError("Zarr file does not contain recognizable abTEM metadata.")
 
+
 def _from_zarr_canonical(root, chunks, decode_types):
     import dask.array as da
 
@@ -2008,6 +2067,7 @@ def _from_zarr_canonical(root, chunks, decode_types):
 
     return imported[0] if len(imported) == 1 else imported
 
+
 def _from_zarr_legacy(root, chunks, decode_types):
     import dask.array as da
     from dask import config
@@ -2049,6 +2109,7 @@ def _from_zarr_legacy(root, chunks, decode_types):
             imported.append(cls(array, **kwargs))
 
     return imported[0] if len(imported) == 1 else imported
+
 
 def validate_axis_metadata(
     axis_metadata: Optional[AxisMetadata | Sequence[str] | dict],
