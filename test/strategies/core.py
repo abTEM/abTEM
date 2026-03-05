@@ -80,6 +80,16 @@ def temporary_path(draw, allow_none=True):
 
 
 @st.composite
+def temporary_path_zip(draw, allow_none=True):
+    path = st.just(
+        os.path.join(tempfile.gettempdir(), f"abtem-test-{str(uuid.uuid4())}.zarr.zip")
+    )
+    if allow_none:
+        path = st.one_of(st.just(path), st.none())
+    return draw(path)
+
+
+@st.composite
 def scan_axis_metadata(draw):
     sampling = st.floats(min_value=0.01, max_value=0.1)
     offset = st.floats(min_value=0.0, max_value=10.0)
