@@ -308,19 +308,14 @@ class ComputableList(list):
             has_array = has_array.ensure_lazy()
             array = has_array.copy_to_device("cpu").array
 
-            # packed_kwargs = has_array._pack_kwargs(
-            #     has_array._copy_kwargs(exclude=("array",))
-            # )
-            #
-            # Encode tuples in packed_kwargs
-            # packed_kwargs = encode_types(packed_kwargs)
-            #
-            # arrays_to_write.append((i, array))
-            # metadata_list.append(
-            #     {f"kwargs{i}": packed_kwargs, f"type{i}": has_array.__class__.__name__}
-            # )
-
             metadata_dict = has_array._metadata_to_dict()
+
+            packed_kwargs = has_array._pack_kwargs(
+                has_array._copy_kwargs(exclude=("array",))
+            )
+
+            metadata_dict["kwargs"] = packed_kwargs
+
             metadata_dict = encode_types(metadata_dict)
 
             arrays_to_write.append((i, array))
@@ -2034,13 +2029,14 @@ def _from_zarr_canonical(root, chunks, decode_types):
 
         metadata.pop("data_origin", None)
         cls_name = metadata.pop("type")
-        cls = getattr(abtem.measurements, cls_name)
+        cls = getattr(abtem, cls_name)
 
+        kwargs = metadata.pop("kwargs", None)
         axes_dict = metadata.pop("axes")
 
         # Preserve axis order
         axes_list = [
-            abtem.core.axes.axis_from_dict(axes_dict[k])
+            axis_from_dict(axes_dict[k])
             for k in sorted(axes_dict, key=lambda x: int(x.split("_")[1]))
         ]
 
@@ -2055,13 +2051,23 @@ def _from_zarr_canonical(root, chunks, decode_types):
 
         array = da.from_array(zarr_array, chunks=array_chunks)
 
-        imported.append(
-            cls.from_array_and_metadata(
+        try:
+            obj = cls.from_array_and_metadata(
                 array,
                 axes_metadata=axes_list,
                 metadata=metadata,
             )
-        )
+        except Exception:
+            if kwargs is None:
+                raise
+
+            kwargs = cls._unpack_kwargs(kwargs)
+            kwargs["array"] = array
+            kwargs["metadata"] = metadata
+
+            obj = cls(**kwargs)
+
+        imported.append(obj)
 
         i += 1
 
