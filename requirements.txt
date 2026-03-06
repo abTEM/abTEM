@@ -13,4 +13,3 @@ tabulate
 ipywidgets
 ipympl
 tqdm
-rich # Required for supporting Zarr zip storage

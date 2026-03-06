@@ -25,6 +25,7 @@ from typing import (
 import dask
 import dask.array as da
 import numpy as np
+import zarr  # type: ignore
 from dask.array.utils import validate_axis
 from dask.diagnostics import Profiler, ProgressBar, ResourceProfiler
 from tqdm.dask import TqdmCallback
@@ -228,15 +229,15 @@ class ComputableList(list):
         compute: bool = True,
         overwrite: bool = False,
         progress_bar: Optional[bool] = None,
-        compression_level: int | None = 4,
         **kwargs: Any,
     ):
         """Write data to a zarr file.
+
         Parameters
         ----------
         url : str
-            Location of the data. For Zarr 3 zip stores, use a .zip extension.
-            For directory stores, use .zarr extension or a directory path.
+            Location of the data, typically a path to a local file. A URL can also
+            include a protocol specifier like s3:// for remote data.
         compute : bool
             If true compute immediately; return dask.delayed.Delayed otherwise.
         overwrite : bool
@@ -245,9 +246,6 @@ class ComputableList(list):
         progress_bar : bool
             Display a progress bar in the terminal or notebook during computation. The
             progress bar is only displayed with a local scheduler.
-        compression_level : int or None
-            If set (0–9), applies Zstandard compression with Blosc backend at that level.
-            Level 0 disables compression. Default is 4, raises ValueError if > 9.
         kwargs :
             Keyword arguments passed to `dask.array.to_zarr`.
         """
@@ -332,93 +330,37 @@ class ComputableList(list):
                 compressors=compressors,
             ):
 
-                if overwrite and os.path.exists(url):
-                    os.remove(url)
+                array = has_array.copy_to_device("cpu").array
 
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Duplicate name:.*zarr.json",
-                        category=UserWarning,
+                computables.append(
+                    array.to_zarr(
+                        url, compute=False, component=f"array{i}", overwrite=overwrite
                     )
+                )
+                packed_kwargs = has_array._pack_kwargs(
+                    has_array._copy_kwargs(exclude=("array",))
+                )
 
-                    store = zarr.storage.ZipStore(url, mode="w")
-
-                    try:
-                        root = zarr.group(store=store, overwrite=True)
-
-                        for metadata_dict in metadata_list:
-                            for key, value in metadata_dict.items():
-                                root.attrs[key] = value
-
-                        for i, computed_array in computed_arrays:
-                            root.create_array(
-                                name=f"array{i}",
-                                data=computed_array,
-                                chunks=computed_array.shape,
-                                overwrite=True,
-                                compressors=compressors,
-                            )
-                    finally:
-                        store.close()
-
-                return url
-
-            delayed_arrays = [
-                (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
-            ]
-            delayed_write = write_to_zipstore(
-                delayed_arrays, url, metadata_list, overwrite, compressors=compressors
-            )
-
-        else:
-            # Use directory store for non-.zip files
-            @dask.delayed
-            def write_to_directory(computed_arrays, url, metadata_list, overwrite):
-                import shutil
-
-                if overwrite and os.path.exists(url):
-                    shutil.rmtree(url)
-
-                root = zarr.open(url, mode="w")
-
-                try:
-                    for metadata_dict in metadata_list:
-                        for key, value in metadata_dict.items():
-                            root.attrs[key] = value
-
-                    for i, computed_array in computed_arrays:
-                        root.create_array(
-                            name=f"array{i}",
-                            data=computed_array,
-                            chunks=computed_array.shape,
-                            overwrite=True,
-                        )
-                finally:
-                    store = getattr(root, "store", None)
-                    if store is not None:
-                        close_fn = getattr(store, "close", None)
-                        if callable(close_fn):
-                            close_fn()
-
-                return url
-
-            delayed_arrays = [
-                (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
-            ]
-            delayed_write = write_to_directory(
-                delayed_arrays, url, metadata_list, overwrite
-            )
+                root.attrs[f"kwargs{i}"] = packed_kwargs
+                root.attrs[f"type{i}"] = has_array.__class__.__name__
+        finally:
+            # Close underlying store if it supports closing (some stores expose .close()).
+            store = getattr(root, "store", None)
+            if store is not None:
+                close_fn = getattr(store, "close", None)
+                if callable(close_fn):
+                    close_fn()
 
         if not compute:
-            return delayed_write
+            return computables
 
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            output = dask.compute(delayed_write, **kwargs)[0]
+            output = dask.compute(computables, **kwargs)[0]
 
         profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
+
         if profilers:
             return output, profilers
         else:
@@ -1434,7 +1376,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @classmethod
     def from_zarr(cls, url: str, chunks: Chunks = "auto") -> Self:
-        """Read wave functions from a Zarr file.
+        """Read wave functions from a hdf5 file.
 
         url : str
             Location of the data, typically a path to a local file. A URL can also
@@ -1971,7 +1913,7 @@ def from_zarr(url: str, chunks: Optional[Chunks] = None):
     ----------
     url : str
         Location of the data. A URL can include a protocol specifier like s3:// for
-        remote data. For Zarr 3 zip stores, this should be a path to a .zip file.
+        remote data.
     chunks :  tuple of ints or tuples of ints
         Passed to dask.array.from_array(), allows setting the chunks on initialisation,
         if the chunking scheme in the on-disc dataset is not optimal for the
