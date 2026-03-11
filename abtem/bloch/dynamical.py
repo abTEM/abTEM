@@ -1857,7 +1857,7 @@ class BlochWaves:
 
         return griddata / griddata.sum()
 
-    def CBED_patterns(
+    def calculate_CBED_patterns(
         self,
         probe: Probe,
         thicknesses: float | Iterable[float],
