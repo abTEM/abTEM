@@ -39,6 +39,7 @@ dependencies = [
     "ipywidgets",
     "ipympl",
     "tqdm",
+    "rich", # Required for supporting Zarr zip storage
 ]
 dynamic = ["version"]
 
@@ -91,6 +92,9 @@ version = {attr = "abtem._version.__version__"}
 [tool.black]
 line-length = 88
 
+[tool.isort]
+profile = "black"
+
 [tool.ruff]
 fix = false
 line-length = 88
@@ -132,4 +136,3 @@ checks = [
     "SA01",
     "ES01",
 ]
-
