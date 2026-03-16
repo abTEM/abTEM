@@ -1839,15 +1839,12 @@ class BlochWaves:
             d = centers[1] - centers[0]
             return xp.concatenate((centers - d / 2, xp.array(centers[-1:] + d / 2)))
 
-        # Prepare your shifted vectors
         x_centers = xp.fft.fftshift(alpha_xx[:, 0])
         y_centers = xp.fft.fftshift(alpha_yy[0, :])
 
-        # Create edges that surround the centers
         x_edges = get_edges(x_centers)
         y_edges = get_edges(y_centers)
 
-        # Bin the data
         griddata, _, _ = xp.histogram2d(
             all_angular_positions[:, 0],
             all_angular_positions[:, 1],
@@ -1855,7 +1852,7 @@ class BlochWaves:
             weights=all_intensities,
         )
 
-        return griddata / griddata.sum()
+        return griddata / griddata.sum()  # note: normalized to unity
 
     def calculate_CBED_patterns(
         self,
