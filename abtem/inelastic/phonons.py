@@ -236,7 +236,7 @@ def validate_seeds(
     if isinstance(seeds, int) and num_seeds is None:
         seeds = (seeds,)
 
-    elif seeds is None :
+    elif seeds is None:
         if num_seeds is None:
             raise ValueError("Provide `num_seeds` or a seed for each configuration.")
 
@@ -388,19 +388,21 @@ def validate_sigmas(
 
     if isinstance(validated_sigmas, dict):
         sigmas_array = next(iter(validated_sigmas.values()))
+        anisotropic = np.asarray(sigmas_array).shape == (3,)
     else:
         sigmas_array = validated_sigmas
-
-    if (
-        sigmas_array.shape
-        and len(sigmas_array.shape) == 2
-        and sigmas_array.shape[-1] == (3,)
-    ):
-        anisotropic = True
-    elif len(sigmas_array.shape) < 2:
-        anisotropic = False
-    else:
-        raise RuntimeError("Anisotropic displacements must be given as three values.")
+        if (
+            sigmas_array.shape
+            and len(sigmas_array.shape) == 2
+            and sigmas_array.shape[-1] == 3
+        ):
+            anisotropic = True
+        elif len(sigmas_array.shape) < 2:
+            anisotropic = False
+        else:
+            raise RuntimeError(
+                "Anisotropic displacements must be given as three values."
+            )
 
     return validated_sigmas, anisotropic
 
@@ -559,7 +561,9 @@ class FrozenPhonons(BaseFrozenPhonons):
         if anisotropic:
             r = rng.normal(size=(len(atoms), 3))
             for axis in self._axes:
-                atoms.positions[:, axis] += sigmas[:, axis] * r[:, axis]
+                # If sigmas is 2D (anisotropic), extract the sigma for this axis
+                sigma_axis = sigmas[:, axis] if sigmas.ndim == 2 else sigmas
+                atoms.positions[:, axis] += sigma_axis * r[:, axis]
         else:
             r = rng.normal(size=(len(atoms), 3))
 
