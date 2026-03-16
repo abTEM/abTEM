@@ -52,7 +52,7 @@ def test_can_build(data, waves_builder, device, lazy):
     assert np.all(np.isclose(waves_builder.extent, waves.extent))
     check_grid_consistent(waves.extent, waves.gpts, waves.sampling)
 
-    assert np.isclose(waves.energy, waves_builder.energy)
+    assert np.isclose(waves.energy, waves_builder.accelerator.energy)
 
 
 @given(data=st.data())

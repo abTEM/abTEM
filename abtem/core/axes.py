@@ -425,6 +425,25 @@ class ParameterAxis(NonLinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class EnergyAxis(NonLinearAxis):
+    label: str = "Energy"
+    units: str = "eV"
+
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
+        """Format title displaying energy in keV regardless of stored eV units."""
+        if formatting is None:
+            formatting = ".3g"
+        value_kev = self.values[0] / 1000.0
+        formatted = f"{value_kev:>{formatting}}"
+        if include_label:
+            return f"{self.label} = {formatted} keV"
+        else:
+            return f"{formatted} keV"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class PositionsAxis(OrdinalAxis):
     label: str = "x, y"
     units: str = "Å"

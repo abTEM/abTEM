@@ -135,6 +135,8 @@ def validate_units(
         return units
     elif units_type[units] == "angular":
         return units
+    elif units_type[units] == "energy":
+        return units
     else:
         raise ValueError(f"Invalid units: {units}")
 
