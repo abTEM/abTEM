@@ -1,4 +1,4 @@
-"""Tests for energy ensemble support in PlaneWave, Probe, and Waves."""
+"""Tests for energy ensemble support in PlaneWave, Probe, Waves, and BlochWaves."""
 
 import numpy as np
 import os
@@ -6,7 +6,9 @@ import tempfile
 
 import ase
 import abtem
-from abtem.core.axes import EnergyAxis
+from abtem.bloch.dynamical import BlochWaves
+from abtem.core.axes import EnergyAxis, ThicknessAxis
+from abtem.measurements import IndexedDiffractionPatterns
 from abtem.waves import PlaneWave, Probe, Waves
 
 ENERGIES = [80e3, 200e3, 300e3]
@@ -147,3 +149,120 @@ class TestWavesEnergyEnsemble:
         assert loaded.shape == (3, 32, 32)
         assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
         assert loaded.ensemble_axes_metadata[0].values == (80e3, 200e3, 300e3)
+
+
+# ---------------------------------------------------------------------------
+# SrTiO3 fixture used by BlochWaves tests
+# ---------------------------------------------------------------------------
+
+def _srtio3_atoms():
+    return ase.Atoms(
+        symbols="SrTiO3",
+        scaled_positions=[
+            [0.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [0.5, 0.0, 0.5],
+            [0.5, 0.5, 0.0],
+            [0.0, 0.5, 0.5],
+        ],
+        cell=[3.9127, 3.9127, 3.9127],
+        pbc=True,
+    )
+
+
+BLOCH_ENERGIES = [100e3, 200e3, 300e3]
+BLOCH_SG_MAX = 0.1
+BLOCH_G_MAX = 8.0
+BLOCH_THICKNESS = [20.0, 40.0]
+
+
+class TestBlochWavesEnergyEnsemble:
+    """Verify that BlochWaves accepts a list of energies and returns correctly
+    shaped, stacked results without requiring manual loops."""
+
+    def test_scalar_energy_unchanged(self):
+        """Scalar energy still works as before (no regression)."""
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(atoms, energy=100e3, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX)
+        assert bw._energy_hkl_masks is None
+        result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS[0])
+        assert isinstance(result, IndexedDiffractionPatterns)
+
+    def test_union_mask_is_superset(self):
+        """The union _hkl_mask must be at least as large as each per-energy mask."""
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(
+            atoms, energy=BLOCH_ENERGIES, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX
+        )
+        assert bw._energy_hkl_masks is not None
+        n_union = int(bw._hkl_mask.sum())
+        for sub in bw._energy_hkl_masks:
+            assert int(sub.sum()) <= n_union
+
+    def test_diffraction_patterns_shape(self):
+        """calculate_diffraction_patterns returns (n_energies, n_beams) array."""
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(
+            atoms, energy=BLOCH_ENERGIES, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX
+        )
+        result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
+        assert isinstance(result, IndexedDiffractionPatterns)
+        n_energies = len(BLOCH_ENERGIES)
+        n_union = int(bw._hkl_mask.sum())
+        assert result.array.shape == (n_energies, n_union)
+        assert isinstance(result.ensemble_axes_metadata[0], EnergyAxis)
+        assert result.ensemble_axes_metadata[0].values == tuple(BLOCH_ENERGIES)
+
+    def test_diffraction_patterns_multi_thickness_shape(self):
+        """calculate_diffraction_patterns with thicknesses: (n_energies, n_thick, n_beams)."""
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(
+            atoms, energy=BLOCH_ENERGIES, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX
+        )
+        result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS).compute()
+        n_energies = len(BLOCH_ENERGIES)
+        n_union = int(bw._hkl_mask.sum())
+        n_thick = len(BLOCH_THICKNESS)
+        assert result.array.shape == (n_energies, n_thick, n_union)
+        assert isinstance(result.ensemble_axes_metadata[0], EnergyAxis)
+        assert isinstance(result.ensemble_axes_metadata[1], ThicknessAxis)
+
+    def test_exit_waves_shape(self):
+        """calculate_exit_waves returns (n_energies, ny, nx) Waves."""
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(
+            atoms, energy=BLOCH_ENERGIES, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX
+        )
+        result = bw.calculate_exit_waves(BLOCH_THICKNESS[0]).compute()
+        assert isinstance(result, Waves)
+        n_energies = len(BLOCH_ENERGIES)
+        assert result.array.shape[0] == n_energies
+        assert isinstance(result.ensemble_axes_metadata[0], EnergyAxis)
+        assert result.ensemble_axes_metadata[0].values == tuple(BLOCH_ENERGIES)
+
+    def test_exit_waves_multi_thickness_shape(self):
+        """calculate_exit_waves with thicknesses: (n_energies, n_thick, ny, nx)."""
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(
+            atoms, energy=BLOCH_ENERGIES, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX
+        )
+        result = bw.calculate_exit_waves(BLOCH_THICKNESS).compute()
+        n_energies = len(BLOCH_ENERGIES)
+        n_thick = len(BLOCH_THICKNESS)
+        assert result.array.shape[0] == n_energies
+        assert result.array.shape[1] == n_thick
+
+    def test_inactive_beams_are_zero(self):
+        """Beams inactive at a given energy must have zero intensity in the output."""
+        atoms = _srtio3_atoms()
+        bw = BlochWaves(
+            atoms, energy=BLOCH_ENERGIES, sg_max=BLOCH_SG_MAX, g_max=BLOCH_G_MAX
+        )
+        result = bw.calculate_diffraction_patterns(BLOCH_THICKNESS[0]).compute()
+        for i, sub in enumerate(bw._energy_hkl_masks):
+            inactive = ~sub  # positions active in union but NOT at energy i
+            if inactive.any():
+                np.testing.assert_array_equal(
+                    result.array[i, inactive], 0.0,
+                    err_msg=f"Inactive beams non-zero at energy index {i}",
+                )
