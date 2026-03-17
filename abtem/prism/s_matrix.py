@@ -17,6 +17,7 @@ from abtem.array import ArrayObject, ComputableList, validate_lazy
 from abtem.core import config
 from abtem.core.axes import (
     AxisMetadata,
+    EnergyAxis,
     OrdinalAxis,
     ScanAxis,
     UnknownAxis,
@@ -1437,7 +1438,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def __init__(
         self,
         semiangle_cutoff: float,
-        energy: float,
+        energy: float | list | np.ndarray,
         potential: Atoms | BasePotential = None,
         gpts: int | tuple[int, int] = None,
         sampling: float | tuple[float, float] = None,
@@ -1469,7 +1470,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         self._semiangle_cutoff = semiangle_cutoff
         self._downsample = downsample
 
-        self._accelerator = Accelerator(energy=energy)
+        self._energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+        self._accelerator = Accelerator(energy=float(self._energies[0]))
         # self._beam_tilt = BeamTilt(tilt=tilt)
 
         self._store_on_host = store_on_host
@@ -1535,18 +1537,31 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
         """Shape of the SMatrix ensemble axes."""
-        if self.potential is None:
-            return ()
-        else:
-            return self.potential.ensemble_shape
+        energy_shape = (len(self._energies),) if len(self._energies) > 1 else ()
+        potential_shape = (
+            self.potential.ensemble_shape if self.potential is not None else ()
+        )
+        return energy_shape + potential_shape
 
     @property
     def ensemble_axes_metadata(self):
         """Axis metadata for each ensemble axis."""
-        if self.potential is None:
-            return []
-        else:
-            return self.potential.ensemble_axes_metadata
+        energy_meta = (
+            [EnergyAxis(values=tuple(float(e) for e in self._energies))]
+            if len(self._energies) > 1
+            else []
+        )
+        potential_meta = (
+            self.potential.ensemble_axes_metadata if self.potential is not None else []
+        )
+        return energy_meta + potential_meta
+
+    def _with_energy(self, e: float) -> "SMatrix":
+        """Return a single-energy clone of this SMatrix."""
+        clone = self.copy()
+        clone._energies = np.array([float(e)])
+        clone._accelerator = Accelerator(energy=float(e))
+        return clone
 
     @property
     def wave_vectors(self) -> np.ndarray:
@@ -1777,6 +1792,68 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         """
         lazy = validate_lazy(lazy)
 
+        # --- Multi-energy path ---
+        if len(self._energies) > 1:
+            results = [
+                self._with_energy(float(e)).build(lazy=lazy, max_batch=max_batch)
+                for e in self._energies
+            ]
+            # Wave-vector counts differ per energy (higher energy → more plane waves
+            # within the semiangle cutoff).  The sets are nested subsets, so the
+            # result with the most wave vectors is the union.
+            n_wvs = [r.array.shape[0] for r in results]
+            max_idx = int(np.argmax(n_wvs))
+            union_wave_vectors = results[max_idx].wave_vectors
+            n_union = len(union_wave_vectors)
+            # Build a fast lookup: (qx, qy) → union index
+            union_wv_dict = {
+                (float(q[0]), float(q[1])): i
+                for i, q in enumerate(union_wave_vectors)
+            }
+
+            def _embed_wave_vectors(arr, indices, n_union):
+                """Embed arr (n_wv, ...) into (n_union, ...) at the given indices."""
+                out = np.zeros((n_union,) + arr.shape[1:], dtype=arr.dtype)
+                out[indices] = arr
+                return out
+
+            embedded_arrays = []
+            for r in results:
+                if r.array.shape[0] == n_union:
+                    embedded_arrays.append(r.array)
+                else:
+                    indices = np.array(
+                        [union_wv_dict[(float(q[0]), float(q[1]))] for q in r.wave_vectors]
+                    )
+                    if isinstance(r.array, da.Array):
+                        new_chunks = (n_union,) + r.array.chunks[1:]
+                        embedded = r.array.map_blocks(
+                            _embed_wave_vectors,
+                            dtype=r.array.dtype,
+                            chunks=new_chunks,
+                            indices=indices,
+                            n_union=n_union,
+                        )
+                    else:
+                        embedded = _embed_wave_vectors(r.array, indices, n_union)
+                    embedded_arrays.append(embedded)
+
+            stacked_array = da.stack(embedded_arrays, axis=0)
+            energy_ax = EnergyAxis(values=tuple(float(e) for e in self._energies))
+            return SMatrixArray(
+                array=stacked_array,
+                wave_vectors=union_wave_vectors,
+                semiangle_cutoff=self.semiangle_cutoff,
+                energy=None,
+                interpolation=self.interpolation,
+                extent=self.extent,
+                window_gpts=results[0].window_gpts,
+                device=self.device,
+                ensemble_axes_metadata=[energy_ax] + results[0].ensemble_axes_metadata,
+                metadata=results[0].metadata,
+            )
+
+        # --- Single-energy path (unchanged) ---
         downsampled_gpts = self.downsampled_gpts
 
         s_matrix_blocks = self.ensemble_blocks(1)

@@ -1,4 +1,4 @@
-"""Tests for energy ensemble support in PlaneWave, Probe, Waves, and BlochWaves."""
+"""Tests for energy ensemble support in PlaneWave, Probe, Waves, BlochWaves, and SMatrix."""
 
 import numpy as np
 import os
@@ -9,6 +9,7 @@ import abtem
 from abtem.bloch.dynamical import BlochWaves
 from abtem.core.axes import EnergyAxis, ThicknessAxis
 from abtem.measurements import IndexedDiffractionPatterns
+from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.waves import PlaneWave, Probe, Waves
 
 ENERGIES = [80e3, 200e3, 300e3]
@@ -266,3 +267,48 @@ class TestBlochWavesEnergyEnsemble:
                     result.array[i, inactive], 0.0,
                     err_msg=f"Inactive beams non-zero at energy index {i}",
                 )
+
+
+# ---------------------------------------------------------------------------
+# SMatrix (PRISM) energy ensemble tests
+# ---------------------------------------------------------------------------
+
+PRISM_ENERGIES = [100e3, 200e3, 300e3]
+PRISM_SEMIANGLE = 20.0
+PRISM_GPTS = 64
+PRISM_SAMPLING = 0.1
+
+
+class TestSMatrixEnergyEnsemble:
+    def test_scalar_energy_unchanged(self):
+        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=100e3,
+                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
+        assert s.energy == 100e3
+        assert s.ensemble_shape == ()
+        assert s.ensemble_axes_metadata == []
+
+    def test_multi_energy_ensemble_shape(self):
+        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=PRISM_ENERGIES,
+                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
+        assert s.ensemble_shape == (3,)
+        assert len(s.ensemble_axes_metadata) == 1
+        assert isinstance(s.ensemble_axes_metadata[0], EnergyAxis)
+        assert s.ensemble_axes_metadata[0].values == tuple(PRISM_ENERGIES)
+
+    def test_build_eager_shape(self):
+        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=PRISM_ENERGIES,
+                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
+        sma = s.build(lazy=False)
+        assert isinstance(sma, SMatrixArray)
+        assert sma.array.shape[0] == len(PRISM_ENERGIES)
+        assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
+        assert sma.ensemble_axes_metadata[0].values == tuple(PRISM_ENERGIES)
+
+    def test_build_lazy_shape(self):
+        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=PRISM_ENERGIES,
+                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING)
+        sma = s.build(lazy=True)
+        assert sma.array.shape[0] == len(PRISM_ENERGIES)
+        sma_computed = sma.compute()
+        assert sma_computed.array.shape[0] == len(PRISM_ENERGIES)
+        assert isinstance(sma_computed.ensemble_axes_metadata[0], EnergyAxis)
