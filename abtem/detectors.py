@@ -460,7 +460,7 @@ class _AbstractRadialDetector(BaseDetector):
 
                 reciprocal_space_sampling = (
                     1 / (gpts[0] * sampling[0]),
-                    1 / (gpts[0] * sampling[0]),
+                    1 / (gpts[1] * sampling[1]),
                 )
                 angular_sampling = (
                     reciprocal_space_sampling[0] * energy2wavelength(energy) * 1e3,
