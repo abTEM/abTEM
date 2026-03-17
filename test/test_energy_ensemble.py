@@ -4,6 +4,8 @@ import numpy as np
 import os
 import tempfile
 
+import ase
+import abtem
 from abtem.core.axes import EnergyAxis
 from abtem.waves import PlaneWave, Probe, Waves
 
@@ -65,6 +67,24 @@ class TestPlaneWaveEnergyEnsemble:
         assert loaded.shape == (3, 32, 32)
         assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
         assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
+
+    def test_multislice_eager(self):
+        """PlaneWave with list energy completes multislice without EnergyUndefinedError."""
+        unit_cell = ase.Atoms(
+            symbols="SrTiO3",
+            scaled_positions=[
+                [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.5, 0.0, 0.5],
+                [0.5, 0.5, 0.0], [0.0, 0.5, 0.5],
+            ],
+            cell=[3.9127, 3.9127, 3.9127],
+            pbc=True,
+        )
+        potential_unit = abtem.Potential(unit_cell, sampling=0.1, projection="finite")
+        potential = abtem.CrystalPotential(potential_unit, repetitions=(1, 1, 2))
+        pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
+        pw.grid.match(potential)
+        result = pw.multislice(potential).compute()
+        assert result.array.shape[0] == 3
 
 
 class TestProbeEnergyEnsemble:

@@ -1687,6 +1687,17 @@ class PlaneWave(WavesBuilder):
 
         waves = self._build_validated(lazy=lazy, max_batch=max_batch)
 
+        # Ensure each energy value occupies its own dask chunk so that
+        # conventional_multislice_step receives a scalar energy via _valid_energy.
+        if waves.is_lazy:
+            from abtem.core.axes import EnergyAxis
+            for i, ax in enumerate(waves.ensemble_axes_metadata):
+                if isinstance(ax, EnergyAxis) and len(ax.values) > 1:
+                    chunks = list(waves._lazy_array.chunks)
+                    chunks[i] = (1,) * len(ax.values)
+                    waves = waves.rechunk(tuple(chunks))
+                    break
+
         multislice = MultisliceTransform(potential, detectors, **multislice_func_kwargs)
 
         measurements = multislice.apply(waves)
