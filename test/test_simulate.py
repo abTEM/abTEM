@@ -144,16 +144,7 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
     # scan.match_probe(probe)
     probe.grid.match(potential)
 
-    if isinstance(scan, CustomScan) and isinstance(detector, AnnularDetector):
-        return
-
-    try:
-        measurement_shape = detector._out_shape(probe)[0]
-    except RuntimeError as e:
-        if str(e) == "annular detector requires a scan axis":
-            measurement_shape = ()
-        else:
-            raise
+    measurement_shape = detector._out_shape(probe)[0]
 
     measurement = probe.scan(potential, scan=scan, detectors=detector, lazy=lazy)
 

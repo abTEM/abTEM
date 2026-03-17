@@ -634,8 +634,7 @@ class AnnularDetector(_AbstractRadialDetector):
         ensemble_shapes = super()._out_ensemble_shape(waves)
 
         if len(_scan_shape(waves)) == 0:
-            return ((),)
-            # raise RuntimeError("annular detector requires a scan axis")
+            return ensemble_shapes  # No 2D scan axes: keep PositionsAxis in ensemble as-is
 
         return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
 
