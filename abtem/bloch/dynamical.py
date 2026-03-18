@@ -1245,7 +1245,6 @@ class BlochWaves:
             centering = structure_factor.centering
 
         self._structure_factor = structure_factor
-        self._energy = energy
         self._sg_max = sg_max
         self._g_max = g_max
         self._cell = cell
@@ -1254,6 +1253,8 @@ class BlochWaves:
         self._device = validate_device(device)
 
         energies = np.atleast_1d(np.asarray(energy, dtype=float)).ravel()
+        self._energy = float(energies[0])  # always scalar; .energy property is backward-compat
+        self._energies = energies          # full array for multi-energy paths
         if len(energies) == 1:
             # Scalar path — unchanged behaviour
             self._hkl_mask = filter_reciprocal_space_vectors(
@@ -1303,7 +1304,8 @@ class BlochWaves:
         """
         clone = object.__new__(BlochWaves)
         clone.__dict__.update(self.__dict__)  # shallow copy all attrs
-        clone._energy = e
+        clone._energy = float(e)
+        clone._energies = np.array([float(e)])
         # Translate _energy_hkl_masks[idx] (boolean over union_hkl) back to a
         # boolean mask over the full structure_factor.hkl index space.
         e_mask = np.zeros(len(self._hkl_mask), dtype=bool)
@@ -1559,8 +1561,8 @@ class BlochWaves:
             The dynamical diffraction patterns.
         """
         # --- Multi-energy ensemble path ---
-        if self._energy_hkl_masks is not None:
-            energies = np.atleast_1d(np.asarray(self._energy, dtype=float)).ravel()
+        if len(self._energies) > 1:
+            energies = self._energies
             n_union = int(self._hkl_mask.sum())
 
             def _embed_beams(arr, active_mask, n_total):
@@ -1691,8 +1693,8 @@ class BlochWaves:
         """
 
         # --- Multi-energy ensemble path ---
-        if self._energy_hkl_masks is not None:
-            energies = np.atleast_1d(np.asarray(self._energy, dtype=float)).ravel()
+        if len(self._energies) > 1:
+            energies = self._energies
             results = [
                 self._with_energy(i, float(e)).calculate_exit_waves(
                     thicknesses,

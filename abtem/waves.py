@@ -1506,7 +1506,7 @@ class PlaneWave(WavesBuilder):
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        energy=None,
+        energy: float | list | np.ndarray | None = None,
         normalize: bool = False,
         tilt: tuple[float, float] = (0.0, 0.0),
         device: Optional[str] = None,
@@ -1540,9 +1540,7 @@ class PlaneWave(WavesBuilder):
 
     def check_can_build(self):
         self.grid.check_is_defined()
-        if self.accelerator.energy is None and not isinstance(
-            self._energy._energy, BaseDistribution
-        ):
+        if self.accelerator.energy is None and self._energy.energy is None:
             raise RuntimeError("Energy is not defined")
 
     @property
@@ -1569,7 +1567,7 @@ class PlaneWave(WavesBuilder):
         # Multi-energy case: iterate over energies and stack results
         if (
             waves_builder.accelerator.energy is None
-            and isinstance(waves_builder._energy._energy, BaseDistribution)
+            and waves_builder._energy.energy is not None
         ):
             arrays = []
             for e_val in waves_builder._energy._energy.values:
@@ -1752,7 +1750,7 @@ class Probe(WavesBuilder):
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        energy: Optional[float] = None,
+        energy: float | list | np.ndarray | None = None,
         soft: bool = True,
         tilt: TiltType2D = (0.0, 0.0),
         device: Optional[str] = None,
@@ -1823,9 +1821,7 @@ class Probe(WavesBuilder):
 
     def check_can_build(self):
         self.grid.check_is_defined()
-        if self.accelerator.energy is None and not isinstance(
-            self._energy._energy, BaseDistribution
-        ):
+        if self.accelerator.energy is None and self._energy.energy is None:
             raise RuntimeError("Energy is not defined")
 
     @property
@@ -1907,10 +1903,14 @@ class Probe(WavesBuilder):
 
         xp = get_array_module(waves_builder.device)
 
-        # Multi-energy case: iterate over energies and stack results
+        # Multi-energy case: iterate over energies and stack results.
+        # NOTE: aperture and aberrations share waves_builder._accelerator (set in
+        # __init__: aberrations._accelerator = self._accelerator), so mutating
+        # _accelerator.energy propagates to all three. try/finally guarantees
+        # restoration even on exceptions.
         if (
             waves_builder.accelerator.energy is None
-            and isinstance(waves_builder._energy._energy, BaseDistribution)
+            and waves_builder._energy.energy is not None
         ):
             kernel = waves_builder.scan_positions._evaluate_kernel(waves_builder)
             arrays = []
