@@ -4,6 +4,7 @@
 .idea
 .tox
 .pytest_cache
+.claude
 *.pyc
 *.egg-info
 **/__pycache__
