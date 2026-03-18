@@ -1198,8 +1198,12 @@ class BlochWaves:
     ----------
     structure_factor : StructureFactor
         The structure factor.
-    energy : float
-        The energy of the electrons [eV].
+    energy : float or list of float
+        Electron energy [eV]. A single float runs a standard single-energy
+        calculation. A list or array of floats runs the calculation at each
+        energy, using a union of the allowed reciprocal-space vectors across
+        all energies; beams that are inactive at a given energy are set to
+        zero. The output gains a leading :class:`.EnergyAxis` dimension.
     sg_max : float
         The maximum excitation error [1/Å].
     g_max : float

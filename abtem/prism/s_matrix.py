@@ -1394,8 +1394,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     ----------
     semiangle_cutoff : float
         The radial cutoff of the plane-wave expansion [mrad].
-    energy : float
-        Electron energy [eV].
+    energy : float or list of float
+        Electron energy [eV]. A single float runs a standard single-energy
+        calculation. A list or array of floats builds the scattering matrix
+        at each energy independently; the plane-wave sets are zero-padded to
+        the union of all energies' wave vectors (higher energies include more
+        plane waves within the semiangle cutoff), and the result gains a
+        leading :class:`.EnergyAxis` dimension.
     potential : Atoms or AbstractPotential, optional
         Atoms or a potential that the scattering matrix represents. If given as atoms,
         a default potential will be created. If nothing is provided the scattering
@@ -1557,7 +1562,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return energy_meta + potential_meta
 
     def _with_energy(self, e: float) -> "SMatrix":
-        """Return a single-energy clone of this SMatrix."""
+        """Return a single-energy clone of this SMatrix for use in multi-energy builds.
+
+        The clone's ``_energies`` and ``_accelerator`` are set to *e* so that
+        the normal single-energy :meth:`build` path is taken.  The caller is
+        responsible for zero-padding and stacking the resulting
+        :class:`.SMatrixArray` objects into the union wave-vector basis.
+        """
         clone = self.copy()
         clone._energies = np.array([float(e)])
         clone._accelerator = Accelerator(energy=float(e))

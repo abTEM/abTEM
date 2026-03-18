@@ -1196,8 +1196,19 @@ class Waves(BaseWaves, ArrayObject):
 
 class EnergyEnsemble(EnsembleFromDistributions):
     """
-    Stores the electron energy as either a scalar or a distribution, implementing
-    the Ensemble interface so it plugs into the WavesBuilder ensemble machinery.
+    Wraps electron energy for use inside the WavesBuilder ensemble machinery.
+
+    Accepts a scalar float, a list/array of floats, or a
+    :class:`.BaseDistribution`.  When a single value is given, the object
+    behaves like a plain scalar.  When multiple values are given, it acts as
+    an ensemble axis and causes :class:`.WavesBuilder` subclasses to produce
+    output with a leading :class:`.EnergyAxis`.
+
+    The :attr:`energy` property returns:
+
+    * ``float`` — for a scalar energy or a single-element sequence.
+    * :class:`.BaseDistribution` — for a genuine multi-energy ensemble.
+    * ``None`` — if no energy has been set.
     """
 
     def __init__(self, energy=None):
@@ -1209,7 +1220,17 @@ class EnergyEnsemble(EnsembleFromDistributions):
 
     @property
     def energy(self):
-        """float for scalar/single-element, BaseDistribution for ensemble, None if unset."""
+        """Return the energy value(s).
+
+        Returns
+        -------
+        float
+            The scalar energy [eV] if a single value was given.
+        BaseDistribution
+            The full distribution if multiple values were given.
+        None
+            If no energy has been set.
+        """
         if self._energy is None:
             return None
         if isinstance(self._energy, BaseDistribution) and len(self._energy) == 1:
@@ -1482,8 +1503,12 @@ class PlaneWave(WavesBuilder):
     sampling : two float, optional
         Lateral sampling of the wave functions [Å]. If 'gpts' is also given, will be
         ignored.
-    energy : float, optional
-        Electron energy [eV]. If not provided, inferred from the wave functions.
+    energy : float or list of float, optional
+        Electron energy [eV]. A single float gives a standard single-energy
+        simulation. A list or array of floats runs the simulation at each
+        energy in turn and returns output with a leading :class:`.EnergyAxis`
+        ensemble dimension. If not provided, the energy must be inferred from
+        attached wave functions.
     normalize : bool, optional
         If true, normalizes the wave function such that its reciprocal space intensity
         sums to one. If false, the
@@ -1567,7 +1592,7 @@ class PlaneWave(WavesBuilder):
             and waves_builder._energy.energy is not None
         ):
             arrays = []
-            for e_val in waves_builder._energy._energy.values:
+            for e_val in waves_builder._energy.energy.values:
                 e_float = float(e_val)
                 if waves_builder.normalize:
                     arr = xp.full(
@@ -1717,8 +1742,12 @@ class Probe(WavesBuilder):
     sampling : two float, optional
         Lateral sampling of wave functions [Å]. If 'gpts' is also given, will be
         ignored.
-    energy : float, optional
-        Electron energy [eV]. If not provided, inferred from the wave functions.
+    energy : float or list of float, optional
+        Electron energy [eV]. A single float gives a standard single-energy
+        simulation. A list or array of floats runs the simulation at each
+        energy in turn and returns output with a leading :class:`.EnergyAxis`
+        ensemble dimension. If not provided, the energy must be inferred from
+        attached wave functions.
     soft : float, optional
         Taper the edge of the default aperture [mrad] (default is 2.0). Ignored if a
         custom aperture is given.
@@ -1915,7 +1944,7 @@ class Probe(WavesBuilder):
             arrays = []
             original_energy = waves_builder._accelerator.energy
             try:
-                for e_val in waves_builder._energy._energy.values:
+                for e_val in waves_builder._energy.energy.values:
                     e_float = float(e_val)
                     waves_builder._accelerator.energy = e_float
                     single_waves = Waves(
