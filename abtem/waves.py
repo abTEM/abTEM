@@ -1209,6 +1209,11 @@ class EnergyEnsemble(EnsembleFromDistributions):
 
     @property
     def energy(self):
+        """float for scalar/single-element, BaseDistribution for ensemble, None if unset."""
+        if self._energy is None:
+            return None
+        if isinstance(self._energy, BaseDistribution) and len(self._energy) == 1:
+            return float(self._energy.values[0])
         return self._energy
 
     @energy.setter
@@ -1216,23 +1221,13 @@ class EnergyEnsemble(EnsembleFromDistributions):
         self._energy = validate_distribution(value) if value is not None else None
 
     @property
-    def scalar_energy(self):
-        """Return float energy if scalar or single-element distribution, else None."""
-        if self._energy is None:
-            return None
-        if isinstance(self._energy, BaseDistribution):
-            if len(self._energy) == 1:
-                return float(self._energy.values[0])
-            return None
-        return float(self._energy)
-
-    @property
     def ensemble_axes_metadata(self) -> list:
         from abtem.core.axes import EnergyAxis
-        if isinstance(self._energy, BaseDistribution):
+        e = self.energy
+        if isinstance(e, BaseDistribution):
             return [EnergyAxis(
-                values=tuple(float(v) for v in self._energy.values),
-                _ensemble_mean=self._energy.ensemble_mean,
+                values=tuple(float(v) for v in e.values),
+                _ensemble_mean=e.ensemble_mean,
             )]
         return []
 
@@ -1513,7 +1508,8 @@ class PlaneWave(WavesBuilder):
     ):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._energy = validate_energy(energy)
-        self._accelerator = Accelerator(energy=self._energy.scalar_energy)
+        _e = self._energy.energy
+        self._accelerator = Accelerator(energy=_e if not isinstance(_e, BaseDistribution) else None)
 
         self._normalize = normalize
         device = validate_device(device)
@@ -1536,7 +1532,8 @@ class PlaneWave(WavesBuilder):
     @energy.setter
     def energy(self, value):
         self._energy = validate_energy(value)
-        self._accelerator.energy = self._energy.scalar_energy
+        _e = self._energy.energy
+        self._accelerator.energy = _e if not isinstance(_e, BaseDistribution) else None
 
     def check_can_build(self):
         self.grid.check_is_defined()
@@ -1761,7 +1758,8 @@ class Probe(WavesBuilder):
         **kwargs,
     ):
         self._energy = validate_energy(energy)
-        self._accelerator = Accelerator(energy=self._energy.scalar_energy)
+        _e = self._energy.energy
+        self._accelerator = Accelerator(energy=_e if not isinstance(_e, BaseDistribution) else None)
 
         if (semiangle_cutoff is not None) and (aperture is not None):
             if not np.allclose(aperture.semiangle_cutoff, semiangle_cutoff):
@@ -1783,7 +1781,7 @@ class Probe(WavesBuilder):
             aberrations = {}
 
         if isinstance(aberrations, dict):
-            aberrations = Aberrations(energy=self._energy.scalar_energy, **aberrations, **kwargs)
+            aberrations = Aberrations(energy=_e if not isinstance(_e, BaseDistribution) else None, **aberrations, **kwargs)
 
         aberrations._accelerator = self._accelerator
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -1817,7 +1815,8 @@ class Probe(WavesBuilder):
     @energy.setter
     def energy(self, value):
         self._energy = validate_energy(value)
-        self._accelerator.energy = self._energy.scalar_energy
+        _e = self._energy.energy
+        self._accelerator.energy = _e if not isinstance(_e, BaseDistribution) else None
 
     def check_can_build(self):
         self.grid.check_is_defined()
