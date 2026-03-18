@@ -1748,9 +1748,9 @@ class Probe(WavesBuilder):
         energy in turn and returns output with a leading :class:`.EnergyAxis`
         ensemble dimension. If not provided, the energy must be inferred from
         attached wave functions.
-    soft : float, optional
-        Taper the edge of the default aperture [mrad] (default is 2.0). Ignored if a
-        custom aperture is given.
+    soft : bool, optional
+        If True, the edge of the default aperture is softened (default is True). Ignored
+        if a custom aperture is given.
     tilt : two float, two 1D :class:`.BaseDistribution`, 2D :class:`.BaseDistribution`,
     optional
         Small-angle beam tilt [mrad]. This value should generally not exceed one degree.
