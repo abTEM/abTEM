@@ -213,9 +213,6 @@ def add_point_charges_fourier(
     if hasattr(atoms, "atoms"):
         atoms = atoms.atoms
 
-    if hasattr(atoms, "atoms"):
-        atoms = atoms.atoms
-
     for atom in atoms:
         scale = atom.number / pixel_volume
         array += scale * broadening * _fourier_space_delta(kx, ky, kz, *atom.position)
