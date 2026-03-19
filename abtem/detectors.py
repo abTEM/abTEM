@@ -986,11 +986,31 @@ class PixelatedDetector(BaseDetector):
         return 0.0, min(cutoff)
 
     def _new_sampling_and_gpts(self, waves: WavesType):
+        """
+        Calculate the reciprocal-space sampling and grid points for the detector output.
+
+        Determines the output shape of the diffraction pattern after optional resampling
+        and max_angle cropping. The returned values must be consistent with the actual
+        array produced by ``_calculate_new_array``, since they are used to pre-allocate
+        measurement arrays during multislice simulations.
+
+        Parameters
+        ----------
+        waves : WavesType
+            The input waves used to determine reciprocal-space sampling and grid size.
+
+        Returns
+        -------
+        sampling : tuple[float, float]
+            Reciprocal-space sampling in each dimension (Å⁻¹ or mrad).
+        gpts : tuple[int, int]
+            Number of grid points in each dimension for the detector output.
+        """
         if self.resample:
             sampling = waves.reciprocal_space_sampling
             gpts = waves._gpts_within_angle(self.max_angle)
 
-            _, sampling = _diffraction_pattern_resampling_gpts(
+            gpts, sampling = _diffraction_pattern_resampling_gpts(
                 old_sampling=sampling,
                 old_gpts=gpts,
                 sampling=self.resample,
@@ -998,8 +1018,13 @@ class PixelatedDetector(BaseDetector):
                 adjust_sampling=False,
             )
 
-            if self.max_angle and sampling[0] == sampling[1]:
-                gpts = (min(gpts), min(gpts))
+            if self.max_angle:
+                gpts = tuple(
+                    min(g, g_max)
+                    for g, g_max in zip(
+                        gpts, waves._gpts_within_angle(self.max_angle)
+                    )
+                )
         elif self.max_angle and not self.resample:
             gpts = waves._gpts_within_angle(self.max_angle)
             sampling = waves.reciprocal_space_sampling
