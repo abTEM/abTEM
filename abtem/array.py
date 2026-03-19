@@ -1530,6 +1530,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 chunks=chunks,
                 max_elements=max_batch,
                 dtype=self.dtype,
+                device=self.device,
             )
 
             assert chunks[len(transform.ensemble_shape) :] == self._lazy_array.chunks
