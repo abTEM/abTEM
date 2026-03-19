@@ -295,6 +295,11 @@ class ComputableList(list):
                 return bool(obj)
             elif isinstance(obj, np.ndarray):
                 return obj.tolist()
+
+            # --- GPU (CuPy) array/scalar handling ---
+            elif hasattr(obj, "__cuda_array_interface__"):
+                return obj.tolist()
+
             else:
                 return obj
 
