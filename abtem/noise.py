@@ -110,7 +110,7 @@ class NoiseTransform(EnsembleTransform):
         poisson_rng = np.random.RandomState(seed=randomized_seed)
 
         # Poisson sampling requires CPU arrays; move back to GPU afterwards
-        array_cpu = np.asarray(array)
+        array_cpu = array.get() if hasattr(array, "get") else np.asarray(array)
         array_cpu = np.clip(array_cpu, a_min=0.0, a_max=None)
         array_cpu = poisson_rng.poisson(array_cpu).astype(get_dtype())
 
