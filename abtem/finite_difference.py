@@ -209,7 +209,8 @@ def _laplace_operator_stencil(
 
     @njit(parallel=True, fastmath=True)
     def _laplace_stencil_cpu_batch(a):
-        out = np.zeros(a.shape, dtype=a.dtype)
+        out = a.copy()
+        out[:] = 0
         for m in range(a.shape[0]):
             out[m] = stencil_func_2d(a[m])
         return out
