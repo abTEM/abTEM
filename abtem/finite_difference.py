@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
 import scipy.ndimage  # type: ignore
-from numba import cuda, njit, stencil  # type: ignore
+from numba import cuda, njit  # type: ignore
 
 from abtem.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module
@@ -200,19 +200,20 @@ def _laplace_operator_stencil(
     n = len(c) // 2
     padding = n + 1
 
-    @stencil(neighborhood=((-n, n + 1), (-n, n + 1)))
-    def stencil_func_2d(a):
-        cumul = dtype(0.0)
-        for i in range(-n, n + 1):
-            cumul += c[i] * a[i, 0] + c[i] * a[0, i]
-        return cumul
+    from numba import prange  # type: ignore
 
     @njit(parallel=True, fastmath=True)
     def _laplace_stencil_cpu_batch(a):
+        M, H, W = a.shape
         out = a.copy()
         out[:] = 0
-        for m in range(a.shape[0]):
-            out[m] = stencil_func_2d(a[m])
+        for m in prange(M):
+            for i in range(n, H - n):
+                for j in range(n, W - n):
+                    cumul = dtype(0.0)
+                    for k in range(-n, n + 1):
+                        cumul += c[k] * a[m, i + k, j] + c[k] * a[m, i, j + k]
+                    out[m, i, j] = cumul
         return out
 
     @cuda.jit
