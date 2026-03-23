@@ -506,7 +506,7 @@ complex_labels = {
 def axis_to_dict(axis: AxisMetadata):
     d = dataclasses.asdict(axis)
     for key, value in d.items():
-        if isinstance(value, np.ndarray):
+        if isinstance(value, np.ndarray) or hasattr(value, "__cuda_array_interface__"):
             d[key] = tuple(value.tolist())
 
     d["type"] = axis.__class__.__name__

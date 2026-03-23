@@ -991,6 +991,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
             chunks=(max_batch,) + (-1,) * len(waves.shape),
             max_elements=limit,
             dtype=waves.dtype,
+            device=self.device,
         )[0]
 
         start = 0

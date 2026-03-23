@@ -589,3 +589,40 @@ class TestComplexWorkflows:
         )
 
         assert result is not None
+
+
+class TestStencilNumericalAccuracy:
+    """Verify the numba stencil matches the scipy reference implementation."""
+
+    @pytest.mark.parametrize("accuracy", [2, 4, 6, 8])
+    def test_laplace_stencil_matches_scipy_reference(self, accuracy):
+        """Compare the numba Laplacian stencil against scipy.ndimage.convolve."""
+        from abtem.finite_difference import (
+            _laplace_operator_func_slow,
+            _laplace_operator_stencil,
+        )
+
+        prefactor = np.complex64(1.0 + 0.5j)
+        rng = np.random.default_rng(42)
+        a = (
+            rng.standard_normal((2, 24, 24))
+            + 1j * rng.standard_normal((2, 24, 24))
+        ).astype(np.complex64)
+
+        ref = np.stack(
+            [
+                _laplace_operator_func_slow(accuracy, prefactor)(a[m])
+                for m in range(a.shape[0])
+            ]
+        )
+        result = _laplace_operator_stencil(
+            accuracy, prefactor, mode="wrap", dtype=np.complex64, device="cpu"
+        )(a)
+
+        np.testing.assert_allclose(
+            result,
+            ref,
+            rtol=1e-5,
+            atol=1e-5,
+            err_msg=f"Stencil mismatch at accuracy={accuracy}",
+        )

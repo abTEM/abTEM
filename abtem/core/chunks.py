@@ -306,7 +306,7 @@ def _auto_chunks(
         if total > max_elements:
             current_chunks[autodims[j]] -= 1
             if current_chunks[autodims[j]] == 0:
-                raise RuntimeWarning(
+                raise RuntimeError(
                     "Object cannot be automatically chunked; consider increasing chunk-size parameter!"
                 )
             break
@@ -349,7 +349,7 @@ def equal_sized_chunks(
         The split integers.
     """
     if num_items == 0:
-        return 0, 0
+        return ()
 
     if num_chunks is not None and chunk_size is not None:
         raise RuntimeError("specify either num_chunks or chunks, not both")

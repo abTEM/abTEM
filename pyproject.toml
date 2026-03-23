@@ -126,7 +126,8 @@ filterwarnings = [
     "ignore:Axis.*not supported by hyperspy.*:UserWarning",
     "ignore:'num_frozen_phonons' is greater than one, but the potential unit does not have frozen phonons:UserWarning",
     "ignore:ignoring keyword argument 'read_only':UserWarning",
-    "ignore:Passing storage-related arguments:FutureWarning"
+    "ignore:Passing storage-related arguments:FutureWarning",
+    "ignore:FNV hashing is not implemented in Numba:UserWarning"
 ]
 
 [tool.numpydoc_validation]
