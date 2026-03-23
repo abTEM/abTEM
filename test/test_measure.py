@@ -13,7 +13,9 @@ from abtem.core.backend import copy_to_device
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
+    PolarMeasurements,
     RealSpaceLineProfiles,
+    ReciprocalSpaceLineProfiles,
     _scan_sampling,
     _scan_shape,
 )
@@ -537,3 +539,270 @@ def test_integrate_disc(gpts, radius, sampling, position):
 #     image1 = diffraction_patterns.gaussian_source_size(sigma).integrate_radial(0, outer)
 #     image2 = diffraction_patterns.integrate_radial(0, outer).gaussian_filter(sigma)
 #     assert np.allclose(image1.array, image2.array)
+
+
+# ---------------------------------------------------------------------------
+# Images — crop, complex accessors, abs, scan_noise, normalize_ensemble
+# ---------------------------------------------------------------------------
+
+def _make_images(shape=(32, 32), sampling=(0.1, 0.1), complex_=False):
+    arr = np.random.default_rng(0).random(shape)
+    if complex_:
+        arr = arr + 1j * np.random.default_rng(1).random(shape)
+    return Images(arr, sampling=sampling)
+
+
+class TestImagesCrop:
+    def test_crop_reduces_extent(self):
+        imgs = _make_images((32, 32), (0.1, 0.1))
+        cropped = imgs.crop((1.5, 1.5))
+        assert cropped.extent[0] <= imgs.extent[0]
+        assert cropped.extent[1] <= imgs.extent[1]
+
+    def test_crop_centered(self):
+        imgs = _make_images((32, 32), (0.1, 0.1))
+        cropped = imgs.crop((1.0, 1.0), centered=True)
+        assert cropped.base_shape[0] <= imgs.base_shape[0]
+
+    def test_crop_too_large_raises(self):
+        imgs = _make_images((32, 32), (0.1, 0.1))
+        with pytest.raises(ValueError, match="smaller"):
+            imgs.crop((999.0, 999.0))
+
+    def test_crop_centered_with_offset_raises(self):
+        imgs = _make_images((32, 32), (0.1, 0.1))
+        with pytest.raises(ValueError):
+            imgs.crop((1.0, 1.0), offset=(0.1, 0.1), centered=True)
+
+    def test_crop_with_offset(self):
+        imgs = _make_images((32, 32), (0.1, 0.1))
+        cropped = imgs.crop((1.0, 1.0), offset=(0.5, 0.5))
+        assert cropped.base_shape[0] <= imgs.base_shape[0]
+
+
+class TestImagesComplexAccessors:
+    def test_real(self):
+        imgs = _make_images(complex_=True)
+        real = imgs.real()
+        assert not np.iscomplexobj(real.array)
+        assert np.allclose(real.array, imgs.array.real)
+
+    def test_imag(self):
+        imgs = _make_images(complex_=True)
+        imag = imgs.imag()
+        assert np.allclose(imag.array, imgs.array.imag)
+
+    def test_phase(self):
+        imgs = _make_images(complex_=True)
+        phase = imgs.phase()
+        assert np.all(np.abs(phase.array) <= np.pi + 1e-10)
+
+    def test_abs(self):
+        imgs = _make_images(complex_=True)
+        ab = imgs.abs()
+        assert np.all(ab.array >= 0)
+
+    def test_real_on_real_raises(self):
+        imgs = _make_images(complex_=False)
+        with pytest.raises(RuntimeError):
+            imgs.real()
+
+
+class TestImagesNormalizeEnsemble:
+    def test_normalize_reduces_spread(self):
+        arr = np.array([[[1.0, 2.0], [3.0, 4.0]],
+                        [[10.0, 20.0], [30.0, 40.0]]])
+        from abtem.core.axes import OrdinalAxis
+        imgs = Images(arr, sampling=(0.1, 0.1),
+                      ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))])
+        normalized = imgs.normalize_ensemble()
+        assert normalized.array.shape == arr.shape
+
+
+class TestImagesScanNoise:
+    def test_scan_noise_returns_images(self):
+        imgs = _make_images((16, 16))
+        result = imgs.scan_noise(
+            rms_power=1.0, dwell_time=1e-6, flyback_time=1e-4,
+            num_components=5
+        ).compute()
+        assert isinstance(result, Images)
+
+    def test_scan_noise_shape_preserved(self):
+        imgs = _make_images((16, 16))
+        result = imgs.scan_noise(1.0, 1e-6, 1e-4, num_components=5).compute()
+        assert result.base_shape == imgs.base_shape
+
+
+class TestImagesRelativeDifference:
+    def test_zero_difference(self):
+        imgs = _make_images()
+        diff = imgs.relative_difference(imgs.copy())
+        assert np.allclose(diff.array[np.isfinite(diff.array)], 0.0, atol=1e-10)
+
+    def test_wrong_type_raises(self):
+        imgs = _make_images()
+        dp = DiffractionPatterns(
+            np.ones((8, 8)), sampling=0.1, metadata={"energy": 100e3}
+        )
+        with pytest.raises(RuntimeError):
+            imgs.relative_difference(dp)
+
+
+# ---------------------------------------------------------------------------
+# DiffractionPatterns — integrate_radial, crop, poisson_noise with samples
+# ---------------------------------------------------------------------------
+
+class TestDiffractionPatternsIntegrateRadial:
+    def _dp(self, shape=(32, 32)):
+        return DiffractionPatterns(
+            np.ones(shape), sampling=0.05, metadata={"energy": 100e3}
+        )
+
+    def test_returns_images_with_scan_axes(self):
+        arr = np.ones((4, 4, 16, 16))
+        dp = DiffractionPatterns(
+            arr, sampling=0.05,
+            ensemble_axes_metadata=[ScanAxis(), ScanAxis()],
+            metadata={"energy": 100e3},
+        )
+        result = dp.integrate_radial(inner=0, outer=10)
+        assert isinstance(result, Images)
+
+    def test_inner_equals_outer_zero_result(self):
+        dp = self._dp()
+        result = dp.integrate_radial(inner=5, outer=5)
+        assert np.all(result.array == 0.0)
+
+    def test_larger_outer_gives_larger_sum(self):
+        dp = self._dp()
+        r1 = dp.integrate_radial(0, 5)
+        r2 = dp.integrate_radial(0, 10)
+        assert r2.array.sum() >= r1.array.sum()
+
+
+class TestDiffractionPatternsCrop:
+    def test_crop_reduces_max_angle(self):
+        dp = DiffractionPatterns(
+            np.ones((64, 64)), sampling=0.05, metadata={"energy": 100e3}
+        )
+        max_before = min(dp.max_angles)
+        cropped = dp.crop(max_angle=max_before / 2)
+        assert min(cropped.max_angles) <= min(dp.max_angles)
+
+
+class TestDiffractionPatternsPoisson:
+    def test_poisson_with_samples(self):
+        dp = DiffractionPatterns(
+            np.ones((16, 16)) * 100, sampling=0.05, metadata={"energy": 100e3}
+        )
+        noisy = dp.poisson_noise(total_dose=1e6, samples=4).compute()
+        assert noisy.shape[0] == 4
+
+    def test_poisson_nonnegative(self):
+        dp = DiffractionPatterns(
+            np.ones((16, 16)) * 50, sampling=0.05, metadata={"energy": 100e3}
+        )
+        noisy = dp.poisson_noise(total_dose=1e5).compute()
+        assert np.all(noisy.array >= 0)
+
+
+# ---------------------------------------------------------------------------
+# RealSpaceLineProfiles
+# ---------------------------------------------------------------------------
+
+class TestRealSpaceLineProfiles:
+    def _lp(self, n=64):
+        from abtem.core.axes import RealSpaceAxis
+        arr = np.ones(n)
+        return RealSpaceLineProfiles(arr, sampling=0.1)
+
+    def test_construction(self):
+        lp = self._lp()
+        assert lp.base_shape == (64,)
+
+    def test_extent(self):
+        lp = self._lp(32)
+        # RealSpaceLineProfiles.extent is a scalar float, not a tuple
+        assert np.isclose(lp.extent, 32 * 0.1)
+
+    def test_interpolate(self):
+        lp = self._lp()
+        result = lp.interpolate(sampling=0.05)
+        assert result.base_shape[0] > lp.base_shape[0]
+
+    def test_tile(self):
+        lp = self._lp(16)
+        tiled = lp.tile(3)
+        assert tiled.base_shape[0] == 48
+
+    def test_sum_axis(self):
+        arr = np.ones((4, 32))
+        from abtem.core.axes import OrdinalAxis
+        lp = RealSpaceLineProfiles(
+            arr, sampling=0.1,
+            ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(4)))]
+        )
+        result = lp.sum(axis=0)
+        assert result.base_shape == (32,)
+
+
+# ---------------------------------------------------------------------------
+# PolarMeasurements — integrate, integrate_radial
+# ---------------------------------------------------------------------------
+
+class TestPolarMeasurements:
+    def _polar(self, nbins_radial=8, nbins_azimuthal=6):
+        arr = np.ones((4, 4, nbins_radial, nbins_azimuthal))
+        return PolarMeasurements(
+            arr,
+            radial_sampling=5.0,
+            azimuthal_sampling=360.0 / nbins_azimuthal,
+            radial_offset=0.0,
+            azimuthal_offset=0.0,
+            ensemble_axes_metadata=[ScanAxis(), ScanAxis()],
+            metadata={"energy": 100e3},
+        )
+
+    def test_construction(self):
+        pm = self._polar()
+        assert pm.shape[-2] == 8
+        assert pm.shape[-1] == 6
+
+    def test_integrate_radial(self):
+        pm = self._polar()
+        result = pm.integrate_radial(0, pm.outer_angle)
+        assert isinstance(result, Images)
+
+    def test_integrate_all(self):
+        pm = self._polar()
+        result = pm.integrate(
+            radial_limits=(0, pm.outer_angle),
+            azimuthal_limits=None,
+        )
+        assert result.shape == pm.ensemble_shape
+
+    def test_integrate_with_detector_regions(self):
+        pm = self._polar()
+        n_regions = pm.shape[-2] * pm.shape[-1]
+        result = pm.integrate(detector_regions=list(range(n_regions))).compute()
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# ReciprocalSpaceLineProfiles
+# ---------------------------------------------------------------------------
+
+class TestReciprocalSpaceLineProfiles:
+    def test_from_ctf(self):
+        from abtem.transfer import CTF
+        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1), defocus=200.0)
+        profiles = ctf.profiles()
+        assert isinstance(profiles, ReciprocalSpaceLineProfiles)
+
+    def test_shape(self):
+        from abtem.transfer import CTF
+        ctf = CTF(energy=100e3, gpts=(64, 64), sampling=(0.1, 0.1))
+        profiles = ctf.profiles()
+        assert len(profiles.base_shape) == 1
+        assert profiles.base_shape[0] > 0
