@@ -881,7 +881,7 @@ def calculate_structure_matrix(
 
     Mii = xp.asarray(Mii)
 
-    A *= prefactor * Mii[None] * Mii[:, None]
+    A = A * prefactor * Mii[None] * Mii[:, None]
 
     sg = xp.asarray(excitation_errors(g, energy, use_wave_eq=use_wave_eq))
     diag = 2 * 1 / energy2wavelength(energy) * sg
