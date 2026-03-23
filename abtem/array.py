@@ -498,7 +498,11 @@ def _compute(
     resource_profiler: bool = False,
     **kwargs,
 ) -> tuple[list[ArrayObjectType], tuple]:
-    if config.get("device") == "gpu":
+    is_gpu = config.get("device") == "gpu" or any(
+        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
+    )
+
+    if is_gpu:
         check_cupy_is_installed()
 
         if "scheduler" not in kwargs:
