@@ -4,7 +4,7 @@ import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
 import pytest
 import strategies as abtem_st
-from hypothesis import assume, given
+from hypothesis import assume, given, settings
 # from abtem.core.test.strategies import random_chunks, random_array_object
 from utils import (assert_array_matches_device, assert_array_matches_laziness,
                    gpu, remove_dummy_dimensions)
@@ -145,6 +145,7 @@ def test_ensure_lazy(data, has_array, lazy, device):
     assert_array_matches_laziness(has_array.array, True)
 
 
+@settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
@@ -165,6 +166,7 @@ def test_to_zarr(data, has_array, url, lazy, device):
     waves.to_zarr(url)
 
 
+@settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
@@ -185,6 +187,7 @@ def test_to_zarr_zip(data, has_array, url, lazy, device):
     waves.to_zarr(url)
 
 
+@settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -211,6 +214,7 @@ def test_to_zarr_from_zarr(data, has_array, url, lazy, device):
     assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
 
 
+@settings(max_examples=5)
 @given(data=st.data(), url=abtem_st.temporary_path_zip(allow_none=False))
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])

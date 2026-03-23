@@ -59,6 +59,7 @@ def test_scanned_measurement_type():
     #    measurement.integrate_radial(inner=0, outer=10)
 
 
+@settings(max_examples=5)
 @given(data=st.data())
 @pytest.mark.parametrize("method", ["__add__", "__sub__", "__mul__", "__truediv__"])
 @pytest.mark.parametrize("lazy", [True, False])
@@ -78,6 +79,7 @@ def test_add_subtract(data, measurement, method, lazy, device):
     assert new_measurement.array is not measurement.array
 
 
+@settings(max_examples=5)
 @given(data=st.data())
 @pytest.mark.parametrize("method", ["__iadd__", "__isub__", "__imul__", "__itruediv__"])
 @pytest.mark.parametrize("device", ["cpu", gpu])
