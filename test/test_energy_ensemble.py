@@ -10,6 +10,7 @@ from abtem.bloch.dynamical import BlochWaves
 from abtem.core.axes import EnergyAxis, ThicknessAxis
 from abtem.measurements import IndexedDiffractionPatterns
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
+from abtem.multislice import RealSpaceMultislice
 from abtem.waves import PlaneWave, Probe, Waves
 
 ENERGIES = [80e3, 200e3, 300e3]
@@ -87,6 +88,26 @@ class TestPlaneWaveEnergyEnsemble:
         pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
         pw.grid.match(potential)
         result = pw.multislice(potential).compute()
+        assert result.array.shape[0] == 3
+
+    def test_realspace_multislice_eager(self):
+        """PlaneWave with list energy completes RealSpaceMultislice without EnergyUndefinedError."""
+        unit_cell = ase.Atoms(
+            symbols="SrTiO3",
+            scaled_positions=[
+                [0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.5, 0.0, 0.5],
+                [0.5, 0.5, 0.0], [0.0, 0.5, 0.5],
+            ],
+            cell=[3.9127, 3.9127, 3.9127],
+            pbc=True,
+        )
+        potential_unit = abtem.Potential(unit_cell, sampling=0.1, projection="finite")
+        potential = abtem.CrystalPotential(potential_unit, repetitions=(1, 1, 2))
+        pw = abtem.PlaneWave(energy=[100e3, 200e3, 300e3])
+        pw.grid.match(potential)
+        result = pw.multislice(
+            potential, algorithm=RealSpaceMultislice(order=1)
+        ).compute()
         assert result.array.shape[0] == 3
 
 
