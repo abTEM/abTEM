@@ -295,6 +295,11 @@ class ComputableList(list):
                 return bool(obj)
             elif isinstance(obj, np.ndarray):
                 return obj.tolist()
+
+            # --- GPU (CuPy) array/scalar handling ---
+            elif hasattr(obj, "__cuda_array_interface__"):
+                return obj.tolist()
+
             else:
                 return obj
 
@@ -493,8 +498,15 @@ def _compute(
     resource_profiler: bool = False,
     **kwargs,
 ) -> tuple[list[ArrayObjectType], tuple]:
-    if config.get("device") == "gpu":
+    is_gpu = config.get("device") == "gpu" or any(
+        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
+    )
+
+    if is_gpu:
         check_cupy_is_installed()
+
+        if "scheduler" not in kwargs:
+            kwargs["scheduler"] = "synchronous"
 
         if "num_workers" not in kwargs:
             kwargs["num_workers"] = cp.cuda.runtime.getDeviceCount()
@@ -1530,6 +1542,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 chunks=chunks,
                 max_elements=max_batch,
                 dtype=self.dtype,
+                device=self.device,
             )
 
             assert chunks[len(transform.ensemble_shape) :] == self._lazy_array.chunks
