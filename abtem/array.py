@@ -501,6 +501,9 @@ def _compute(
     if config.get("device") == "gpu":
         check_cupy_is_installed()
 
+        if "scheduler" not in kwargs:
+            kwargs["scheduler"] = "synchronous"
+
         if "num_workers" not in kwargs:
             kwargs["num_workers"] = cp.cuda.runtime.getDeviceCount()
 
