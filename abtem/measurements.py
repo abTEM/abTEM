@@ -377,6 +377,29 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
             raise RuntimeError(f"{key} not in measurement metadata.")
         return self.metadata[key]
 
+    def _get_energy(self) -> float:
+        """Return the electron energy [eV].
+
+        Falls back to the first value of an :class:`.EnergyAxis` in
+        ``ensemble_axes_metadata`` when ``metadata["energy"]`` is ``None``
+        (i.e. when the measurements were produced from an energy-ensemble
+        ``Waves`` object).
+
+        Raises
+        ------
+        RuntimeError
+            If no energy can be found in metadata or ensemble axes metadata.
+        """
+        from abtem.core.axes import EnergyAxis
+
+        energy = self.metadata.get("energy")
+        if energy is not None:
+            return energy
+        for axis in self.ensemble_axes_metadata:
+            if isinstance(axis, EnergyAxis):
+                return float(axis.values[0])
+        raise RuntimeError("energy not in measurement metadata.")
+
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
             raise RuntimeError("Function not implemented for non-complex measurements.")
@@ -2217,7 +2240,7 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
     @property
     def angular_extent(self):
         """Extent of line profiles given as scattering angels [mrad]."""
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         return self.extent * wavelength * 1e3
 
     # def _plot_x_label(self, units=None):
@@ -2483,29 +2506,6 @@ class DiffractionPatterns(_BaseMeasurement2D):
     @property
     def _area_per_pixel(self):
         return _scan_area_per_pixel(self)
-
-    def _get_energy(self) -> float:
-        """Return the electron energy [eV].
-
-        Falls back to the first value of an :class:`.EnergyAxis` in
-        ``ensemble_axes_metadata`` when ``metadata["energy"]`` is ``None``
-        (i.e. when the diffraction patterns were produced from an energy-ensemble
-        ``Waves`` object).
-
-        Raises
-        ------
-        RuntimeError
-            If no energy can be found in metadata or ensemble axes metadata.
-        """
-        from abtem.core.axes import EnergyAxis
-
-        energy = self.metadata.get("energy")
-        if energy is not None:
-            return energy
-        for axis in self.ensemble_axes_metadata:
-            if isinstance(axis, EnergyAxis):
-                return float(axis.values[0])
-        raise RuntimeError("energy not in measurement metadata.")
 
     @classmethod
     def from_array_and_metadata(
@@ -4099,7 +4099,7 @@ class PolarMeasurements(BaseMeasurements):
 
         new_array[..., regions < 0] = np.nan
 
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         sampling = (
             angular_sampling[0] / (wavelength * 1e3),
             angular_sampling[1] / (wavelength * 1e3),
@@ -4437,19 +4437,6 @@ class IndexedDiffractionPatterns(BaseMeasurements):
 
     def _area_per_pixel(self):
         raise NotImplementedError
-
-    def _get_energy(self) -> float:
-        """Return the electron energy [eV], falling back to EnergyAxis in ensemble
-        metadata when ``metadata["energy"]`` is ``None`` (energy-ensemble case)."""
-        from abtem.core.axes import EnergyAxis
-
-        energy = self.metadata.get("energy")
-        if energy is not None:
-            return energy
-        for axis in self.ensemble_axes_metadata:
-            if isinstance(axis, EnergyAxis):
-                return float(axis.values[0])
-        raise RuntimeError("energy not in measurement metadata.")
 
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:

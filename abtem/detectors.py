@@ -43,6 +43,24 @@ else:
     ArrayObjectType = TypeVar("ArrayObjectType", bound="ArrayObject")
 
 
+def _energy_from_waves(waves) -> Optional[float]:
+    """Return a representative electron energy from *waves*.
+
+    For ordinary waves ``waves.energy`` is used directly.  For energy-ensemble
+    waves (where ``accelerator.energy`` is ``None``) the first value of the
+    ``EnergyAxis`` in ``ensemble_axes_metadata`` is returned instead so that
+    downstream code that needs a concrete energy value does not receive ``None``.
+    """
+    from abtem.core.axes import EnergyAxis
+
+    energy = waves.energy
+    if energy is None:
+        for axis in waves.ensemble_axes_metadata:
+            if isinstance(axis, EnergyAxis):
+                return float(axis.values[0])
+    return energy
+
+
 def validate_detectors(
     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     waves: Optional[BaseWaves] = None,
@@ -427,7 +445,7 @@ class _AbstractRadialDetector(BaseDetector):
                 )
             segmented_regions = self.get_detector_regions(waves)
             diffraction_patterns = segmented_regions.to_diffraction_patterns(waves.gpts)
-            energy = waves.energy
+            energy = _energy_from_waves(waves)
         elif energy is None:
             raise ValueError("provide the waves or the energy of waves")
         else:
@@ -738,7 +756,7 @@ class AnnularDetector(_AbstractRadialDetector):
 
         array = self._get_detector_region_array(waves, fftshift=fftshift)
         metadata = {
-            "energy": waves.energy,
+            "energy": _energy_from_waves(waves),
             "label": "detector efficiency",
             "units": "%",
         }
