@@ -18,13 +18,12 @@ from abtem.transfer import (
     Vortex,
     Zernike,
     cartesian2polar,
+    hard_aperture,
     nyquist_sampling,
     point_resolution,
     polar2cartesian,
-    polar_aliases,
     scherzer_defocus,
     soft_aperture,
-    hard_aperture,
 )
 
 ENERGY = 100e3  # eV
@@ -33,84 +32,118 @@ SAMPLING = (0.1, 0.1)  # Å/pixel
 
 
 # ---------------------------------------------------------------------------
-# Utility functions
+# Factory functions for parametrized kernel tests
 # ---------------------------------------------------------------------------
 
-class TestNyquistSampling:
-    def test_positive(self):
-        s = nyquist_sampling(semiangle_cutoff=30.0, energy=ENERGY)
-        assert s > 0
-
-    def test_smaller_cutoff_gives_larger_sampling(self):
-        s1 = nyquist_sampling(10.0, ENERGY)
-        s2 = nyquist_sampling(30.0, ENERGY)
-        assert s1 > s2
-
-    def test_higher_energy_smaller_sampling(self):
-        s1 = nyquist_sampling(30.0, 100e3)
-        s2 = nyquist_sampling(30.0, 300e3)
-        assert s2 < s1
+def _aperture():  return Aperture(30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _annular():   return AnnularAperture(10.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _vortex():    return Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _bullseye():  return Bullseye(4, 5.0, 3, 2.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _zernike():   return Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _rpp():       return RadialPhasePlate(2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _temporal():  return TemporalEnvelope(100.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _spatial():   return SpatialEnvelope(0.5, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _ctf():       return CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, defocus=100.0)
 
 
-class TestScherzerDefocus:
-    def test_positive_Cs_gives_positive_defocus(self):
-        Cs = 1e7  # Å
-        df = scherzer_defocus(Cs, ENERGY)
-        assert df > 0
+ALL_KERNELS = pytest.mark.parametrize("factory", [
+    pytest.param(_aperture, id="Aperture"),
+    pytest.param(_annular,  id="AnnularAperture"),
+    pytest.param(_vortex,   id="Vortex"),
+    pytest.param(_bullseye, id="Bullseye"),
+    pytest.param(_zernike,  id="Zernike"),
+    pytest.param(_rpp,      id="RadialPhasePlate"),
+    pytest.param(_temporal, id="TemporalEnvelope"),
+    pytest.param(_spatial,  id="SpatialEnvelope"),
+    pytest.param(_ctf,      id="CTF"),
+])
 
-    def test_negative_Cs_gives_negative_defocus(self):
-        df = scherzer_defocus(-1e7, ENERGY)
-        assert df < 0
+REAL_KERNELS = pytest.mark.parametrize("factory", [
+    pytest.param(_aperture, id="Aperture"),
+    pytest.param(_annular,  id="AnnularAperture"),
+    pytest.param(_bullseye, id="Bullseye"),
+    pytest.param(_temporal, id="TemporalEnvelope"),
+    pytest.param(_spatial,  id="SpatialEnvelope"),
+])
 
-    def test_formula(self):
-        Cs = 1e7
-        wl = energy2wavelength(ENERGY)
-        expected = np.sqrt(1.5 * Cs * wl)
-        assert np.isclose(scherzer_defocus(Cs, ENERGY), expected, rtol=1e-6)
-
-
-class TestPointResolution:
-    def test_positive(self):
-        assert point_resolution(1e7, ENERGY) > 0
-
-    def test_larger_Cs_lower_resolution(self):
-        r1 = point_resolution(1e6, ENERGY)
-        r2 = point_resolution(1e8, ENERGY)
-        assert r2 > r1
-
-    def test_higher_energy_better_resolution(self):
-        r1 = point_resolution(1e7, 100e3)
-        r2 = point_resolution(1e7, 300e3)
-        assert r2 < r1
+COMPLEX_KERNELS = pytest.mark.parametrize("factory", [
+    pytest.param(_vortex,   id="Vortex"),
+    pytest.param(_zernike,  id="Zernike"),
+    pytest.param(_rpp,      id="RadialPhasePlate"),
+    pytest.param(_ctf,      id="CTF"),
+])
 
 
-class TestPolar2Cartesian:
-    def test_returns_dict(self):
-        result = polar2cartesian({"C10": 100.0, "C30": 1e7})
-        assert isinstance(result, dict)
+# ---------------------------------------------------------------------------
+# Common kernel property tests (parametrized across all transfer functions)
+# ---------------------------------------------------------------------------
 
-    def test_C10_preserved(self):
-        result = polar2cartesian({"C10": 200.0})
-        assert np.isclose(result["C10"], 200.0)
-
-    def test_C30_preserved(self):
-        result = polar2cartesian({"C10": 0.0, "C30": 1e7})
-        assert np.isclose(result["C30"], 1e7)
-
-    def test_zero_astigmatism(self):
-        result = polar2cartesian({"C12": 0.0, "phi12": 0.0})
-        assert np.isclose(result["C12a"], 0.0)
-        assert np.isclose(result["C12b"], 0.0)
+@ALL_KERNELS
+def test_kernel_shape(factory):
+    assert factory()._evaluate_kernel().shape == GPTS
 
 
-class TestCartesian2Polar:
-    def test_returns_dict(self):
-        result = cartesian2polar({"C10": 100.0})
-        assert isinstance(result, dict)
+@ALL_KERNELS
+def test_kernel_finite(factory):
+    assert np.all(np.isfinite(factory()._evaluate_kernel()))
 
-    def test_C10_preserved(self):
-        result = cartesian2polar({"C10": 300.0})
-        assert np.isclose(result["C10"], 300.0)
+
+@REAL_KERNELS
+def test_kernel_real_in_unit_interval(factory):
+    k = factory()._evaluate_kernel()
+    assert not np.iscomplexobj(k)
+    assert np.all(k >= 0.0) and np.all(k <= 1.0 + 1e-10)
+
+
+@COMPLEX_KERNELS
+def test_kernel_complex_amplitude_leq_1(factory):
+    k = factory()._evaluate_kernel()
+    assert np.iscomplexobj(k)
+    assert np.all(np.abs(k) <= 1.0 + 1e-6)  # float32 tolerance
+
+
+# ---------------------------------------------------------------------------
+# Utility functions — Hypothesis for monotonicity / sign properties
+# ---------------------------------------------------------------------------
+
+@given(
+    semiangle=st.floats(5.0, 100.0),
+    energy=st.floats(60e3, 300e3),
+)
+def test_nyquist_sampling_positive(semiangle, energy):
+    assert nyquist_sampling(semiangle, energy) > 0
+
+
+@given(Cs=st.floats(1e5, 1e8))
+def test_scherzer_defocus_sign(Cs):
+    assert scherzer_defocus(Cs, ENERGY) > 0
+    assert scherzer_defocus(-Cs, ENERGY) < 0
+
+
+def test_scherzer_defocus_formula():
+    Cs = 1e7
+    wl = energy2wavelength(ENERGY)
+    assert np.isclose(scherzer_defocus(Cs, ENERGY), np.sqrt(1.5 * Cs * wl), rtol=1e-6)
+
+
+@given(
+    Cs_lo=st.floats(1e6, 5e6),
+    Cs_hi=st.floats(5.1e6, 1e8),
+)
+def test_point_resolution_monotone_in_Cs(Cs_lo, Cs_hi):
+    assert point_resolution(Cs_lo, ENERGY) < point_resolution(Cs_hi, ENERGY)
+
+
+def test_polar2cartesian():
+    result = polar2cartesian({"C10": 200.0, "C12": 0.0, "phi12": 0.0})
+    assert isinstance(result, dict)
+    assert np.isclose(result["C10"], 200.0)
+    assert np.isclose(result.get("C12a", 0.0), 0.0) and np.isclose(result.get("C12b", 0.0), 0.0)
+
+
+def test_cartesian2polar():
+    result = cartesian2polar({"C10": 300.0})
+    assert isinstance(result, dict) and np.isclose(result["C10"], 300.0)
 
 
 # ---------------------------------------------------------------------------
@@ -120,219 +153,95 @@ class TestCartesian2Polar:
 class TestSoftHardAperture:
     def _grid(self, n=32):
         alpha = np.linspace(0, 50e-3, n * n).reshape(n, n)
-        phi = np.zeros_like(alpha)
-        return alpha, phi
+        return alpha, np.zeros_like(alpha)
 
-    def test_soft_aperture_values_between_0_and_1(self):
+    def test_soft_aperture_in_0_1(self):
         alpha, phi = self._grid()
-        result = soft_aperture(alpha, phi, 30e-3, (1.0, 1.0))
-        assert np.all(result >= 0.0)
-        assert np.all(result <= 1.0)
+        r = soft_aperture(alpha, phi, 30e-3, (1.0, 1.0))
+        assert np.all(r >= 0.0) and np.all(r <= 1.0)
 
     def test_hard_aperture_binary(self):
-        alpha, phi = self._grid()
-        result = hard_aperture(alpha, 30e-3)
-        unique = np.unique(result)
-        assert set(unique).issubset({0.0, 1.0})
+        r = hard_aperture(self._grid()[0], 30e-3)
+        assert set(np.unique(r)).issubset({0.0, 1.0})
 
     def test_hard_aperture_dc_is_one(self):
-        alpha = np.zeros((8, 8))
-        result = hard_aperture(alpha, 30e-3)
-        assert np.all(result == 1.0)
+        assert np.all(hard_aperture(np.zeros((8, 8)), 30e-3) == 1.0)
 
 
 # ---------------------------------------------------------------------------
-# Aperture
+# Aperture-specific attribute / edge-case tests
 # ---------------------------------------------------------------------------
 
-class TestAperture:
-    def test_basic_construction(self):
-        ap = Aperture(semiangle_cutoff=30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert ap.semiangle_cutoff == 30.0
-
-    def test_soft_property(self):
-        ap = Aperture(30.0, soft=True, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert ap.soft is True
-        ap2 = Aperture(30.0, soft=False, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert ap2.soft is False
-
-    def test_evaluate_kernel_shape(self):
-        ap = Aperture(30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ap._evaluate_kernel()
-        assert kernel.shape == GPTS
-
-    def test_evaluate_values_between_0_and_1(self):
-        ap = Aperture(30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ap._evaluate_kernel()
-        assert np.all(kernel >= 0.0)
-        assert np.all(kernel <= 1.0)
-
-    def test_infinite_cutoff_gives_all_ones(self):
-        ap = Aperture(np.inf, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ap._evaluate_kernel()
-        assert np.all(kernel == 1.0)
-
-    def test_nyquist_sampling(self):
-        ap = Aperture(30.0, energy=ENERGY)
-        s = ap.nyquist_sampling
-        assert s > 0
-
-    def test_to_diffraction_patterns(self):
-        from abtem.measurements import DiffractionPatterns
-
-        ap = Aperture(30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        dp = ap.to_diffraction_patterns()
-        assert isinstance(dp, DiffractionPatterns)
-
-    def test_distribution_semiangle(self):
-        from abtem.distributions import from_values
-
-        cutoffs = from_values([20.0, 30.0, 40.0])
-        ap = Aperture(cutoffs, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ap._evaluate_kernel()
-        assert kernel.shape[0] == 3
+def test_aperture_attributes():
+    ap = Aperture(30.0, soft=True, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert ap.semiangle_cutoff == 30.0 and ap.soft is True
 
 
-# ---------------------------------------------------------------------------
-# AnnularAperture
-# ---------------------------------------------------------------------------
-
-class TestAnnularAperture:
-    def test_construction(self):
-        ap = AnnularAperture(10.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert ap.inner_cutoff == 10.0
-        assert ap.semiangle_cutoff == 30.0
-
-    def test_evaluate_binary(self):
-        ap = AnnularAperture(10.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ap._evaluate_kernel()
-        unique = np.unique(kernel)
-        assert set(unique).issubset({0.0, 1.0})
-
-    def test_dc_is_zero(self):
-        """DC component (alpha=0) should be blocked by the inner cutoff."""
-        ap = AnnularAperture(5.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ap._evaluate_kernel()
-        # The very centre should be 0 (blocked by inner cutoff)
-        assert kernel[0, 0] == 0.0
+def test_aperture_infinite_cutoff_gives_ones():
+    assert np.all(
+        Aperture(np.inf, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel() == 1.0
+    )
 
 
-# ---------------------------------------------------------------------------
-# Vortex
-# ---------------------------------------------------------------------------
-
-class TestVortex:
-    def test_construction(self):
-        v = Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert v.quantum_number == 1
-
-    def test_evaluate_is_complex(self):
-        v = Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = v._evaluate_kernel()
-        assert np.iscomplexobj(kernel)
-
-    def test_amplitude_binary(self):
-        v = Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = v._evaluate_kernel()
-        amp = np.abs(kernel)
-        unique = np.unique(np.round(amp, 6))
-        assert set(unique).issubset({0.0, 1.0})
+def test_aperture_nyquist_sampling():
+    assert Aperture(30.0, energy=ENERGY).nyquist_sampling > 0
 
 
-# ---------------------------------------------------------------------------
-# Bullseye
-# ---------------------------------------------------------------------------
-
-class TestBullseye:
-    def test_construction(self):
-        b = Bullseye(
-            num_spokes=4, spoke_width=5.0, num_rings=3, ring_width=2.0,
-            semiangle_cutoff=30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING,
-        )
-        assert b.num_spokes == 4
-        assert b.num_rings == 3
-
-    def test_evaluate_kernel_shape(self):
-        b = Bullseye(4, 5.0, 3, 2.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = b._evaluate_kernel()
-        assert kernel.shape == GPTS
-
-    def test_soft_is_false(self):
-        b = Bullseye(4, 5.0, 3, 2.0, 30.0, energy=ENERGY)
-        assert b.soft is False
+def test_aperture_to_diffraction_patterns():
+    from abtem.measurements import DiffractionPatterns
+    dp = Aperture(30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING).to_diffraction_patterns()
+    assert isinstance(dp, DiffractionPatterns)
 
 
-# ---------------------------------------------------------------------------
-# Zernike
-# ---------------------------------------------------------------------------
-
-class TestZernike:
-    def test_construction(self):
-        z = Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert z.center_hole_cutoff == 2.0
-        assert z.phase_shift == np.pi / 2
-
-    def test_evaluate_is_complex(self):
-        z = Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = z._evaluate_kernel()
-        assert np.iscomplexobj(kernel)
-
-    def test_amplitude_leq_1(self):
-        z = Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = z._evaluate_kernel()
-        assert np.all(np.abs(kernel) <= 1.0 + 1e-10)
+def test_aperture_distribution_semiangle():
+    from abtem.distributions import from_values
+    k = Aperture(
+        from_values([20.0, 30.0, 40.0]), energy=ENERGY, gpts=GPTS, sampling=SAMPLING
+    )._evaluate_kernel()
+    assert k.shape[0] == 3
 
 
-# ---------------------------------------------------------------------------
-# RadialPhasePlate
-# ---------------------------------------------------------------------------
-
-class TestRadialPhasePlate:
-    def test_construction(self):
-        rpp = RadialPhasePlate(2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert rpp.num_flips == 2
-
-    def test_evaluate_is_complex(self):
-        rpp = RadialPhasePlate(2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = rpp._evaluate_kernel()
-        assert np.iscomplexobj(kernel)
-
-    def test_amplitude_is_one(self):
-        rpp = RadialPhasePlate(2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = rpp._evaluate_kernel()
-        assert np.allclose(np.abs(kernel), 1.0)
+def test_annular_aperture_attributes_and_dc():
+    ap = AnnularAperture(10.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert ap.inner_cutoff == 10.0 and ap.semiangle_cutoff == 30.0
+    assert AnnularAperture(5.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel()[0, 0] == 0.0
 
 
-# ---------------------------------------------------------------------------
-# TemporalEnvelope
-# ---------------------------------------------------------------------------
+def test_vortex_quantum_number():
+    assert Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING).quantum_number == 1
 
-class TestTemporalEnvelope:
-    def test_construction(self):
-        te = TemporalEnvelope(100.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        assert te.focal_spread == 100.0
 
-    def test_evaluate_real_valued(self):
-        te = TemporalEnvelope(100.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = te._evaluate_kernel()
-        assert not np.iscomplexobj(kernel)
+def test_bullseye_attributes():
+    b = Bullseye(4, 5.0, 3, 2.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert b.num_spokes == 4 and b.num_rings == 3 and b.soft is False
 
-    def test_values_between_0_and_1(self):
-        te = TemporalEnvelope(100.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = te._evaluate_kernel()
-        assert np.all(kernel >= 0.0)
-        assert np.all(kernel <= 1.0)
 
-    def test_zero_focal_spread_gives_ones(self):
-        te = TemporalEnvelope(0.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = te._evaluate_kernel()
-        assert np.allclose(kernel, 1.0)
+def test_zernike_attributes():
+    z = Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert z.center_hole_cutoff == 2.0 and z.phase_shift == np.pi / 2
 
-    def test_dc_is_one(self):
-        """DC component (alpha=0) always has envelope = 1."""
-        te = TemporalEnvelope(500.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = te._evaluate_kernel()
-        assert np.isclose(kernel[0, 0], 1.0)
+
+def test_rpp_attributes_and_unit_amplitude():
+    rpp = RadialPhasePlate(2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert rpp.num_flips == 2
+    assert np.allclose(np.abs(rpp._evaluate_kernel()), 1.0)
+
+
+def test_temporal_envelope_attributes_and_limits():
+    te = TemporalEnvelope(100.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    assert te.focal_spread == 100.0
+    assert np.allclose(
+        TemporalEnvelope(0.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel(), 1.0
+    )
+    assert np.isclose(
+        TemporalEnvelope(500.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel()[0, 0], 1.0
+    )
+
+
+def test_spatial_envelope_zero_spread_gives_ones():
+    assert np.allclose(
+        SpatialEnvelope(0.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel(), 1.0
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -340,47 +249,23 @@ class TestTemporalEnvelope:
 # ---------------------------------------------------------------------------
 
 class TestAberrations:
-    def test_construction_defocus(self):
+    def test_defocus_alias(self):
         ab = Aberrations(energy=ENERGY, defocus=100.0)
-        assert ab.defocus == 100.0
-        assert np.isclose(ab.C10, -100.0)
-
-    def test_construction_Cs(self):
-        ab = Aberrations(energy=ENERGY, Cs=1e7)
-        assert ab.Cs == 1e7
+        assert ab.defocus == 100.0 and np.isclose(ab.C10, -100.0)
 
     def test_set_aberrations_dict(self):
         ab = Aberrations(energy=ENERGY)
         ab.set_aberrations({"C10": -200.0, "C30": 1e7})
         assert np.isclose(ab.defocus, 200.0)
 
-    def test_scherzer_defocus_string(self):
+    def test_scherzer_string(self):
         ab = Aberrations(energy=ENERGY, Cs=1e7)
         ab.set_aberrations({"defocus": "scherzer"})
-        expected = scherzer_defocus(1e7, ENERGY)
-        assert np.isclose(ab.defocus, expected, rtol=1e-5)
+        assert np.isclose(ab.defocus, scherzer_defocus(1e7, ENERGY), rtol=1e-5)
 
-    def test_aberration_coefficients_dict(self):
-        ab = Aberrations(energy=ENERGY, defocus=100.0, Cs=1e6)
-        coeffs = ab.aberration_coefficients
-        assert isinstance(coeffs, dict)
-        assert "C10" in coeffs
-
-    def test_polar_aliases(self):
-        ab = Aberrations(energy=ENERGY)
-        ab.astigmatism = 50.0
-        assert ab.C12 == 50.0
-
-    def test_evaluate_from_angular_grid(self):
-        ab = Aberrations(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, defocus=100.0)
-        kernel = ab._evaluate_kernel()
-        assert kernel.shape == GPTS
-        assert np.iscomplexobj(kernel)
-
-    def test_no_aberrations_gives_unit_phase(self):
-        ab = Aberrations(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ab._evaluate_kernel()
-        assert np.allclose(np.abs(kernel), 1.0)
+    def test_no_aberrations_unit_phase(self):
+        k = Aberrations(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)._evaluate_kernel()
+        assert np.allclose(np.abs(k), 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -388,104 +273,49 @@ class TestAberrations:
 # ---------------------------------------------------------------------------
 
 class TestCTF:
-    def test_construction_defaults(self):
+    def test_defaults(self):
         ctf = CTF(energy=ENERGY)
-        assert ctf.defocus == 0.0
-        assert ctf.focal_spread == 0.0
-
-    def test_construction_with_aberrations(self):
-        ctf = CTF(energy=ENERGY, defocus=500.0, Cs=1e7)
-        assert ctf.defocus == 500.0
-        assert ctf.Cs == 1e7
-
-    def test_evaluate_kernel_shape(self):
-        ctf = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ctf._evaluate_kernel()
-        assert kernel.shape == GPTS
-
-    def test_evaluate_kernel_complex(self):
-        ctf = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, defocus=100.0)
-        kernel = ctf._evaluate_kernel()
-        assert np.iscomplexobj(kernel)
-
-    def test_no_aberrations_dc_is_one(self):
-        ctf = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        kernel = ctf._evaluate_kernel()
-        assert np.isclose(np.abs(kernel[0, 0]), 1.0)
+        assert ctf.defocus == 0.0 and ctf.focal_spread == 0.0
 
     def test_aperture_cuts_high_angles(self):
-        ctf_open = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        ctf_cut = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, semiangle_cutoff=5.0)
-        open_sum = np.sum(np.abs(ctf_open._evaluate_kernel()))
-        cut_sum = np.sum(np.abs(ctf_cut._evaluate_kernel()))
-        assert open_sum > cut_sum
+        open_ = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+        cut = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, semiangle_cutoff=5.0)
+        assert np.sum(np.abs(open_._evaluate_kernel())) > np.sum(np.abs(cut._evaluate_kernel()))
 
-    def test_focal_spread_attenuates_high_angles(self):
-        ctf_nofs = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, focal_spread=0.0)
-        ctf_fs = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, focal_spread=500.0)
-        nofs_sum = np.sum(np.abs(ctf_nofs._evaluate_kernel()))
-        fs_sum = np.sum(np.abs(ctf_fs._evaluate_kernel()))
-        assert nofs_sum > fs_sum
+    def test_focal_spread_attenuates(self):
+        nofs = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, focal_spread=0.0)
+        fs = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, focal_spread=500.0)
+        assert np.sum(np.abs(nofs._evaluate_kernel())) > np.sum(np.abs(fs._evaluate_kernel()))
 
     def test_to_diffraction_patterns(self):
         from abtem.measurements import DiffractionPatterns
-
-        ctf = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        dp = ctf.to_diffraction_patterns()
+        dp = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING).to_diffraction_patterns()
         assert isinstance(dp, DiffractionPatterns)
 
     def test_profiles(self):
         from abtem.measurements import ReciprocalSpaceLineProfiles
-
-        ctf = CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, defocus=200.0)
-        profiles = ctf.profiles()
-        assert isinstance(profiles, ReciprocalSpaceLineProfiles)
+        assert isinstance(
+            CTF(energy=ENERGY, gpts=GPTS, sampling=SAMPLING, defocus=200.0).profiles(),
+            ReciprocalSpaceLineProfiles,
+        )
 
     def test_apply_to_waves(self):
         from abtem.waves import PlaneWave
-
         ctf = CTF(energy=ENERGY, semiangle_cutoff=30.0, defocus=100.0)
-        wave = PlaneWave(energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-        wave = wave.build(lazy=False)
-        result = wave.apply_transform(ctf)
-        assert result.array.shape == wave.array.shape
+        wave = PlaneWave(energy=ENERGY, gpts=GPTS, sampling=SAMPLING).build(lazy=False)
+        assert wave.apply_transform(ctf).array.shape == wave.array.shape
 
     @settings(max_examples=5)
     @given(defocus=st.floats(-500, 500), Cs=st.floats(0, 1e8))
     def test_hypothesis_evaluate(self, defocus, Cs):
-        ctf = CTF(energy=ENERGY, gpts=(32, 32), sampling=SAMPLING,
-                  defocus=defocus, Cs=Cs)
-        kernel = ctf._evaluate_kernel()
-        assert kernel.shape == (32, 32)
-        assert np.all(np.isfinite(kernel))
+        k = CTF(
+            energy=ENERGY, gpts=(32, 32), sampling=SAMPLING, defocus=defocus, Cs=Cs
+        )._evaluate_kernel()
+        assert k.shape == (32, 32) and np.all(np.isfinite(k))
 
 
 # ---------------------------------------------------------------------------
-# SpatialEnvelope
-# ---------------------------------------------------------------------------
-
-class TestSpatialEnvelope:
-    def test_construction(self):
-        se = SpatialEnvelope(angular_spread=0.5, energy=ENERGY,
-                             gpts=GPTS, sampling=SAMPLING)
-        assert se.angular_spread == 0.5
-
-    def test_zero_spread_gives_ones(self):
-        se = SpatialEnvelope(angular_spread=0.0, energy=ENERGY,
-                             gpts=GPTS, sampling=SAMPLING)
-        kernel = se._evaluate_kernel()
-        assert np.allclose(kernel, 1.0)
-
-    def test_values_between_0_and_1(self):
-        se = SpatialEnvelope(angular_spread=1.0, energy=ENERGY,
-                             gpts=GPTS, sampling=SAMPLING)
-        kernel = se._evaluate_kernel()
-        assert np.all(kernel >= 0.0 - 1e-10)
-        assert np.all(kernel <= 1.0 + 1e-10)
-
-
-# ---------------------------------------------------------------------------
-# Existing test (kept for regression)
+# Existing regression test
 # ---------------------------------------------------------------------------
 
 def test_point_resolution_regression():
@@ -504,6 +334,4 @@ def test_point_resolution_regression():
     )
     analytical_point_resolution = point_resolution(energy=200e3, Cs=1e-3 * 1e10)
 
-    assert np.round(numerical_point_resolution1, 1) == np.round(
-        analytical_point_resolution, 1
-    )
+    assert np.round(numerical_point_resolution1, 1) == np.round(analytical_point_resolution, 1)

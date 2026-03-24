@@ -126,276 +126,153 @@ def test_cut(structure):
 # euler_sequence
 # ---------------------------------------------------------------------------
 
-class TestEulerSequence:
-    def test_intrinsic_xyz(self):
-        assert euler_sequence("xyz", "intrinsic") == (0, 0, 0, 0)
-
-    def test_static_same_as_intrinsic(self):
-        assert euler_sequence("zyz", "static") == euler_sequence("zyz", "intrinsic")
-
-    def test_extrinsic_zyx(self):
-        assert euler_sequence("zyx", "extrinsic") == (0, 0, 0, 1)
-
-    def test_rotating_same_as_extrinsic(self):
-        assert euler_sequence("xyz", "rotating") == euler_sequence("xyz", "extrinsic")
-
-    def test_invalid_convention_raises(self):
-        with pytest.raises(ValueError):
-            euler_sequence("xyz", "bad_convention")
+def test_euler_sequence():
+    assert euler_sequence("xyz", "intrinsic") == (0, 0, 0, 0)
+    assert euler_sequence("zyx", "extrinsic") == (0, 0, 0, 1)
+    assert euler_sequence("zyz", "static") == euler_sequence("zyz", "intrinsic")
+    assert euler_sequence("xyz", "rotating") == euler_sequence("xyz", "extrinsic")
+    with pytest.raises(ValueError):
+        euler_sequence("xyz", "bad_convention")
 
 
 # ---------------------------------------------------------------------------
 # plane_to_axes
 # ---------------------------------------------------------------------------
 
-class TestPlaneToAxes:
-    def test_xy_gives_0_1_2(self):
-        assert plane_to_axes("xy") == (0, 1, 2)
-
-    def test_xz_gives_0_2_1(self):
-        assert plane_to_axes("xz") == (0, 2, 1)
-
-    def test_yz_gives_1_2_0(self):
-        assert plane_to_axes("yz") == (1, 2, 0)
-
-    def test_result_is_permutation_of_012(self):
-        for plane in ("xy", "xz", "yx", "yz", "zx", "zy"):
-            axes = plane_to_axes(plane)
-            assert sorted(axes) == [0, 1, 2]
+def test_plane_to_axes():
+    assert plane_to_axes("xy") == (0, 1, 2)
+    assert plane_to_axes("xz") == (0, 2, 1)
+    assert plane_to_axes("yz") == (1, 2, 0)
+    for plane in ("xy", "xz", "yx", "yz", "zx", "zy"):
+        assert sorted(plane_to_axes(plane)) == [0, 1, 2]
 
 
 # ---------------------------------------------------------------------------
-# is_cell_hexagonal
+# is_cell_hexagonal / is_cell_orthogonal / is_cell_valid / standardize_cell
 # ---------------------------------------------------------------------------
 
-class TestIsCellHexagonal:
-    def test_hcp_is_hexagonal(self):
-        atoms = bulk("Be")
-        assert is_cell_hexagonal(atoms)
-
-    def test_cubic_is_not_hexagonal(self):
-        atoms = bulk("Al", cubic=True)
-        assert not is_cell_hexagonal(atoms)
-
-    def test_accepts_cell_directly(self):
-        atoms = bulk("Be")
-        assert is_cell_hexagonal(atoms.cell)
+@pytest.mark.parametrize("atoms,is_hex,is_ortho", [
+    (bulk("Be"), True, False),
+    (bulk("Al", cubic=True), False, True),
+])
+def test_cell_predicates(atoms, is_hex, is_ortho):
+    assert is_cell_hexagonal(atoms) == is_hex
+    assert is_cell_orthogonal(atoms) == is_ortho
 
 
-# ---------------------------------------------------------------------------
-# is_cell_orthogonal
-# ---------------------------------------------------------------------------
-
-class TestIsCellOrthogonal:
-    def test_cubic_is_orthogonal(self):
-        atoms = bulk("Al", cubic=True)
-        assert is_cell_orthogonal(atoms)
-
-    def test_hcp_is_not_orthogonal(self):
-        atoms = bulk("Be")
-        assert not is_cell_orthogonal(atoms)
-
-    def test_accepts_ndarray(self):
-        cell = np.diag([3.0, 3.0, 3.0])
-        assert is_cell_orthogonal(cell)
+def test_is_cell_valid():
+    assert is_cell_valid(bulk("Al", cubic=True))
+    assert is_cell_valid(standardize_cell(bulk("Al", cubic=True)))
 
 
-# ---------------------------------------------------------------------------
-# is_cell_valid
-# ---------------------------------------------------------------------------
-
-class TestIsCellValid:
-    def test_orthogonal_cubic_is_valid(self):
-        atoms = bulk("Al", cubic=True)
-        assert is_cell_valid(atoms)
-
-    def test_standardized_structure_is_valid(self):
-        atoms = bulk("Al", cubic=True)
-        standardized = standardize_cell(atoms)
-        assert is_cell_valid(standardized)
+def test_cell_predicate_alternate_inputs():
+    assert is_cell_hexagonal(bulk("Be").cell)           # accepts Cell object
+    assert is_cell_orthogonal(np.diag([3.0, 3.0, 3.0]))  # accepts ndarray
 
 
-# ---------------------------------------------------------------------------
-# standardize_cell
-# ---------------------------------------------------------------------------
-
-class TestStandardizeCell:
-    def test_cubic_unchanged(self):
-        atoms = bulk("Al", cubic=True)
-        result = standardize_cell(atoms)
-        assert is_cell_valid(result)
-
-    def test_invalid_cell_raises(self):
-        atoms = bulk("Be")  # hexagonal — not directly standardizable to orthogonal
-        with pytest.raises(RuntimeError):
-            standardize_cell(atoms)
+def test_standardize_cell():
+    assert is_cell_valid(standardize_cell(bulk("Al", cubic=True)))
+    with pytest.raises(RuntimeError):
+        standardize_cell(bulk("Be"))  # hexagonal — not standardizable to orthogonal
 
 
 # ---------------------------------------------------------------------------
 # euler_to_rotation / rotation_matrix_to_euler round-trip
 # ---------------------------------------------------------------------------
 
-class TestEulerRoundTrip:
-    @pytest.mark.parametrize("axes", ["xyz", "zxz", "zyz"])
-    def test_round_trip_intrinsic(self, axes):
-        angles = (0.1, 0.2, 0.3)
-        R = euler_to_rotation(*angles, axes=axes)
-        assert R.shape == (3, 3)
-        # Rotation matrix should be orthogonal
-        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
-        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-10)
-        recovered = rotation_matrix_to_euler(R, axes=axes)
-        # Re-compute R from recovered angles and compare
-        R2 = euler_to_rotation(*recovered, axes=axes)
-        assert np.allclose(R, R2, atol=1e-10)
+@pytest.mark.parametrize("axes", ["xyz", "zxz", "zyz"])
+def test_euler_round_trip(axes):
+    angles = (0.1, 0.2, 0.3)
+    R = euler_to_rotation(*angles, axes=axes)
+    assert R.shape == (3, 3)
+    assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
+    assert np.isclose(np.linalg.det(R), 1.0, atol=1e-10)
+    R2 = euler_to_rotation(*rotation_matrix_to_euler(R, axes=axes), axes=axes)
+    assert np.allclose(R, R2, atol=1e-10)
 
-    def test_zero_angles_gives_identity(self):
-        R = euler_to_rotation(0.0, 0.0, 0.0)
-        assert np.allclose(R, np.eye(3))
 
-    def test_extrinsic_convention(self):
-        R = euler_to_rotation(0.1, 0.2, 0.3, axes="zyx", convention="extrinsic")
-        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
+def test_euler_zero_angles_and_extrinsic():
+    assert np.allclose(euler_to_rotation(0.0, 0.0, 0.0), np.eye(3))
+    R = euler_to_rotation(0.1, 0.2, 0.3, axes="zyx", convention="extrinsic")
+    assert np.allclose(R @ R.T, np.eye(3), atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
 # decompose_affine_transform
 # ---------------------------------------------------------------------------
 
-class TestDecomposeAffineTransform:
-    def test_pure_scale(self):
-        A = np.diag([2.0, 3.0, 4.0])
-        rotation, scale, shear = decompose_affine_transform(A)
-        assert np.allclose(scale, [2.0, 3.0, 4.0], atol=1e-10)
-
-    def test_identity(self):
-        rotation, scale, shear = decompose_affine_transform(np.eye(3))
-        assert np.allclose(scale, [1.0, 1.0, 1.0], atol=1e-10)
-        assert np.allclose(shear, [0.0, 0.0, 0.0], atol=1e-10)
-        assert np.allclose(rotation, np.eye(3), atol=1e-10)
+def test_decompose_affine_transform():
+    R, scale, shear = decompose_affine_transform(np.eye(3))
+    assert np.allclose(scale, [1.0, 1.0, 1.0]) and np.allclose(shear, [0.0, 0.0, 0.0])
+    assert np.allclose(R, np.eye(3))
+    _, scale, _ = decompose_affine_transform(np.diag([2.0, 3.0, 4.0]))
+    assert np.allclose(scale, [2.0, 3.0, 4.0], atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
 # wrap_with_tolerance
 # ---------------------------------------------------------------------------
 
-class TestWrapWithTolerance:
-    def test_returns_atoms(self):
-        from ase import Atoms
-        atoms = bulk("Al", cubic=True)
-        result = wrap_with_tolerance(atoms)
-        assert isinstance(result, Atoms)
-
-    def test_positions_within_cell(self):
-        atoms = bulk("Al", cubic=True)
-        result = wrap_with_tolerance(atoms)
-        scaled = result.get_scaled_positions()
-        assert np.all(scaled >= -1e-6)
-        assert np.all(scaled < 1.0 + 1e-6)
-
-    def test_does_not_modify_original(self):
-        atoms = bulk("Al", cubic=True)
-        original_pos = atoms.positions.copy()
-        wrap_with_tolerance(atoms)
-        assert np.allclose(atoms.positions, original_pos)
+def test_wrap_with_tolerance():
+    from ase import Atoms
+    atoms = bulk("Al", cubic=True)
+    original_pos = atoms.positions.copy()
+    result = wrap_with_tolerance(atoms)
+    assert isinstance(result, Atoms)
+    scaled = result.get_scaled_positions()
+    assert np.all(scaled >= -1e-6) and np.all(scaled < 1.0 + 1e-6)
+    assert np.allclose(atoms.positions, original_pos)  # original not modified
 
 
 # ---------------------------------------------------------------------------
 # flip_atoms
 # ---------------------------------------------------------------------------
 
-class TestFlipAtoms:
-    def test_z_flip(self):
-        atoms = bulk("Al", cubic=True)
-        flipped = flip_atoms(atoms, axis=2)
-        # z positions should be mirrored about cell[2,2]/2
-        expected_z = atoms.cell[2, 2] - atoms.positions[:, 2]
-        assert np.allclose(flipped.positions[:, 2], expected_z)
-
-    def test_does_not_modify_original(self):
-        atoms = bulk("Al", cubic=True)
-        original_pos = atoms.positions.copy()
-        flip_atoms(atoms, axis=2)
-        assert np.allclose(atoms.positions, original_pos)
-
-    def test_x_and_y_unchanged(self):
-        atoms = bulk("Al", cubic=True)
-        flipped = flip_atoms(atoms, axis=2)
-        assert np.allclose(flipped.positions[:, :2], atoms.positions[:, :2])
-
-    def test_double_flip_is_identity(self):
-        atoms = bulk("Al", cubic=True)
-        double_flipped = flip_atoms(flip_atoms(atoms, axis=2), axis=2)
-        assert np.allclose(double_flipped.positions, atoms.positions)
+def test_flip_atoms():
+    atoms = bulk("Al", cubic=True)
+    original_pos = atoms.positions.copy()
+    flipped = flip_atoms(atoms, axis=2)
+    assert np.allclose(flipped.positions[:, 2], atoms.cell[2, 2] - atoms.positions[:, 2])
+    assert np.allclose(flipped.positions[:, :2], atoms.positions[:, :2])
+    assert np.allclose(atoms.positions, original_pos)  # original not modified
+    assert np.allclose(flip_atoms(flipped, axis=2).positions, atoms.positions)  # double flip
 
 
 # ---------------------------------------------------------------------------
 # rotate_atoms
 # ---------------------------------------------------------------------------
 
-class TestRotateAtoms:
-    def test_zero_rotation_is_identity(self):
-        atoms = bulk("Al", cubic=True)
-        rotated = rotate_atoms(atoms, angles=(0.0, 0.0, 0.0))
-        assert np.allclose(rotated.positions, atoms.positions)
+def test_rotate_atoms():
+    atoms = bulk("Al", cubic=True)
+    original_pos = atoms.positions.copy()
+    assert np.allclose(rotate_atoms(atoms, angles=(0.0, 0.0, 0.0)).positions, atoms.positions)
+    rotate_atoms(atoms, angles=(0.1, 0.2, 0.3))
+    assert np.allclose(atoms.positions, original_pos)  # original not modified
 
-    def test_does_not_modify_original(self):
-        atoms = bulk("Al", cubic=True)
-        original_pos = atoms.positions.copy()
-        rotate_atoms(atoms, angles=(0.1, 0.2, 0.3))
-        assert np.allclose(atoms.positions, original_pos)
 
-    def test_preserves_interatomic_distances(self):
-        atoms = bulk("Al", cubic=True)
-        rotated = rotate_atoms(atoms, angles=(0.3, 0.5, 0.1))
-        orig_dists = np.sort(np.linalg.norm(
-            atoms.positions[:, None] - atoms.positions[None, :], axis=-1
-        ).ravel())
-        rot_dists = np.sort(np.linalg.norm(
-            rotated.positions[:, None] - rotated.positions[None, :], axis=-1
-        ).ravel())
-        assert np.allclose(orig_dists, rot_dists, atol=1e-10)
-
-    def test_scalar_angle(self):
-        atoms = bulk("Al", cubic=True)
-        rotated = rotate_atoms(atoms, angles=0.1)
-        assert rotated.positions.shape == atoms.positions.shape
+def test_rotate_atoms_preserves_distances():
+    atoms = bulk("Al", cubic=True)
+    rotated = rotate_atoms(atoms, angles=(0.3, 0.5, 0.1))
+    pairwise = lambda pos: np.sort(np.linalg.norm(
+        pos[:, None] - pos[None, :], axis=-1
+    ).ravel())
+    assert np.allclose(pairwise(atoms.positions), pairwise(rotated.positions), atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
-# rotate_atoms_to_plane
+# rotate_atoms_to_plane / best_orthogonal_cell
 # ---------------------------------------------------------------------------
 
-class TestRotateAtomsToPlane:
-    def test_xy_plane_no_change(self):
-        atoms = bulk("Al", cubic=True)
-        result = rotate_atoms_to_plane(atoms, plane="xy")
-        assert result is atoms  # returns original object unchanged
-
-    def test_xz_plane_returns_valid(self):
-        atoms = bulk("Al", cubic=True)
-        result = rotate_atoms_to_plane(atoms, plane="xz")
-        assert is_cell_valid(result)
+def test_rotate_atoms_to_plane():
+    atoms = bulk("Al", cubic=True)
+    assert rotate_atoms_to_plane(atoms, plane="xy") is atoms
+    assert is_cell_valid(rotate_atoms_to_plane(atoms, plane="xz"))
 
 
-# ---------------------------------------------------------------------------
-# best_orthogonal_cell
-# ---------------------------------------------------------------------------
-
-class TestBestOrthogonalCell:
-    def test_cubic_cell_returns_lengths(self):
-        atoms = bulk("Al", cubic=True)
-        result = best_orthogonal_cell(np.array(atoms.cell))
-        assert result.shape == (3,)
-        assert np.all(result > 0)
-
-    def test_result_is_positive(self):
-        cell = np.diag([3.0, 4.0, 5.0])
-        result = best_orthogonal_cell(cell)
-        assert np.all(result > 0)
-
-    def test_zero_vector_raises(self):
-        # Two columns with zero norm trigger the RuntimeError
-        cell = np.array([[0.0, 0.0, 3.0], [0.0, 0.0, 4.0], [0.0, 0.0, 5.0]])
-        with pytest.raises(RuntimeError):
-            best_orthogonal_cell(cell)
+def test_best_orthogonal_cell():
+    atoms = bulk("Al", cubic=True)
+    result = best_orthogonal_cell(np.array(atoms.cell))
+    assert result.shape == (3,) and np.all(result > 0)
+    with pytest.raises(RuntimeError):
+        # Two zero-norm columns trigger the RuntimeError
+        best_orthogonal_cell(np.array([[0., 0., 3.], [0., 0., 4.], [0., 0., 5.]]))
