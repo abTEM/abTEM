@@ -454,17 +454,34 @@ class Waves(BaseWaves, ArrayObject):
 
     @property
     def metadata(self) -> dict:
-        self._metadata["energy"] = self.energy
+        # Only write energy when it is a concrete scalar value.  For
+        # energy-ensemble Waves (self.energy is None) we must *not* overwrite
+        # the "energy" key: it may have been populated with the per-member
+        # value by EnergyAxis.item_metadata when this object was produced by
+        # indexing a multi-energy ensemble.
+        if self.energy is not None:
+            self._metadata["energy"] = self.energy
         self._metadata["reciprocal_space"] = self.reciprocal_space
         return self._metadata
 
     @property
     def _valid_energy(self) -> float:
-        """Return energy, also accepting a single-element EnergyAxis in ensemble metadata."""
+        """Return a scalar energy [eV] for this object.
+
+        Resolution order:
+        1. ``accelerator.energy`` — set for ordinary single-energy waves.
+        2. ``_metadata["energy"]`` — populated by :meth:`EnergyAxis.item_metadata`
+           when this object was produced by indexing an energy-ensemble.
+        3. A single-element ``EnergyAxis`` in ``ensemble_axes_metadata`` — the
+           residual case during per-member partitioned computation.
+        """
         from abtem.core.energy import EnergyUndefinedError
         from abtem.core.axes import EnergyAxis
         if self.energy is not None:
             return self.energy
+        energy = self._metadata.get("energy")
+        if energy is not None:
+            return float(energy)
         for axis in self.ensemble_axes_metadata:
             if isinstance(axis, EnergyAxis) and len(axis.values) == 1:
                 return float(axis.values[0])
@@ -474,14 +491,18 @@ class Waves(BaseWaves, ArrayObject):
     def angular_sampling(self) -> tuple[float, float]:
         """Reciprocal-space sampling in units of scattering angles [mrad].
 
-        For an energy-ensemble ``Waves`` object the maximum energy value is used
-        (smallest wavelength), which gives the most conservative crop geometry
-        and ensures that all energy slices are covered by the requested angle.
+        For a single-energy object the exact energy is used.  For an indexed
+        member of an energy ensemble the per-member energy stored in
+        ``metadata["energy"]`` is used.  For the full multi-member ensemble the
+        maximum energy (shortest wavelength) is used so that the grid is
+        conservative — it covers all members without aliasing.
         """
         from abtem.core.axes import EnergyAxis
         from abtem.core.energy import EnergyUndefinedError, energy2wavelength
 
         energy = self.accelerator.energy
+        if energy is None:
+            energy = self._metadata.get("energy")
         if energy is None:
             for axis in self.ensemble_axes_metadata:
                 if isinstance(axis, EnergyAxis):

@@ -187,6 +187,36 @@ class TestWavesEnergyEnsemble:
         )
         assert np.allclose(sampling, expected)
 
+    def test_indexing_propagates_energy_to_metadata(self):
+        """Indexing a member from an energy ensemble populates metadata['energy']."""
+        arr = np.ones((3, 32, 32), dtype=complex)
+        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
+        assert w.metadata.get("energy") is None  # full ensemble: no scalar energy
+        assert w[0].metadata["energy"] == 80e3
+        assert w[1].metadata["energy"] == 100e3
+        assert w[2].metadata["energy"] == 120e3
+
+    def test_indexed_member_valid_energy(self):
+        """_valid_energy on an indexed member returns the correct per-member energy."""
+        arr = np.ones((3, 32, 32), dtype=complex)
+        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
+        assert w[0]._valid_energy == 80e3
+        assert w[1]._valid_energy == 100e3
+        assert w[2]._valid_energy == 120e3
+
+    def test_indexed_member_angular_sampling(self):
+        """angular_sampling on an indexed member uses the exact per-member energy."""
+        from abtem.core.energy import energy2wavelength
+        arr = np.ones((3, 32, 32), dtype=complex)
+        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
+        for i, energy in enumerate([80e3, 100e3, 120e3]):
+            wl = energy2wavelength(energy)
+            expected = (
+                w.reciprocal_space_sampling[0] * wl * 1e3,
+                w.reciprocal_space_sampling[1] * wl * 1e3,
+            )
+            assert np.allclose(w[i].angular_sampling, expected)
+
 
 class TestWavesEnergyEnsembleDiffractionPatterns:
     """Regression tests for three failures reported by a user working with an
@@ -216,11 +246,35 @@ class TestWavesEnergyEnsembleDiffractionPatterns:
         assert all(a > 0 for a in dp.angular_sampling)
 
     def test_dp_get_energy_fallback(self):
-        """DiffractionPatterns._get_energy() resolves from EnergyAxis when
-        metadata['energy'] is None."""
+        """Full ensemble: _get_energy() falls back to the first EnergyAxis value."""
         dp = self._exit_waves().diffraction_patterns()
-        assert dp.metadata.get("energy") is None   # energy is not in metadata ...
-        assert dp._get_energy() == 80e3            # ... but resolves from EnergyAxis
+        assert dp.metadata.get("energy") is None   # no scalar energy on full ensemble
+        assert dp._get_energy() == 80e3            # resolved from EnergyAxis
+
+    def test_indexed_member_has_correct_energy(self):
+        """Indexing a member propagates the per-member energy into metadata."""
+        dp = self._exit_waves().diffraction_patterns()
+        assert dp[0].metadata["energy"] == 80e3
+        assert dp[1].metadata["energy"] == 100e3
+        assert dp[2].metadata["energy"] == 120e3
+
+    def test_indexed_member_get_energy(self):
+        """_get_energy() on an indexed member returns the exact per-member energy."""
+        dp = self._exit_waves().diffraction_patterns()
+        assert dp[0]._get_energy() == 80e3
+        assert dp[2]._get_energy() == 120e3
+
+    def test_indexed_member_angular_sampling(self):
+        """angular_sampling on an indexed DiffractionPatterns uses exact per-member energy."""
+        from abtem.core.energy import energy2wavelength
+        dp = self._exit_waves().diffraction_patterns()
+        for i, energy in enumerate([80e3, 100e3, 120e3]):
+            wl = energy2wavelength(energy)
+            expected = (
+                dp.sampling[0] * wl * 1e3,
+                dp.sampling[1] * wl * 1e3,
+            )
+            assert np.allclose(dp[i].angular_sampling, expected)
 
     def test_block_direct(self):
         """block_direct() no longer raises TypeError on energy-ensemble patterns."""

@@ -44,16 +44,20 @@ else:
 
 
 def _energy_from_waves(waves) -> Optional[float]:
-    """Return a representative electron energy from *waves*.
+    """Return a scalar electron energy [eV] from *waves*.
 
-    For ordinary waves ``waves.energy`` is used directly.  For energy-ensemble
-    waves (where ``accelerator.energy`` is ``None``) the first value of the
-    ``EnergyAxis`` in ``ensemble_axes_metadata`` is returned instead so that
-    downstream code that needs a concrete energy value does not receive ``None``.
+    Resolution order mirrors ``Waves._valid_energy``:
+    1. ``waves.energy`` — set for ordinary single-energy waves.
+    2. ``waves.metadata["energy"]`` — populated by ``EnergyAxis.item_metadata``
+       when *waves* was produced by indexing an energy-ensemble.
+    3. First value of an ``EnergyAxis`` in ``ensemble_axes_metadata`` — used as
+       a fallback when the full multi-member ensemble has not been indexed yet.
     """
     from abtem.core.axes import EnergyAxis
 
     energy = waves.energy
+    if energy is None:
+        energy = waves.metadata.get("energy")
     if energy is None:
         for axis in waves.ensemble_axes_metadata:
             if isinstance(axis, EnergyAxis):
