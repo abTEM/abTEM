@@ -13,7 +13,6 @@ from typing import (
     TYPE_CHECKING,
     Callable,
     Dict,
-    Hashable,
     Optional,
     Self,
     Sequence,
@@ -372,18 +371,17 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         """Metadata describing the measurement."""
         return self._metadata
 
-    def _get_from_metadata(self, key: Hashable):
-        if key not in self.metadata.keys():
-            raise RuntimeError(f"{key} not in measurement metadata.")
-        return self.metadata[key]
-
     def _get_energy(self) -> float:
         """Return the electron energy [eV].
 
-        Falls back to the first value of an :class:`.EnergyAxis` in
-        ``ensemble_axes_metadata`` when ``metadata["energy"]`` is ``None``
-        (i.e. when the measurements were produced from an energy-ensemble
-        ``Waves`` object).
+        Resolution order:
+        1. ``metadata["energy"]`` — always present for single-energy
+           measurements and for indexed members of an energy ensemble
+           (populated by :meth:`EnergyAxis.item_metadata` during indexing).
+        2. First value of an ``EnergyAxis`` in ``ensemble_axes_metadata`` —
+           reached only for a full (un-indexed) energy-ensemble measurement.
+           This is an imprecise convenience fallback; callers that need the
+           exact per-member energy should index the ensemble first.
 
         Raises
         ------
