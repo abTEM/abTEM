@@ -173,6 +173,75 @@ class TestWavesEnergyEnsemble:
         assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
         assert loaded.ensemble_axes_metadata[0].values == (80e3, 200e3, 300e3)
 
+    def test_angular_sampling_uses_max_energy(self):
+        """Waves.angular_sampling uses max energy for energy-ensemble waves."""
+        from abtem.core.energy import energy2wavelength
+        arr = np.ones((3, 32, 32), dtype=complex)
+        w = Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
+        sampling = w.angular_sampling
+        assert len(sampling) == 2 and all(a > 0 for a in sampling)
+        wl = energy2wavelength(120e3)  # max energy
+        expected = (
+            w.reciprocal_space_sampling[0] * wl * 1e3,
+            w.reciprocal_space_sampling[1] * wl * 1e3,
+        )
+        assert np.allclose(sampling, expected)
+
+
+class TestWavesEnergyEnsembleDiffractionPatterns:
+    """Regression tests for three failures reported by a user working with an
+    energy-ensemble exit-wave stack produced by RealSpaceMultislice.
+
+    All three failures share the same root cause: when energy is stored as an
+    EnergyAxis in ensemble_axes_metadata, metadata["energy"] is None, causing
+    energy-dependent geometry calculations to raise TypeError / EnergyUndefinedError.
+    """
+
+    def _exit_waves(self):
+        """Minimal energy-ensemble Waves (3 energies, 32×32 grid)."""
+        arr = np.ones((3, 32, 32), dtype=complex)
+        return Waves(arr, energy=[80e3, 100e3, 120e3], sampling=0.1)
+
+    def test_diffraction_patterns_default_angle(self):
+        """diffraction_patterns() without max_angle works for energy ensemble."""
+        dp = self._exit_waves().diffraction_patterns()
+        assert dp.array.shape[0] == 3
+        assert isinstance(dp.ensemble_axes_metadata[0], EnergyAxis)
+
+    def test_diffraction_patterns_max_angle(self):
+        """diffraction_patterns(max_angle=30) no longer raises EnergyUndefinedError."""
+        dp = self._exit_waves().diffraction_patterns(max_angle=30)
+        assert dp.array.shape[0] == 3
+        # angular_sampling should be computable without error
+        assert all(a > 0 for a in dp.angular_sampling)
+
+    def test_dp_get_energy_fallback(self):
+        """DiffractionPatterns._get_energy() resolves from EnergyAxis when
+        metadata['energy'] is None."""
+        dp = self._exit_waves().diffraction_patterns()
+        assert dp.metadata.get("energy") is None   # energy is not in metadata ...
+        assert dp._get_energy() == 80e3            # ... but resolves from EnergyAxis
+
+    def test_block_direct(self):
+        """block_direct() no longer raises TypeError on energy-ensemble patterns."""
+        dp = self._exit_waves().diffraction_patterns()
+        blocked = dp.block_direct()
+        assert blocked.array.shape == dp.array.shape
+
+    def test_angular_sampling_and_max_angles(self):
+        """angular_sampling and max_angles work on energy-ensemble DiffractionPatterns."""
+        dp = self._exit_waves().diffraction_patterns()
+        assert all(a > 0 for a in dp.angular_sampling)
+        assert all(a > 0 for a in dp.max_angles)
+
+    def test_index_diffraction_spots(self):
+        """index_diffraction_spots() no longer raises TypeError on energy-ensemble patterns."""
+        from ase.build import bulk
+        atoms = bulk("Al", cubic=True)
+        dp = self._exit_waves().diffraction_patterns()
+        result = dp.index_diffraction_spots(cell=atoms.cell)
+        assert result is not None
+
 
 # ---------------------------------------------------------------------------
 # SrTiO3 fixture used by BlochWaves tests

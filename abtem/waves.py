@@ -470,6 +470,31 @@ class Waves(BaseWaves, ArrayObject):
                 return float(axis.values[0])
         raise EnergyUndefinedError("Energy is not defined")
 
+    @property
+    def angular_sampling(self) -> tuple[float, float]:
+        """Reciprocal-space sampling in units of scattering angles [mrad].
+
+        For an energy-ensemble ``Waves`` object the maximum energy value is used
+        (smallest wavelength), which gives the most conservative crop geometry
+        and ensures that all energy slices are covered by the requested angle.
+        """
+        from abtem.core.axes import EnergyAxis
+        from abtem.core.energy import EnergyUndefinedError, energy2wavelength
+
+        energy = self.accelerator.energy
+        if energy is None:
+            for axis in self.ensemble_axes_metadata:
+                if isinstance(axis, EnergyAxis):
+                    energy = float(max(axis.values))
+                    break
+        if energy is None:
+            raise EnergyUndefinedError("Energy is not defined")
+        wl = energy2wavelength(energy)
+        return (
+            self.reciprocal_space_sampling[0] * wl * 1e3,
+            self.reciprocal_space_sampling[1] * wl * 1e3,
+        )
+
     @classmethod
     def from_array_and_metadata(
         cls,

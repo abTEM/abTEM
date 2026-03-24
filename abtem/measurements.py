@@ -2484,6 +2484,29 @@ class DiffractionPatterns(_BaseMeasurement2D):
     def _area_per_pixel(self):
         return _scan_area_per_pixel(self)
 
+    def _get_energy(self) -> float:
+        """Return the electron energy [eV].
+
+        Falls back to the first value of an :class:`.EnergyAxis` in
+        ``ensemble_axes_metadata`` when ``metadata["energy"]`` is ``None``
+        (i.e. when the diffraction patterns were produced from an energy-ensemble
+        ``Waves`` object).
+
+        Raises
+        ------
+        RuntimeError
+            If no energy can be found in metadata or ensemble axes metadata.
+        """
+        from abtem.core.axes import EnergyAxis
+
+        energy = self.metadata.get("energy")
+        if energy is not None:
+            return energy
+        for axis in self.ensemble_axes_metadata:
+            if isinstance(axis, EnergyAxis):
+                return float(axis.values[0])
+        raise RuntimeError("energy not in measurement metadata.")
+
     @classmethod
     def from_array_and_metadata(
         cls,
@@ -2693,7 +2716,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
 
         if energy is None:
-            energy = self._get_from_metadata("energy")
+            energy = self._get_energy()
 
         if g_max is None:
             g_max = max(self.max_frequency)
@@ -2795,7 +2818,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         Angular sampling of diffraction patterns in `x` and `y` [mrad].
         """
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         return (
             self.sampling[0] * wavelength * 1e3,
             self.sampling[1] * wavelength * 1e3,
@@ -2840,7 +2863,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """Lowest and highest scattering angle in `x` and `y` [mrad]."""
 
         limits = self.limits
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         limits[0] = (
             limits[0][0] * wavelength * 1e3,
             limits[0][1] * wavelength * 1e3,
@@ -3629,7 +3652,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 width=width,
             )
 
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
 
         return ReciprocalSpaceLineProfiles(
             array,
@@ -4415,6 +4438,19 @@ class IndexedDiffractionPatterns(BaseMeasurements):
     def _area_per_pixel(self):
         raise NotImplementedError
 
+    def _get_energy(self) -> float:
+        """Return the electron energy [eV], falling back to EnergyAxis in ensemble
+        metadata when ``metadata["energy"]`` is ``None`` (energy-ensemble case)."""
+        from abtem.core.axes import EnergyAxis
+
+        energy = self.metadata.get("energy")
+        if energy is not None:
+            return energy
+        for axis in self.ensemble_axes_metadata:
+            if isinstance(axis, EnergyAxis):
+                return float(axis.values[0])
+        raise RuntimeError("energy not in measurement metadata.")
+
     @property
     def base_axes_metadata(self) -> list[AxisMetadata]:
         return [AxisMetadata(label="hkl")]
@@ -4470,7 +4506,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         Scattering angles of the diffraction spots.
         """
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         return self.positions * wavelength * 1e3
 
     @property
@@ -4644,7 +4680,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
 
         if max_angle is not None and k_max is None:
-            wavelength = energy2wavelength(self._get_from_metadata("energy"))
+            wavelength = energy2wavelength(self._get_energy())
             k_max = max_angle / wavelength / 1e3
 
         elif not k_max or max_angle:
