@@ -247,13 +247,9 @@ def _interpolate_between_cells(
 
 
 def _interpolate_slice(array, cell, gpts, sampling, a, b):
-    slice_shape = gpts + (int((b - a) / (min(sampling))),)
-
-    if slice_shape[-1] <= 1:
-        raise RuntimeError(
-            "The slice thickness requested is not implemented for the provided charge"
-            " density calculation."
-        )
+    dz_charge = cell[2, 2] / array.shape[2]
+    nz = max(int(np.ceil((b - a) / dz_charge)), 2)
+    slice_shape = gpts + (nz,)
 
     slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
 
@@ -436,12 +432,6 @@ class ChargeDensityPotential(_PotentialBuilder):
     def charge_density(self):
         return self._charge_density
 
-    @staticmethod
-    def _wrap_charge_density(charge_density, frozen_phonon):
-        return np.array(
-            [{"charge_density": charge_density, "atoms": frozen_phonon}], dtype=object
-        )
-
     def _partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = self._validate_ensemble_chunks(chunks)
 
@@ -452,66 +442,79 @@ class ChargeDensityPotential(_PotentialBuilder):
         elif len(charge_densities.shape) != 4:
             raise RuntimeError()
 
+        def wrap_args(charge_density, frozen_phonon):
+            return np.array(
+                [{"charge_density": charge_density, "atoms": frozen_phonon}],
+                dtype=object,
+            )
+
         if len(self.ensemble_shape) == 0:
-            blocks = np.zeros((1,), dtype=object)
-        else:
-            blocks = np.zeros((len(chunks[0]),), dtype=object)
-
-        if lazy:
-            if not isinstance(charge_densities, da.core.Array):
-                charge_densities = da.from_array(
-                    charge_densities, chunks=(1, -1, -1, -1)
-                )
-
-            if charge_densities.shape[0] != self.ensemble_shape:
-                charge_densities = da.tile(
-                    charge_densities, self.ensemble_shape + (1, 1, 1)
-                )
-
-            charge_densities = charge_densities.to_delayed()
-
-        elif hasattr(charge_densities, "compute"):
-            raise RuntimeError
-
-        frozen_phonon_blocks = self._ewald_potential().frozen_phonons._partition_args(
-            lazy=lazy
-        )[0]
-
-        for i, (charge_density, frozen_phonon) in enumerate(
-            zip(charge_densities, frozen_phonon_blocks)
-        ):
+            # No ensemble dimension (DummyFrozenPhonons, single config)
             if lazy:
-                block = dask.delayed(self._wrap_charge_density)(
-                    charge_density.item(), frozen_phonon
-                )
-                itemset(blocks, i, da.from_delayed(block, shape=(1,), dtype=object))
-
+                if not isinstance(charge_densities, da.core.Array):
+                    charge_densities = da.from_array(
+                        charge_densities, chunks=(1, -1, -1, -1)
+                    )
+                block = dask.delayed(wrap_args)(charge_densities[0], None)
+                array = da.from_delayed(block, shape=(), dtype=object)
             else:
-                itemset(
-                    blocks, i, self._wrap_charge_density(charge_density, frozen_phonon)
-                )
+                array = wrap_args(charge_densities[0], None)
+                array = _wrap_with_array(array, ndims=0)
+        else:
+            # Ensemble case (FrozenPhonons or AtomsEnsemble)
+            n_ensemble = self.ensemble_shape[0]
 
-        if lazy:
-            blocks = da.concatenate(list(blocks))
+            if lazy:
+                if not isinstance(charge_densities, da.core.Array):
+                    charge_densities = da.from_array(
+                        charge_densities, chunks=(1, -1, -1, -1)
+                    )
+                if charge_densities.shape[0] == 1 and n_ensemble > 1:
+                    charge_densities = da.tile(
+                        charge_densities, (n_ensemble,) + (1,) * 3
+                    )
+                charge_densities = charge_densities.to_delayed().ravel()
+            elif hasattr(charge_densities, "compute"):
+                raise RuntimeError
 
-        return (blocks,)
+            frozen_phonon_blocks = (
+                self._ewald_potential()
+                .frozen_phonons._partition_args(chunks, lazy=lazy)[0]
+            )
+
+            array = np.zeros((len(chunks[0]),), dtype=object)
+            for i, (cd, fp) in enumerate(
+                zip(charge_densities, frozen_phonon_blocks)
+            ):
+                if lazy:
+                    block = dask.delayed(wrap_args)(cd, fp)
+                    itemset(
+                        array, i, da.from_delayed(block, shape=(1,), dtype=object)
+                    )
+                else:
+                    itemset(array, i, wrap_args(cd, fp))
+
+            if lazy:
+                array = da.concatenate(list(array))
+
+        return (array,)
 
     @staticmethod
-    def _charge_density_potential(*args, atoms, frozen_phonons_partial, **kwargs):
+    def _charge_density_potential(*args, frozen_phonons_partial, **kwargs):
         args = args[0]
         if hasattr(args, "item"):
             args = args.item()
 
-        args["atoms"] = frozen_phonons_partial(args["atoms"])
+        if args["atoms"] is not None:
+            atoms = frozen_phonons_partial(args["atoms"])
+        else:
+            atoms = DummyFrozenPhonons(kwargs.pop("_default_atoms"))
 
-        # if isinstance(args["atoms"], np.ndarray):
-        #    args["atoms"] = AtomsEnsemble(args["atoms"])
-        args["atoms"] = atoms  # Hack to avoid issues with non-existent FrozenPhonons
-        kwargs.update(args)
-        potential = ChargeDensityPotential(**kwargs)
-
-        potential = _wrap_with_array(potential)
-        return potential
+        charge_density = args["charge_density"]
+        potential = ChargeDensityPotential(
+            atoms=atoms, charge_density=charge_density, **kwargs
+        )
+        return _wrap_with_array(potential)
 
     def _from_partitioned_args(self):
         kwargs = self._copy_kwargs(
@@ -520,13 +523,12 @@ class ChargeDensityPotential(_PotentialBuilder):
         frozen_phonons_partial = (
             self._ewald_potential().frozen_phonons._from_partitioned_args()
         )
-        new_potential = partial(
+        return partial(
             self._charge_density_potential,
-            atoms=self._ewald_potential().frozen_phonons.atoms,  # Hack to make atoms explicit
             frozen_phonons_partial=frozen_phonons_partial,
+            _default_atoms=self.frozen_phonons.atoms,
             **kwargs,
         )
-        return new_potential
 
     def _interpolate_slice(self, array, cell, a, b):
         slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)
@@ -539,13 +541,14 @@ class ChargeDensityPotential(_PotentialBuilder):
 
         pixel_thickness = slice_shape[-1] - 1
 
-        return np.trapzezoid(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
+        return np.trapezoid(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
 
     def _integrate_slice(self, array, a, b):
         dz = self.box[2] / array.shape[2]
         na = int(np.floor(a / dz))
         nb = int(np.floor(b / dz))
-        slice_array = np.trapzezoid(array[..., na:nb], axis=-1, dx=(b - a) / (nb - na - 1))
+        dx = (b - a) / (nb - na - 1)
+        slice_array = np.trapezoid(array[..., na:nb], axis=-1, dx=dx)
         return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
     def _ewald_potential(self):
