@@ -204,7 +204,6 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         assert isinstance(measurements, (BaseMeasurements, Waves))
         return measurements
 
-    @abstractmethod
     def angular_limits(self, waves: Waves) -> tuple[float, float]:
         """
         The outer limits of the detected scattering angles in x and y [mrad] for the
@@ -219,6 +218,7 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         -------
         limits : tuple of float
         """
+        raise NotImplementedError
 
 
 class _AbstractRadialDetector(BaseDetector):
@@ -769,6 +769,291 @@ class AnnularDetector(_AbstractRadialDetector):
             array, metadata=metadata, sampling=waves.reciprocal_space_sampling
         )
         return diffraction_patterns
+
+
+def _slit_detector_mask(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    corners: tuple[float, float, float, float],
+    fftshift: bool = False,
+    xp=np,
+) -> np.ndarray:
+    """Boolean mask for a rectangular slit in reciprocal space.
+
+    Parameters
+    ----------
+    gpts : (int, int)
+        Grid points.
+    sampling : (float, float)
+        Angular sampling [mrad/pixel].
+    corners : (kx_min, kx_max, ky_min, ky_max)
+        Rectangle bounds in mrad (signed with respect to diffraction-pattern origin).
+    fftshift : bool
+        If True, zero frequency is at the centre of the array.
+    xp : array module
+    """
+    from abtem.core.grid import spatial_frequencies
+
+    kx, ky = spatial_frequencies(
+        gpts,
+        (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]),
+        False,
+        xp,
+    )
+    kx2d = kx[:, None] * xp.ones((1, gpts[1]))
+    ky2d = xp.ones((gpts[0], 1)) * ky[None, :]
+
+    kx_min, kx_max, ky_min, ky_max = corners
+    mask = (kx2d >= kx_min) & (kx2d < kx_max) & (ky2d >= ky_min) & (ky2d < ky_max)
+
+    if fftshift:
+        mask = xp.fft.fftshift(mask)
+
+    return mask
+
+
+def _corners_from_slit_params(
+    offset: tuple[float, float],
+    angle: float,
+    extent: float,
+    width: float,
+) -> tuple[float, float, float, float]:
+    """Convert slit geometry parameters to axis-aligned corners after rotation.
+
+    The slit is centred at *offset*, has its long axis along *angle* (degrees,
+    CCW from the kx axis), full length *extent* and full width *width*.
+
+    Returns the rotated corners as ``(kx_min, kx_max, ky_min, ky_max)`` in the
+    *rotated* frame — the mask function works in this frame after rotating the
+    coordinate grid by ``-angle``.
+    """
+    half_e = extent / 2.0
+    half_w = width / 2.0
+    # corners in the rotated frame, centred at origin
+    corners_local = np.array(
+        [[-half_e, -half_w], [-half_e, half_w], [half_e, -half_w], [half_e, half_w]]
+    )
+    angle_rad = np.deg2rad(angle)
+    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    R = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+    corners_world = corners_local @ R.T + np.array(offset)
+    kx_min, ky_min = corners_world.min(axis=0)
+    kx_max, ky_max = corners_world.max(axis=0)
+    return float(kx_min), float(kx_max), float(ky_min), float(ky_max)
+
+
+class SlitDetector(BaseDetector):
+    """
+    A rectangular slit detector in reciprocal (diffraction) space.
+
+    The slit can be defined in two ways:
+
+    **Geometry mode** — specify centre, orientation and size:
+
+    Parameters
+    ----------
+    offset : two floats
+        Centre of the slit ``(kx, ky)`` [mrad] with respect to the
+        diffraction-pattern origin.
+    angle : float
+        Rotation of the long axis of the slit [degrees, CCW from kx axis].
+    extent : float
+        Full length of the slit along its long axis [mrad].
+    width : float
+        Full width of the slit perpendicular to its long axis [mrad].
+
+    **Corner mode** — specify the four sides directly:
+
+    Parameters
+    ----------
+    corners : (kx_min, kx_max, ky_min, ky_max)
+        Axis-aligned bounds of the rectangle [mrad], with signs measured from
+        the diffraction-pattern origin.  Incompatible with *offset*, *angle*,
+        *extent* and *width*.
+
+    Common parameters
+    -----------------
+    to_cpu : bool, optional
+        Copy result to CPU after detection.  Default is True.
+    url : str, optional
+        Save path for the measurement.
+    """
+
+    def __init__(
+        self,
+        offset: tuple[float, float] = (0.0, 0.0),
+        angle: float = 0.0,
+        extent: Optional[float] = None,
+        width: Optional[float] = None,
+        corners: Optional[tuple[float, float, float, float]] = None,
+        to_cpu: bool = True,
+        url: Optional[str] = None,
+    ):
+        if corners is not None:
+            if any(p is not None for p in (extent, width)):
+                raise ValueError(
+                    "Provide either 'corners' or 'offset'/'angle'/'extent'/'width', not both."
+                )
+            if len(corners) != 4:
+                raise ValueError("'corners' must be a sequence of four values (kx_min, kx_max, ky_min, ky_max).")
+            self._corners = tuple(float(c) for c in corners)
+            self._offset = (
+                (corners[0] + corners[1]) / 2.0,
+                (corners[2] + corners[3]) / 2.0,
+            )
+            self._angle = 0.0
+            self._extent = float(corners[1] - corners[0])
+            self._width = float(corners[3] - corners[2])
+        else:
+            if extent is None or width is None:
+                raise ValueError("Provide both 'extent' and 'width' when not using 'corners'.")
+            self._offset = tuple(float(v) for v in offset)
+            self._angle = float(angle)
+            self._extent = float(extent)
+            self._width = float(width)
+            self._corners = _corners_from_slit_params(
+                self._offset, self._angle, self._extent, self._width
+            )
+        super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def offset(self) -> tuple[float, float]:
+        """Centre of the slit (kx, ky) [mrad]."""
+        return self._offset
+
+    @property
+    def angle(self) -> float:
+        """Long-axis rotation angle [degrees]."""
+        return self._angle
+
+    @property
+    def extent(self) -> float:
+        """Full length along the long axis [mrad]."""
+        return self._extent
+
+    @property
+    def width(self) -> float:
+        """Full width perpendicular to the long axis [mrad]."""
+        return self._width
+
+    @property
+    def corners(self) -> tuple[float, float, float, float]:
+        """Axis-aligned bounding rectangle (kx_min, kx_max, ky_min, ky_max) [mrad]."""
+        return self._corners
+
+    def _out_metadata(self, array_object: WavesType) -> tuple[dict]:
+        metadata = super()._out_metadata(array_object)[0]
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
+        return (metadata,)
+
+    def _out_ensemble_axes_metadata(
+        self, waves: WavesType
+    ) -> tuple[list[AxisMetadata]]:
+        source = _scan_axes(waves)
+        scan_axes_metadata = [waves.ensemble_axes_metadata[i] for i in source]
+        ensemble_axes_metadata = [
+            m for i, m in enumerate(waves.ensemble_axes_metadata) if i not in source
+        ]
+        return (ensemble_axes_metadata + scan_axes_metadata,)
+
+    def _out_base_axes_metadata(self, waves: WavesType) -> tuple[list[AxisMetadata]]:
+        return ([],)
+
+    def _out_ensemble_shape(self, waves: WavesType) -> tuple[tuple[int, ...], ...]:
+        ensemble_shapes = super()._out_ensemble_shape(waves)
+        if len(_scan_shape(waves)) == 0:
+            return ensemble_shapes
+        return tuple(ensemble_shape[:-2] for ensemble_shape in ensemble_shapes)
+
+    def _out_base_shape(self, waves: WavesType) -> tuple[tuple[int, ...]]:
+        return (_scan_shape(waves),)
+
+    def _out_dtype(self, waves: WavesType) -> tuple[np.dtype]:
+        return (get_dtype(complex=False),)
+
+    def _out_type(
+        self, waves: WavesType
+    ) -> tuple[Type[RealSpaceLineProfiles] | Type[Images] | Type[MeasurementsEnsemble]]:
+        return (_scanned_measurement_type(waves),)
+
+    def _get_detector_region_array(
+        self, waves: "BaseWaves", fftshift: bool = True
+    ) -> np.ndarray:
+        xp = get_array_module(waves.array)
+        gpts = waves._gpts_within_angle("cutoff")
+        sampling = waves.angular_sampling
+        return _slit_detector_mask(
+            gpts=gpts,
+            sampling=sampling,
+            corners=self._corners,
+            fftshift=fftshift,
+            xp=xp,
+        )
+
+    def get_detector_region(self, waves: "BaseWaves", fftshift: bool = True):
+        """
+        Get the slit detector region as a DiffractionPatterns object.
+
+        Parameters
+        ----------
+        waves : BaseWaves
+        fftshift : bool, optional
+        """
+        array = self._get_detector_region_array(waves, fftshift=fftshift)
+        metadata = {
+            "energy": _energy_from_waves(waves),
+            "label": "detector efficiency",
+            "units": "%",
+        }
+        return DiffractionPatterns(
+            array, metadata=metadata, sampling=waves.reciprocal_space_sampling
+        )
+
+    def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
+        xp = get_array_module(waves.array)
+
+        diffraction_patterns = waves.diffraction_patterns(
+            max_angle="full", parity="same", fftshift=False
+        )
+        gpts = diffraction_patterns.shape[-2:]
+        sampling = diffraction_patterns.angular_sampling
+
+        mask = _slit_detector_mask(
+            gpts=gpts,
+            sampling=sampling,
+            corners=self._corners,
+            fftshift=False,
+            xp=xp,
+        )
+        intensity = xp.sum(
+            diffraction_patterns._eager_array * mask, axis=(-2, -1)
+        )
+
+        if self.to_cpu and hasattr(intensity, "get"):
+            intensity = intensity.get()
+
+        return intensity
+
+    def detect(
+        self, waves: WavesType
+    ) -> Images | RealSpaceLineProfiles | MeasurementsEnsemble:
+        """
+        Detect the given waves producing images.
+
+        Parameters
+        ----------
+        waves : Waves
+
+        Returns
+        -------
+        measurement : Images or RealSpaceLineProfiles
+        """
+        measurements = self.apply(waves)
+        assert isinstance(
+            measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
+        )
+        return measurements
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
