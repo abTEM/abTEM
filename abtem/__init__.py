@@ -11,6 +11,7 @@ from abtem.detectors import (
     FlexibleAnnularDetector,
     PixelatedDetector,
     SegmentedDetector,
+    SlitDetector,
     WavesDetector,
 )
 from abtem.inelastic.phonons import (
@@ -45,6 +46,7 @@ __all__ = [
     "stack",
     "from_zarr",
     "AnnularDetector",
+    "SlitDetector",
     "SegmentedDetector",
     "FlexibleAnnularDetector",
     "PixelatedDetector",
