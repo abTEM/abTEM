@@ -26,8 +26,8 @@ from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
 
-from abtem.core.axes import AxisMetadata, FrozenPhononsAxis, UnknownAxis
-from abtem.core.chunks import Chunks, chunk_ranges, validate_chunks
+from abtem.core.axes import AxisMetadata, EnergyAxis, FrozenPhononsAxis, UnknownAxis
+from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
 
@@ -795,3 +795,196 @@ class AtomsEnsemble(BaseFrozenPhonons):
         """
         positions = np.stack([atoms.positions for atoms in self.trajectory])
         return (positions - positions.mean(0)).std()
+
+
+class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
+    """
+    Energy-resolved ensemble of frozen-phonon configurations.
+
+    Wraps a 2D array of Atoms objects ``(n_energies, n_configs)`` with an
+    :class:`~abtem.core.axes.EnergyAxis` and
+    :class:`~abtem.core.axes.FrozenPhononsAxis` as ensemble axes.  The energy
+    values typically come from external phonon calculations.
+
+    All inner configuration lists must have the same length.
+
+    Parameters
+    ----------
+    energy_resolved_snapshots : list of lists of ASE Atoms, or 2D np.ndarray
+        Outer index is energy, inner index is configuration.
+    energies : array-like
+        Energy values [eV] corresponding to each outer entry.
+    ensemble_mean : bool, optional
+        If True (default), average over frozen-phonon configurations.
+    cell : Cell, optional
+    """
+
+    def __init__(
+        self,
+        energy_resolved_snapshots: list[Sequence[Atoms]] | np.ndarray,
+        energies: np.ndarray | Sequence[float],
+        ensemble_mean: bool = True,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        cell: Optional[Cell] = None,
+    ):
+        energies = np.asarray(energies)
+
+        if isinstance(energy_resolved_snapshots, np.ndarray):
+            snapshots = energy_resolved_snapshots
+        else:
+            if len(energy_resolved_snapshots) != len(energies):
+                raise ValueError(
+                    "Number of snapshot groups must match the number of energies "
+                    f"({len(energy_resolved_snapshots)} != {len(energies)})"
+                )
+            n_configs = len(energy_resolved_snapshots[0])
+            for i, trajectory in enumerate(energy_resolved_snapshots[1:], 1):
+                if len(trajectory) != n_configs:
+                    raise ValueError(
+                        f"All configuration lists must have the same length; "
+                        f"entry 0 has {n_configs}, entry {i} has {len(trajectory)}"
+                    )
+
+            snapshots = np.empty((len(energies), n_configs), dtype=object)
+            for i, trajectory in enumerate(energy_resolved_snapshots):
+                for j, atoms in enumerate(trajectory):
+                    itemset(snapshots, (i, j), atoms)
+
+        atoms = snapshots.ravel()[0]
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
+            atoms, None, cell
+        )
+
+        self._snapshots = snapshots
+        self._energies = energies
+
+        super().__init__(
+            atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
+        )
+
+        if ensemble_axes_metadata is not None:
+            self._ensemble_axes_metadata = ensemble_axes_metadata
+        else:
+            self._ensemble_axes_metadata = [
+                EnergyAxis(
+                    label="energy loss",
+                    values=tuple(float(e) for e in energies),
+                    units="eV",
+                ),
+                FrozenPhononsAxis(_ensemble_mean=ensemble_mean),
+            ]
+
+    @property
+    def snapshots(self) -> np.ndarray:
+        """2D object array of Atoms ``(n_energies, n_configs)``."""
+        return self._snapshots
+
+    @property
+    def energies(self) -> np.ndarray:
+        """Energy values [eV] for each snapshot group."""
+        return self._energies
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        return self._ensemble_axes_metadata
+
+    @property
+    def ensemble_shape(self) -> tuple[int, ...]:
+        return self._snapshots.shape
+
+    @property
+    def num_configs(self) -> int:
+        return self._snapshots.shape[1]
+
+    @property
+    def atoms(self) -> Atoms:
+        atoms = self._snapshots.ravel()[0]
+        if isinstance(atoms, np.ndarray):
+            atoms = atoms.item()
+        return atoms
+
+    def __len__(self) -> int:
+        return len(self._energies)
+
+    def __getitem__(self, item):
+        new_snapshots = self._snapshots[item]
+        new_energies = (
+            self._energies[item]
+            if not isinstance(item, tuple)
+            else self._energies[item[0]]
+        )
+        if new_snapshots.ndim < 2:
+            new_snapshots = new_snapshots.reshape(1, -1)
+        if np.ndim(new_energies) == 0:
+            new_energies = np.atleast_1d(new_energies)
+        kwargs = self._copy_kwargs(
+            exclude=("energy_resolved_snapshots", "energies")
+        )
+        return EnergyResolvedAtomsEnsemble(
+            new_snapshots, new_energies, **kwargs
+        )
+
+    def randomize(self, atoms: Atoms) -> Atoms:
+        return atoms
+
+    @property
+    def _default_ensemble_chunks(self) -> tuple[int, ...]:
+        return (1,) * len(self.ensemble_shape)
+
+    def _partition_args(
+        self, chunks: Optional[Chunks] = None, lazy: bool = True
+    ):
+        if chunks is None:
+            chunks = 1
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+
+        if lazy:
+            array = np.empty(tuple(len(c) for c in chunks), dtype=object)
+            for index, slic in iterate_chunk_ranges(chunks):
+                snapshots_chunk = self._snapshots[slic]
+                energies_chunk = self._energies[slic[0]]
+                lazy_args = dask.delayed(_wrap_with_array)(
+                    (snapshots_chunk, energies_chunk), ndims=1
+                )
+                lazy_array = da.from_delayed(
+                    lazy_args, shape=(1,), dtype=object
+                )
+                itemset(array, index, lazy_array)
+
+            shape = array.shape
+            array = da.concatenate(array.flatten()).reshape(shape)
+        else:
+            snapshots = self._snapshots
+            if isinstance(snapshots, da.core.Array):
+                snapshots = snapshots.compute()
+
+            array = np.empty(tuple(len(c) for c in chunks), dtype=object)
+            for index, slic in iterate_chunk_ranges(chunks):
+                snapshots_chunk = snapshots[slic]
+                energies_chunk = self._energies[slic[0]]
+                itemset(
+                    array,
+                    index,
+                    _wrap_with_array((snapshots_chunk, energies_chunk), 1),
+                )
+
+        return (array,)
+
+    @staticmethod
+    def _from_partition_args_func(*args, **kwargs):
+        args = unpack_blockwise_args(args)
+        snapshots_chunk, energies_chunk = args[0]
+        ensemble = EnergyResolvedAtomsEnsemble(
+            snapshots_chunk, energies_chunk, **kwargs
+        )
+        return _wrap_with_array(ensemble)
+
+    def _from_partitioned_args(self):
+        kwargs = self._copy_kwargs(
+            exclude=("energy_resolved_snapshots", "energies")
+        )
+        kwargs["cell"] = self.cell.array
+        kwargs["ensemble_axes_metadata"] = [UnknownAxis()] * len(
+            self.ensemble_shape
+        )
+        return partial(self._from_partition_args_func, **kwargs)

@@ -1183,7 +1183,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         chunks: tuple[int, ...] = ()
 
         if len(self.potential.ensemble_shape) > 0:
-            chunks = chunks + (1,)
+            chunks = chunks + (1,) * len(self.potential.ensemble_shape)
 
         if len(self.potential.exit_planes) > 1:
             chunks = chunks + (len(self.potential.exit_planes),)

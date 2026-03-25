@@ -439,15 +439,25 @@ class EnergyAxis(NonLinearAxis):
     def format_title(
         self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
     ) -> str:
-        """Format title displaying energy in keV regardless of stored eV units."""
-        if formatting is None:
-            formatting = ".3g"
-        value_kev = self.values[0] / 1000.0
-        formatted = f"{value_kev:>{formatting}}"
-        if include_label:
-            return f"{self.label} = {formatted} keV"
+        """Format title displaying energy in keV, or meV for energy loss."""
+        if self.label == "energy loss":
+            if formatting is None:
+                formatting = ".3g"
+            value_meV = self.values[0] * 1000.0
+            formatted = f"{value_meV:>{formatting}}"
+            if include_label:
+                return f"{self.label} = {formatted} meV"
+            else:
+                return f"{formatted} meV"
         else:
-            return f"{formatted} keV"
+            if formatting is None:
+                formatting = ".3g"
+            value_kev = self.values[0] / 1000.0
+            formatted = f"{value_kev:>{formatting}}"
+            if include_label:
+                return f"{self.label} = {formatted} keV"
+            else:
+                return f"{formatted} keV"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
