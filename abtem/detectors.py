@@ -204,23 +204,6 @@ class BaseDetector(ArrayObjectTransform[Waves, BaseMeasurements | Waves]):
         assert isinstance(measurements, (BaseMeasurements, Waves))
         return measurements
 
-    def angular_limits(self, waves: Waves) -> tuple[float, float]:
-        """
-        The outer limits of the detected scattering angles in x and y [mrad] for the
-        given waves.
-
-        Parameters
-        ----------
-        waves : BaseWaves
-            The waves to derive the detector limits from.
-
-        Returns
-        -------
-        limits : tuple of float
-        """
-        raise NotImplementedError
-
-
 class _AbstractRadialDetector(BaseDetector):
     def __init__(
         self,
