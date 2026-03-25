@@ -5039,3 +5039,212 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         return IndexedDiffractionPatterns(
             intensities, miller_indices, positions, ensemble_axes_metadata, metadata
         )
+
+
+class MomentumResolvedSpectrum(BaseMeasurements):
+    """
+    Momentum-resolved energy-loss spectrum S(q, E).
+
+    Stores a 2D intensity array whose last two dimensions correspond to
+    scattering-vector bins (q) and energy bins (E). Additional leading
+    dimensions are ensemble axes.
+
+    Parameters
+    ----------
+    array : np.ndarray or dask array
+        Array of shape ``(..., n_q, n_E)``.
+    q_values : sequence of float
+        Scattering-vector values [mrad] for each q bin.
+    e_values : sequence of float
+        Energy-loss values [eV] for each energy bin.
+    ensemble_axes_metadata : list of AxisMetadata, optional
+    metadata : dict, optional
+    """
+
+    _base_dims = 2
+
+    def __init__(
+        self,
+        array: np.ndarray | da.core.Array,
+        q_values: Sequence[float] | np.ndarray,
+        e_values: Sequence[float] | np.ndarray,
+        ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
+        metadata: Optional[dict] = None,
+    ):
+        self._q_values = tuple(float(v) for v in q_values)
+        self._e_values = tuple(float(v) for v in e_values)
+
+        if metadata is None:
+            metadata = {}
+        metadata.setdefault("label", "intensity")
+        metadata.setdefault("units", "arb. unit")
+
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
+
+    @property
+    def q_values(self) -> tuple[float, ...]:
+        """Scattering-vector values [mrad]."""
+        return self._q_values
+
+    @property
+    def e_values(self) -> tuple[float, ...]:
+        """Energy-loss values [eV]."""
+        return self._e_values
+
+    @property
+    def _area_per_pixel(self):
+        raise RuntimeError("Cannot infer pixel area for a spectrum.")
+
+    @property
+    def base_axes_metadata(self) -> list[AxisMetadata]:
+        return [
+            NonLinearAxis(
+                label="q",
+                values=self._q_values,
+                units="mrad",
+            ),
+            NonLinearAxis(
+                label="energy loss",
+                values=self._e_values,
+                units="meV",
+            ),
+        ]
+
+    @classmethod
+    def from_array_and_metadata(
+        cls,
+        array: np.ndarray | da.core.Array,
+        axes_metadata: list[AxisMetadata],
+        metadata: Optional[dict] = None,
+    ) -> "MomentumResolvedSpectrum":
+        q_axis = axes_metadata[-2]
+        e_axis = axes_metadata[-1]
+        return cls(
+            array,
+            q_values=q_axis.values,
+            e_values=e_axis.values,
+            ensemble_axes_metadata=axes_metadata[:-2] or None,
+            metadata=metadata,
+        )
+
+    def show(
+        self,
+        ax: Optional[Axes] = None,
+        cbar: bool = True,
+        cmap: Optional[str] = "viridis",
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        power: float = 1.0,
+        explode: bool | Sequence[int] = (),
+        figsize: Optional[tuple[int, int]] = None,
+        title: bool | str = True,
+        e_units: str = "meV",
+        **kwargs,
+    ) -> "Visualization":
+        """
+        Show the spectrum as a 2D heatmap with q on the x-axis and energy
+        on the y-axis.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes, optional
+        cbar : bool
+            Show colorbar. Default True.
+        cmap : str, optional
+            Colormap name. Default 'viridis'.
+        vmin, vmax : float, optional
+            Colour-scale limits.
+        power : float
+            Display on a power scale.
+        explode : bool or sequence of int
+            Explode ensemble axes into a grid.
+        figsize : (width, height), optional
+        title : bool or str
+        e_units : str
+            Units for the energy axis ('meV' or 'eV'). Default 'meV'.
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import PowerNorm
+
+        array = self.array
+        if hasattr(array, "compute"):
+            array = array.compute()
+
+        q = np.array(self._q_values)
+        e = np.array(self._e_values)
+        if e_units == "meV":
+            e = e * 1000.0
+            e_label = "Energy loss [meV]"
+        else:
+            e_label = "Energy loss [eV]"
+
+        # Handle ensemble dimensions
+        ensemble_shape = array.shape[: -self._base_dims]
+        if len(ensemble_shape) > 0 and explode:
+            import itertools
+
+            indices = list(itertools.product(*[range(s) for s in ensemble_shape]))
+            n = len(indices)
+            ncols = min(n, 4)
+            nrows = (n + ncols - 1) // ncols
+            if figsize is None:
+                figsize = (4 * ncols, 3.5 * nrows)
+            fig, axes_arr = plt.subplots(
+                nrows, ncols, figsize=figsize, squeeze=False
+            )
+            axes_flat = axes_arr.flatten()
+            norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+            for k, idx in enumerate(indices):
+                a = axes_flat[k]
+                data = array[idx]
+                im = a.pcolormesh(q, e, data.T, shading="auto", cmap=cmap, norm=norm)
+                a.set_xlabel("q [mrad]")
+                a.set_ylabel(e_label)
+                if title:
+                    parts = []
+                    for dim, ax_meta in enumerate(self.ensemble_axes_metadata):
+                        parts.append(ax_meta[idx[dim]].format_title())
+                    a.set_title(", ".join(parts))
+            for k in range(len(indices), len(axes_flat)):
+                axes_flat[k].set_visible(False)
+            if cbar:
+                fig.colorbar(
+                    im,
+                    ax=axes_flat[: len(indices)].tolist(),
+                    label=f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]",
+                )
+            fig.tight_layout()
+            return fig, axes_arr
+        else:
+            # Single panel — take first ensemble member if needed
+            data = array
+            while data.ndim > 2:
+                data = data[0]
+
+            if ax is None:
+                if figsize is None:
+                    figsize = (6, 4)
+                fig, ax = plt.subplots(figsize=figsize)
+            else:
+                fig = ax.get_figure()
+
+            norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+            im = ax.pcolormesh(q, e, data.T, shading="auto", cmap=cmap, norm=norm)
+            ax.set_xlabel("q [mrad]")
+            ax.set_ylabel(e_label)
+            if isinstance(title, str) and title is not True:
+                ax.set_title(title)
+            elif title is True:
+                ax.set_title("S(q, E)")
+            if cbar:
+                fig.colorbar(
+                    im,
+                    ax=ax,
+                    label=f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]",
+                )
+            fig.tight_layout()
+            return fig, ax
