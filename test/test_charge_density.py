@@ -59,3 +59,47 @@ def test_thin_slice_thickness(carbon_atoms, charge_density_3d):
     result = pot.build(lazy=False)
     assert result.array.shape[-2:] == pot.gpts
     assert result.array.shape[0] == len(pot)
+
+
+@pytest.mark.parametrize("repetitions", [(1, 1, 1), (2, 1, 1), (1, 2, 1), (2, 2, 1)])
+def test_repetitions_cell(carbon_atoms, charge_density_3d, repetitions):
+    """Repeating the cell should scale the box accordingly."""
+    pot = ChargeDensityPotential(
+        carbon_atoms, charge_density_3d, sampling=0.1, repetitions=repetitions
+    )
+    base_cell = carbon_atoms.cell.diagonal()
+    expected = tuple(base_cell[i] * repetitions[i] for i in range(3))
+    assert np.allclose(pot.box, expected[:2] + (expected[2],), atol=1e-5)
+
+
+def test_repetitions_build(carbon_atoms, charge_density_3d):
+    """Building with repetitions should succeed and tile the potential."""
+    pot_1x1 = ChargeDensityPotential(
+        carbon_atoms, charge_density_3d, sampling=0.1, repetitions=(1, 1, 1)
+    )
+    pot_2x2 = ChargeDensityPotential(
+        carbon_atoms, charge_density_3d, sampling=0.1, repetitions=(2, 2, 1)
+    )
+    result_1x1 = pot_1x1.build(lazy=False)
+    result_2x2 = pot_2x2.build(lazy=False)
+
+    assert result_2x2.array.shape[-2:] == pot_2x2.gpts
+    assert result_2x2.array.shape[0] == len(pot_2x2)
+    # The tiled potential should have ~4x more grid points in x and y
+    assert result_2x2.array.shape[-2] == pytest.approx(result_1x1.array.shape[-2] * 2, abs=1)
+    assert result_2x2.array.shape[-1] == pytest.approx(result_1x1.array.shape[-1] * 2, abs=1)
+
+
+def test_num_frozen_phonons(carbon_atoms, charge_density_3d):
+    """num_frozen_phonons should match the number of ensemble configurations."""
+    pot = ChargeDensityPotential(carbon_atoms, charge_density_3d, sampling=0.1)
+    assert pot.num_frozen_phonons == pot.num_configurations == 1
+
+
+def test_repetitions_property(carbon_atoms, charge_density_3d):
+    """repetitions property should return the stored tuple."""
+    reps = (2, 3, 1)
+    pot = ChargeDensityPotential(
+        carbon_atoms, charge_density_3d, sampling=0.1, repetitions=reps
+    )
+    assert pot.repetitions == reps

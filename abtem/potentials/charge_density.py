@@ -366,6 +366,9 @@ class ChargeDensityPotential(_PotentialBuilder):
         is preserved, which may require applying a small affine transformation to the
         atoms. If False, the transformed potential is effectively cut out of a larger
         repeated potential, which may not preserve periodicity.
+    repetitions : three int, optional
+        Repeats the atoms and the charge density by integer amounts in the `x`, `y`
+        and `z` directions. The default is (1, 1, 1).
     device : str, optional
         The device used for calculating the potential. The default is determined by the
         user configuration file.
@@ -383,6 +386,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         periodic: bool = True,
         exit_planes: int = None,
+        repetitions: Tuple[int, int, int] = (1, 1, 1),
         device: str = None,
     ):
         if hasattr(atoms, "randomize"):
@@ -393,12 +397,15 @@ class ChargeDensityPotential(_PotentialBuilder):
             raise RuntimeError()
 
         self._charge_density = charge_density.astype(np.float32)
+        self._repetitions = repetitions
+
+        cell = self._frozen_phonons.atoms.cell * repetitions
 
         super().__init__(
             array_object=PotentialArray,
             gpts=gpts,
             sampling=sampling,
-            cell=atoms.cell,
+            cell=cell,
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
             device=device,
@@ -423,6 +430,14 @@ class ChargeDensityPotential(_PotentialBuilder):
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
         return self.frozen_phonons.ensemble_shape
+
+    @property
+    def repetitions(self):
+        return self._repetitions
+
+    @property
+    def num_frozen_phonons(self):
+        return len(self.frozen_phonons)
 
     @property
     def is_lazy(self):
@@ -478,7 +493,7 @@ class ChargeDensityPotential(_PotentialBuilder):
                 raise RuntimeError
 
             frozen_phonon_blocks = (
-                self._ewald_potential()
+                self._get_ewald_potential()
                 .frozen_phonons._partition_args(chunks, lazy=lazy)[0]
             )
 
@@ -521,7 +536,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             exclude=("atoms", "charge_density"), cls=ChargeDensityPotential
         )
         frozen_phonons_partial = (
-            self._ewald_potential().frozen_phonons._from_partitioned_args()
+            self._get_ewald_potential().frozen_phonons._from_partitioned_args()
         )
         return partial(
             self._charge_density_potential,
@@ -551,10 +566,8 @@ class ChargeDensityPotential(_PotentialBuilder):
         slice_array = np.trapezoid(array[..., na:nb], axis=-1, dx=dx)
         return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
-    def _ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(
-            width=3
-        )  # Changed to match GPAWPotential
+    def _get_ewald_potential(self):
+        ewald_parametrization = EwaldParametrization(width=3)
 
         return Potential(
             atoms=self.frozen_phonons,
@@ -598,7 +611,25 @@ class ChargeDensityPotential(_PotentialBuilder):
         else:
             raise RuntimeError()
 
-        ewald_potential = self._ewald_potential()
+        if self.repetitions != (1, 1, 1):
+            array = np.tile(array, self.repetitions)
+            atoms = self.frozen_phonons.atoms * self.repetitions
+            ewald_parametrization = EwaldParametrization(width=3)
+            ewald_potential = Potential(
+                atoms=atoms,
+                gpts=self.gpts,
+                sampling=self.sampling,
+                parametrization=ewald_parametrization,
+                slice_thickness=self.slice_thickness,
+                projection="finite",
+                plane=self.plane,
+                box=self.box,
+                origin=self.origin,
+                exit_planes=self.exit_planes,
+                device=self.device,
+            )
+        else:
+            ewald_potential = self._get_ewald_potential()
 
         for slic in _generate_slices(
             array, ewald_potential, first_slice=first_slice, last_slice=last_slice
