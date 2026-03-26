@@ -28,6 +28,8 @@ from abtem.measurements import (
     PolarMeasurements,
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
+    momentum_resolved_spectrum,
+    phonon_loss_diffraction_patterns,
 )
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
@@ -58,6 +60,8 @@ __all__ = [
     "ReciprocalSpaceLineProfiles",
     "MeasurementsEnsemble",
     "MomentumResolvedSpectrum",
+    "momentum_resolved_spectrum",
+    "phonon_loss_diffraction_patterns",
     "PolarMeasurements",
     "IndexedDiffractionPatterns",
     "SMatrix",
