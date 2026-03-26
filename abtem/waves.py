@@ -1048,6 +1048,15 @@ class Waves(BaseWaves, ArrayObject):
 
         return diffraction_patterns
 
+    def phonon_loss_diffraction_patterns(self, **kwargs):
+        """Compute inelastic (TDS) diffraction patterns from energy-resolved
+        frozen-phonon exit waves.  See
+        :func:`abtem.measurements.phonon_loss_diffraction_patterns` for full
+        documentation."""
+        from abtem.measurements import phonon_loss_diffraction_patterns
+
+        return phonon_loss_diffraction_patterns(self, **kwargs)
+
     def apply_ctf(
         self, ctf: Optional[CTF] = None, max_batch: int | str = "auto", **kwargs: Any
     ) -> Waves:

@@ -430,11 +430,11 @@ class EnergyAxis(NonLinearAxis):
     units: str = "eV"
 
     def item_metadata(self, item, metadata=None):
-        # Use the lowercase "energy" key to match the metadata convention used
-        # everywhere else in the codebase (metadata["energy"]).  The inherited
-        # OrdinalAxis implementation would use self.label ("Energy") which would
-        # silently miss all lookups that check for "energy".
-        return {"energy": self.values[item]}
+        # Use a key derived from the label so that energy-loss axes
+        # ("energy loss") do not overwrite the electron energy ("energy")
+        # stored in measurement metadata.
+        key = self.label.lower().replace(" ", "_")
+        return {key: self.values[item]}
 
     def format_title(
         self, formatting: Optional[str] = None, include_label: bool = True, **kwargs

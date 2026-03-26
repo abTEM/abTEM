@@ -5193,9 +5193,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             nrows = (n + ncols - 1) // ncols
             if figsize is None:
                 figsize = (4 * ncols, 3.5 * nrows)
-            fig, axes_arr = plt.subplots(
-                nrows, ncols, figsize=figsize, squeeze=False
-            )
+            fig, axes_arr = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
             axes_flat = axes_arr.flatten()
             norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
             for k, idx in enumerate(indices):
@@ -5248,3 +5246,259 @@ class MomentumResolvedSpectrum(BaseMeasurements):
                 )
             fig.tight_layout()
             return fig, ax
+
+
+def phonon_loss_diffraction_patterns(
+    exit_waves,
+    component: str = "tds",
+    max_angle: str | float = "cutoff",
+    parity: str = "odd",
+    block_direct: bool | float = False,
+) -> "DiffractionPatterns":
+    """
+    Compute inelastic (TDS) diffraction patterns from energy-resolved
+    frozen-phonon exit waves.
+
+    The thermal diffuse scattering signal is obtained per energy bin as::
+
+        I_coherent   = |FT(Σ_j psi_j)|² / N²   (elastic)
+        I_incoherent = Σ_j |FT(psi_j)|² / N     (total)
+        I_tds        = I_incoherent - I_coherent  (inelastic / phonon loss)
+
+    The returned ``DiffractionPatterns`` retain the ``EnergyAxis`` but the
+    ``FrozenPhononsAxis`` is collapsed.  Apply an offset ``AnnularDetector``
+    or ``SlitDetector`` to integrate over desired q points.
+
+    Parameters
+    ----------
+    exit_waves : Waves
+        Complex exit waves from a multislice simulation with an
+        ``EnergyResolvedAtomsEnsemble`` (``ensemble_mean=False``).
+        Must contain both a ``FrozenPhononsAxis`` and an ``EnergyAxis``
+        (label ``"energy loss"``) in its ensemble axes.
+    component : {'tds', 'coherent', 'incoherent', 'all'}
+        Which component to return.  ``'all'`` stacks the three along a
+        new leading ``OrdinalAxis(label='component')``.
+    max_angle : str or float
+        Passed to ``Waves.diffraction_patterns``.
+    parity : str
+        Passed to ``Waves.diffraction_patterns``.
+    block_direct : bool or float, optional
+        If True, the direct beam is blocked in the resulting diffraction
+        patterns. If given as a float, masks up to that scattering angle
+        [mrad]. Default is False.
+
+    Returns
+    -------
+    DiffractionPatterns
+        Intensity patterns with the ``FrozenPhononsAxis`` removed and the
+        ``EnergyAxis`` preserved.
+    """
+    from abtem.core.axes import EnergyAxis, FrozenPhononsAxis, OrdinalAxis
+
+    # --- validate ensemble axes ---
+    fp_axis_idx = None
+    energy_axis_idx = None
+    for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
+        if isinstance(ax, FrozenPhononsAxis):
+            fp_axis_idx = i
+        if isinstance(ax, EnergyAxis) and "loss" in ax.label.lower():
+            energy_axis_idx = i
+
+    if fp_axis_idx is None:
+        raise ValueError(
+            "exit_waves must have a FrozenPhononsAxis in ensemble_axes_metadata. "
+            "Did you create the EnergyResolvedAtomsEnsemble with ensemble_mean=False?"
+        )
+    if energy_axis_idx is None:
+        raise ValueError(
+            "exit_waves must have an EnergyAxis with label containing 'loss' "
+            "in ensemble_axes_metadata."
+        )
+
+    if not np.iscomplexobj(exit_waves.array):
+        raise ValueError(
+            "exit_waves must contain complex wave functions (not intensities). "
+            "Pass the Waves object directly, not DiffractionPatterns."
+        )
+
+    # --- number of frozen-phonon configurations ---
+    N = exit_waves.shape[fp_axis_idx]
+
+    dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
+
+    # Coherent: sum complex exit waves first, then compute diffraction pattern
+    #   I_coh = |FT(Σ_j psi_j)|² / N²
+    coherent_waves = exit_waves.sum(axis=fp_axis_idx)
+    dp_coherent = coherent_waves.diffraction_patterns(**dp_kwargs)
+    I_coherent = dp_coherent.array / N**2
+
+    # Incoherent: compute diffraction patterns first, then sum intensities
+    #   I_inc = Σ_j |FT(psi_j)|² / N
+    dp_all = exit_waves.diffraction_patterns(**dp_kwargs)
+    I_incoherent = dp_all.array.sum(axis=fp_axis_idx) / N
+
+    # TDS = incoherent - coherent
+    I_tds = I_incoherent - I_coherent
+
+    # --- select component ---
+    valid_components = ("tds", "coherent", "incoherent", "all")
+    if component not in valid_components:
+        raise ValueError(f"component must be one of {valid_components}")
+
+    remaining_axes = [
+        ax
+        for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
+        if i != fp_axis_idx
+    ]
+
+    if component == "all":
+        xp = get_array_module(I_tds)
+        result_array = xp.stack([I_coherent, I_incoherent, I_tds], axis=0)
+        component_axis = OrdinalAxis(
+            label="component",
+            values=("coherent", "incoherent", "tds"),
+        )
+        remaining_axes = [component_axis] + remaining_axes
+    elif component == "tds":
+        result_array = I_tds
+    elif component == "coherent":
+        result_array = I_coherent
+    else:
+        result_array = I_incoherent
+
+    metadata = dict(dp_coherent.metadata)
+    metadata["phonon_loss_component"] = component
+
+    result = DiffractionPatterns(
+        result_array,
+        sampling=dp_coherent.sampling,
+        fftshift=dp_coherent.fftshift,
+        ensemble_axes_metadata=remaining_axes or None,
+        metadata=metadata,
+    )
+
+    if block_direct:
+        radius = block_direct if isinstance(block_direct, (int, float)) else None
+        result = result.block_direct(radius=radius)
+
+    return result
+
+
+def momentum_resolved_spectrum(
+    tds_diffraction_patterns: "DiffractionPatterns",
+    outer: float,
+    q_max: Optional[float] = None,
+    q_min: float = 0.0,
+    angle: float = 0.0,
+    inner: float = 0.0,
+) -> "MomentumResolvedSpectrum":
+    """
+    Build S(q, E) by sweeping an offset annular integration over q-points.
+
+    For each q-point in the range, the centre of a small annular integration
+    region is offset to ``(q * cos(angle), q * sin(angle))`` and
+    ``integrate_radial(inner, outer, offset=...)`` is called on the
+    diffraction patterns.
+
+    Parameters
+    ----------
+    tds_diffraction_patterns : DiffractionPatterns
+        Energy-resolved TDS diffraction patterns (as returned by
+        ``phonon_loss_diffraction_patterns``).  Must have an ``EnergyAxis``
+        with label containing ``'loss'`` in its ensemble axes.
+    outer : float
+        Outer acceptance radius [mrad] of the integration annulus around
+        each q-point.
+    q_max : float, optional
+        Maximum q value [mrad].  Defaults to the minimum cutoff angle of
+        the diffraction patterns.
+    q_min : float, optional
+        Minimum q value [mrad].  Default is 0.
+    angle : float, optional
+        Direction of the q sweep [degrees, CCW from kx].  Default is 0.
+    inner : float, optional
+        Inner acceptance radius [mrad] of the integration annulus around
+        each q-point.  Default is 0.
+
+    Returns
+    -------
+    MomentumResolvedSpectrum
+    """
+    from abtem.core.axes import EnergyAxis, OrdinalAxis
+
+    dp = tds_diffraction_patterns
+
+    # --- if component="all" was used, select the TDS slice ---
+    if dp.metadata.get("phonon_loss_component") == "all":
+        component_axis_idx = None
+        for i, ax in enumerate(dp.ensemble_axes_metadata):
+            if isinstance(ax, OrdinalAxis) and ax.label == "component":
+                component_axis_idx = i
+                break
+        if component_axis_idx is not None:
+            tds_idx = list(ax.values).index("tds")
+            slicing = tuple(
+                tds_idx if j == component_axis_idx else slice(None)
+                for j in range(len(dp.ensemble_axes_metadata))
+            )
+            dp = dp[slicing]
+
+    # --- find the energy axis ---
+    energy_axis_idx = None
+    for i, ax in enumerate(dp.ensemble_axes_metadata):
+        if isinstance(ax, EnergyAxis) and "loss" in ax.label.lower():
+            energy_axis_idx = i
+            break
+    if energy_axis_idx is None:
+        raise ValueError(
+            "Diffraction patterns must have an EnergyAxis with label "
+            "containing 'loss'.  Use phonon_loss_diffraction_patterns first."
+        )
+
+    energy_axis = dp.ensemble_axes_metadata[energy_axis_idx]
+    e_values = np.array(energy_axis.values)
+
+    # --- q sampling: step by the acceptance diameter so disks tile the range ---
+    q_step = outer - inner
+    if q_max is None:
+        q_max = min(dp.max_angles)
+    q_values = np.arange(q_min, q_max, q_step)
+
+    # --- sweep q-points ---
+    angle_rad = np.deg2rad(angle)
+    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+
+    slices = []
+    for q in q_values:
+        offset = (float(q * cos_a), float(q * sin_a))
+        integrated = dp.integrate_radial(inner=inner, outer=outer, offset=offset)
+        # integrated has shape (...ensemble...) — extract the array
+        slices.append(integrated.array)
+
+    # Stack along a new q axis: result shape (..., n_q)
+    xp = get_array_module(slices[0])
+    spectrum_array = xp.stack(slices, axis=-1)
+
+    # Now we need shape (..., n_q, n_E).
+    # Currently the energy axis is an ensemble dimension (at energy_axis_idx)
+    # and q is the last axis. Move energy to the final axis.
+    #
+    # ensemble dims come before base dims. integrate_radial collapsed the
+    # 2D base to scalar, so the current array is purely ensemble + the new q
+    # trailing axis.  The energy ensemble dim is at energy_axis_idx.
+    # Move it to the end to get (...other_ensemble..., n_q, n_E).
+    spectrum_array = xp.moveaxis(spectrum_array, energy_axis_idx, -1)
+
+    # remaining ensemble axes (everything except the energy axis)
+    remaining_ensemble = [
+        ax for i, ax in enumerate(dp.ensemble_axes_metadata) if i != energy_axis_idx
+    ]
+
+    return MomentumResolvedSpectrum(
+        array=spectrum_array,
+        q_values=q_values,
+        e_values=e_values,
+        ensemble_axes_metadata=remaining_ensemble or None,
+        metadata={"label": "intensity", "units": "arb. unit"},
+    )
