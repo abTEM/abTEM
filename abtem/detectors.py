@@ -1125,11 +1125,14 @@ class SpectralSlitDetector(BaseDetector):
         if power != 1.0:
             arr = np.abs(arr) ** power
         mx, my = waves.max_angles
+        from abtem.core import config
+
+        cmap = config.get("visualize.cmap", "viridis")
         ax.imshow(
             arr,
             extent=[-mx, mx, -my, my],
             origin="lower",
-            cmap="gray",
+            cmap=cmap,
             aspect="equal",
         )
         return mx, my
