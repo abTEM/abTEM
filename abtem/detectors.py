@@ -831,19 +831,35 @@ class SpectralSlitDetector(BaseDetector):
 
     The slit can be defined in two ways:
 
-    **Geometry mode** — specify centre, orientation and size:
+    **Geometry mode** — specify size, q-range and orientation:
 
     Parameters
     ----------
-    offset : two floats
-        Centre of the slit ``(kx, ky)`` [mrad] with respect to the
-        diffraction-pattern origin.
-    angle : float
-        Rotation of the long axis of the slit [degrees, CCW from kx axis].
-    extent : float
-        Full length of the slit along its long axis [mrad].
     width : float
-        Full width of the slit perpendicular to its long axis [mrad].
+        **Full** width of the slit perpendicular to its long axis [mrad].
+        This is the full integration aperture, *not* the half-width.  For
+        equivalent integration coverage perpendicular to the q-scan direction
+        as a :class:`SpectralAnnularDetector` with acceptance radius
+        ``outer=r``, use ``width = 2 * r`` (the disk diameter, not the
+        radius).
+    q_min : float, optional
+        Start of the q-axis [mrad].  Default is 0, which includes q=0 (the
+        direct beam direction) as the first point of the spectrum.  Set to a
+        positive value to exclude the low-q / direct-beam region, e.g.
+        ``q_min=10`` to start at 10 mrad.  Directly comparable to the
+        ``q_min`` parameter of :class:`SpectralAnnularDetector`.
+    q_max : float
+        Maximum scattering vector along the slit's long axis [mrad].  Directly
+        comparable to the ``q_max`` parameter of
+        :class:`SpectralAnnularDetector`.
+    angle : float, optional
+        Rotation of the long axis of the slit [degrees, CCW from kx axis].
+        Default is 0.
+    offset : two floats, optional
+        Origin of the q-axis sweep ``(kx, ky)`` [mrad].  The q-axis starts
+        here (at ``q_min``) and extends in the direction given by ``angle``.
+        Default is ``(0, 0)``, i.e. the sweep starts from the diffraction
+        pattern centre.
 
     **Corner mode** — specify the four sides directly:
 
@@ -852,7 +868,9 @@ class SpectralSlitDetector(BaseDetector):
     corners : (kx_min, kx_max, ky_min, ky_max)
         Axis-aligned bounds of the rectangle [mrad], with signs measured from
         the diffraction-pattern origin.  Incompatible with *offset*, *angle*,
-        *extent* and *width*.
+        *q_min*, *q_max* and *width*.  The q-axis origin is taken as
+        ``(kx_min, (ky_min+ky_max)/2)``, so ``q=0`` maps to the left edge of
+        the rectangle.
 
     Common parameters
     -----------------
@@ -860,48 +878,92 @@ class SpectralSlitDetector(BaseDetector):
         Copy result to CPU after detection.  Default is True.
     url : str, optional
         Save path for the measurement.
+
+    Notes
+    -----
+    **Comparing slit and annular detectors**
+
+    Both detector types share the same ``q_min``/``q_max`` convention — the
+    same numerical value gives the same scattering-vector range in the output
+    spectrum.  The perpendicular acceptance differs: the slit integrates a
+    rectangle of full width ``width``, while the annular detector integrates a
+    disk of radius ``outer``.
+
+    ===========================  ====================================
+    SpectralSlitDetector         SpectralAnnularDetector
+    ===========================  ====================================
+    ``width`` — full slit width  ``outer`` — acceptance **radius**
+    ``q_min`` — start q (≥ 0)   ``q_min`` — start q (≥ 0)
+    ``q_max`` — max q            ``q_max`` — max q
+    ``angle`` — sweep direction  ``angle`` — sweep direction
+    ===========================  ====================================
+
+    For equivalent perpendicular acceptance and the same q-range::
+
+        SpectralSlitDetector(width=2*r, q_min=Q0, q_max=Q)
+        SpectralAnnularDetector(outer=r, q_min=Q0, q_max=Q)
+
+    Note that ``width = 2 * outer``: the slit ``width`` is the full aperture
+    diameter, whereas ``outer`` is the acceptance *radius*.
     """
 
     def __init__(
         self,
-        offset: tuple[float, float] = (0.0, 0.0),
-        angle: float = 0.0,
-        extent: Optional[float] = None,
         width: Optional[float] = None,
+        q_min: float = 0.0,
+        q_max: Optional[float] = None,
+        angle: float = 0.0,
+        offset: tuple[float, float] = (0.0, 0.0),
         corners: Optional[tuple[float, float, float, float]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
         if corners is not None:
-            if any(p is not None for p in (extent, width)):
+            if any(p is not None for p in (q_max, width)):
                 raise ValueError(
-                    "Provide either 'corners' or 'offset'/'angle'/'extent'/'width', not both."
+                    "Provide either 'corners' or 'offset'/'angle'/'q_min'/'q_max'/'width', not both."
                 )
             if len(corners) != 4:
                 raise ValueError("'corners' must be a sequence of four values (kx_min, kx_max, ky_min, ky_max).")
             self._corners = tuple(float(c) for c in corners)
+            # offset = start of q-sweep (left edge, ky-centre), consistent with
+            # geometry mode where offset is the q=0 origin.
             self._offset = (
-                (corners[0] + corners[1]) / 2.0,
+                float(corners[0]),
                 (corners[2] + corners[3]) / 2.0,
             )
             self._angle = 0.0
             self._extent = float(corners[1] - corners[0])
             self._width = float(corners[3] - corners[2])
+            self._q_min = 0.0
         else:
-            if extent is None or width is None:
-                raise ValueError("Provide both 'extent' and 'width' when not using 'corners'.")
+            if q_max is None or width is None:
+                raise ValueError("Provide both 'q_max' and 'width' when not using 'corners'.")
+            q_min = float(q_min)
+            q_max = float(q_max)
+            if q_min < 0 or q_min >= q_max:
+                raise ValueError(f"q_min must satisfy 0 <= q_min < q_max, got q_min={q_min}, q_max={q_max}.")
+            self._q_min = q_min
             self._offset = tuple(float(v) for v in offset)
             self._angle = float(angle)
-            self._extent = float(extent)
+            # Physical slit extent and centre: spans from q_min to q_max along
+            # the slit direction, centred at offset + (q_min+q_max)/2 * direction.
+            angle_rad = np.deg2rad(float(angle))
+            cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+            slit_center = (
+                offset[0] + (q_min + q_max) / 2.0 * cos_a,
+                offset[1] + (q_min + q_max) / 2.0 * sin_a,
+            )
+            self._extent = q_max - q_min
             self._width = float(width)
             self._corners = _corners_from_slit_params(
-                self._offset, self._angle, self._extent, self._width
+                slit_center, self._angle, self._extent, self._width
             )
         super().__init__(to_cpu=to_cpu, url=url)
 
     @property
     def offset(self) -> tuple[float, float]:
-        """Centre of the slit (kx, ky) [mrad]."""
+        """Origin of the q-axis sweep (kx, ky) [mrad].  The q-axis starts here."""
         return self._offset
 
     @property
@@ -910,8 +972,18 @@ class SpectralSlitDetector(BaseDetector):
         return self._angle
 
     @property
+    def q_min(self) -> float:
+        """Start of the q-axis [mrad]."""
+        return self._q_min
+
+    @property
+    def q_max(self) -> float:
+        """Maximum scattering vector along the slit's long axis [mrad] (= q_min + extent)."""
+        return self._q_min + self._extent
+
+    @property
     def extent(self) -> float:
-        """Full length along the long axis [mrad]."""
+        """Physical length of the slit along its long axis [mrad] (= q_max - q_min)."""
         return self._extent
 
     @property
@@ -1052,16 +1124,39 @@ class SpectralAnnularDetector(AnnularDetector):
     Parameters
     ----------
     outer : float
-        Acceptance radius [mrad] of the integration disk at each q-point.
+        Acceptance **radius** [mrad] of the integration disk at each q-point.
+        The full disk diameter is ``2 * outer``.  The q-axis step size in the
+        resulting :class:`~abtem.measurements.MomentumResolvedSpectrum` equals
+        ``outer`` (one disk-radius per q-step).  For equivalent perpendicular
+        acceptance as a :class:`SpectralSlitDetector` with ``width=w``, use
+        ``outer = w / 2``.
     q_min : float, optional
         Start of the q sweep [mrad].  Default is 0.
     q_max : float, optional
         End of the q sweep [mrad].  If None (default), the diffraction-pattern
-        cutoff angle is used at call time.
+        cutoff angle is used at call time.  To cover the same q-range as a
+        :class:`SpectralSlitDetector` with ``q_max=Q``, use the same
+        ``q_max=Q``.
     angle : float, optional
-        Direction of the sweep [degrees, CCW from kx].  Default is 0.
+        Direction of the q sweep [degrees, CCW from kx].  Default is 0.
     to_cpu : bool, optional
     url : str, optional
+
+    Notes
+    -----
+    **Comparing annular and slit detectors**
+
+    =========================  ====================================
+    SpectralAnnularDetector    SpectralSlitDetector
+    =========================  ====================================
+    ``outer`` — disk radius    ``width/2`` — half-width
+    ``q_max`` — max q          ``q_max`` — max q
+    =========================  ====================================
+
+    For equivalent perpendicular acceptance and the same q-range::
+
+        SpectralAnnularDetector(outer=r, q_max=Q)
+        SpectralSlitDetector(q_max=Q, width=2*r)
     """
 
     def __init__(

@@ -5110,7 +5110,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             NonLinearAxis(
                 label="energy loss",
                 values=self._e_values,
-                units="meV",
+                units="eV",
             ),
         ]
 
@@ -5395,13 +5395,21 @@ def momentum_resolved_spectrum(
     Dispatches on the type of *detector*:
 
     * :class:`~abtem.detectors.SpectralAnnularDetector` — sweeps an offset
-      circular acceptance disk (radius ``outer``, inner=0) along a radial
-      direction, calling ``integrate_radial`` at each q-point.
+      circular acceptance disk (acceptance **radius** ``outer``, inner always 0)
+      along a radial direction at each q-step.  The q-axis runs from
+      ``q_min`` to ``q_max`` in steps of ``outer`` (one disk-radius per step).
     * :class:`~abtem.detectors.SpectralSlitDetector` — uses
-      :meth:`DiffractionPatterns.interpolate_line_at_position` (spline
-      interpolation) to integrate strips along the slit's long axis, with the
-      short-axis width averaged over.  This handles arbitrary rotation angles
-      accurately.
+      :meth:`DiffractionPatterns.interpolate_line` (spline interpolation) to
+      integrate strips along the slit's long axis.  Samples directly from
+      ``q_min`` to ``q_max`` (default ``q_min=0`` includes the direct beam).
+      The integration aperture perpendicular to q has **full width** ``width``
+      (= ``2 * outer`` of an equivalent annular detector).
+
+    Both detector types share the same ``q_min`` / ``q_max`` convention — the
+    same numerical values yield the same q-range in the output spectrum::
+
+        SpectralAnnularDetector(outer=r, q_min=Q0, q_max=Q)
+        SpectralSlitDetector(q_min=Q0, q_max=Q, width=2*r)
 
     Parameters
     ----------
@@ -5454,8 +5462,8 @@ def momentum_resolved_spectrum(
 
     # ---- SpectralSlitDetector: interpolated strip integration ----
     if isinstance(detector, SpectralSlitDetector):
-        # interpolate_line_at_position works in the DP's internal coordinate
-        # system (Å⁻¹).  Convert mrad → Å⁻¹ using the electron wavelength.
+        # interpolate_line works in the DP's internal coordinate system (Å⁻¹).
+        # Convert mrad → Å⁻¹ using the electron wavelength.
         energy = dp.metadata.get("energy")
         if energy is None:
             raise ValueError(
@@ -5465,41 +5473,37 @@ def momentum_resolved_spectrum(
         wavelength = energy2wavelength(energy)  # Å
         mrad_to_inv_ang = 1.0 / (wavelength * 1e3)
 
-        center_inv = (
+        offset_inv = (
             detector.offset[0] * mrad_to_inv_ang,
             detector.offset[1] * mrad_to_inv_ang,
         )
-        extent_inv = detector.extent * mrad_to_inv_ang
+        q_min_inv = detector.q_min * mrad_to_inv_ang
+        q_max_inv = detector.q_max * mrad_to_inv_ang
         width_inv = detector.width * mrad_to_inv_ang
         sampling_inv = min(dp.sampling)
 
-        line_profiles = dp.interpolate_line_at_position(
-            center=center_inv,
-            angle=detector.angle,
-            extent=extent_inv,
+        angle_rad = np.deg2rad(detector.angle)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+
+        # Sample directly from q_min to q_max along the slit direction.
+        # For q_min=0 this naturally includes q=0 as the first point.
+        N = max(2, int(round((q_max_inv - q_min_inv) / sampling_inv)) + 1)
+
+        start_inv = (offset_inv[0] + q_min_inv * cos_a, offset_inv[1] + q_min_inv * sin_a)
+        end_inv = (offset_inv[0] + q_max_inv * cos_a, offset_inv[1] + q_max_inv * sin_a)
+
+        line_profiles = dp.interpolate_line(
+            start=start_inv,
+            end=end_inv,
+            gpts=N,
             width=width_inv,
-            sampling=sampling_inv,
+            endpoint=True,
         )
 
-        # line_profiles shape: (...ensemble..., n_q)
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
         spectrum_array = xp.moveaxis(line_profiles.array, energy_axis_idx, -1)
-
-        # q-values: absolute distance from origin in mrad for each strip centre
-        n_q = line_profiles.shape[-1]
-        q_local = np.linspace(
-            -detector.extent / 2,
-            detector.extent / 2,
-            n_q,
-            endpoint=False,
-        ) + detector.extent / (2 * n_q)
-        angle_rad = np.deg2rad(detector.angle)
-        ox, oy = detector.offset
-        q_values = np.sqrt(
-            (ox + q_local * np.cos(angle_rad)) ** 2
-            + (oy + q_local * np.sin(angle_rad)) ** 2
-        )
+        q_values = np.linspace(detector.q_min, detector.q_max, N)
 
     # ---- SpectralAnnularDetector: offset-disk sweep ----
     elif isinstance(detector, SpectralAnnularDetector):
@@ -5510,14 +5514,29 @@ def momentum_resolved_spectrum(
         angle_rad = np.deg2rad(detector.sweep_angle)
         cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
 
-        slices = []
-        for q in q_values:
-            offset = (float(q * cos_a), float(q * sin_a))
-            integrated = dp.integrate_radial(inner=0.0, outer=outer, offset=offset)
-            slices.append(integrated.array)
+        xp = get_array_module(dp.array)
+        gpts = dp.shape[-2:]
+        sampling = dp.angular_sampling
 
-        xp = get_array_module(slices[0])
-        spectrum_array = xp.stack(slices, axis=-1)              # (...ens, n_q)
+        # Build all masks at once and stack: (n_q, gy, gx)
+        masks = xp.stack(
+            [
+                _annular_detector_mask(
+                    gpts=gpts,
+                    sampling=sampling,
+                    inner=0.0,
+                    outer=outer,
+                    offset=(float(q * cos_a), float(q * sin_a)),
+                    fftshift=dp.fftshift,
+                    xp=xp,
+                )
+                for q in q_values
+            ],
+            axis=0,
+        )
+
+        # Single batched contraction: (...ens, gy, gx) × (n_q, gy, gx) → (...ens, n_q)
+        spectrum_array = xp.tensordot(dp.array, masks, axes=([-2, -1], [-2, -1]))
         spectrum_array = xp.moveaxis(spectrum_array, energy_axis_idx, -1)  # (...ens, n_q, n_E)
 
     else:
