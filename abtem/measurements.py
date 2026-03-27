@@ -5199,7 +5199,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             for k, idx in enumerate(indices):
                 a = axes_flat[k]
                 data = array[idx]
-                im = a.pcolormesh(q, e, data.T, shading="auto", cmap=cmap, norm=norm)
+                im = a.pcolormesh(q, e, data.T, shading="nearest", cmap=cmap, norm=norm)
                 a.set_xlabel("q [mrad]")
                 a.set_ylabel(e_label)
                 if title:
@@ -5231,7 +5231,7 @@ class MomentumResolvedSpectrum(BaseMeasurements):
                 fig = ax.get_figure()
 
             norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-            im = ax.pcolormesh(q, e, data.T, shading="auto", cmap=cmap, norm=norm)
+            im = ax.pcolormesh(q, e, data.T, shading="nearest", cmap=cmap, norm=norm)
             ax.set_xlabel("q [mrad]")
             ax.set_ylabel(e_label)
             if isinstance(title, str) and title is not True:
@@ -5456,6 +5456,19 @@ def momentum_resolved_spectrum(
 
     energy_axis = dp.ensemble_axes_metadata[energy_axis_idx]
     e_values = np.array(energy_axis.values)
+
+    # Guard against a mismatch between axis metadata and actual array size
+    # (e.g. a frozen-phonon axis that was not fully collapsed).
+    n_e_array = dp.array.shape[energy_axis_idx]
+    n_e_axis = len(e_values)
+    if n_e_array != n_e_axis:
+        raise ValueError(
+            f"EnergyAxis at position {energy_axis_idx} has {n_e_axis} values "
+            f"but dp.array has size {n_e_array} along that axis.  "
+            f"Make sure the input was produced by phonon_loss_diffraction_patterns "
+            f"with all FrozenPhonons axes collapsed."
+        )
+
     remaining_ensemble = [
         ax for i, ax in enumerate(dp.ensemble_axes_metadata) if i != energy_axis_idx
     ]
