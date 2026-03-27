@@ -5522,9 +5522,17 @@ def momentum_resolved_spectrum(
             endpoint=True,
         )
 
+        # interpolate_line with width>0 returns the AVERAGE across the
+        # perpendicular direction.  Convert to a SUM to be consistent with the
+        # annular detector path (which sums all pixels inside the mask).
+        # n_perp is the number of perpendicular samples used internally.
+        n_perp = int(np.floor(width_inv / sampling_inv / 2) * 2 + 1)
+
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
-        spectrum_array = xp.moveaxis(line_profiles.array, energy_axis_idx, -1)
+        spectrum_array = xp.moveaxis(
+            line_profiles.array * n_perp, energy_axis_idx, -1
+        )
         q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
 
         # Optionally bin along q to reduce the number of points
