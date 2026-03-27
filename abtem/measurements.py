@@ -5520,6 +5520,7 @@ def momentum_resolved_spectrum(
             gpts=N,
             width=width_inv,
             endpoint=True,
+            order=1,  # linear interp — cubic splines ring around sharp peaks
         )
 
         # interpolate_line with width>0 returns the AVERAGE across the
