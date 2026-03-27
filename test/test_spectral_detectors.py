@@ -123,6 +123,49 @@ def test_slit_and_annular_same_q_range():
     assert spec_ann._q_values[-1] == pytest.approx(Q, abs=1e-6)
 
 
+# ---- q_sampling reduces the number of q-points ------------------------------
+
+
+def test_annular_q_sampling_reduces_points():
+    """q_sampling > outer should produce fewer q-points than the default."""
+    dp = _make_dp(gpts=64, sampling=0.5)
+    det_default = SpectralAnnularDetector(outer=1.0, q_max=20.0)
+    det_coarse = SpectralAnnularDetector(outer=1.0, q_max=20.0, q_sampling=4.0)
+
+    spec_default = momentum_resolved_spectrum(dp, det_default)
+    spec_coarse = momentum_resolved_spectrum(dp, det_coarse)
+
+    assert len(spec_coarse._q_values) < len(spec_default._q_values)
+    # Both reach the same endpoints
+    assert spec_coarse._q_values[0] == pytest.approx(0.0, abs=1e-6)
+    assert spec_coarse._q_values[-1] == pytest.approx(20.0, abs=1e-6)
+
+
+def test_slit_q_sampling_reduces_points():
+    """q_sampling should bin the line profile, producing fewer q-points."""
+    dp = _make_dp(gpts=256, sampling=0.05)
+    det_default = SpectralSlitDetector(width=3.0, q_max=6.0)
+    det_coarse = SpectralSlitDetector(width=3.0, q_max=6.0, q_sampling=2.0)
+
+    spec_default = momentum_resolved_spectrum(dp, det_default)
+    spec_coarse = momentum_resolved_spectrum(dp, det_coarse)
+
+    assert len(spec_coarse._q_values) < len(spec_default._q_values)
+
+
+def test_annular_q_sampling_none_matches_default():
+    """q_sampling=None should be identical to omitting it (default=outer)."""
+    dp = _make_dp(gpts=64, sampling=0.5)
+    det_a = SpectralAnnularDetector(outer=2.0, q_max=20.0)
+    det_b = SpectralAnnularDetector(outer=2.0, q_max=20.0, q_sampling=None)
+
+    spec_a = momentum_resolved_spectrum(dp, det_a)
+    spec_b = momentum_resolved_spectrum(dp, det_b)
+
+    np.testing.assert_allclose(spec_a.array, spec_b.array)
+    assert spec_a._q_values == spec_b._q_values
+
+
 # ---- show() should not raise ------------------------------------------------
 
 

@@ -5525,13 +5525,31 @@ def momentum_resolved_spectrum(
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
         spectrum_array = xp.moveaxis(line_profiles.array, energy_axis_idx, -1)
-        q_values = np.linspace(detector.q_min, detector.q_max, N)
+        q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
+
+        # Optionally bin along q to reduce the number of points
+        if detector.q_sampling is not None:
+            q_sampling_mrad = detector.q_sampling
+            native_step = (detector.q_max - detector.q_min) / max(N - 1, 1)
+            bin_size = max(1, int(round(q_sampling_mrad / native_step)))
+            n_q_fine = spectrum_array.shape[-2]
+            n_q_binned = n_q_fine // bin_size
+            # Trim to a multiple of bin_size, then reshape and sum
+            trimmed = spectrum_array[..., : n_q_binned * bin_size, :]
+            new_shape = trimmed.shape[:-2] + (n_q_binned, bin_size, trimmed.shape[-1])
+            spectrum_array = trimmed.reshape(new_shape).sum(axis=-2)
+            # Bin centres for q_values
+            q_trimmed = q_values_fine[: n_q_binned * bin_size]
+            q_values = q_trimmed.reshape(n_q_binned, bin_size).mean(axis=1)
+        else:
+            q_values = q_values_fine
 
     # ---- SpectralAnnularDetector: offset-disk sweep ----
     elif isinstance(detector, SpectralAnnularDetector):
         outer = detector.outer
         q_max = detector.q_max if detector.q_max is not None else min(dp.max_angles)
-        n_steps = max(2, round((q_max - detector.q_min) / outer) + 1)
+        q_step = detector.q_sampling if detector.q_sampling is not None else outer
+        n_steps = max(2, round((q_max - detector.q_min) / q_step) + 1)
         q_values = np.linspace(detector.q_min, q_max, n_steps)
 
         angle_rad = np.deg2rad(detector.sweep_angle)

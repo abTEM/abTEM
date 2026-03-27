@@ -860,6 +860,11 @@ class SpectralSlitDetector(BaseDetector):
         here (at ``q_min``) and extends in the direction given by ``angle``.
         Default is ``(0, 0)``, i.e. the sweep starts from the diffraction
         pattern centre.
+    q_sampling : float, optional
+        Desired q-axis bin size [mrad].  If None (default) the native
+        pixel sampling of the diffraction pattern is used.  Setting a
+        larger value bins adjacent line samples together, producing fewer
+        q-points and a faster spectrum.
 
     **Corner mode** — specify the four sides directly:
 
@@ -915,9 +920,11 @@ class SpectralSlitDetector(BaseDetector):
         angle: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
         corners: Optional[tuple[float, float, float, float]] = None,
+        q_sampling: Optional[float] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
+        self._q_sampling = float(q_sampling) if q_sampling is not None else None
         if corners is not None:
             if any(p is not None for p in (q_max, width)):
                 raise ValueError(
@@ -985,6 +992,11 @@ class SpectralSlitDetector(BaseDetector):
     def extent(self) -> float:
         """Physical length of the slit along its long axis [mrad] (= q_max - q_min)."""
         return self._extent
+
+    @property
+    def q_sampling(self) -> Optional[float]:
+        """q-axis bin size [mrad], or None for native DP sampling."""
+        return self._q_sampling
 
     @property
     def width(self) -> float:
@@ -1140,6 +1152,10 @@ class SpectralAnnularDetector(AnnularDetector):
         ``q_max=Q``.
     angle : float, optional
         Direction of the q sweep [degrees, CCW from kx].  Default is 0.
+    q_sampling : float, optional
+        Step between q-points [mrad].  If None (default) the step equals
+        ``outer`` (one disk-radius per step).  Setting a larger value
+        produces fewer q-points and a faster spectrum.
     to_cpu : bool, optional
     url : str, optional
 
@@ -1166,12 +1182,14 @@ class SpectralAnnularDetector(AnnularDetector):
         q_min: float = 0.0,
         q_max: Optional[float] = None,
         angle: float = 0.0,
+        q_sampling: Optional[float] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
         self._q_min = float(q_min)
         self._q_max = q_max
         self._sweep_angle = float(angle)
+        self._q_sampling = float(q_sampling) if q_sampling is not None else None
         super().__init__(
             inner=0.0, outer=outer, offset=(0.0, 0.0), to_cpu=to_cpu, url=url
         )
@@ -1185,6 +1203,11 @@ class SpectralAnnularDetector(AnnularDetector):
     def q_max(self) -> Optional[float]:
         """End of the q sweep [mrad], or None to use the DP cutoff angle."""
         return self._q_max
+
+    @property
+    def q_sampling(self) -> Optional[float]:
+        """Step between q-points [mrad], or None to use ``outer``."""
+        return self._q_sampling
 
     @property
     def sweep_angle(self) -> float:
