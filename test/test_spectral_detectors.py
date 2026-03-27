@@ -104,12 +104,8 @@ def test_annular_q_min_nonzero():
 
 def test_slit_and_annular_same_q_range():
     """SpectralSlitDetector(width=2*r, q_max=Q) and
-    SpectralAnnularDetector(outer=r, q_max=Q) must start at the same q.
-
-    Note on endpoints: the slit samples q continuously via linspace (inclusive
-    of q_max), while the annular sweeps discrete disk positions via arange
-    (exclusive of q_max, so the last value is q_max - outer).  Both use the
-    same q_max value to bound the output range.
+    SpectralAnnularDetector(outer=r, q_max=Q) must span the same q range,
+    both starting at q=0 and ending at q=Q.
     """
     r, Q = 2.0, 20.0
     dp = _make_dp(gpts=64, sampling=0.5)
@@ -122,11 +118,9 @@ def test_slit_and_annular_same_q_range():
 
     # Both start at q=0
     assert spec_slit._q_values[0] == pytest.approx(spec_ann._q_values[0], abs=1e-6)
-    # Slit reaches q_max; annular reaches q_max - outer (arange is exclusive)
+    # Both reach q_max as the last point
     assert spec_slit._q_values[-1] == pytest.approx(Q, abs=1e-6)
-    assert spec_ann._q_values[-1] == pytest.approx(Q - r, abs=1e-6)
-    # All annular q_values are within [0, q_max)
-    assert np.all(np.array(spec_ann._q_values) < Q + 1e-9)
+    assert spec_ann._q_values[-1] == pytest.approx(Q, abs=1e-6)
 
 
 # ---- show() should not raise ------------------------------------------------

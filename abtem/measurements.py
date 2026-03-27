@@ -5509,7 +5509,8 @@ def momentum_resolved_spectrum(
     elif isinstance(detector, SpectralAnnularDetector):
         outer = detector.outer
         q_max = detector.q_max if detector.q_max is not None else min(dp.max_angles)
-        q_values = np.arange(detector.q_min, q_max, outer)
+        n_steps = max(2, round((q_max - detector.q_min) / outer) + 1)
+        q_values = np.linspace(detector.q_min, q_max, n_steps)
 
         angle_rad = np.deg2rad(detector.sweep_angle)
         cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)

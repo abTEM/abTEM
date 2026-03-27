@@ -1125,9 +1125,10 @@ class SpectralAnnularDetector(AnnularDetector):
     ----------
     outer : float
         Acceptance **radius** [mrad] of the integration disk at each q-point.
-        The full disk diameter is ``2 * outer``.  The q-axis step size in the
-        resulting :class:`~abtem.measurements.MomentumResolvedSpectrum` equals
-        ``outer`` (one disk-radius per q-step).  For equivalent perpendicular
+        The full disk diameter is ``2 * outer``.  The q-axis in the resulting
+        :class:`~abtem.measurements.MomentumResolvedSpectrum` runs from
+        ``q_min`` to ``q_max`` in approximately ``outer``-sized steps.  For
+        equivalent perpendicular
         acceptance as a :class:`SpectralSlitDetector` with ``width=w``, use
         ``outer = w / 2``.
     q_min : float, optional
