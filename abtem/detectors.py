@@ -1207,8 +1207,9 @@ class SpectralSlitDetector(BaseDetector):
         ax.set_aspect("equal")
         ax.set_xlabel("kx [mrad]")
         ax.set_ylabel("ky [mrad]")
-        ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
-        ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
+        if not show_pattern:
+            ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+            ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
         if mx is not None:
             ax.set_xlim(-mx, mx)
             ax.set_ylim(-my, my)
@@ -1431,8 +1432,9 @@ class SpectralAnnularDetector(AnnularDetector):
         ax.set_aspect("equal")
         ax.set_xlabel("kx [mrad]")
         ax.set_ylabel("ky [mrad]")
-        ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
-        ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
+        if not show_pattern:
+            ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+            ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
         if mx is not None:
             ax.set_xlim(-mx, mx)
             ax.set_ylim(-my, my)
