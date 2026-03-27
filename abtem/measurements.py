@@ -5223,6 +5223,15 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             while data.ndim > 2:
                 data = data[0]
 
+            n_q, n_e = len(q), len(e)
+            if data.shape != (n_q, n_e):
+                raise ValueError(
+                    f"Shape mismatch in MomentumResolvedSpectrum.show(): "
+                    f"data.shape={data.shape} but expected ({n_q}, {n_e}) "
+                    f"from q_values (len {n_q}) and e_values (len {n_e}).  "
+                    f"Full array shape: {array.shape}"
+                )
+
             if ax is None:
                 if figsize is None:
                     figsize = (6, 4)
@@ -5557,6 +5566,16 @@ def momentum_resolved_spectrum(
         raise TypeError(
             f"detector must be a SpectralAnnularDetector or SpectralSlitDetector, "
             f"got {type(detector).__name__}"
+        )
+
+    # Validate: last two dims must be (n_q, n_e)
+    expected_tail = (len(q_values), len(e_values))
+    if spectrum_array.shape[-2:] != expected_tail:
+        raise RuntimeError(
+            f"momentum_resolved_spectrum internal error: spectrum_array.shape="
+            f"{spectrum_array.shape} but expected last two dims {expected_tail} "
+            f"(n_q={len(q_values)}, n_e={len(e_values)}).  "
+            f"dp.array.shape={dp.array.shape}, energy_axis_idx={energy_axis_idx}"
         )
 
     return MomentumResolvedSpectrum(
