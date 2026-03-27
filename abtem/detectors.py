@@ -825,7 +825,7 @@ def _corners_from_slit_params(
     return float(kx_min), float(kx_max), float(ky_min), float(ky_max)
 
 
-class SlitDetector(BaseDetector):
+class SpectralSlitDetector(BaseDetector):
     """
     A rectangular slit detector in reciprocal (diffraction) space.
 
@@ -1037,6 +1037,63 @@ class SlitDetector(BaseDetector):
             measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
         )
         return measurements
+
+
+class SpectralAnnularDetector(AnnularDetector):
+    """
+    Sweeps an offset circular acceptance region over q to build S(q, E).
+
+    The acceptance disk (radius ``outer``, inner always 0) is centred at
+    ``(q·cos(angle), q·sin(angle))`` for each q in ``[q_min, q_max)``.
+    Pass to :func:`abtem.momentum_resolved_spectrum` together with
+    energy-resolved diffraction patterns to obtain a
+    :class:`~abtem.measurements.MomentumResolvedSpectrum`.
+
+    Parameters
+    ----------
+    outer : float
+        Acceptance radius [mrad] of the integration disk at each q-point.
+    q_min : float, optional
+        Start of the q sweep [mrad].  Default is 0.
+    q_max : float, optional
+        End of the q sweep [mrad].  If None (default), the diffraction-pattern
+        cutoff angle is used at call time.
+    angle : float, optional
+        Direction of the sweep [degrees, CCW from kx].  Default is 0.
+    to_cpu : bool, optional
+    url : str, optional
+    """
+
+    def __init__(
+        self,
+        outer: float,
+        q_min: float = 0.0,
+        q_max: Optional[float] = None,
+        angle: float = 0.0,
+        to_cpu: bool = True,
+        url: Optional[str] = None,
+    ):
+        self._q_min = float(q_min)
+        self._q_max = q_max
+        self._sweep_angle = float(angle)
+        super().__init__(
+            inner=0.0, outer=outer, offset=(0.0, 0.0), to_cpu=to_cpu, url=url
+        )
+
+    @property
+    def q_min(self) -> float:
+        """Start of the q sweep [mrad]."""
+        return self._q_min
+
+    @property
+    def q_max(self) -> Optional[float]:
+        """End of the q sweep [mrad], or None to use the DP cutoff angle."""
+        return self._q_max
+
+    @property
+    def sweep_angle(self) -> float:
+        """Direction of the q sweep [degrees, CCW from kx]."""
+        return self._sweep_angle
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):

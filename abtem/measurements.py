@@ -5387,62 +5387,52 @@ def phonon_loss_diffraction_patterns(
 
 def momentum_resolved_spectrum(
     tds_diffraction_patterns: "DiffractionPatterns",
-    outer: float,
-    q_max: Optional[float] = None,
-    q_min: float = 0.0,
-    angle: float = 0.0,
-    inner: float = 0.0,
+    detector,
 ) -> "MomentumResolvedSpectrum":
     """
-    Build S(q, E) by sweeping an offset annular integration over q-points.
+    Build S(q, E) from energy-resolved TDS diffraction patterns.
 
-    For each q-point in the range, the centre of a small annular integration
-    region is offset to ``(q * cos(angle), q * sin(angle))`` and
-    ``integrate_radial(inner, outer, offset=...)`` is called on the
-    diffraction patterns.
+    Dispatches on the type of *detector*:
+
+    * :class:`~abtem.detectors.SpectralAnnularDetector` — sweeps an offset
+      circular acceptance disk (radius ``outer``, inner=0) along a radial
+      direction, calling ``integrate_radial`` at each q-point.
+    * :class:`~abtem.detectors.SpectralSlitDetector` — uses
+      :meth:`DiffractionPatterns.interpolate_line_at_position` (spline
+      interpolation) to integrate strips along the slit's long axis, with the
+      short-axis width averaged over.  This handles arbitrary rotation angles
+      accurately.
 
     Parameters
     ----------
     tds_diffraction_patterns : DiffractionPatterns
-        Energy-resolved TDS diffraction patterns (as returned by
-        ``phonon_loss_diffraction_patterns``).  Must have an ``EnergyAxis``
-        with label containing ``'loss'`` in its ensemble axes.
-    outer : float
-        Outer acceptance radius [mrad] of the integration annulus around
-        each q-point.
-    q_max : float, optional
-        Maximum q value [mrad].  Defaults to the minimum cutoff angle of
-        the diffraction patterns.
-    q_min : float, optional
-        Minimum q value [mrad].  Default is 0.
-    angle : float, optional
-        Direction of the q sweep [degrees, CCW from kx].  Default is 0.
-    inner : float, optional
-        Inner acceptance radius [mrad] of the integration annulus around
-        each q-point.  Default is 0.
+        Energy-resolved TDS diffraction patterns as returned by
+        :func:`phonon_loss_diffraction_patterns`.  Must have an
+        ``EnergyAxis`` (label containing ``'loss'``) in its ensemble axes.
+    detector : SpectralAnnularDetector or SpectralSlitDetector
+        Detector that controls the integration strategy and q-range.
 
     Returns
     -------
     MomentumResolvedSpectrum
     """
     from abtem.core.axes import EnergyAxis, OrdinalAxis
+    from abtem.core.energy import energy2wavelength
+    from abtem.detectors import SpectralAnnularDetector, SpectralSlitDetector
 
     dp = tds_diffraction_patterns
 
-    # --- if component="all" was used, select the TDS slice ---
+    # --- auto-select TDS slice when component="all" was used ---
     if dp.metadata.get("phonon_loss_component") == "all":
-        component_axis_idx = None
         for i, ax in enumerate(dp.ensemble_axes_metadata):
             if isinstance(ax, OrdinalAxis) and ax.label == "component":
-                component_axis_idx = i
+                tds_idx = list(ax.values).index("tds")
+                slicing = tuple(
+                    tds_idx if j == i else slice(None)
+                    for j in range(len(dp.ensemble_axes_metadata))
+                )
+                dp = dp[slicing]
                 break
-        if component_axis_idx is not None:
-            tds_idx = list(ax.values).index("tds")
-            slicing = tuple(
-                tds_idx if j == component_axis_idx else slice(None)
-                for j in range(len(dp.ensemble_axes_metadata))
-            )
-            dp = dp[slicing]
 
     # --- find the energy axis ---
     energy_axis_idx = None
@@ -5452,48 +5442,89 @@ def momentum_resolved_spectrum(
             break
     if energy_axis_idx is None:
         raise ValueError(
-            "Diffraction patterns must have an EnergyAxis with label "
+            "tds_diffraction_patterns must have an EnergyAxis with label "
             "containing 'loss'.  Use phonon_loss_diffraction_patterns first."
         )
 
     energy_axis = dp.ensemble_axes_metadata[energy_axis_idx]
     e_values = np.array(energy_axis.values)
-
-    # --- q sampling: step by the acceptance diameter so disks tile the range ---
-    q_step = outer - inner
-    if q_max is None:
-        q_max = min(dp.max_angles)
-    q_values = np.arange(q_min, q_max, q_step)
-
-    # --- sweep q-points ---
-    angle_rad = np.deg2rad(angle)
-    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
-
-    slices = []
-    for q in q_values:
-        offset = (float(q * cos_a), float(q * sin_a))
-        integrated = dp.integrate_radial(inner=inner, outer=outer, offset=offset)
-        # integrated has shape (...ensemble...) — extract the array
-        slices.append(integrated.array)
-
-    # Stack along a new q axis: result shape (..., n_q)
-    xp = get_array_module(slices[0])
-    spectrum_array = xp.stack(slices, axis=-1)
-
-    # Now we need shape (..., n_q, n_E).
-    # Currently the energy axis is an ensemble dimension (at energy_axis_idx)
-    # and q is the last axis. Move energy to the final axis.
-    #
-    # ensemble dims come before base dims. integrate_radial collapsed the
-    # 2D base to scalar, so the current array is purely ensemble + the new q
-    # trailing axis.  The energy ensemble dim is at energy_axis_idx.
-    # Move it to the end to get (...other_ensemble..., n_q, n_E).
-    spectrum_array = xp.moveaxis(spectrum_array, energy_axis_idx, -1)
-
-    # remaining ensemble axes (everything except the energy axis)
     remaining_ensemble = [
         ax for i, ax in enumerate(dp.ensemble_axes_metadata) if i != energy_axis_idx
     ]
+
+    # ---- SpectralSlitDetector: interpolated strip integration ----
+    if isinstance(detector, SpectralSlitDetector):
+        # interpolate_line_at_position works in the DP's internal coordinate
+        # system (Å⁻¹).  Convert mrad → Å⁻¹ using the electron wavelength.
+        energy = dp.metadata.get("energy")
+        if energy is None:
+            raise ValueError(
+                "DiffractionPatterns metadata must contain 'energy' [eV] for "
+                "mrad → Å⁻¹ conversion in SpectralSlitDetector mode."
+            )
+        wavelength = energy2wavelength(energy)  # Å
+        mrad_to_inv_ang = 1.0 / (wavelength * 1e3)
+
+        center_inv = (
+            detector.offset[0] * mrad_to_inv_ang,
+            detector.offset[1] * mrad_to_inv_ang,
+        )
+        extent_inv = detector.extent * mrad_to_inv_ang
+        width_inv = detector.width * mrad_to_inv_ang
+        sampling_inv = min(dp.sampling)
+
+        line_profiles = dp.interpolate_line_at_position(
+            center=center_inv,
+            angle=detector.angle,
+            extent=extent_inv,
+            width=width_inv,
+            sampling=sampling_inv,
+        )
+
+        # line_profiles shape: (...ensemble..., n_q)
+        # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
+        xp = get_array_module(line_profiles.array)
+        spectrum_array = xp.moveaxis(line_profiles.array, energy_axis_idx, -1)
+
+        # q-values: absolute distance from origin in mrad for each strip centre
+        n_q = line_profiles.shape[-1]
+        q_local = np.linspace(
+            -detector.extent / 2,
+            detector.extent / 2,
+            n_q,
+            endpoint=False,
+        ) + detector.extent / (2 * n_q)
+        angle_rad = np.deg2rad(detector.angle)
+        ox, oy = detector.offset
+        q_values = np.sqrt(
+            (ox + q_local * np.cos(angle_rad)) ** 2
+            + (oy + q_local * np.sin(angle_rad)) ** 2
+        )
+
+    # ---- SpectralAnnularDetector: offset-disk sweep ----
+    elif isinstance(detector, SpectralAnnularDetector):
+        outer = detector.outer
+        q_max = detector.q_max if detector.q_max is not None else min(dp.max_angles)
+        q_values = np.arange(detector.q_min, q_max, outer)
+
+        angle_rad = np.deg2rad(detector.sweep_angle)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+
+        slices = []
+        for q in q_values:
+            offset = (float(q * cos_a), float(q * sin_a))
+            integrated = dp.integrate_radial(inner=0.0, outer=outer, offset=offset)
+            slices.append(integrated.array)
+
+        xp = get_array_module(slices[0])
+        spectrum_array = xp.stack(slices, axis=-1)              # (...ens, n_q)
+        spectrum_array = xp.moveaxis(spectrum_array, energy_axis_idx, -1)  # (...ens, n_q, n_E)
+
+    else:
+        raise TypeError(
+            f"detector must be a SpectralAnnularDetector or SpectralSlitDetector, "
+            f"got {type(detector).__name__}"
+        )
 
     return MomentumResolvedSpectrum(
         array=spectrum_array,
