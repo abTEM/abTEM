@@ -65,6 +65,32 @@ def _energy_from_waves(waves) -> Optional[float]:
     return energy
 
 
+def _gpts_and_sampling_from_obj(obj):
+    """Extract grid parameters from waves *or* a DiffractionPatterns object.
+
+    Returns
+    -------
+    gpts : tuple[int, int]
+    angular_sampling : tuple[float, float]   [mrad]
+    reciprocal_space_sampling : tuple[float, float]   [1/Å]
+    energy : float or None   [eV]
+    """
+    from abtem.measurements import DiffractionPatterns
+
+    if isinstance(obj, DiffractionPatterns):
+        gpts = obj.shape[-2:]
+        angular_sampling = obj.angular_sampling
+        reciprocal_space_sampling = obj.sampling
+        energy = obj.metadata.get("energy")
+    else:
+        # BaseWaves
+        gpts = obj._gpts_within_angle("cutoff")
+        angular_sampling = obj.angular_sampling
+        reciprocal_space_sampling = obj.reciprocal_space_sampling
+        energy = _energy_from_waves(obj)
+    return gpts, angular_sampling, reciprocal_space_sampling, energy
+
+
 def validate_detectors(
     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     waves: Optional[BaseWaves] = None,
@@ -706,13 +732,14 @@ class AnnularDetector(_AbstractRadialDetector):
         return measurements
 
     def _get_detector_region_array(
-        self, waves: BaseWaves, fftshift: bool = True
+        self, waves, fftshift: bool = True
     ) -> np.ndarray:
         inner, outer = self.angular_limits(waves)
+        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
 
         array = _polar_detector_bins(
-            gpts=waves._gpts_within_angle("cutoff"),
-            sampling=waves.angular_sampling,
+            gpts=gpts,
+            sampling=angular_sampling,
             inner=inner,
             outer=outer,
             nbins_radial=1,
@@ -725,31 +752,31 @@ class AnnularDetector(_AbstractRadialDetector):
         assert isinstance(array, np.ndarray)
         return array >= 0
 
-    def get_detector_region(self, waves: BaseWaves, fftshift: bool = True):
+    def get_detector_region(self, waves, fftshift: bool = True):
         """
         Get the annular detector region as a diffraction pattern.
 
         Parameters
         ----------
-        waves : BaseWaves
-            The waves to derive the annular detector region from.
+        waves : BaseWaves or DiffractionPatterns
+            The waves or diffraction patterns used to derive grid calibration.
         fftshift : bool, optional
-            If True, the zero-frequency of the detector region if shifted to the center
-            of the array, otherwise the center is at (0, 0).
+            If True, the zero-frequency of the detector region is shifted to the
+            centre of the array, otherwise the centre is at (0, 0).
 
         Returns
         -------
         detector_region : DiffractionPatterns
         """
-
         array = self._get_detector_region_array(waves, fftshift=fftshift)
+        _, _, reciprocal_space_sampling, energy = _gpts_and_sampling_from_obj(waves)
         metadata = {
-            "energy": _energy_from_waves(waves),
+            "energy": energy,
             "label": "detector efficiency",
             "units": "%",
         }
         diffraction_patterns = DiffractionPatterns(
-            array, metadata=metadata, sampling=waves.reciprocal_space_sampling
+            array, metadata=metadata, sampling=reciprocal_space_sampling
         )
         return diffraction_patterns
 
@@ -1045,37 +1072,54 @@ class SpectralSlitDetector(BaseDetector):
         return (_scanned_measurement_type(waves),)
 
     def _get_detector_region_array(
-        self, waves: "BaseWaves", fftshift: bool = True
+        self, waves, fftshift: bool = True
     ) -> np.ndarray:
-        xp = get_array_module(waves.array)
-        gpts = waves._gpts_within_angle("cutoff")
-        sampling = waves.angular_sampling
+        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
+        xp = np
         return _slit_detector_mask(
             gpts=gpts,
-            sampling=sampling,
+            sampling=angular_sampling,
             corners=self._corners,
             fftshift=fftshift,
             xp=xp,
         )
 
-    def get_detector_region(self, waves: "BaseWaves", fftshift: bool = True):
+    def get_detector_region(self, waves, fftshift: bool = True):
         """
         Get the slit detector region as a DiffractionPatterns object.
 
         Parameters
         ----------
-        waves : BaseWaves
+        waves : BaseWaves or DiffractionPatterns
+            The waves or diffraction patterns used to derive grid calibration.
         fftshift : bool, optional
+            If True, the zero-frequency component is shifted to the centre.
         """
         array = self._get_detector_region_array(waves, fftshift=fftshift)
+        _, _, reciprocal_space_sampling, energy = _gpts_and_sampling_from_obj(waves)
         metadata = {
-            "energy": _energy_from_waves(waves),
+            "energy": energy,
             "label": "detector efficiency",
             "units": "%",
         }
         return DiffractionPatterns(
-            array, metadata=metadata, sampling=waves.reciprocal_space_sampling
+            array, metadata=metadata, sampling=reciprocal_space_sampling
         )
+
+    def show(self, waves, fftshift: bool = True, **kwargs):
+        """
+        Show the slit detector region overlaid on the diffraction grid.
+
+        Parameters
+        ----------
+        waves : BaseWaves or DiffractionPatterns
+            Provides the grid calibration (gpts, angular sampling, energy).
+        fftshift : bool, optional
+            Passed to :meth:`get_detector_region`.
+        **kwargs
+            Forwarded to :meth:`DiffractionPatterns.show`.
+        """
+        return self.get_detector_region(waves, fftshift=fftshift).show(**kwargs)
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
         xp = get_array_module(waves.array)
@@ -1213,6 +1257,26 @@ class SpectralAnnularDetector(AnnularDetector):
     def sweep_angle(self) -> float:
         """Direction of the q sweep [degrees, CCW from kx]."""
         return self._sweep_angle
+
+    def show(self, waves, fftshift: bool = True, **kwargs):
+        """
+        Show the acceptance disk of the detector overlaid on the diffraction grid.
+
+        The disk is shown at the origin (``offset=(0, 0)``); it represents the
+        acceptance region that is swept along the q-direction when computing a
+        spectrum.  Pass the result of :func:`momentum_resolved_spectrum` to see
+        where each q-step lands.
+
+        Parameters
+        ----------
+        waves : BaseWaves or DiffractionPatterns
+            Provides the grid calibration (gpts, angular sampling, energy).
+        fftshift : bool, optional
+            Passed to :meth:`get_detector_region`.
+        **kwargs
+            Forwarded to :meth:`DiffractionPatterns.show`.
+        """
+        return self.get_detector_region(waves, fftshift=fftshift).show(**kwargs)
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
