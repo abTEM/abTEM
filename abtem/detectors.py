@@ -1106,20 +1106,117 @@ class SpectralSlitDetector(BaseDetector):
             array, metadata=metadata, sampling=reciprocal_space_sampling
         )
 
-    def show(self, waves, fftshift: bool = True, **kwargs):
+    @staticmethod
+    def _show_pattern_bg(ax, waves, power):
+        """Render the summed DP as a grayscale imshow background."""
+        from abtem.measurements import DiffractionPatterns
+
+        if not isinstance(waves, DiffractionPatterns):
+            raise ValueError(
+                "show_pattern=True requires a DiffractionPatterns object"
+            )
+        arr = np.array(
+            waves.array.compute() if hasattr(waves.array, "compute") else waves.array
+        )
+        if arr.ndim > 2:
+            arr = arr.sum(axis=tuple(range(arr.ndim - 2)))
+        if not getattr(waves, "fftshift", True):
+            arr = np.fft.fftshift(arr)
+        if power != 1.0:
+            arr = np.abs(arr) ** power
+        mx, my = waves.max_angles
+        ax.imshow(
+            arr,
+            extent=[-mx, mx, -my, my],
+            origin="lower",
+            cmap="gray",
+            aspect="equal",
+        )
+        return mx, my
+
+    def show(
+        self,
+        waves,
+        show_pattern: bool = False,
+        power: float = 0.5,
+        ax=None,
+        figsize=None,
+        **kwargs,
+    ):
         """
-        Show the slit detector region overlaid on the diffraction grid.
+        Show the slit detector region as a polygon patch.
 
         Parameters
         ----------
         waves : BaseWaves or DiffractionPatterns
-            Provides the grid calibration (gpts, angular sampling, energy).
-        fftshift : bool, optional
-            Passed to :meth:`get_detector_region`.
-        **kwargs
-            Forwarded to :meth:`DiffractionPatterns.show`.
+            Provides grid calibration.  When *show_pattern* is True, the
+            diffraction pattern (summed over all ensemble axes) is shown as a
+            grayscale background and *waves* must be a
+            :class:`~abtem.measurements.DiffractionPatterns`.
+        show_pattern : bool, optional
+            Overlay the patch on the summed diffraction pattern.  Requires a
+            :class:`~abtem.measurements.DiffractionPatterns` as *waves*.
+        power : float, optional
+            Exponent applied to the pattern before display (default 0.5 →
+            square-root stretch).  Ignored when *show_pattern* is False.
+        ax : matplotlib Axes, optional
+        figsize : tuple, optional
         """
-        return self.get_detector_region(waves, fftshift=fftshift).show(**kwargs)
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Polygon as MplPolygon
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize or (6, 6))
+
+        mx = my = None
+        if show_pattern:
+            mx, my = self._show_pattern_bg(ax, waves, power)
+
+        # Compute world-space corners of the rotated rectangle.
+        angle_rad = np.deg2rad(self._angle)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        half_e = self._extent / 2.0
+        half_w = self._width / 2.0
+        # Centre of the slit rectangle in world coords
+        center = np.array([
+            self._offset[0] + (self._q_min + half_e) * cos_a,
+            self._offset[1] + (self._q_min + half_e) * sin_a,
+        ])
+        R = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        local = np.array([
+            [-half_e, -half_w],
+            [half_e, -half_w],
+            [half_e, half_w],
+            [-half_e, half_w],
+        ])
+        world = local @ R.T + center
+
+        patch = MplPolygon(
+            world,
+            closed=True,
+            facecolor="red",
+            alpha=0.25,
+            edgecolor="red",
+            linewidth=1.5,
+        )
+        ax.add_patch(patch)
+
+        ax.set_aspect("equal")
+        ax.set_xlabel("kx [mrad]")
+        ax.set_ylabel("ky [mrad]")
+        ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+        ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
+        if mx is not None:
+            ax.set_xlim(-mx, mx)
+            ax.set_ylim(-my, my)
+        else:
+            lim = (self.q_max + self._width) * 1.1
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+        ax.set_title(
+            f"SpectralSlitDetector  width={self._width} mrad  angle={self._angle}°"
+        )
+        return ax
 
     def _calculate_new_array(self, waves: WavesType) -> np.ndarray:
         xp = get_array_module(waves.array)
@@ -1258,25 +1355,93 @@ class SpectralAnnularDetector(AnnularDetector):
         """Direction of the q sweep [degrees, CCW from kx]."""
         return self._sweep_angle
 
-    def show(self, waves, fftshift: bool = True, **kwargs):
+    def show(
+        self,
+        waves,
+        show_pattern: bool = False,
+        power: float = 0.5,
+        ax=None,
+        figsize=None,
+        **kwargs,
+    ):
         """
-        Show the acceptance disk of the detector overlaid on the diffraction grid.
+        Show all acceptance-disk positions along the q-sweep.
 
-        The disk is shown at the origin (``offset=(0, 0)``); it represents the
-        acceptance region that is swept along the q-direction when computing a
-        spectrum.  Pass the result of :func:`momentum_resolved_spectrum` to see
-        where each q-step lands.
+        Each disk (radius ``outer``) is drawn at the q-position it would be
+        centred on when computing a spectrum, so the full sweep from ``q_min``
+        to ``q_max`` is visible at once.
 
         Parameters
         ----------
         waves : BaseWaves or DiffractionPatterns
-            Provides the grid calibration (gpts, angular sampling, energy).
-        fftshift : bool, optional
-            Passed to :meth:`get_detector_region`.
-        **kwargs
-            Forwarded to :meth:`DiffractionPatterns.show`.
+            Provides grid calibration and, when *show_pattern* is True, the
+            diffraction data.  Must be a
+            :class:`~abtem.measurements.DiffractionPatterns` when
+            *show_pattern* is True.
+        show_pattern : bool, optional
+            Overlay the disks on the summed diffraction pattern shown as a
+            grayscale background.
+        power : float, optional
+            Exponent applied to the pattern before display (default 0.5 →
+            square-root stretch).  Ignored when *show_pattern* is False.
+        ax : matplotlib Axes, optional
+        figsize : tuple, optional
         """
-        return self.get_detector_region(waves, fftshift=fftshift).show(**kwargs)
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle
+
+        from abtem.measurements import DiffractionPatterns
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize or (6, 6))
+
+        mx = my = None
+        if show_pattern:
+            mx, my = SpectralSlitDetector._show_pattern_bg(ax, waves, power)
+
+        # q-values that will be swept
+        if isinstance(waves, DiffractionPatterns):
+            q_max_dp = min(waves.max_angles)
+        else:
+            q_max_dp = min(waves.cutoff_angles)
+        q_max = self.q_max if self.q_max is not None else q_max_dp
+        step = self.q_sampling if self.q_sampling is not None else self.outer
+        n_steps = max(2, round((q_max - self.q_min) / step) + 1)
+        q_vals = np.linspace(self.q_min, q_max, n_steps)
+
+        angle_rad = np.deg2rad(self._sweep_angle)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+
+        for q in q_vals:
+            cx, cy = q * cos_a, q * sin_a
+            ax.add_patch(
+                Circle(
+                    (cx, cy),
+                    self.outer,
+                    fill=False,
+                    edgecolor="red",
+                    linewidth=0.8,
+                    alpha=0.6,
+                )
+            )
+
+        ax.set_aspect("equal")
+        ax.set_xlabel("kx [mrad]")
+        ax.set_ylabel("ky [mrad]")
+        ax.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+        ax.axvline(0, color="gray", linewidth=0.5, alpha=0.5)
+        if mx is not None:
+            ax.set_xlim(-mx, mx)
+            ax.set_ylim(-my, my)
+        else:
+            lim = (q_max + self.outer) * 1.1
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+        ax.set_title(
+            f"SpectralAnnularDetector  outer={self.outer} mrad"
+            f"  angle={self._sweep_angle}°"
+        )
+        return ax
 
 
 class FlexibleAnnularDetector(_AbstractRadialDetector):
