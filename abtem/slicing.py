@@ -309,14 +309,17 @@ class SliceIndexedAtoms(BaseSlicedAtoms):
     ):
         super().__init__(atoms, slice_thickness)
 
-        labels = np.digitize(
-            self.atoms.positions[:, 2], np.cumsum(self.slice_thickness)
-        )
+        bin_edges = np.array(self.slice_thickness).cumsum()
 
-        # method="closest"
-        # labels = find_closest_indices(
-        #    atoms.positions[:, 2], np.cumsum((0,) + self.slice_thickness[:-1])
-        # )
+        # Guard against floating-point accumulation error in cumsum:
+        # atoms exactly on a slice boundary can be assigned to the wrong
+        # slice when the cumulative sum drifts by ~1e-14.  Nudge each
+        # edge down by a small tolerance so that an atom sitting
+        # precisely at z = sum(thicknesses[:k]) falls into slice k
+        # (the next slice), not slice k-1.
+        bin_edges -= 1e-12
+
+        labels = np.digitize(self.atoms.positions[:, 2], bin_edges)
 
         self._slice_index = [
             indices for indices in label_to_index(labels, max_label=len(self) - 1)
