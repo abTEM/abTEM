@@ -2134,6 +2134,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             chunks = ()
             drop_axis = ()
             if not self.ensemble_shape:
+                blocks = blocks[None]  # expand 0-d to 1-d so drop_axis=(0,) is valid
                 drop_axis = (0,)
                 new_axis = tuple_range(
                     offset=0, length=len(scan.shape) + len(ctf.ensemble_shape)

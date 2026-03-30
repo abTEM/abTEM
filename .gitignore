@@ -4,6 +4,8 @@
 .idea
 .tox
 .pytest_cache
+.claude
+CLAUDE.md
 *.pyc
 *.egg-info
 **/__pycache__

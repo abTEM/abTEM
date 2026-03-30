@@ -1,7 +1,10 @@
 import hypothesis.strategies as st
+import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import assume, given
+
+import abtem
 
 
 @given(data=st.data())
@@ -144,3 +147,48 @@ def test_detect(data, detector, lazy, device):
 #     )
 #
 #     assert np.allclose(measurement1.array, measurement2.array)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize(
+    "extent,gpts",
+    [
+        ((5.0, 6.0), (50, 60)),  # rectangular cell
+        ((5.0, 5.0), (50, 50)),  # square cell
+    ],
+)
+def test_pixelated_detector_resample_uniform(lazy, extent, gpts):
+    """Test that PixelatedDetector with resample='uniform' works for rectangular
+    and square cells, both lazy and eager. Regression test for GitHub issue #165.
+
+    The bug caused a shape mismatch (ValueError) during compute() because the
+    pre-allocated measurement array shape did not match the actual interpolated
+    diffraction pattern shape for non-square grids.
+    """
+    from ase import Atoms
+
+    atoms = Atoms("Si", positions=[(0, 0, 0)], cell=[extent[0], extent[1], 4.0], pbc=True)
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=2.0)
+    probe = abtem.Probe(
+        energy=100e3,
+        semiangle_cutoff=10,
+        extent=potential.extent,
+        gpts=potential.gpts,
+    )
+    detector = abtem.PixelatedDetector(max_angle=30, resample="uniform")
+
+    waves = probe.build(lazy=lazy)
+    measurement = waves.multislice(potential, detectors=detector)
+
+    if lazy:
+        measurement = measurement.compute()
+
+    # Verify the predicted shape matches the actual array shape.
+    expected_shape = detector._out_base_shape(probe.build(lazy=False))
+    assert measurement.base_shape == expected_shape[0]
+
+    # Verify sampling is uniform (equal in both dimensions).
+    sampling = measurement.sampling
+    assert np.isclose(sampling[0], sampling[1]), (
+        f"Sampling should be uniform but got {sampling}"
+    )
