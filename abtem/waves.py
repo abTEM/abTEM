@@ -1253,9 +1253,10 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
                 chunks,
                 max_elements="auto",
                 dtype=get_dtype(complex=True),
+                device=self.device,
             )
 
-        chunks = validate_chunks(self.ensemble_shape, chunks)
+        chunks = validate_chunks(self.ensemble_shape, chunks, device=self.device)
 
         args = ()
         for arg_split, ensemble in zip(self._chunk_splits(), self._ensembles.values()):
@@ -1349,6 +1350,7 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
                 chunks=chunks,
                 max_elements=max_batch,
                 dtype=self.dtype,
+                device=self.device,
             )
 
             blocks = self.ensemble_blocks(chunks=valid_chunks[:-2])

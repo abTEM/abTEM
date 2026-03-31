@@ -35,7 +35,7 @@ def validate_gpts(gpts: tuple[int, ...]) -> tuple[int, ...]:
     """
     gpts = tuple(gpts)
 
-    if all(n > 0 for n in gpts):
+    if not all(n > 0 for n in gpts):
         raise ValueError("gpts must be greater than 0")
 
     return gpts

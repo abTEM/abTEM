@@ -243,7 +243,7 @@ class CustomScan(BaseScan):
     Parameters
     ----------
     positions : np.ndarray, optional
-        Scan positions [Å]. Anything that can be converted to a ndarray of shape (n, 3)
+        Scan positions [Å]. Anything that can be converted to a ndarray of shape (n, 2)
         is accepted. Default is (0., 0.).
     """
 
