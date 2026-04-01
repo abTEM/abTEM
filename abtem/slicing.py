@@ -69,6 +69,11 @@ def _validate_slice_thickness(
     num_slices: Optional[int] = None,
 ) -> tuple[float, ...]:
     if is_number(slice_thickness):
+        st_value = slice_thickness.item() if isinstance(slice_thickness, np.ndarray) else float(slice_thickness)
+        if st_value <= 0.0:
+            raise ValueError(
+                f"slice_thickness must be positive, got {slice_thickness}"
+            )
         if thickness is not None:
             thickness = float(thickness)
             n = float(np.ceil(thickness / slice_thickness))

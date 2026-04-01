@@ -574,17 +574,9 @@ def fft_interpolate(
 
     if normalization == "values":
         array *= np.prod(array.shape[-len(new_shape) :]) / old_size
-
-    elif normalization == "amplitude":
+    elif normalization in ("amplitude", "intensity"):
         pass
     else:
-        pass
-        # raise ValueError(f"Normalization [{normalization}] not recognized.")
-
-    # elif normalization != "intensity":
-    #    raise ValueError()
-
-    # else:
-    #    raise ValueError(f"Normalization {normalization} not recognized.")
+        raise ValueError(f"Normalization '{normalization}' not recognized.")
 
     return array
