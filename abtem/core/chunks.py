@@ -419,8 +419,18 @@ def estimate_potential_chunk_size(
     """
     Estimate the number of potential slices that fit in the memory budget.
 
-    The budget accounts for the potential slice (real) and its transmission function
-    (complex, 2x the size of the potential slice).
+    ``build()`` places the entire slice dimension into a single dask chunk, so
+    the full potential must fit in memory at once. This function calculates how
+    many slices can be held simultaneously when the potential is instead built
+    in smaller chunks via ``generate_chunked_slices()``.
+
+    The budget accounts for the potential slice (real-valued) and its
+    transmission function (complex-valued, 2x the size), giving 3x the raw
+    slice size per slice held in memory.
+
+    On GPU, the budget is capped by ``dask.chunk-size-gpu`` and (when cupy is
+    available) by actual free VRAM, since dask uses a synchronous scheduler
+    that materializes the full chunk at once.
 
     Parameters
     ----------
