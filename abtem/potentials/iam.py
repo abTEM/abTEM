@@ -102,12 +102,15 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         exit_plane_index = 0
         exit_planes = self.exit_planes
 
+        if len(exit_planes) == 0:
+            return np.zeros(len(self), dtype=bool)
+
         if exit_planes[0] == -1:
             exit_plane_index += 1
 
         is_exit_plane = np.zeros(len(self), dtype=bool)
         for i in range(len(is_exit_plane)):
-            if i == exit_planes[exit_plane_index]:
+            if exit_plane_index < len(exit_planes) and i == exit_planes[exit_plane_index]:
                 is_exit_plane[i] = True
                 exit_plane_index += 1
 
@@ -837,11 +840,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 self.gpts, self.device
             )
 
+        exit_plane_after = self._exit_plane_after
+
         for chunk_start in range(first_slice, last_slice, chunk_size):
             chunk_end = min(chunk_start + chunk_size, last_slice)
-            yield self.build(
+            chunk = self.build(
                 first_slice=chunk_start, last_slice=chunk_end, lazy=False
             )
+            # Remap exit planes to chunk-local indices (build() sets the
+            # full potential's exit_planes which are global indices).
+            chunk._exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+            yield chunk
 
     @property
     def ensemble_axes_metadata(self):
