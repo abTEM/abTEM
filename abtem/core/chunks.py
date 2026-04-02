@@ -428,12 +428,12 @@ def estimate_potential_chunk_size(
     transmission function (complex-valued, 2x the size), giving 3x the raw
     slice size per slice held in memory.
 
-    On GPU the budget is based on **currently** free VRAM (queried via cupy
-    at call time), not a fixed config value. This adapts to memory already
-    occupied by wave arrays, FFT workspaces, and other allocations. The
-    budget is 50% of current free VRAM with a 0.75 safety factor, so the
-    effective cap is ~37.5% of what is actually available. Falls back to
-    ``dask.chunk-size-gpu`` when cupy is unavailable.
+    On GPU the budget is the minimum of 2 GB and 50% of currently free VRAM
+    (queried via cupy at call time). The 2 GB cap prevents over-allocation
+    when most of VRAM is nominally free but will be consumed by wave arrays,
+    FFT workspaces, and transmission functions during propagation. A 0.75
+    safety factor is applied on top. Falls back to ``dask.chunk-size-gpu``
+    when cupy is unavailable.
 
     Parameters
     ----------
@@ -470,11 +470,13 @@ def estimate_potential_chunk_size(
             import cupy as cp
 
             free_mem, _ = cp.cuda.Device().mem_info
-            # Use 50% of *currently* free VRAM. Queried at call time so it
-            # adapts to memory already occupied by wave arrays, FFT buffers,
-            # cupy workspace, etc. The 0.75 safety factor below brings the
-            # effective usage to ~37.5% of available VRAM.
-            budget_bytes = int(free_mem * 0.50)
+            # Cap at 2 GB or 50% of currently free VRAM, whichever is
+            # smaller. The 2 GB cap prevents over-allocation: even when
+            # most VRAM appears free, wave arrays, FFT workspaces, and
+            # transmission functions will consume significant additional
+            # memory during propagation.
+            max_budget = 2 * 1024**3  # 2 GB
+            budget_bytes = min(int(free_mem * 0.50), max_budget)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
