@@ -409,3 +409,62 @@ def generate_chunks(
 
         yield start, end
         start = end
+
+
+def estimate_potential_chunk_size(
+    gpts: tuple[int, int],
+    device: str = "cpu",
+    dtype: np.dtype = None,
+) -> int:
+    """
+    Estimate the number of potential slices that fit in the memory budget.
+
+    The budget accounts for the potential slice (real) and its transmission function
+    (complex, 2x the size of the potential slice).
+
+    Parameters
+    ----------
+    gpts : tuple of int
+        The number of grid points (y, x).
+    device : str
+        The device ('cpu' or 'gpu').
+    dtype : np.dtype, optional
+        The dtype of the potential array. If None, uses float32.
+
+    Returns
+    -------
+    int
+        The estimated number of slices that fit in memory.
+    """
+    from abtem.core.utils import get_dtype
+
+    if dtype is None:
+        dtype = np.dtype(get_dtype(complex=False))
+
+    slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
+
+    # Transmission function is complex, so 2x the potential slice size
+    effective_per_slice = slice_bytes * 3
+
+    chunk_size_key = "potential.slice-chunk-size"
+    chunk_size_setting = config.get(chunk_size_key, "auto")
+
+    if chunk_size_setting != "auto":
+        return int(chunk_size_setting)
+
+    if device == "gpu":
+        budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
+        try:
+            import cupy as cp
+
+            free_mem, _ = cp.cuda.Device().mem_info
+            budget_bytes = min(budget_bytes, free_mem)
+        except (ImportError, Exception):
+            pass
+    else:
+        budget_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
+
+    safety_factor = 0.75
+    chunk_size = max(1, int(budget_bytes * safety_factor / effective_per_slice))
+
+    return min(chunk_size, 4096)
