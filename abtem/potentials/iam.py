@@ -134,6 +134,71 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        This default implementation collects slices from ``generate_slices()`` and
+        stacks them. Subclasses may override for more efficient implementations.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            A chunk of potential slices.
+        """
+        from abtem.core.chunks import estimate_potential_chunk_size
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        xp = get_array_module(self.device)
+
+        for chunk_start in range(first_slice, last_slice, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, last_slice)
+            n_slices = chunk_end - chunk_start
+
+            arrays = []
+            slice_thicknesses = []
+            exit_plane_after = self._exit_plane_after
+
+            for slic in self.generate_slices(chunk_start, chunk_end):
+                arrays.append(slic.array)
+                slice_thicknesses.extend(slic.slice_thickness)
+
+            array = xp.concatenate(arrays, axis=0)
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            from abtem.potentials.iam import PotentialArray
+
+            chunk = PotentialArray(
+                array,
+                slice_thickness=tuple(slice_thicknesses),
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
+
     @abstractmethod
     def build(
         self,
@@ -709,6 +774,28 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             else:
                 yield potential_array
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        from abtem.core.chunks import estimate_potential_chunk_size
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        for chunk_start in range(first_slice, last_slice, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, last_slice)
+            yield self.build(
+                first_slice=chunk_start, last_slice=chunk_end, lazy=False
+            )
+
     @property
     def ensemble_axes_metadata(self):
         return self.frozen_phonons.ensemble_axes_metadata
@@ -986,6 +1073,44 @@ class FieldArray(BaseField, ArrayObject):
             stop += 1
 
             yield slic
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        from abtem.core.chunks import estimate_potential_chunk_size
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start in range(first_slice, last_slice, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, last_slice)
+
+            s = (0,) * (len(self.array.shape) - 3) + (
+                slice(chunk_start, chunk_end),
+            )
+            chunk_array = self.array[s]
+
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            chunk = self.__class__(
+                chunk_array,
+                slice_thickness=self.slice_thickness[chunk_start:chunk_end],
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
 
     def __getitem__(self, items):
         if isinstance(items, (Number, slice)):

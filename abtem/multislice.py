@@ -542,6 +542,7 @@ def multislice_and_detect(
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     return_backscattered: bool = False,
     pbar: bool = False,
+    potential_chunk_size: int | str = "auto",
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions
@@ -562,6 +563,10 @@ def multislice_and_detect(
     return_backscattered: bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
         backscattered components are also returned. Requires potential exit_planes
+    potential_chunk_size : int or str, optional
+        Number of potential slices to build and hold in memory at once. ``"auto"``
+        selects based on the configured memory budget. Setting to 1 gives the
+        previous one-slice-at-a-time behavior.
 
     """
     waves = waves.ensure_real_space()
@@ -650,42 +655,48 @@ def multislice_and_detect(
 
         depth = 0.0
 
-        for potential_slice, next_slice in lookahead(
-            potential_configuration.generate_slices()
+        for potential_chunk in potential_configuration.generate_chunked_slices(
+            chunk_size=potential_chunk_size
         ):
-            if algorithm.expansion_scope == "full":
-                waves, backscatter_waves = multislice_step(
-                    waves, potential_slice, next_slice=next_slice
-                )
-            else:
-                waves = multislice_step(waves, potential_slice, next_slice=None)
-            tqdm_pbar.update_if_exists(int(n_waves))
+            for potential_slice, next_slice in lookahead(
+                potential_chunk.generate_slices()
+            ):
+                if algorithm.expansion_scope == "full":
+                    waves, backscatter_waves = multislice_step(
+                        waves, potential_slice, next_slice=next_slice
+                    )
+                else:
+                    waves = multislice_step(waves, potential_slice, next_slice=None)
+                tqdm_pbar.update_if_exists(int(n_waves))
 
-            depth += potential_slice.axes_metadata[0].values[0]
+                depth += potential_slice.axes_metadata[0].values[0]
 
-            _update_plasmon_axes(waves, depth)
+                _update_plasmon_axes(waves, depth)
 
-            if potential_slice.exit_planes:
-                measurement_index = _validate_potential_ensemble_indices(
-                    potential_index, exit_plane_index, potential
-                )
+                if potential_slice.exit_planes:
+                    measurement_index = _validate_potential_ensemble_indices(
+                        potential_index, exit_plane_index, potential
+                    )
 
-                if measurements is not None:
-                    if algorithm.expansion_scope == "full" and return_backscattered:
-                        _update_measurements(
-                            waves, detectors[:-1], measurements[:-1], measurement_index
-                        )
-                        _update_measurements(
-                            backscatter_waves,
-                            detectors[-1:],
-                            measurements[-1:],
-                            measurement_index,
-                        )
-                    else:
-                        _update_measurements(
-                            waves, detectors, measurements, measurement_index
-                        )
-                exit_plane_index += 1
+                    if measurements is not None:
+                        if algorithm.expansion_scope == "full" and return_backscattered:
+                            _update_measurements(
+                                waves,
+                                detectors[:-1],
+                                measurements[:-1],
+                                measurement_index,
+                            )
+                            _update_measurements(
+                                backscatter_waves,
+                                detectors[-1:],
+                                measurements[-1:],
+                                measurement_index,
+                            )
+                        else:
+                            _update_measurements(
+                                waves, detectors, measurements, measurement_index
+                            )
+                    exit_plane_index += 1
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
