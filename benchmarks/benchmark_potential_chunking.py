@@ -269,6 +269,7 @@ def benchmark_scan(
     scan_gpts: tuple[int, int],
     device: str,
     prebuilt: bool,
+    max_batch: int = 8,
     energy: float = 200e3,
     n_repeats: int = 2,
 ) -> BenchmarkResult:
@@ -276,6 +277,9 @@ def benchmark_scan(
 
     If prebuilt=True, builds the potential once before scanning.
     If prebuilt=False, passes the unbuilt Potential (chunks rebuilt per batch).
+
+    max_batch controls how many probe positions are processed at once,
+    bounding the wave array memory (n_batch * gpts_y * gpts_x * 8 bytes).
     """
     probe = Probe(energy=energy, semiangle_cutoff=20, device=device)
     detector = AnnularDetector(inner=40, outer=200)
@@ -286,9 +290,11 @@ def benchmark_scan(
         gpts=scan_gpts,
     )
 
+    n_positions = scan_gpts[0] * scan_gpts[1]
+    n_batches = (n_positions + max_batch - 1) // max_batch
     label_prefix = "pre-built" if prebuilt else "unbuilt"
     label = (
-        f"{label_prefix} scan={scan_gpts}, "
+        f"{label_prefix} scan={scan_gpts} batch={max_batch}, "
         f"slices={len(potential)}, gpts={potential.gpts}"
     )
     mem_mb = estimate_potential_memory_mb(potential)
@@ -313,7 +319,7 @@ def benchmark_scan(
     # Warmup
     try:
         result = probe.scan(
-            pot, scan=scan, detectors=detector, lazy=False,
+            pot, scan=scan, detectors=detector, lazy=False, max_batch=max_batch,
         )
         del result
     except Exception as e:
@@ -351,7 +357,7 @@ def benchmark_scan(
             tracker.__enter__()
 
         result = probe.scan(
-            pot, scan=scan, detectors=detector, lazy=False,
+            pot, scan=scan, detectors=detector, lazy=False, max_batch=max_batch,
         )
 
         if device == "gpu":
@@ -543,32 +549,45 @@ def run_benchmarks(device: str, quick: bool = False):
     print(f"Scan Benchmark (Probe + GridScan) — device={device}")
     print(f"{'=' * 90}")
 
+    # Each config: (gpts, repetitions, scan_gpts, max_batch, description)
+    #
+    # max_batch controls probe positions per batch, bounding wave memory:
+    #   wave_bytes = max_batch * gpts_y * gpts_x * 8 (complex64)
+    #   e.g. max_batch=8, gpts=1024: 8 * 1024^2 * 8 = 64 MB
+    #
+    # More scan positions with small max_batch = more batches = more
+    # potential rebuilds for the unbuilt case.
+    #
     if quick:
         scan_configs = [
-            ((128, 128), (2, 2, 4), (4, 4), "quick-scan (128x128, 4x4 scan)"),
+            ((128, 128), (2, 2, 4), (4, 4), 4, "quick-scan (128x128, 4x4 scan)"),
         ]
     else:
         scan_configs = [
-            # More scan positions = more batches = more potential rebuilds
-            ((512, 512), (2, 2, 20), (16, 16), "512x512, ~100 slices, 16x16 scan"),
-            ((512, 512), (2, 2, 20), (32, 32), "512x512, ~100 slices, 32x32 scan"),
-            ((1024, 1024), (2, 2, 20), (16, 16), "1024x1024, ~100 slices, 16x16 scan"),
-            ((1024, 1024), (2, 2, 20), (32, 32), "1024x1024, ~100 slices, 32x32 scan"),
+            # Moderate potential, increasing scan positions
+            ((512, 512), (2, 2, 20), (16, 16), 8, "512x512, ~100 slices, 16x16 scan, batch=8"),
+            ((512, 512), (2, 2, 20), (32, 32), 8, "512x512, ~100 slices, 32x32 scan, batch=8"),
+            # Larger potential per slice
+            ((1024, 1024), (2, 2, 20), (16, 16), 4, "1024x1024, ~100 slices, 16x16 scan, batch=4"),
+            ((1024, 1024), (2, 2, 20), (32, 32), 4, "1024x1024, ~100 slices, 32x32 scan, batch=4"),
         ]
         if device == "gpu":
             scan_configs.extend([
                 # Potential exceeds VRAM — pre-build will fail, unbuilt must chunk
-                ((2048, 2048), (10, 10, 200), (8, 8), "2048x2048, ~1000 slices (~17 GB), 8x8 scan"),
-                ((4096, 4096), (20, 20, 120), (8, 8), "4096x4096, ~600 slices (~40 GB), 8x8 scan"),
+                ((2048, 2048), (10, 10, 200), (16, 16), 2, "2048x2048, ~1000 slices (~17 GB), 16x16 scan, batch=2"),
+                ((4096, 4096), (20, 20, 120), (8, 8), 1, "4096x4096, ~600 slices (~40 GB), 8x8 scan, batch=1"),
             ])
 
-    for gpts, reps, scan_gpts, desc in scan_configs:
+    for gpts, reps, scan_gpts, max_batch, desc in scan_configs:
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
         mem_mb = estimate_potential_memory_mb(potential)
         mem_gb = mem_mb / 1000
+        n_positions = scan_gpts[0] * scan_gpts[1]
+        n_batches = (n_positions + max_batch - 1) // max_batch
 
         print(f"\n── {desc}: {num_slices} slices, {mem_gb:.2f} GB potential ──")
+        print(f"  {n_positions} positions, {n_batches} batches (potential rebuilt per batch when unbuilt)")
 
         if device == "gpu":
             import cupy as cp
@@ -576,7 +595,8 @@ def run_benchmarks(device: str, quick: bool = False):
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
         # Pre-built: build once, scan reuses
-        result = benchmark_scan(potential, scan_gpts, device, prebuilt=True, n_repeats=3)
+        result = benchmark_scan(potential, scan_gpts, device, prebuilt=True,
+                                max_batch=max_batch, n_repeats=3)
         print_result(result)
 
         gc.collect()
@@ -584,7 +604,8 @@ def run_benchmarks(device: str, quick: bool = False):
             cp.get_default_memory_pool().free_all_blocks()
 
         # Unbuilt: potential chunks rebuilt per scan batch
-        result = benchmark_scan(potential, scan_gpts, device, prebuilt=False, n_repeats=3)
+        result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
+                                max_batch=max_batch, n_repeats=3)
         print_result(result)
 
         gc.collect()
