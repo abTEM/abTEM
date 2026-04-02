@@ -428,11 +428,12 @@ def estimate_potential_chunk_size(
     transmission function (complex-valued, 2x the size), giving 3x the raw
     slice size per slice held in memory.
 
-    On GPU the budget defaults to 25% of free VRAM (queried via cupy), which
-    is much larger than the dask chunk-size config. This is appropriate
-    because potential chunking controls how many slices are materialised at
-    once — not dask task granularity. A safety factor of 0.75 is applied on
-    top. Falls back to ``dask.chunk-size-gpu`` when cupy is unavailable.
+    On GPU the budget is based on **currently** free VRAM (queried via cupy
+    at call time), not a fixed config value. This adapts to memory already
+    occupied by wave arrays, FFT workspaces, and other allocations. The
+    budget is 50% of current free VRAM with a 0.75 safety factor, so the
+    effective cap is ~37.5% of what is actually available. Falls back to
+    ``dask.chunk-size-gpu`` when cupy is unavailable.
 
     Parameters
     ----------
@@ -469,9 +470,11 @@ def estimate_potential_chunk_size(
             import cupy as cp
 
             free_mem, _ = cp.cuda.Device().mem_info
-            # Use 25% of free VRAM — much larger than dask chunk-size, but
-            # appropriate since we control exactly what is materialised.
-            budget_bytes = int(free_mem * 0.25)
+            # Use 50% of *currently* free VRAM. Queried at call time so it
+            # adapts to memory already occupied by wave arrays, FFT buffers,
+            # cupy workspace, etc. The 0.75 safety factor below brings the
+            # effective usage to ~37.5% of available VRAM.
+            budget_bytes = int(free_mem * 0.50)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:

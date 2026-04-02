@@ -628,6 +628,14 @@ def run_benchmarks(device: str, quick: bool = False):
             ])
 
     for gpts, reps, scan_gpts, max_batch, desc in scan_configs:
+        # Aggressive cleanup before each config to prevent VRAM leaks
+        gc.collect()
+        if device == "gpu":
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
         mem_mb = estimate_potential_memory_mb(potential)
@@ -639,7 +647,6 @@ def run_benchmarks(device: str, quick: bool = False):
         print(f"  {n_positions} positions, {n_batches} batches (potential rebuilt per batch when unbuilt)")
 
         if device == "gpu":
-            import cupy as cp
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
@@ -650,6 +657,7 @@ def run_benchmarks(device: str, quick: bool = False):
 
         gc.collect()
         if device == "gpu":
+            cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
 
         # Unbuilt: potential chunks rebuilt per scan batch
@@ -659,6 +667,7 @@ def run_benchmarks(device: str, quick: bool = False):
 
         gc.collect()
         if device == "gpu":
+            cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
 
     print(f"\n{'=' * 90}")
