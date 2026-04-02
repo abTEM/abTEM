@@ -18,6 +18,9 @@ import sys
 import time
 import threading
 
+# Suppress tqdm progress bars (from dask/abtem internals)
+os.environ["TQDM_DISABLE"] = "1"
+
 # Ensure the repo root is on sys.path so we import the local abtem, not an
 # editable install pointing at a different checkout.
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -272,20 +275,21 @@ def benchmark_scan(
     max_batch: int = 8,
     energy: float = 200e3,
     n_repeats: int = 2,
-    zarr_dir: str | None = None,
 ) -> BenchmarkResult:
-    """Benchmark a Probe + GridScan measurement using the lazy→zarr path.
+    """Benchmark a Probe + GridScan measurement.
 
-    This is the realistic workflow for memory-hungry scans: build the dask
-    graph lazily, then stream results directly to a zarr store without ever
-    materializing the full result array in memory.
+    If prebuilt=True, builds the potential eagerly once, then runs scan with
+    lazy=False (pre-built GPU arrays can't stream through dask→zarr due to
+    dtype serialization issues, but the result fits in memory anyway).
 
-    If prebuilt=True, builds the potential eagerly once before scanning.
-    If prebuilt=False, passes the unbuilt Potential (chunks rebuilt per batch).
+    If prebuilt=False (unbuilt Potential), uses the realistic lazy→zarr path:
+    build the dask graph lazily, then stream results to a zarr store block by
+    block without ever materializing the full result array.
 
     max_batch controls how many probe positions are processed at once,
     bounding the wave array memory (n_batch * gpts_y * gpts_x * 8 bytes).
     """
+    import shutil
     import tempfile
 
     probe = Probe(energy=energy, semiangle_cutoff=20, device=device)
@@ -299,12 +303,14 @@ def benchmark_scan(
 
     n_positions = scan_gpts[0] * scan_gpts[1]
     n_batches = (n_positions + max_batch - 1) // max_batch
-    label_prefix = "pre-built" if prebuilt else "unbuilt"
+    label_prefix = "pre-built" if prebuilt else "unbuilt (lazy→zarr)"
     label = (
         f"{label_prefix} scan={scan_gpts} batch={max_batch}, "
         f"slices={len(potential)}, gpts={potential.gpts}"
     )
     mem_mb = estimate_potential_memory_mb(potential)
+    use_zarr = not prebuilt
+    zarr_dir = None
 
     if prebuilt:
         try:
@@ -322,20 +328,27 @@ def benchmark_scan(
             )
     else:
         pot = potential
-
-    # Create zarr output directory
-    if zarr_dir is None:
         zarr_dir = tempfile.mkdtemp(prefix="abtem_bench_")
 
-    # Warmup: lazy graph build + zarr write
-    zarr_path = os.path.join(zarr_dir, "warmup.zarr")
+    # Warmup
     try:
-        lazy_result = probe.scan(
-            pot, scan=scan, detectors=detector, lazy=True, max_batch=max_batch,
-        )
-        lazy_result.to_zarr(zarr_path, overwrite=True)
-        del lazy_result
+        if use_zarr:
+            zarr_path = os.path.join(zarr_dir, "warmup.zarr")
+            lazy_result = probe.scan(
+                pot, scan=scan, detectors=detector, lazy=True,
+                max_batch=max_batch,
+            )
+            lazy_result.to_zarr(zarr_path, overwrite=True)
+            del lazy_result
+        else:
+            result = probe.scan(
+                pot, scan=scan, detectors=detector, lazy=False,
+                max_batch=max_batch,
+            )
+            del result
     except Exception as e:
+        if zarr_dir:
+            shutil.rmtree(zarr_dir, ignore_errors=True)
         return BenchmarkResult(
             label=label,
             device=device,
@@ -365,18 +378,24 @@ def benchmark_scan(
         else:
             tracker = None
 
-        zarr_path = os.path.join(zarr_dir, f"run_{i}.zarr")
-
         t0 = time.perf_counter()
         if tracker:
             tracker.__enter__()
 
-        # Lazy graph build (fast, no computation)
-        lazy_result = probe.scan(
-            pot, scan=scan, detectors=detector, lazy=True, max_batch=max_batch,
-        )
-        # Stream to zarr — dask computes block by block, writing to disk
-        lazy_result.to_zarr(zarr_path, overwrite=True)
+        if use_zarr:
+            zarr_path = os.path.join(zarr_dir, f"run_{i}.zarr")
+            lazy_result = probe.scan(
+                pot, scan=scan, detectors=detector, lazy=True,
+                max_batch=max_batch,
+            )
+            lazy_result.to_zarr(zarr_path, overwrite=True)
+            del lazy_result
+        else:
+            result = probe.scan(
+                pot, scan=scan, detectors=detector, lazy=False,
+                max_batch=max_batch,
+            )
+            del result
 
         if device == "gpu":
             import cupy as cp
@@ -388,15 +407,13 @@ def benchmark_scan(
 
         t1 = time.perf_counter()
         times.append(t1 - t0)
-        del lazy_result
 
         gc.collect()
         if device == "gpu":
             cp.get_default_memory_pool().free_all_blocks()
 
-    # Clean up zarr files
-    import shutil
-    shutil.rmtree(zarr_dir, ignore_errors=True)
+    if zarr_dir:
+        shutil.rmtree(zarr_dir, ignore_errors=True)
 
     extra = {"all_times": times}
     if peak_vram_mb > 0:
@@ -583,24 +600,31 @@ def run_benchmarks(device: str, quick: bool = False):
     # More scan positions with small max_batch = more batches = more
     # potential rebuilds for the unbuilt case.
     #
+    # Each config: (gpts, repetitions, scan_gpts, max_batch, description)
+    #
+    # max_batch controls probe positions per batch, bounding wave memory:
+    #   wave_bytes = max_batch * gpts_y * gpts_x * 8 (complex64)
+    #
+    # n_batches = ceil(n_positions / max_batch) — each batch triggers a
+    # full potential rebuild for the unbuilt case.
+    #
     if quick:
         scan_configs = [
-            ((128, 128), (2, 2, 4), (4, 4), 4, "quick-scan (128x128, 4x4 scan)"),
+            ((128, 128), (2, 2, 4), (4, 4), 4, "quick-scan"),
         ]
     else:
         scan_configs = [
-            # Moderate potential, increasing scan positions
-            ((512, 512), (2, 2, 20), (16, 16), 8, "512x512, ~100 slices, 16x16 scan, batch=8"),
-            ((512, 512), (2, 2, 20), (32, 32), 8, "512x512, ~100 slices, 32x32 scan, batch=8"),
-            # Larger potential per slice
-            ((1024, 1024), (2, 2, 20), (16, 16), 4, "1024x1024, ~100 slices, 16x16 scan, batch=4"),
-            ((1024, 1024), (2, 2, 20), (32, 32), 4, "1024x1024, ~100 slices, 32x32 scan, batch=4"),
+            # 32 batches vs 128 batches — shows scaling with rebuild count
+            ((512, 512), (2, 2, 10), (16, 16), 8, "512x512, ~50 slices, 16x16, batch=8 (32 batches)"),
+            ((512, 512), (2, 2, 10), (32, 32), 8, "512x512, ~50 slices, 32x32, batch=8 (128 batches)"),
+            # Larger slices — higher per-rebuild cost
+            ((1024, 1024), (2, 2, 10), (16, 16), 8, "1024x1024, ~50 slices, 16x16, batch=8 (32 batches)"),
         ]
         if device == "gpu":
             scan_configs.extend([
-                # Potential exceeds VRAM — pre-build will fail, unbuilt must chunk
-                ((2048, 2048), (10, 10, 200), (16, 16), 2, "2048x2048, ~1000 slices (~17 GB), 16x16 scan, batch=2"),
-                ((4096, 4096), (20, 20, 120), (8, 8), 1, "4096x4096, ~600 slices (~40 GB), 8x8 scan, batch=1"),
+                # Potential exceeds VRAM — pre-build impossible
+                ((2048, 2048), (10, 10, 60), (8, 8), 4, "2048x2048, ~300 slices (~5 GB), 8x8, batch=4"),
+                ((4096, 4096), (20, 20, 60), (4, 4), 1, "4096x4096, ~300 slices (~20 GB), 4x4, batch=1"),
             ])
 
     for gpts, reps, scan_gpts, max_batch, desc in scan_configs:
