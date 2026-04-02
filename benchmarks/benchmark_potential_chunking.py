@@ -441,14 +441,10 @@ def run_benchmarks(device: str, quick: bool = False):
     #
     if quick:
         configs = [
-            ((256, 256), (2, 2, 10), "small (256x256, ~50 slices)"),
-            ((512, 512), (2, 2, 10), "medium (512x512, ~50 slices)"),
+            ((512, 512), (2, 2, 10), "quick (512x512, ~50 slices)"),
         ]
     else:
         configs = [
-            ((512, 512), (2, 2, 10), "small (512x512, ~50 slices)"),
-            ((1024, 1024), (2, 2, 20), "medium (1024x1024, ~100 slices)"),
-            ((2048, 2048), (2, 2, 20), "large (2048x2048, ~100 slices, ~1.7 GB)"),
             ((2048, 2048), (10, 10, 60), "xlarge (2048x2048, ~300 slices, ~5 GB)"),
         ]
         if device == "gpu":
