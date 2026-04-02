@@ -487,31 +487,31 @@ def run_benchmarks(device: str, quick: bool = False):
     #
     if quick:
         configs = [
-            ((512, 512), (2, 2, 10), "quick (512x512, ~50 slices)"),
+            ((512, 512), (2, 2, 10)),
         ]
     else:
         configs = [
-            ((2048, 2048), (10, 10, 60), "xlarge (2048x2048, ~300 slices, ~5 GB)"),
+            ((2048, 2048), (10, 10, 60)),
         ]
         if device == "gpu":
             configs.extend([
                 # These are designed to approach or exceed 24 GB RTX 4090 VRAM.
                 # build(lazy=False) should OOM; chunked multislice should succeed.
-                ((2048, 2048), (10, 10, 200), "xxlarge (2048x2048, ~1000 slices, ~17 GB)"),
-                ((4096, 4096), (20, 20, 60), "VRAM-exceed (4096x4096, ~300 slices, ~20 GB)"),
-                ((4096, 4096), (20, 20, 120), "VRAM-exceed-2x (4096x4096, ~600 slices, ~40 GB)"),
+                ((2048, 2048), (10, 10, 200)),
+                ((4096, 4096), (20, 20, 60)),
+                ((4096, 4096), (20, 20, 120)),
             ])
 
     # Chunk sizes to test
     chunk_sizes: list[int | str] = [1, 10, 50, "auto"]
 
-    for gpts, reps, desc in configs:
+    for gpts, reps in configs:
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
         mem_mb = estimate_potential_memory_mb(potential)
-
         mem_gb = mem_mb / 1000
-        print(f"\n── {desc}: {num_slices} slices, {mem_gb:.2f} GB potential ──")
+
+        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
 
         if device == "gpu":
             import cupy as cp
@@ -601,7 +601,7 @@ def run_benchmarks(device: str, quick: bool = False):
     # More scan positions with small max_batch = more batches = more
     # potential rebuilds for the unbuilt case.
     #
-    # Each config: (gpts, repetitions, scan_gpts, max_batch, description)
+    # Each config: (gpts, repetitions, scan_gpts, max_batch)
     #
     # max_batch controls probe positions per batch, bounding wave memory:
     #   wave_bytes = max_batch * gpts_y * gpts_x * 8 (complex64)
@@ -611,24 +611,24 @@ def run_benchmarks(device: str, quick: bool = False):
     #
     if quick:
         scan_configs = [
-            ((128, 128), (2, 2, 4), (4, 4), 4, "quick-scan"),
+            ((128, 128), (2, 2, 4), (4, 4), 4),
         ]
     else:
         scan_configs = [
-            # 32 batches vs 128 batches — shows scaling with rebuild count
-            ((512, 512), (2, 2, 10), (16, 16), 8, "512x512, ~50 slices, 16x16, batch=8 (32 batches)"),
-            ((512, 512), (2, 2, 10), (32, 32), 8, "512x512, ~50 slices, 32x32, batch=8 (128 batches)"),
+            # Increasing scan positions — shows scaling with rebuild count
+            ((512, 512), (2, 2, 10), (16, 16), 8),
+            ((512, 512), (2, 2, 10), (32, 32), 8),
             # Larger slices — higher per-rebuild cost
-            ((1024, 1024), (2, 2, 10), (16, 16), 8, "1024x1024, ~50 slices, 16x16, batch=8 (32 batches)"),
+            ((1024, 1024), (2, 2, 10), (16, 16), 8),
         ]
         if device == "gpu":
             scan_configs.extend([
                 # Potential exceeds VRAM — pre-build impossible
-                ((2048, 2048), (10, 10, 60), (8, 8), 4, "2048x2048, ~300 slices (~5 GB), 8x8, batch=4"),
-                ((4096, 4096), (20, 20, 60), (4, 4), 1, "4096x4096, ~300 slices (~20 GB), 4x4, batch=1"),
+                ((2048, 2048), (10, 10, 60), (8, 8), 4),
+                ((4096, 4096), (20, 20, 60), (4, 4), 1),
             ])
 
-    for gpts, reps, scan_gpts, max_batch, desc in scan_configs:
+    for gpts, reps, scan_gpts, max_batch in scan_configs:
         # Aggressive cleanup before each config to prevent VRAM leaks
         gc.collect()
         if device == "gpu":
@@ -644,8 +644,9 @@ def run_benchmarks(device: str, quick: bool = False):
         n_positions = scan_gpts[0] * scan_gpts[1]
         n_batches = (n_positions + max_batch - 1) // max_batch
 
-        print(f"\n── {desc}: {num_slices} slices, {mem_gb:.2f} GB potential ──")
-        print(f"  {n_positions} positions, {n_batches} batches (potential rebuilt per batch when unbuilt)")
+        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
+              f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch={max_batch} ──")
+        print(f"  {n_positions} positions, {n_batches} batches")
 
         if device == "gpu":
             free, total = cp.cuda.Device().mem_info
