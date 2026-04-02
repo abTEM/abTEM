@@ -272,6 +272,7 @@ def benchmark_scan(
     scan_gpts: tuple[int, int],
     device: str,
     prebuilt: bool,
+    potential_chunk_size: int | str = "auto",
     max_batch: int = 8,
     energy: float = 200e3,
     n_repeats: int = 2,
@@ -303,9 +304,9 @@ def benchmark_scan(
 
     n_positions = scan_gpts[0] * scan_gpts[1]
     n_batches = (n_positions + max_batch - 1) // max_batch
-    label_prefix = "pre-built" if prebuilt else "unbuilt (lazy→zarr)"
+    cs_label = "pre-built" if prebuilt else f"chunk={potential_chunk_size}"
     label = (
-        f"{label_prefix} scan={scan_gpts} batch={max_batch}, "
+        f"{cs_label}, scan={scan_gpts}, batch={max_batch}, "
         f"slices={len(potential)}, gpts={potential.gpts}"
     )
     mem_mb = estimate_potential_memory_mb(potential)
@@ -336,14 +337,14 @@ def benchmark_scan(
             zarr_path = os.path.join(zarr_dir, "warmup.zarr")
             lazy_result = probe.scan(
                 pot, scan=scan, detectors=detector, lazy=True,
-                max_batch=max_batch,
+                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
             )
             lazy_result.to_zarr(zarr_path, overwrite=True)
             del lazy_result
         else:
             result = probe.scan(
                 pot, scan=scan, detectors=detector, lazy=False,
-                max_batch=max_batch,
+                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
             )
             del result
     except Exception as e:
@@ -354,7 +355,7 @@ def benchmark_scan(
             device=device,
             gpts=potential.gpts,
             num_slices=len(potential),
-            chunk_size="pre-built" if prebuilt else "auto",
+            chunk_size="pre-built" if prebuilt else potential_chunk_size,
             potential_bytes_mb=mem_mb,
             time_seconds=float("nan"),
             extra={"error": f"{type(e).__name__}: {e}"},
@@ -386,14 +387,14 @@ def benchmark_scan(
             zarr_path = os.path.join(zarr_dir, f"run_{i}.zarr")
             lazy_result = probe.scan(
                 pot, scan=scan, detectors=detector, lazy=True,
-                max_batch=max_batch,
+                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
             )
             lazy_result.to_zarr(zarr_path, overwrite=True)
             del lazy_result
         else:
             result = probe.scan(
                 pot, scan=scan, detectors=detector, lazy=False,
-                max_batch=max_batch,
+                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
             )
             del result
 
@@ -427,7 +428,7 @@ def benchmark_scan(
         device=device,
         gpts=potential.gpts,
         num_slices=len(potential),
-        chunk_size="pre-built" if prebuilt else "auto",
+        chunk_size="pre-built" if prebuilt else potential_chunk_size,
         potential_bytes_mb=mem_mb,
         time_seconds=np.median(times),
         extra=extra,
@@ -650,7 +651,7 @@ def run_benchmarks(device: str, quick: bool = False):
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
-        # Pre-built: build once, scan reuses
+        # Pre-built: build once, scan reuses (reference)
         result = benchmark_scan(potential, scan_gpts, device, prebuilt=True,
                                 max_batch=max_batch, n_repeats=3)
         print_result(result)
@@ -660,15 +661,22 @@ def run_benchmarks(device: str, quick: bool = False):
             cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
 
-        # Unbuilt: potential chunks rebuilt per scan batch
-        result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
-                                max_batch=max_batch, n_repeats=3)
-        print_result(result)
+        # Unbuilt: test different potential chunk sizes
+        scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
+        # Add a larger chunk size if the potential has enough slices
+        if num_slices > 50:
+            scan_chunk_sizes.insert(2, 50)
 
-        gc.collect()
-        if device == "gpu":
-            cp.cuda.Stream.null.synchronize()
-            cp.get_default_memory_pool().free_all_blocks()
+        for cs in scan_chunk_sizes:
+            result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
+                                    potential_chunk_size=cs,
+                                    max_batch=max_batch, n_repeats=3)
+            print_result(result)
+
+            gc.collect()
+            if device == "gpu":
+                cp.cuda.Stream.null.synchronize()
+                cp.get_default_memory_pool().free_all_blocks()
 
     print(f"\n{'=' * 90}")
     print("Done.")
