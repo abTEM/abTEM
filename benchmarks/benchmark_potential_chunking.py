@@ -16,6 +16,7 @@ import gc
 import os
 import sys
 import time
+import threading
 
 # Ensure the repo root is on sys.path so we import the local abtem, not an
 # editable install pointing at a different checkout.
@@ -83,13 +84,43 @@ def warmup_gpu():
         pass
 
 
-def _gpu_used_mb():
-    """Return GPU memory currently used by cupy's pool, in MB."""
-    try:
+class PeakVRAMTracker:
+    """Context manager that samples GPU memory in a background thread.
+
+    Captures the peak cupy memory-pool usage during the lifetime of the
+    context, rather than only measuring after the computation finishes
+    (when temporary allocations have already been freed).
+    """
+
+    def __init__(self, interval: float = 0.005):
+        self.interval = interval
+        self.peak_bytes = 0
+        self._stop = threading.Event()
+        self._thread = None
+
+    def _sample_loop(self):
         import cupy as cp
-        return cp.get_default_memory_pool().used_bytes() / 1e6
-    except Exception:
-        return 0.0
+        pool = cp.get_default_memory_pool()
+        while not self._stop.is_set():
+            used = pool.used_bytes()
+            if used > self.peak_bytes:
+                self.peak_bytes = used
+            self._stop.wait(self.interval)
+
+    def __enter__(self):
+        self.peak_bytes = 0
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+
+    @property
+    def peak_mb(self) -> float:
+        return self.peak_bytes / 1e6
 
 
 def benchmark_multislice(
@@ -140,15 +171,27 @@ def benchmark_multislice(
 
             cp.cuda.Stream.null.synchronize()
 
+        if device == "gpu":
+            tracker = PeakVRAMTracker(interval=0.002)
+        else:
+            tracker = None
+
         t0 = time.perf_counter()
+        if tracker:
+            tracker.__enter__()
+
         result = waves.multislice(
             potential, potential_chunk_size=chunk_size, lazy=False
         )
+
         if device == "gpu":
             import cupy as cp
 
             cp.cuda.Stream.null.synchronize()
-            peak_vram_mb = max(peak_vram_mb, _gpu_used_mb())
+
+        if tracker:
+            tracker.__exit__(None, None, None)
+            peak_vram_mb = max(peak_vram_mb, tracker.peak_mb)
 
         t1 = time.perf_counter()
         times.append(t1 - t0)
