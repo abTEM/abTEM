@@ -549,23 +549,31 @@ def multislice_and_detect(
     through a given potential, detecting at each of the exit planes specified in the
     potential.
 
-    The potential is consumed in chunks: for each chunk a group of contiguous slices
-    is built eagerly into memory, the wave functions are propagated through those
-    slices, and the chunk is discarded before the next one is built. This keeps peak
-    memory bounded while still allowing efficient batched computation (especially
-    important on GPU). When the potential is already a pre-built
-    :class:`.PotentialArray` (eager or lazy/dask-backed), the chunks are zero-copy
-    views into the existing array.
+    The potential is consumed in chunks of contiguous slices. For an unbuilt
+    :class:`.Potential`, each chunk is eagerly computed into memory, the wave
+    functions are propagated through those slices, and the chunk is discarded
+    before the next one is built. This keeps peak memory bounded — previously,
+    ``build()`` placed the entire slice dimension into a single dask chunk, so
+    the full potential had to fit in memory (or VRAM) at once.
+
+    On GPU, where dask uses a synchronous scheduler and the full dask chunk is
+    materialized at once, this chunking is critical for simulations whose
+    potential exceeds available VRAM.
+
+    When the potential is already a pre-built :class:`.PotentialArray` (eager or
+    dask-backed), the chunks are views into the existing array and the memory
+    savings only apply if an unbuilt :class:`.Potential` is passed instead.
 
     Parameters
     ----------
     waves : Waves
         A batch of wave functions as a :class:`.Waves` object.
     potential : BasePotential
-        A potential as :class:`.BasePotential` object. Can be an unbuilt
-        :class:`.Potential` (slices are computed on the fly in chunks) or a
-        pre-built :class:`.PotentialArray` (slices are already in memory and
-        chunking only controls iteration grouping).
+        A potential as :class:`.BasePotential` object. Pass an unbuilt
+        :class:`.Potential` to benefit from memory-bounded slice chunking.
+        A pre-built :class:`.PotentialArray` is also supported but its full
+        data is already in memory, so chunking only controls iteration
+        grouping.
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
@@ -579,7 +587,7 @@ def multislice_and_detect(
     potential_chunk_size : int or str, optional
         Number of potential slices to eagerly build and hold in memory at once
         during propagation. ``"auto"`` (default) selects based on the configured
-        memory budget (``dask.chunk-size`` / ``dask.chunk-size-gpu``).  Can also
+        memory budget (``dask.chunk-size`` / ``dask.chunk-size-gpu``). Can also
         be set globally via the ``potential.slice-chunk-size`` configuration key.
 
     """

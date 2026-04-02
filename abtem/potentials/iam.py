@@ -143,17 +143,26 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         """
         Generate potential slices in memory-budgeted chunks.
 
-        Rather than building all slices into memory at once (as ``build()`` does
-        when computed eagerly) or yielding them one at a time (as
-        ``generate_slices()`` does), this method groups slices into chunks whose
-        total size fits within a configurable memory budget. Each chunk is yielded
-        as an eager ``PotentialArray`` and can be discarded after propagation,
-        bounding peak memory usage.
+        Previously, ``build()`` always placed the entire slice dimension into a
+        single dask chunk — meaning the full ``(num_slices, gpts_y, gpts_x)``
+        array had to fit in memory (or VRAM) at once. There was no slice-level
+        chunking. This method introduces that missing middle ground: it eagerly
+        builds a group of contiguous slices that fits within a configurable
+        memory budget, yields it as a ``PotentialArray``, and the caller can
+        discard it after propagation before the next chunk is built. This
+        bounds peak memory and enables simulations of systems whose full
+        potential would not fit in memory.
 
-        This default implementation collects slices from ``generate_slices()`` and
-        stacks them. Subclasses may override for more efficient implementations
-        (e.g. ``_FieldBuilderFromAtoms`` uses ``build(first_slice, last_slice)``
-        to avoid intermediate single-slice allocations).
+        On GPU this is especially important: dask uses a synchronous scheduler,
+        so the full potential chunk would be materialized at once in VRAM.
+        Chunking over slices keeps VRAM usage bounded while still feeding the
+        GPU enough data per chunk for efficient computation.
+
+        This default implementation collects slices from ``generate_slices()``
+        and stacks them. Subclasses may override for more efficient
+        implementations (e.g. ``_FieldBuilderFromAtoms`` uses
+        ``build(first_slice, last_slice)`` to avoid intermediate single-slice
+        allocations).
 
         Parameters
         ----------
@@ -796,11 +805,12 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         """
         Generate potential slices in memory-budgeted chunks.
 
-        Overrides the base class implementation to use
-        ``build(first_slice, last_slice, lazy=False)`` for each chunk range,
-        which is more efficient than collecting individual slices because
-        it avoids intermediate single-slice allocations and directly produces
-        a contiguous eager array for the chunk.
+        Overrides the base class to use ``build(first_slice, last_slice,
+        lazy=False)`` for each chunk range. This eagerly computes a contiguous
+        block of slices directly into a single allocation, avoiding the
+        overhead of building and stacking individual slices. Each chunk is
+        discarded by the caller after propagation, so only one chunk needs
+        to reside in memory (or VRAM) at a time.
 
         Parameters
         ----------
@@ -1120,10 +1130,16 @@ class FieldArray(BaseField, ArrayObject):
         """
         Generate potential slices in memory-budgeted chunks.
 
-        Since the data is already in memory (eager or dask-backed), this
-        yields array views of the existing data without any new allocation
-        or computation. The chunk size only controls how many slices are
-        grouped per yielded ``PotentialArray``.
+        For a pre-built ``PotentialArray`` the data is already in memory
+        (or backed by a dask array whose single chunk spans all slices).
+        This method yields views into the existing array without any new
+        allocation or copy, so chunking only controls iteration grouping.
+
+        Note: if the array is dask-backed, the full potential is still
+        materialized as a single chunk when computed (dask never chunks
+        along the slice axis). To benefit from true memory-bounded
+        slice chunking, pass an unbuilt :class:`.Potential` to the
+        multislice algorithm instead.
 
         Parameters
         ----------
