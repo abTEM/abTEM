@@ -83,6 +83,15 @@ def warmup_gpu():
         pass
 
 
+def _gpu_used_mb():
+    """Return GPU memory currently used by cupy's pool, in MB."""
+    try:
+        import cupy as cp
+        return cp.get_default_memory_pool().used_bytes() / 1e6
+    except Exception:
+        return 0.0
+
+
 def benchmark_multislice(
     potential: Potential,
     chunk_size: int | str,
@@ -112,7 +121,7 @@ def benchmark_multislice(
             chunk_size=chunk_size,
             potential_bytes_mb=mem_mb,
             time_seconds=float("nan"),
-            extra={"error": str(e)},
+            extra={"error": f"{type(e).__name__}: {e}"},
         )
 
     gc.collect()
@@ -124,6 +133,7 @@ def benchmark_multislice(
 
     # Timed runs
     times = []
+    peak_vram_mb = 0.0
     for _ in range(n_repeats):
         if device == "gpu":
             import cupy as cp
@@ -138,6 +148,7 @@ def benchmark_multislice(
             import cupy as cp
 
             cp.cuda.Stream.null.synchronize()
+            peak_vram_mb = max(peak_vram_mb, _gpu_used_mb())
 
         t1 = time.perf_counter()
         times.append(t1 - t0)
@@ -147,6 +158,10 @@ def benchmark_multislice(
         if device == "gpu":
             cp.get_default_memory_pool().free_all_blocks()
 
+    extra = {"all_times": times}
+    if peak_vram_mb > 0:
+        extra["peak_vram_mb"] = peak_vram_mb
+
     return BenchmarkResult(
         label=label,
         device=device,
@@ -155,7 +170,7 @@ def benchmark_multislice(
         chunk_size=chunk_size,
         potential_bytes_mb=mem_mb,
         time_seconds=np.median(times),
-        extra={"all_times": times},
+        extra=extra,
     )
 
 
@@ -209,15 +224,17 @@ def print_result(result: BenchmarkResult):
     err = result.extra.get("error")
     if err:
         print(
-            f"  {result.label:<60s}  "
+            f"  {result.label:<55s}  "
             f"ERROR: {err}"
         )
     else:
         times_str = ", ".join(f"{t:.3f}" for t in result.extra.get("all_times", []))
+        vram = result.extra.get("peak_vram_mb")
+        vram_str = f"  vram={vram / 1000:5.1f}GB" if vram else ""
         print(
-            f"  {result.label:<60s}  "
-            f"{result.time_seconds:8.3f}s  "
-            f"(pot={result.potential_bytes_mb:7.1f} MB)  "
+            f"  {result.label:<55s}  "
+            f"{result.time_seconds:8.3f}s"
+            f"{vram_str}  "
             f"[{times_str}]"
         )
 
@@ -247,6 +264,12 @@ def run_benchmarks(device: str, quick: bool = False):
     # Repetitions control the number of slices (z-direction).
     # gpts controls lateral resolution and memory per slice.
     #
+    # Memory per slice (float32): gpts^2 * 4 bytes
+    #   512x512   =   1 MB/slice
+    #  1024x1024  =   4 MB/slice
+    #  2048x2048  =  16 MB/slice
+    #  4096x4096  =  64 MB/slice
+    #
     if quick:
         configs = [
             ((256, 256), (2, 2, 10), "small (256x256, ~50 slices)"),
@@ -254,44 +277,53 @@ def run_benchmarks(device: str, quick: bool = False):
         ]
     else:
         configs = [
-            ((256, 256), (2, 2, 10), "small (256x256, ~50 slices)"),
-            ((512, 512), (2, 2, 10), "medium (512x512, ~50 slices)"),
-            ((512, 512), (2, 2, 40), "large (512x512, ~200 slices)"),
-            ((1024, 1024), (2, 2, 20), "xlarge (1024x1024, ~100 slices)"),
+            ((512, 512), (2, 2, 10), "small (512x512, ~50 slices)"),
+            ((1024, 1024), (2, 2, 20), "medium (1024x1024, ~100 slices)"),
+            ((2048, 2048), (2, 2, 20), "large (2048x2048, ~100 slices, ~1.7 GB)"),
+            ((2048, 2048), (10, 10, 60), "xlarge (2048x2048, ~300 slices, ~5 GB)"),
         ]
         if device == "gpu":
-            # This one may exceed VRAM if built all at once
-            configs.append(
-                ((1024, 1024), (2, 2, 60), "xxlarge (1024x1024, ~300 slices)"),
-            )
-            configs.append(
-                ((2048, 2048), (2, 2, 20), "huge (2048x2048, ~100 slices)"),
-            )
+            configs.extend([
+                # These are designed to approach or exceed 24 GB RTX 4090 VRAM.
+                # build(lazy=False) should OOM; chunked multislice should succeed.
+                ((2048, 2048), (10, 10, 200), "xxlarge (2048x2048, ~1000 slices, ~17 GB)"),
+                ((4096, 4096), (20, 20, 60), "VRAM-exceed (4096x4096, ~300 slices, ~20 GB)"),
+                ((4096, 4096), (20, 20, 120), "VRAM-exceed-2x (4096x4096, ~600 slices, ~40 GB)"),
+            ])
 
     # Chunk sizes to test
-    chunk_sizes: list[int | str] = [1, 5, 10, 25, 50, "auto"]
+    chunk_sizes: list[int | str] = [1, 10, 50, "auto"]
 
     for gpts, reps, desc in configs:
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
         mem_mb = estimate_potential_memory_mb(potential)
 
-        print(f"\n── {desc}: {num_slices} slices, {mem_mb:.1f} MB potential ──")
+        mem_gb = mem_mb / 1000
+        print(f"\n── {desc}: {num_slices} slices, {mem_gb:.2f} GB potential ──")
+
+        if device == "gpu":
+            import cupy as cp
+            free, total = cp.cuda.Device().mem_info
+            print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
         # First benchmark: build the full potential at once (reference)
         print("\n  [Full build reference]")
+        full_build_ok = False
         try:
             t0 = time.perf_counter()
             full = potential.build(lazy=False)
             t1 = time.perf_counter()
             print(f"  build(lazy=False) all {num_slices} slices:  {t1 - t0:.3f}s")
+            full_build_ok = True
             del full
-        except Exception as e:
-            print(f"  build(lazy=False) FAILED: {e}")
+        except (MemoryError, Exception) as e:
+            ename = type(e).__name__
+            print(f"  build(lazy=False) FAILED ({ename}): {e}")
+            print(f"  >>> This is expected — potential ({mem_gb:.1f} GB) exceeds available memory.")
 
         gc.collect()
         if device == "gpu":
-            import cupy as cp
             cp.get_default_memory_pool().free_all_blocks()
 
         # Benchmark: potential building only (no multislice)
@@ -306,14 +338,17 @@ def run_benchmarks(device: str, quick: bool = False):
         print("\n  [Full multislice (PlaneWave, 200 keV)]")
 
         # Reference: pre-built potential (if it fits in memory)
-        try:
-            prebuilt = potential.build(lazy=False)
-            result = benchmark_multislice(prebuilt, "auto", device, n_repeats=3)
-            result.label = f"pre-built PotentialArray, chunk=auto"
-            print_result(result)
-            del prebuilt
-        except Exception as e:
-            print(f"  pre-built PotentialArray: FAILED ({e})")
+        if full_build_ok:
+            try:
+                prebuilt = potential.build(lazy=False)
+                result = benchmark_multislice(prebuilt, "auto", device, n_repeats=3)
+                result.label = f"pre-built PotentialArray, chunk=auto"
+                print_result(result)
+                del prebuilt
+            except (MemoryError, Exception) as e:
+                print(f"  pre-built PotentialArray: OOM ({type(e).__name__})")
+        else:
+            print(f"  pre-built PotentialArray: SKIPPED (full build failed above)")
 
         gc.collect()
         if device == "gpu":
