@@ -549,10 +549,18 @@ def run_benchmarks(device: str, quick: bool = False):
         ]
     else:
         scan_configs = [
-            ((256, 256), (2, 2, 6), (8, 8), "small-scan (256x256, 8x8 scan)"),
-            ((512, 512), (2, 2, 6), (8, 8), "medium-scan (512x512, 8x8 scan)"),
-            ((512, 512), (2, 2, 20), (8, 8), "medium-deep (512x512, ~100 slices, 8x8 scan)"),
+            # More scan positions = more batches = more potential rebuilds
+            ((512, 512), (2, 2, 20), (16, 16), "512x512, ~100 slices, 16x16 scan"),
+            ((512, 512), (2, 2, 20), (32, 32), "512x512, ~100 slices, 32x32 scan"),
+            ((1024, 1024), (2, 2, 20), (16, 16), "1024x1024, ~100 slices, 16x16 scan"),
+            ((1024, 1024), (2, 2, 20), (32, 32), "1024x1024, ~100 slices, 32x32 scan"),
         ]
+        if device == "gpu":
+            scan_configs.extend([
+                # Potential exceeds VRAM — pre-build will fail, unbuilt must chunk
+                ((2048, 2048), (10, 10, 200), (8, 8), "2048x2048, ~1000 slices (~17 GB), 8x8 scan"),
+                ((4096, 4096), (20, 20, 120), (8, 8), "4096x4096, ~600 slices (~40 GB), 8x8 scan"),
+            ])
 
     for gpts, reps, scan_gpts, desc in scan_configs:
         potential = make_large_potential(gpts, reps, device=device)
