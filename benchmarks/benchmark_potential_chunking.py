@@ -272,15 +272,22 @@ def benchmark_scan(
     max_batch: int = 8,
     energy: float = 200e3,
     n_repeats: int = 2,
+    zarr_dir: str | None = None,
 ) -> BenchmarkResult:
-    """Benchmark a Probe + GridScan measurement.
+    """Benchmark a Probe + GridScan measurement using the lazy→zarr path.
 
-    If prebuilt=True, builds the potential once before scanning.
+    This is the realistic workflow for memory-hungry scans: build the dask
+    graph lazily, then stream results directly to a zarr store without ever
+    materializing the full result array in memory.
+
+    If prebuilt=True, builds the potential eagerly once before scanning.
     If prebuilt=False, passes the unbuilt Potential (chunks rebuilt per batch).
 
     max_batch controls how many probe positions are processed at once,
     bounding the wave array memory (n_batch * gpts_y * gpts_x * 8 bytes).
     """
+    import tempfile
+
     probe = Probe(energy=energy, semiangle_cutoff=20, device=device)
     detector = AnnularDetector(inner=40, outer=200)
 
@@ -316,12 +323,18 @@ def benchmark_scan(
     else:
         pot = potential
 
-    # Warmup
+    # Create zarr output directory
+    if zarr_dir is None:
+        zarr_dir = tempfile.mkdtemp(prefix="abtem_bench_")
+
+    # Warmup: lazy graph build + zarr write
+    zarr_path = os.path.join(zarr_dir, "warmup.zarr")
     try:
-        result = probe.scan(
-            pot, scan=scan, detectors=detector, lazy=False, max_batch=max_batch,
+        lazy_result = probe.scan(
+            pot, scan=scan, detectors=detector, lazy=True, max_batch=max_batch,
         )
-        del result
+        lazy_result.to_zarr(zarr_path, overwrite=True)
+        del lazy_result
     except Exception as e:
         return BenchmarkResult(
             label=label,
@@ -342,7 +355,7 @@ def benchmark_scan(
 
     times = []
     peak_vram_mb = 0.0
-    for _ in range(n_repeats):
+    for i in range(n_repeats):
         if device == "gpu":
             import cupy as cp
             cp.cuda.Stream.null.synchronize()
@@ -352,13 +365,18 @@ def benchmark_scan(
         else:
             tracker = None
 
+        zarr_path = os.path.join(zarr_dir, f"run_{i}.zarr")
+
         t0 = time.perf_counter()
         if tracker:
             tracker.__enter__()
 
-        result = probe.scan(
-            pot, scan=scan, detectors=detector, lazy=False, max_batch=max_batch,
+        # Lazy graph build (fast, no computation)
+        lazy_result = probe.scan(
+            pot, scan=scan, detectors=detector, lazy=True, max_batch=max_batch,
         )
+        # Stream to zarr — dask computes block by block, writing to disk
+        lazy_result.to_zarr(zarr_path, overwrite=True)
 
         if device == "gpu":
             import cupy as cp
@@ -370,11 +388,15 @@ def benchmark_scan(
 
         t1 = time.perf_counter()
         times.append(t1 - t0)
-        del result
+        del lazy_result
 
         gc.collect()
         if device == "gpu":
             cp.get_default_memory_pool().free_all_blocks()
+
+    # Clean up zarr files
+    import shutil
+    shutil.rmtree(zarr_dir, ignore_errors=True)
 
     extra = {"all_times": times}
     if peak_vram_mb > 0:
@@ -538,15 +560,18 @@ def run_benchmarks(device: str, quick: bool = False):
             import cupy as cp
             cp.get_default_memory_pool().free_all_blocks()
 
-    # ─── Scan benchmark: pre-built vs unbuilt potential ───
+    # ─── Scan benchmark: pre-built vs unbuilt potential (lazy → zarr) ───
     #
-    # For scanned measurements (Probe + GridScan), every scan-position batch
-    # calls multislice_and_detect independently. With an unbuilt Potential the
-    # slices are rebuilt from atoms for every batch. Pre-building once should
-    # avoid this redundant work.
+    # The realistic workflow for memory-hungry scans: build the dask graph
+    # lazily, then stream results to a zarr store block by block — the full
+    # result array never lives in memory.
+    #
+    # With an unbuilt Potential, chunks are rebuilt from atoms for every
+    # scan-position batch. Pre-building once avoids this redundant work
+    # (but requires the full potential to fit in memory).
     #
     print(f"\n{'=' * 90}")
-    print(f"Scan Benchmark (Probe + GridScan) — device={device}")
+    print(f"Scan Benchmark (Probe + GridScan, lazy → zarr) — device={device}")
     print(f"{'=' * 90}")
 
     # Each config: (gpts, repetitions, scan_gpts, max_batch, description)
