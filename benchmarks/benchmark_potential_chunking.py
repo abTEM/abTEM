@@ -276,19 +276,21 @@ def benchmark_scan(
     max_batch: int = 8,
     energy: float = 200e3,
     n_repeats: int = 2,
+    to_zarr: bool = False,
 ) -> BenchmarkResult:
     """Benchmark a Probe + GridScan measurement.
 
-    If prebuilt=True, builds the potential eagerly once, then runs scan with
-    lazy=False (pre-built GPU arrays can't stream through dask→zarr due to
-    dtype serialization issues, but the result fits in memory anyway).
-
-    If prebuilt=False (unbuilt Potential), uses the realistic lazy→zarr path:
-    build the dask graph lazily, then stream results to a zarr store block by
-    block without ever materializing the full result array.
-
-    max_batch controls how many probe positions are processed at once,
-    bounding the wave array memory (n_batch * gpts_y * gpts_x * 8 bytes).
+    Parameters
+    ----------
+    prebuilt : bool
+        If True, build the potential eagerly once before scanning.
+    to_zarr : bool
+        If True, use the lazy→zarr streaming path (realistic for huge scans
+        whose results don't fit in memory). If False, use lazy=False (eager).
+    potential_chunk_size : int or str
+        Passed through to multislice as ``potential_chunk_size``.
+    max_batch : int
+        Probe positions per dask block, bounding wave memory.
     """
     import shutil
     import tempfile
@@ -304,13 +306,14 @@ def benchmark_scan(
 
     n_positions = scan_gpts[0] * scan_gpts[1]
     n_batches = (n_positions + max_batch - 1) // max_batch
-    cs_label = "pre-built" if prebuilt else f"chunk={potential_chunk_size}"
-    label = (
-        f"{cs_label}, scan={scan_gpts}, batch={max_batch}, "
-        f"slices={len(potential)}, gpts={potential.gpts}"
-    )
+    if prebuilt:
+        cs_label = "pre-built"
+    else:
+        cs_label = f"chunk={potential_chunk_size}"
+    if to_zarr:
+        cs_label += " (zarr)"
+    label = f"{cs_label}, scan={scan_gpts}, batch={max_batch}"
     mem_mb = estimate_potential_memory_mb(potential)
-    use_zarr = not prebuilt
     zarr_dir = None
 
     if prebuilt:
@@ -329,12 +332,12 @@ def benchmark_scan(
             )
     else:
         pot = potential
+
+    if to_zarr:
         zarr_dir = tempfile.mkdtemp(prefix="abtem_bench_")
 
-    # Warmup
-    try:
-        if use_zarr:
-            zarr_path = os.path.join(zarr_dir, "warmup.zarr")
+    def _run_scan(zarr_path=None):
+        if to_zarr:
             lazy_result = probe.scan(
                 pot, scan=scan, detectors=detector, lazy=True,
                 max_batch=max_batch, potential_chunk_size=potential_chunk_size,
@@ -347,6 +350,11 @@ def benchmark_scan(
                 max_batch=max_batch, potential_chunk_size=potential_chunk_size,
             )
             del result
+
+    # Warmup
+    try:
+        warmup_path = os.path.join(zarr_dir, "warmup.zarr") if zarr_dir else None
+        _run_scan(warmup_path)
     except Exception as e:
         if zarr_dir:
             shutil.rmtree(zarr_dir, ignore_errors=True)
@@ -379,24 +387,13 @@ def benchmark_scan(
         else:
             tracker = None
 
+        run_path = os.path.join(zarr_dir, f"run_{i}.zarr") if zarr_dir else None
+
         t0 = time.perf_counter()
         if tracker:
             tracker.__enter__()
 
-        if use_zarr:
-            zarr_path = os.path.join(zarr_dir, f"run_{i}.zarr")
-            lazy_result = probe.scan(
-                pot, scan=scan, detectors=detector, lazy=True,
-                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
-            )
-            lazy_result.to_zarr(zarr_path, overwrite=True)
-            del lazy_result
-        else:
-            result = probe.scan(
-                pot, scan=scan, detectors=detector, lazy=False,
-                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
-            )
-            del result
+        _run_scan(run_path)
 
         if device == "gpu":
             import cupy as cp
@@ -652,19 +649,23 @@ def run_benchmarks(device: str, quick: bool = False):
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
-        # Pre-built: build once, scan reuses (reference)
+        def _cleanup():
+            gc.collect()
+            if device == "gpu":
+                cp.cuda.Stream.null.synchronize()
+                cp.get_default_memory_pool().free_all_blocks()
+
+        # --- Eager path (lazy=False) ---
+        print("  [eager (lazy=False)]")
+
+        # Pre-built eager (reference)
         result = benchmark_scan(potential, scan_gpts, device, prebuilt=True,
                                 max_batch=max_batch, n_repeats=3)
         print_result(result)
+        _cleanup()
 
-        gc.collect()
-        if device == "gpu":
-            cp.cuda.Stream.null.synchronize()
-            cp.get_default_memory_pool().free_all_blocks()
-
-        # Unbuilt: test different potential chunk sizes
+        # Unbuilt eager with different chunk sizes
         scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
-        # Add a larger chunk size if the potential has enough slices
         if num_slices > 50:
             scan_chunk_sizes.insert(2, 50)
 
@@ -673,11 +674,17 @@ def run_benchmarks(device: str, quick: bool = False):
                                     potential_chunk_size=cs,
                                     max_batch=max_batch, n_repeats=3)
             print_result(result)
+            _cleanup()
 
-            gc.collect()
-            if device == "gpu":
-                cp.cuda.Stream.null.synchronize()
-                cp.get_default_memory_pool().free_all_blocks()
+        # --- Lazy → zarr path ---
+        print("  [lazy → zarr]")
+
+        for cs in scan_chunk_sizes:
+            result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
+                                    potential_chunk_size=cs, to_zarr=True,
+                                    max_batch=max_batch, n_repeats=3)
+            print_result(result)
+            _cleanup()
 
     print(f"\n{'=' * 90}")
     print("Done.")
