@@ -29,8 +29,9 @@ import numpy as np
 from ase.build import bulk
 
 import abtem
-from abtem import PlaneWave, Potential
+from abtem import AnnularDetector, PlaneWave, Potential, Probe
 from abtem.core import config
+from abtem.scan import GridScan
 
 
 @dataclass
@@ -263,6 +264,131 @@ def benchmark_build_only(
     )
 
 
+def benchmark_scan(
+    potential: Potential,
+    scan_gpts: tuple[int, int],
+    device: str,
+    prebuilt: bool,
+    energy: float = 200e3,
+    n_repeats: int = 2,
+) -> BenchmarkResult:
+    """Benchmark a Probe + GridScan measurement.
+
+    If prebuilt=True, builds the potential once before scanning.
+    If prebuilt=False, passes the unbuilt Potential (chunks rebuilt per batch).
+    """
+    probe = Probe(energy=energy, semiangle_cutoff=20, device=device)
+    detector = AnnularDetector(inner=40, outer=200)
+
+    scan = GridScan(
+        start=(0, 0),
+        end=potential.extent,
+        gpts=scan_gpts,
+    )
+
+    label_prefix = "pre-built" if prebuilt else "unbuilt"
+    label = (
+        f"{label_prefix} scan={scan_gpts}, "
+        f"slices={len(potential)}, gpts={potential.gpts}"
+    )
+    mem_mb = estimate_potential_memory_mb(potential)
+
+    if prebuilt:
+        try:
+            pot = potential.build(lazy=False)
+        except Exception as e:
+            return BenchmarkResult(
+                label=label,
+                device=device,
+                gpts=potential.gpts,
+                num_slices=len(potential),
+                chunk_size="N/A",
+                potential_bytes_mb=mem_mb,
+                time_seconds=float("nan"),
+                extra={"error": f"build failed: {type(e).__name__}: {e}"},
+            )
+    else:
+        pot = potential
+
+    # Warmup
+    try:
+        result = probe.scan(
+            pot, scan=scan, detectors=detector, lazy=False,
+        )
+        del result
+    except Exception as e:
+        return BenchmarkResult(
+            label=label,
+            device=device,
+            gpts=potential.gpts,
+            num_slices=len(potential),
+            chunk_size="pre-built" if prebuilt else "auto",
+            potential_bytes_mb=mem_mb,
+            time_seconds=float("nan"),
+            extra={"error": f"{type(e).__name__}: {e}"},
+        )
+
+    gc.collect()
+    if device == "gpu":
+        import cupy as cp
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.cuda.Stream.null.synchronize()
+
+    times = []
+    peak_vram_mb = 0.0
+    for _ in range(n_repeats):
+        if device == "gpu":
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+
+        if device == "gpu":
+            tracker = PeakVRAMTracker(interval=0.002)
+        else:
+            tracker = None
+
+        t0 = time.perf_counter()
+        if tracker:
+            tracker.__enter__()
+
+        result = probe.scan(
+            pot, scan=scan, detectors=detector, lazy=False,
+        )
+
+        if device == "gpu":
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+
+        if tracker:
+            tracker.__exit__(None, None, None)
+            peak_vram_mb = max(peak_vram_mb, tracker.peak_mb)
+
+        t1 = time.perf_counter()
+        times.append(t1 - t0)
+        del result
+
+        gc.collect()
+        if device == "gpu":
+            cp.get_default_memory_pool().free_all_blocks()
+
+    extra = {"all_times": times}
+    if peak_vram_mb > 0:
+        extra["peak_vram_mb"] = peak_vram_mb
+
+    if prebuilt:
+        del pot
+
+    return BenchmarkResult(
+        label=label,
+        device=device,
+        gpts=potential.gpts,
+        num_slices=len(potential),
+        chunk_size="pre-built" if prebuilt else "auto",
+        potential_bytes_mb=mem_mb,
+        time_seconds=np.median(times),
+        extra=extra,
+    )
+
+
 def print_result(result: BenchmarkResult):
     err = result.extra.get("error")
     if err:
@@ -408,6 +534,57 @@ def run_benchmarks(device: str, quick: bool = False):
         gc.collect()
         if device == "gpu":
             import cupy as cp
+            cp.get_default_memory_pool().free_all_blocks()
+
+    # ─── Scan benchmark: pre-built vs unbuilt potential ───
+    #
+    # For scanned measurements (Probe + GridScan), every scan-position batch
+    # calls multislice_and_detect independently. With an unbuilt Potential the
+    # slices are rebuilt from atoms for every batch. Pre-building once should
+    # avoid this redundant work.
+    #
+    print(f"\n{'=' * 90}")
+    print(f"Scan Benchmark (Probe + GridScan) — device={device}")
+    print(f"{'=' * 90}")
+
+    if quick:
+        scan_configs = [
+            ((128, 128), (2, 2, 4), (4, 4), "quick-scan (128x128, 4x4 scan)"),
+        ]
+    else:
+        scan_configs = [
+            ((256, 256), (2, 2, 6), (8, 8), "small-scan (256x256, 8x8 scan)"),
+            ((512, 512), (2, 2, 6), (8, 8), "medium-scan (512x512, 8x8 scan)"),
+            ((512, 512), (2, 2, 20), (8, 8), "medium-deep (512x512, ~100 slices, 8x8 scan)"),
+        ]
+
+    for gpts, reps, scan_gpts, desc in scan_configs:
+        potential = make_large_potential(gpts, reps, device=device)
+        num_slices = len(potential)
+        mem_mb = estimate_potential_memory_mb(potential)
+        mem_gb = mem_mb / 1000
+
+        print(f"\n── {desc}: {num_slices} slices, {mem_gb:.2f} GB potential ──")
+
+        if device == "gpu":
+            import cupy as cp
+            free, total = cp.cuda.Device().mem_info
+            print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+
+        # Pre-built: build once, scan reuses
+        result = benchmark_scan(potential, scan_gpts, device, prebuilt=True, n_repeats=3)
+        print_result(result)
+
+        gc.collect()
+        if device == "gpu":
+            cp.get_default_memory_pool().free_all_blocks()
+
+        # Unbuilt: potential chunks rebuilt per scan batch
+        result = benchmark_scan(potential, scan_gpts, device, prebuilt=False, n_repeats=3)
+        print_result(result)
+
+        gc.collect()
+        if device == "gpu":
             cp.get_default_memory_pool().free_all_blocks()
 
     print(f"\n{'=' * 90}")
