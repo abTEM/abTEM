@@ -41,6 +41,9 @@ warnings:
   dask-blockwise-performance: false
   # Show a warning when the grid is overspecified
   overspecified-grid: true
+potential:
+  # Number of slices to build at once during multislice. "auto" = memory-budget-aware.
+  slice-chunk-size: "auto"
 antialias:
   # The antialias cutoff in reciprocal space
   cutoff: 0.6666666
