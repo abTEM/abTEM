@@ -549,24 +549,38 @@ def multislice_and_detect(
     through a given potential, detecting at each of the exit planes specified in the
     potential.
 
+    The potential is consumed in chunks: for each chunk a group of contiguous slices
+    is built eagerly into memory, the wave functions are propagated through those
+    slices, and the chunk is discarded before the next one is built. This keeps peak
+    memory bounded while still allowing efficient batched computation (especially
+    important on GPU). When the potential is already a pre-built
+    :class:`.PotentialArray` (eager or lazy/dask-backed), the chunks are zero-copy
+    views into the existing array.
+
     Parameters
     ----------
     waves : Waves
         A batch of wave functions as a :class:`.Waves` object.
     potential : BasePotential
-        A potential as :class:`.BasePotential` object.
+        A potential as :class:`.BasePotential` object. Can be an unbuilt
+        :class:`.Potential` (slices are computed on the fly in chunks) or a
+        pre-built :class:`.PotentialArray` (slices are already in memory and
+        chunking only controls iteration grouping).
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice())
-    return_backscattered: bool, optional
+    algorithm : FourierMultislice or RealSpaceMultislice, optional
+        Algorithm used for multislice operator (default is FourierMultislice()).
+    return_backscattered : bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
-        backscattered components are also returned. Requires potential exit_planes
+        backscattered components are also returned. Requires potential exit_planes.
+    pbar : bool, optional
+        If True, display a progress bar.
     potential_chunk_size : int or str, optional
-        Number of potential slices to build and hold in memory at once. ``"auto"``
-        selects based on the configured memory budget. Setting to 1 gives the
-        previous one-slice-at-a-time behavior.
+        Number of potential slices to eagerly build and hold in memory at once
+        during propagation. ``"auto"`` (default) selects based on the configured
+        memory budget (``dask.chunk-size`` / ``dask.chunk-size-gpu``).  Can also
+        be set globally via the ``potential.slice-chunk-size`` configuration key.
 
     """
     waves = waves.ensure_real_space()

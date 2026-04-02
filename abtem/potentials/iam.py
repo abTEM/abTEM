@@ -143,8 +143,17 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         """
         Generate potential slices in memory-budgeted chunks.
 
+        Rather than building all slices into memory at once (as ``build()`` does
+        when computed eagerly) or yielding them one at a time (as
+        ``generate_slices()`` does), this method groups slices into chunks whose
+        total size fits within a configurable memory budget. Each chunk is yielded
+        as an eager ``PotentialArray`` and can be discarded after propagation,
+        bounding peak memory usage.
+
         This default implementation collects slices from ``generate_slices()`` and
-        stacks them. Subclasses may override for more efficient implementations.
+        stacks them. Subclasses may override for more efficient implementations
+        (e.g. ``_FieldBuilderFromAtoms`` uses ``build(first_slice, last_slice)``
+        to avoid intermediate single-slice allocations).
 
         Parameters
         ----------
@@ -153,12 +162,16 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         last_slice : int, optional
             Index of the last slice.
         chunk_size : int or str, optional
-            Number of slices per chunk. ``"auto"`` selects based on memory budget.
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget (``dask.chunk-size`` on CPU,
+            ``dask.chunk-size-gpu`` on GPU). Can also be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
 
         Yields
         ------
         PotentialArray
-            A chunk of potential slices.
+            A chunk of contiguous potential slices with correctly assigned
+            exit planes.
         """
         from abtem.core.chunks import estimate_potential_chunk_size
 
@@ -780,6 +793,30 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         last_slice: Optional[int] = None,
         chunk_size: int | str = "auto",
     ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Overrides the base class implementation to use
+        ``build(first_slice, last_slice, lazy=False)`` for each chunk range,
+        which is more efficient than collecting individual slices because
+        it avoids intermediate single-slice allocations and directly produces
+        a contiguous eager array for the chunk.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            An eagerly computed chunk of contiguous potential slices.
+        """
         from abtem.core.chunks import estimate_potential_chunk_size
 
         if last_slice is None:
@@ -1080,6 +1117,29 @@ class FieldArray(BaseField, ArrayObject):
         last_slice: Optional[int] = None,
         chunk_size: int | str = "auto",
     ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Since the data is already in memory (eager or dask-backed), this
+        yields array views of the existing data without any new allocation
+        or computation. The chunk size only controls how many slices are
+        grouped per yielded ``PotentialArray``.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            A view into the existing array covering a chunk of slices.
+        """
         from abtem.core.chunks import estimate_potential_chunk_size
 
         if last_slice is None:
