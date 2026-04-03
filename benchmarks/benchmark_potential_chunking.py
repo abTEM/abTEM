@@ -675,12 +675,13 @@ def run_benchmarks(device: str, quick: bool = False):
         scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
 
         # --- lazy → .compute() ---
-        # Note: pre-built PotentialArray on GPU cannot serialize through
-        # dask graphs (ValueError: Unsupported dtype object). This is an
-        # existing abTEM limitation, not related to potential chunking.
-        # The PlaneWave benchmark above shows the pre-built vs chunked
-        # comparison for single-wave propagation.
         print("  [lazy → compute]")
+
+        # Pre-built reference (potential built once, dask batches probes)
+        result = benchmark_scan(potential, scan_gpts, device, prebuilt=True,
+                                max_batch=max_batch, n_repeats=3)
+        print_result(result)
+        _cleanup()
 
         for cs in scan_chunk_sizes:
             result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
