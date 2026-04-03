@@ -148,6 +148,14 @@ def benchmark_multislice(
         )
         del result
     except Exception as e:
+        # Clear traceback to release cupy array references after OOM
+        msg = f"{type(e).__name__}: {e}"
+        e.__traceback__ = None
+        del e
+        gc.collect()
+        if device == "gpu":
+            import cupy as cp
+            cp.get_default_memory_pool().free_all_blocks()
         return BenchmarkResult(
             label=label,
             device=device,
@@ -156,7 +164,7 @@ def benchmark_multislice(
             chunk_size=chunk_size,
             potential_bytes_mb=mem_mb,
             time_seconds=float("nan"),
-            extra={"error": f"{type(e).__name__}: {e}"},
+            extra={"error": msg},
         )
 
     gc.collect()
@@ -278,15 +286,20 @@ def benchmark_scan(
     n_repeats: int = 2,
     to_zarr: bool = False,
 ) -> BenchmarkResult:
-    """Benchmark a Probe + GridScan measurement.
+    """Benchmark a Probe + GridScan measurement using the lazy path.
+
+    All scans use ``lazy=True`` so that dask batches scan positions via
+    ``max_batch``. The eager path (``lazy=False``) ignores ``max_batch``
+    and processes all positions at once, which is not representative of
+    real usage and causes OOM for large scans.
 
     Parameters
     ----------
     prebuilt : bool
         If True, build the potential eagerly once before scanning.
     to_zarr : bool
-        If True, use the lazy→zarr streaming path (realistic for huge scans
-        whose results don't fit in memory). If False, use lazy=False (eager).
+        If True, stream results to zarr on disk (realistic for huge scans
+        whose results don't fit in memory). If False, call ``.compute()``.
     potential_chunk_size : int or str
         Passed through to multislice as ``potential_chunk_size``.
     max_batch : int
@@ -294,6 +307,7 @@ def benchmark_scan(
     """
     import shutil
     import tempfile
+    import traceback as tb
 
     probe = Probe(energy=energy, semiangle_cutoff=20, device=device)
     detector = AnnularDetector(inner=40, outer=200)
@@ -304,8 +318,6 @@ def benchmark_scan(
         gpts=scan_gpts,
     )
 
-    n_positions = scan_gpts[0] * scan_gpts[1]
-    n_batches = (n_positions + max_batch - 1) // max_batch
     if prebuilt:
         cs_label = "pre-built"
     else:
@@ -320,6 +332,9 @@ def benchmark_scan(
         try:
             pot = potential.build(lazy=False)
         except Exception as e:
+            # Clear traceback to release cupy array references
+            e.__traceback__ = None
+            gc.collect()
             return BenchmarkResult(
                 label=label,
                 device=device,
@@ -337,25 +352,23 @@ def benchmark_scan(
         zarr_dir = tempfile.mkdtemp(prefix="abtem_bench_")
 
     def _run_scan(zarr_path=None):
+        lazy_result = probe.scan(
+            pot, scan=scan, detectors=detector, lazy=True,
+            max_batch=max_batch, potential_chunk_size=potential_chunk_size,
+        )
         if to_zarr:
-            lazy_result = probe.scan(
-                pot, scan=scan, detectors=detector, lazy=True,
-                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
-            )
             lazy_result.to_zarr(zarr_path, overwrite=True)
-            del lazy_result
         else:
-            result = probe.scan(
-                pot, scan=scan, detectors=detector, lazy=False,
-                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
-            )
-            del result
+            lazy_result.compute()
+        del lazy_result
 
     # Warmup
     try:
         warmup_path = os.path.join(zarr_dir, "warmup.zarr") if zarr_dir else None
         _run_scan(warmup_path)
     except Exception as e:
+        e.__traceback__ = None
+        gc.collect()
         if zarr_dir:
             shutil.rmtree(zarr_dir, ignore_errors=True)
         return BenchmarkResult(
@@ -529,6 +542,8 @@ def run_benchmarks(device: str, quick: bool = False):
             ename = type(e).__name__
             print(f"  build(lazy=False) FAILED ({ename}): {e}")
             print(f"  >>> This is expected — potential ({mem_gb:.1f} GB) exceeds available memory.")
+            e.__traceback__ = None
+            del e
 
         gc.collect()
         if device == "gpu":
@@ -620,9 +635,8 @@ def run_benchmarks(device: str, quick: bool = False):
         ]
         if device == "gpu":
             scan_configs.extend([
-                # Potential exceeds VRAM — pre-build impossible
-                ((2048, 2048), (10, 10, 60), (8, 8), 4),
-                ((4096, 4096), (20, 20, 60), (4, 4), 1),
+                # Potential exceeds VRAM — pre-build impossible, must chunk
+                ((2048, 2048), (10, 10, 200), (8, 8), 4),
             ])
 
     for gpts, reps, scan_gpts, max_batch in scan_configs:
@@ -654,21 +668,22 @@ def run_benchmarks(device: str, quick: bool = False):
             if device == "gpu":
                 cp.cuda.Stream.null.synchronize()
                 cp.get_default_memory_pool().free_all_blocks()
+                cp.get_default_pinned_memory_pool().free_all_blocks()
 
-        # --- Eager path (lazy=False) ---
-        print("  [eager (lazy=False)]")
+        scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
+        if num_slices > 50:
+            scan_chunk_sizes.insert(2, 50)
 
-        # Pre-built eager (reference)
+        # --- lazy → .compute() ---
+        print("  [lazy → compute]")
+
+        # Pre-built reference (potential built once, dask batches probes)
         result = benchmark_scan(potential, scan_gpts, device, prebuilt=True,
                                 max_batch=max_batch, n_repeats=3)
         print_result(result)
         _cleanup()
 
-        # Unbuilt eager with different chunk sizes
-        scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
-        if num_slices > 50:
-            scan_chunk_sizes.insert(2, 50)
-
+        # Unbuilt with different potential chunk sizes
         for cs in scan_chunk_sizes:
             result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
                                     potential_chunk_size=cs,
@@ -676,7 +691,7 @@ def run_benchmarks(device: str, quick: bool = False):
             print_result(result)
             _cleanup()
 
-        # --- Lazy → zarr path ---
+        # --- lazy → zarr (streaming to disk) ---
         print("  [lazy → zarr]")
 
         for cs in scan_chunk_sizes:
