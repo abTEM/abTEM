@@ -670,20 +670,18 @@ def run_benchmarks(device: str, quick: bool = False):
                 cp.get_default_memory_pool().free_all_blocks()
                 cp.get_default_pinned_memory_pool().free_all_blocks()
 
+        # Chunk sizes to test. Only use small explicit values — larger
+        # chunks compete with wave arrays + FFT workspace for VRAM.
         scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
-        if num_slices > 50:
-            scan_chunk_sizes.insert(2, 50)
 
         # --- lazy → .compute() ---
+        # Note: pre-built PotentialArray on GPU cannot serialize through
+        # dask graphs (ValueError: Unsupported dtype object). This is an
+        # existing abTEM limitation, not related to potential chunking.
+        # The PlaneWave benchmark above shows the pre-built vs chunked
+        # comparison for single-wave propagation.
         print("  [lazy → compute]")
 
-        # Pre-built reference (potential built once, dask batches probes)
-        result = benchmark_scan(potential, scan_gpts, device, prebuilt=True,
-                                max_batch=max_batch, n_repeats=3)
-        print_result(result)
-        _cleanup()
-
-        # Unbuilt with different potential chunk sizes
         for cs in scan_chunk_sizes:
             result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
                                     potential_chunk_size=cs,
