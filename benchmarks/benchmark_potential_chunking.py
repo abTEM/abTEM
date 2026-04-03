@@ -4,6 +4,9 @@ Benchmark: Potential chunking performance for large multislice simulations.
 Designed to run on a workstation with an NVIDIA RTX 4090 (24 GB VRAM).
 Tests both CPU and GPU with various potential sizes and chunk strategies.
 
+Each scan configuration runs in a **separate subprocess** so that OOM
+errors in one config don't pollute VRAM for subsequent configs.
+
 Usage:
     python benchmarks/benchmark_potential_chunking.py
     python benchmarks/benchmark_potential_chunking.py --device gpu
@@ -13,7 +16,9 @@ Usage:
 
 import argparse
 import gc
+import json
 import os
+import subprocess
 import sys
 import time
 import threading
@@ -26,7 +31,6 @@ os.environ["TQDM_DISABLE"] = "1"
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
-from dataclasses import dataclass, field
 
 import numpy as np
 from ase.build import bulk
@@ -37,17 +41,9 @@ from abtem.core import config
 from abtem.scan import GridScan
 
 
-@dataclass
-class BenchmarkResult:
-    label: str
-    device: str
-    gpts: tuple[int, int]
-    num_slices: int
-    chunk_size: str | int
-    potential_bytes_mb: float
-    time_seconds: float
-    extra: dict = field(default_factory=dict)
-
+# ──────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────
 
 def make_large_potential(
     gpts: tuple[int, int],
@@ -57,28 +53,23 @@ def make_large_potential(
 ) -> Potential:
     """Create a large silicon potential for benchmarking."""
     atoms = bulk("Si", cubic=True) * repetitions
-    potential = Potential(
-        atoms,
-        gpts=gpts,
-        slice_thickness=slice_thickness,
-        device=device,
+    return Potential(
+        atoms, gpts=gpts, slice_thickness=slice_thickness, device=device,
     )
-    return potential
 
 
 def estimate_potential_memory_mb(potential: Potential) -> float:
     """Estimate total potential memory in MB (float32)."""
-    num_slices = len(potential)
-    gpts = potential.gpts
-    dtype_bytes = np.dtype(np.float32).itemsize
-    return num_slices * gpts[0] * gpts[1] * dtype_bytes / 1e6
+    return (
+        len(potential) * potential.gpts[0] * potential.gpts[1]
+        * np.dtype(np.float32).itemsize / 1e6
+    )
 
 
 def warmup_gpu():
     """Run a small computation to warm up the GPU."""
     try:
         import cupy as cp
-
         a = cp.ones((256, 256), dtype=np.complex64)
         cp.fft.fft2(a)
         cp.cuda.Stream.null.synchronize()
@@ -89,12 +80,7 @@ def warmup_gpu():
 
 
 class PeakVRAMTracker:
-    """Context manager that samples GPU memory in a background thread.
-
-    Captures the peak cupy memory-pool usage during the lifetime of the
-    context, rather than only measuring after the computation finishes
-    (when temporary allocations have already been freed).
-    """
+    """Context manager that samples GPU memory in a background thread."""
 
     def __init__(self, interval: float = 0.005):
         self.interval = interval
@@ -127,152 +113,93 @@ class PeakVRAMTracker:
         return self.peak_bytes / 1e6
 
 
+def _gpu_cleanup():
+    gc.collect()
+    try:
+        import cupy as cp
+        cp.cuda.Stream.null.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+    except ImportError:
+        pass
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Benchmark functions
+# ──────────────────────────────────────────────────────────────────────
+
 def benchmark_multislice(
     potential: Potential,
     chunk_size: int | str,
     device: str,
     energy: float = 200e3,
-    n_repeats: int = 3,
-) -> BenchmarkResult:
+) -> dict:
     """Benchmark a single multislice run with given chunk size."""
     waves = PlaneWave(energy=energy, gpts=potential.gpts, device=device)
     waves.grid.match(potential)
 
     label = f"gpts={potential.gpts}, slices={len(potential)}, chunk={chunk_size}"
-    mem_mb = estimate_potential_memory_mb(potential)
-
-    # Warmup run (not timed)
-    try:
-        result = waves.multislice(
-            potential, potential_chunk_size=chunk_size, lazy=False
-        )
-        del result
-    except Exception as e:
-        # Clear traceback to release cupy array references after OOM
-        msg = f"{type(e).__name__}: {e}"
-        e.__traceback__ = None
-        del e
-        gc.collect()
-        if device == "gpu":
-            import cupy as cp
-            cp.get_default_memory_pool().free_all_blocks()
-        return BenchmarkResult(
-            label=label,
-            device=device,
-            gpts=potential.gpts,
-            num_slices=len(potential),
-            chunk_size=chunk_size,
-            potential_bytes_mb=mem_mb,
-            time_seconds=float("nan"),
-            extra={"error": msg},
-        )
 
     gc.collect()
     if device == "gpu":
         import cupy as cp
-
         cp.get_default_memory_pool().free_all_blocks()
         cp.cuda.Stream.null.synchronize()
 
-    # Timed runs
-    times = []
-    peak_vram_mb = 0.0
-    for _ in range(n_repeats):
-        if device == "gpu":
-            import cupy as cp
+    tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else None
 
-            cp.cuda.Stream.null.synchronize()
+    t0 = time.perf_counter()
+    if tracker:
+        tracker.__enter__()
 
-        if device == "gpu":
-            tracker = PeakVRAMTracker(interval=0.002)
-        else:
-            tracker = None
-
-        t0 = time.perf_counter()
-        if tracker:
-            tracker.__enter__()
-
+    try:
         result = waves.multislice(
             potential, potential_chunk_size=chunk_size, lazy=False
         )
-
-        if device == "gpu":
-            import cupy as cp
-
-            cp.cuda.Stream.null.synchronize()
-
+    except Exception as e:
         if tracker:
             tracker.__exit__(None, None, None)
-            peak_vram_mb = max(peak_vram_mb, tracker.peak_mb)
+        msg = f"{type(e).__name__}: {e}"
+        e.__traceback__ = None
+        del e
+        _gpu_cleanup()
+        return {"label": label, "error": msg}
 
-        t1 = time.perf_counter()
-        times.append(t1 - t0)
-        del result
+    if device == "gpu":
+        cp.cuda.Stream.null.synchronize()
+    if tracker:
+        tracker.__exit__(None, None, None)
 
-        gc.collect()
-        if device == "gpu":
-            cp.get_default_memory_pool().free_all_blocks()
+    elapsed = time.perf_counter() - t0
+    del result
+    _gpu_cleanup()
 
-    extra = {"all_times": times}
-    if peak_vram_mb > 0:
-        extra["peak_vram_mb"] = peak_vram_mb
-
-    return BenchmarkResult(
-        label=label,
-        device=device,
-        gpts=potential.gpts,
-        num_slices=len(potential),
-        chunk_size=chunk_size,
-        potential_bytes_mb=mem_mb,
-        time_seconds=np.median(times),
-        extra=extra,
-    )
+    out = {"label": label, "time": elapsed}
+    if tracker:
+        out["peak_vram_mb"] = tracker.peak_mb
+    return out
 
 
 def benchmark_build_only(
     potential: Potential,
     chunk_size: int | str,
     device: str,
-    n_repeats: int = 3,
-) -> BenchmarkResult:
+) -> dict:
     """Benchmark just the potential building (no multislice propagation)."""
     label = f"build-only gpts={potential.gpts}, slices={len(potential)}, chunk={chunk_size}"
-    mem_mb = estimate_potential_memory_mb(potential)
-
-    # Warmup
-    for chunk in potential.generate_chunked_slices(chunk_size=chunk_size):
-        pass
 
     gc.collect()
     if device == "gpu":
         import cupy as cp
-
         cp.get_default_memory_pool().free_all_blocks()
 
-    times = []
-    for _ in range(n_repeats):
-        t0 = time.perf_counter()
-        for chunk in potential.generate_chunked_slices(chunk_size=chunk_size):
-            pass
-        t1 = time.perf_counter()
-        times.append(t1 - t0)
+    t0 = time.perf_counter()
+    for chunk in potential.generate_chunked_slices(chunk_size=chunk_size):
+        pass
+    elapsed = time.perf_counter() - t0
 
-        gc.collect()
-        if device == "gpu":
-            import cupy as cp
-
-            cp.get_default_memory_pool().free_all_blocks()
-
-    return BenchmarkResult(
-        label=label,
-        device=device,
-        gpts=potential.gpts,
-        num_slices=len(potential),
-        chunk_size=chunk_size,
-        potential_bytes_mb=mem_mb,
-        time_seconds=np.median(times),
-        extra={"all_times": times},
-    )
+    _gpu_cleanup()
+    return {"label": label, "time": elapsed}
 
 
 def benchmark_scan(
@@ -283,40 +210,15 @@ def benchmark_scan(
     potential_chunk_size: int | str = "auto",
     max_batch: int = 8,
     energy: float = 200e3,
-    n_repeats: int = 2,
     to_zarr: bool = False,
-) -> BenchmarkResult:
-    """Benchmark a Probe + GridScan measurement using the lazy path.
-
-    All scans use ``lazy=True`` so that dask batches scan positions via
-    ``max_batch``. The eager path (``lazy=False``) ignores ``max_batch``
-    and processes all positions at once, which is not representative of
-    real usage and causes OOM for large scans.
-
-    Parameters
-    ----------
-    prebuilt : bool
-        If True, build the potential eagerly once before scanning.
-    to_zarr : bool
-        If True, stream results to zarr on disk (realistic for huge scans
-        whose results don't fit in memory). If False, call ``.compute()``.
-    potential_chunk_size : int or str
-        Passed through to multislice as ``potential_chunk_size``.
-    max_batch : int
-        Probe positions per dask block, bounding wave memory.
-    """
+) -> dict:
+    """Benchmark a Probe + GridScan measurement using the lazy path."""
     import shutil
     import tempfile
-    import traceback as tb
 
     probe = Probe(energy=energy, semiangle_cutoff=20, device=device)
     detector = AnnularDetector(inner=40, outer=200)
-
-    scan = GridScan(
-        start=(0, 0),
-        end=potential.extent,
-        gpts=scan_gpts,
-    )
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=scan_gpts)
 
     if prebuilt:
         cs_label = "pre-built"
@@ -325,146 +227,116 @@ def benchmark_scan(
     if to_zarr:
         cs_label += " (zarr)"
     label = f"{cs_label}, scan={scan_gpts}, batch={max_batch}"
-    mem_mb = estimate_potential_memory_mb(potential)
-    zarr_dir = None
 
     if prebuilt:
         try:
             pot = potential.build(lazy=False)
         except Exception as e:
-            # Clear traceback to release cupy array references
             e.__traceback__ = None
-            gc.collect()
-            return BenchmarkResult(
-                label=label,
-                device=device,
-                gpts=potential.gpts,
-                num_slices=len(potential),
-                chunk_size="N/A",
-                potential_bytes_mb=mem_mb,
-                time_seconds=float("nan"),
-                extra={"error": f"build failed: {type(e).__name__}: {e}"},
-            )
+            _gpu_cleanup()
+            return {"label": label, "error": f"build failed: {type(e).__name__}: {e}"}
     else:
         pot = potential
 
-    if to_zarr:
-        zarr_dir = tempfile.mkdtemp(prefix="abtem_bench_")
+    zarr_dir = tempfile.mkdtemp(prefix="abtem_bench_") if to_zarr else None
 
-    def _run_scan(zarr_path=None):
+    _gpu_cleanup()
+
+    tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else None
+    run_path = os.path.join(zarr_dir, "run.zarr") if zarr_dir else None
+
+    t0 = time.perf_counter()
+    if tracker:
+        tracker.__enter__()
+
+    try:
         lazy_result = probe.scan(
             pot, scan=scan, detectors=detector, lazy=True,
             max_batch=max_batch, potential_chunk_size=potential_chunk_size,
         )
         if to_zarr:
-            lazy_result.to_zarr(zarr_path, overwrite=True)
+            lazy_result.to_zarr(run_path, overwrite=True)
         else:
             lazy_result.compute()
         del lazy_result
-
-    # Warmup
-    try:
-        warmup_path = os.path.join(zarr_dir, "warmup.zarr") if zarr_dir else None
-        _run_scan(warmup_path)
     except Exception as e:
-        e.__traceback__ = None
-        gc.collect()
-        if zarr_dir:
-            shutil.rmtree(zarr_dir, ignore_errors=True)
-        return BenchmarkResult(
-            label=label,
-            device=device,
-            gpts=potential.gpts,
-            num_slices=len(potential),
-            chunk_size="pre-built" if prebuilt else potential_chunk_size,
-            potential_bytes_mb=mem_mb,
-            time_seconds=float("nan"),
-            extra={"error": f"{type(e).__name__}: {e}"},
-        )
-
-    gc.collect()
-    if device == "gpu":
-        import cupy as cp
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.cuda.Stream.null.synchronize()
-
-    times = []
-    peak_vram_mb = 0.0
-    for i in range(n_repeats):
-        if device == "gpu":
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-
-        if device == "gpu":
-            tracker = PeakVRAMTracker(interval=0.002)
-        else:
-            tracker = None
-
-        run_path = os.path.join(zarr_dir, f"run_{i}.zarr") if zarr_dir else None
-
-        t0 = time.perf_counter()
-        if tracker:
-            tracker.__enter__()
-
-        _run_scan(run_path)
-
-        if device == "gpu":
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-
         if tracker:
             tracker.__exit__(None, None, None)
-            peak_vram_mb = max(peak_vram_mb, tracker.peak_mb)
+        e.__traceback__ = None
+        _gpu_cleanup()
+        if zarr_dir:
+            shutil.rmtree(zarr_dir, ignore_errors=True)
+        return {"label": label, "error": f"{type(e).__name__}: {e}"}
 
-        t1 = time.perf_counter()
-        times.append(t1 - t0)
+    if device == "gpu":
+        import cupy as cp
+        cp.cuda.Stream.null.synchronize()
+    if tracker:
+        tracker.__exit__(None, None, None)
 
-        gc.collect()
-        if device == "gpu":
-            cp.get_default_memory_pool().free_all_blocks()
-
-    if zarr_dir:
-        shutil.rmtree(zarr_dir, ignore_errors=True)
-
-    extra = {"all_times": times}
-    if peak_vram_mb > 0:
-        extra["peak_vram_mb"] = peak_vram_mb
+    elapsed = time.perf_counter() - t0
 
     if prebuilt:
         del pot
+    _gpu_cleanup()
+    if zarr_dir:
+        shutil.rmtree(zarr_dir, ignore_errors=True)
 
-    return BenchmarkResult(
-        label=label,
-        device=device,
-        gpts=potential.gpts,
-        num_slices=len(potential),
-        chunk_size="pre-built" if prebuilt else potential_chunk_size,
-        potential_bytes_mb=mem_mb,
-        time_seconds=np.median(times),
-        extra=extra,
-    )
+    out = {"label": label, "time": elapsed}
+    if tracker:
+        out["peak_vram_mb"] = tracker.peak_mb
+    return out
 
 
-def print_result(result: BenchmarkResult):
-    err = result.extra.get("error")
-    if err:
-        print(
-            f"  {result.label:<55s}  "
-            f"ERROR: {err}"
-        )
+# ──────────────────────────────────────────────────────────────────────
+# Output formatting
+# ──────────────────────────────────────────────────────────────────────
+
+def print_result(r: dict):
+    if "error" in r:
+        print(f"  {r['label']:<55s}  ERROR: {r['error']}")
     else:
-        times_str = ", ".join(f"{t:.3f}" for t in result.extra.get("all_times", []))
-        vram = result.extra.get("peak_vram_mb")
+        vram = r.get("peak_vram_mb")
         vram_str = f"  vram={vram / 1000:5.1f}GB" if vram else ""
-        print(
-            f"  {result.label:<55s}  "
-            f"{result.time_seconds:8.3f}s"
-            f"{vram_str}  "
-            f"[{times_str}]"
-        )
+        print(f"  {r['label']:<55s}  {r['time']:8.3f}s{vram_str}")
 
 
-def run_benchmarks(device: str, quick: bool = False):
+# ──────────────────────────────────────────────────────────────────────
+# Configuration lists
+# ──────────────────────────────────────────────────────────────────────
+
+def get_planewave_configs(device: str, quick: bool):
+    if quick:
+        return [((512, 512), (2, 2, 10))]
+    configs = [((2048, 2048), (10, 10, 60))]
+    if device == "gpu":
+        configs.extend([
+            ((2048, 2048), (10, 10, 200)),
+            ((4096, 4096), (20, 20, 60)),
+            ((4096, 4096), (20, 20, 120)),
+        ])
+    return configs
+
+
+def get_scan_configs(device: str, quick: bool):
+    """Return list of (gpts, repetitions, scan_gpts, max_batch)."""
+    if quick:
+        return [((128, 128), (2, 2, 4), (4, 4), 4)]
+    configs = [
+        ((512, 512), (2, 2, 10), (16, 16), 8),
+        ((512, 512), (2, 2, 10), (32, 32), 8),
+        ((1024, 1024), (2, 2, 10), (16, 16), 8),
+    ]
+    if device == "gpu":
+        configs.append(((2048, 2048), (10, 10, 200), (8, 8), 4))
+    return configs
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Planewave benchmarks (run in-process — OOMs are less sticky here)
+# ──────────────────────────────────────────────────────────────────────
+
+def run_planewave_benchmarks(device: str, quick: bool = False):
     print(f"\n{'=' * 90}")
     print(f"Potential Chunking Benchmark — device={device}")
     print(f"abTEM version: {abtem.__version__}")
@@ -473,7 +345,6 @@ def run_benchmarks(device: str, quick: bool = False):
     if device == "gpu":
         try:
             import cupy as cp
-
             dev = cp.cuda.Device()
             free, total = dev.mem_info
             print(f"GPU: {cp.cuda.runtime.getDeviceProperties(0)['name'].decode()}")
@@ -483,43 +354,12 @@ def run_benchmarks(device: str, quick: bool = False):
             print("ERROR: cupy not available, cannot run GPU benchmarks")
             return
 
-    # ─── Benchmark configurations ───
-    #
-    # Each config: (gpts, repetitions, description)
-    # Repetitions control the number of slices (z-direction).
-    # gpts controls lateral resolution and memory per slice.
-    #
-    # Memory per slice (float32): gpts^2 * 4 bytes
-    #   512x512   =   1 MB/slice
-    #  1024x1024  =   4 MB/slice
-    #  2048x2048  =  16 MB/slice
-    #  4096x4096  =  64 MB/slice
-    #
-    if quick:
-        configs = [
-            ((512, 512), (2, 2, 10)),
-        ]
-    else:
-        configs = [
-            ((2048, 2048), (10, 10, 60)),
-        ]
-        if device == "gpu":
-            configs.extend([
-                # These are designed to approach or exceed 24 GB RTX 4090 VRAM.
-                # build(lazy=False) should OOM; chunked multislice should succeed.
-                ((2048, 2048), (10, 10, 200)),
-                ((4096, 4096), (20, 20, 60)),
-                ((4096, 4096), (20, 20, 120)),
-            ])
-
-    # Chunk sizes to test
     chunk_sizes: list[int | str] = [1, 10, 50, "auto"]
 
-    for gpts, reps in configs:
+    for gpts, reps in get_planewave_configs(device, quick):
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
-        mem_mb = estimate_potential_memory_mb(potential)
-        mem_gb = mem_mb / 1000
+        mem_gb = estimate_potential_memory_mb(potential) / 1000
 
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
 
@@ -528,7 +368,7 @@ def run_benchmarks(device: str, quick: bool = False):
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
-        # First benchmark: build the full potential at once (reference)
+        # Full build reference
         print("\n  [Full build reference]")
         full_build_ok = False
         try:
@@ -539,196 +379,176 @@ def run_benchmarks(device: str, quick: bool = False):
             full_build_ok = True
             del full
         except (MemoryError, Exception) as e:
-            ename = type(e).__name__
-            print(f"  build(lazy=False) FAILED ({ename}): {e}")
+            print(f"  build(lazy=False) FAILED ({type(e).__name__}): {e}")
             print(f"  >>> This is expected — potential ({mem_gb:.1f} GB) exceeds available memory.")
             e.__traceback__ = None
             del e
+        _gpu_cleanup()
 
-        gc.collect()
-        if device == "gpu":
-            cp.get_default_memory_pool().free_all_blocks()
-
-        # Benchmark: potential building only (no multislice)
+        # Build only
         print("\n  [Potential build (generate_chunked_slices)]")
         for cs in chunk_sizes:
             if isinstance(cs, int) and cs > num_slices:
                 continue
-            result = benchmark_build_only(potential, cs, device, n_repeats=3)
-            print_result(result)
+            print_result(benchmark_build_only(potential, cs, device))
 
-        # Benchmark: full multislice
+        # Full multislice
         print("\n  [Full multislice (PlaneWave, 200 keV)]")
-
-        # Reference: pre-built potential (if it fits in memory)
         if full_build_ok:
             try:
                 prebuilt = potential.build(lazy=False)
-                result = benchmark_multislice(prebuilt, "auto", device, n_repeats=3)
-                result.label = f"pre-built PotentialArray, chunk=auto"
-                print_result(result)
+                r = benchmark_multislice(prebuilt, "auto", device)
+                r["label"] = "pre-built PotentialArray, chunk=auto"
+                print_result(r)
                 del prebuilt
             except (MemoryError, Exception) as e:
                 print(f"  pre-built PotentialArray: OOM ({type(e).__name__})")
         else:
             print(f"  pre-built PotentialArray: SKIPPED (full build failed above)")
+        _gpu_cleanup()
 
-        gc.collect()
-        if device == "gpu":
-            import cupy as cp
-            cp.get_default_memory_pool().free_all_blocks()
-
-        # Chunked: unbuilt Potential with various chunk sizes
         for cs in chunk_sizes:
             if isinstance(cs, int) and cs > num_slices:
                 continue
-            result = benchmark_multislice(potential, cs, device, n_repeats=3)
-            print_result(result)
+            print_result(benchmark_multislice(potential, cs, device))
+        _gpu_cleanup()
 
-        gc.collect()
-        if device == "gpu":
-            import cupy as cp
-            cp.get_default_memory_pool().free_all_blocks()
 
-    # ─── Scan benchmark: pre-built vs unbuilt potential (lazy → zarr) ───
-    #
-    # The realistic workflow for memory-hungry scans: build the dask graph
-    # lazily, then stream results to a zarr store block by block — the full
-    # result array never lives in memory.
-    #
-    # With an unbuilt Potential, chunks are rebuilt from atoms for every
-    # scan-position batch. Pre-building once avoids this redundant work
-    # (but requires the full potential to fit in memory).
-    #
+# ──────────────────────────────────────────────────────────────────────
+# Scan benchmarks — each config runs in a SEPARATE SUBPROCESS
+# ──────────────────────────────────────────────────────────────────────
+
+def run_single_scan_config(device: str, config_index: int, quick: bool):
+    """Run one scan config (called in a subprocess). Prints results to stdout."""
+    config.set({"dask.lazy": False})
+
+    scan_configs = get_scan_configs(device, quick)
+    gpts, reps, scan_gpts, max_batch = scan_configs[config_index]
+
+    if device == "gpu":
+        warmup_gpu()
+
+    potential = make_large_potential(gpts, reps, device=device)
+    num_slices = len(potential)
+    mem_gb = estimate_potential_memory_mb(potential) / 1000
+    n_positions = scan_gpts[0] * scan_gpts[1]
+    n_batches = (n_positions + max_batch - 1) // max_batch
+
+    print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
+          f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch={max_batch} ──")
+    print(f"  {n_positions} positions, {n_batches} batches")
+
+    if device == "gpu":
+        import cupy as cp
+        free, total = cp.cuda.Device().mem_info
+        print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+
+    scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
+
+    # --- lazy → .compute() ---
+    print("  [lazy → compute]")
+
+    print_result(benchmark_scan(
+        potential, scan_gpts, device, prebuilt=True, max_batch=max_batch))
+    _gpu_cleanup()
+
+    for cs in scan_chunk_sizes:
+        print_result(benchmark_scan(
+            potential, scan_gpts, device, prebuilt=False,
+            potential_chunk_size=cs, max_batch=max_batch))
+        _gpu_cleanup()
+
+    # --- lazy → zarr ---
+    print("  [lazy → zarr]")
+
+    for cs in scan_chunk_sizes:
+        print_result(benchmark_scan(
+            potential, scan_gpts, device, prebuilt=False,
+            potential_chunk_size=cs, to_zarr=True, max_batch=max_batch))
+        _gpu_cleanup()
+
+    sys.stdout.flush()
+
+
+def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
+    """Spawn a fresh subprocess for each scan config."""
     print(f"\n{'=' * 90}")
-    print(f"Scan Benchmark (Probe + GridScan, lazy → zarr) — device={device}")
+    print(f"Scan Benchmark (Probe + GridScan, lazy path) — device={device}")
+    print(f"Each config runs in a fresh subprocess for clean VRAM.")
     print(f"{'=' * 90}")
 
-    # Each config: (gpts, repetitions, scan_gpts, max_batch, description)
-    #
-    # max_batch controls probe positions per batch, bounding wave memory:
-    #   wave_bytes = max_batch * gpts_y * gpts_x * 8 (complex64)
-    #   e.g. max_batch=8, gpts=1024: 8 * 1024^2 * 8 = 64 MB
-    #
-    # More scan positions with small max_batch = more batches = more
-    # potential rebuilds for the unbuilt case.
-    #
-    # Each config: (gpts, repetitions, scan_gpts, max_batch)
-    #
-    # max_batch controls probe positions per batch, bounding wave memory:
-    #   wave_bytes = max_batch * gpts_y * gpts_x * 8 (complex64)
-    #
-    # n_batches = ceil(n_positions / max_batch) — each batch triggers a
-    # full potential rebuild for the unbuilt case.
-    #
-    if quick:
-        scan_configs = [
-            ((128, 128), (2, 2, 4), (4, 4), 4),
+    scan_configs = get_scan_configs(device, quick)
+    script = os.path.abspath(__file__)
+
+    for i, (gpts, reps, scan_gpts, max_batch) in enumerate(scan_configs):
+        cmd = [
+            sys.executable, script,
+            "--device", device,
+            "--_run-scan-config", str(i),
         ]
-    else:
-        scan_configs = [
-            # Increasing scan positions — shows scaling with rebuild count
-            ((512, 512), (2, 2, 10), (16, 16), 8),
-            ((512, 512), (2, 2, 10), (32, 32), 8),
-            # Larger slices — higher per-rebuild cost
-            ((1024, 1024), (2, 2, 10), (16, 16), 8),
-        ]
-        if device == "gpu":
-            scan_configs.extend([
-                # Potential exceeds VRAM — pre-build impossible, must chunk
-                ((2048, 2048), (10, 10, 200), (8, 8), 4),
-            ])
+        if quick:
+            cmd.append("--quick")
 
-    for gpts, reps, scan_gpts, max_batch in scan_configs:
-        # Aggressive cleanup before each config to prevent VRAM leaks
-        gc.collect()
-        if device == "gpu":
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-            cp.get_default_memory_pool().free_all_blocks()
-            cp.get_default_pinned_memory_pool().free_all_blocks()
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "TQDM_DISABLE": "1"},
+        )
 
-        potential = make_large_potential(gpts, reps, device=device)
-        num_slices = len(potential)
-        mem_mb = estimate_potential_memory_mb(potential)
-        mem_gb = mem_mb / 1000
-        n_positions = scan_gpts[0] * scan_gpts[1]
-        n_batches = (n_positions + max_batch - 1) // max_batch
+        # Print subprocess stdout directly
+        if result.stdout:
+            print(result.stdout, end="")
 
-        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
-              f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch={max_batch} ──")
-        print(f"  {n_positions} positions, {n_batches} batches")
-
-        if device == "gpu":
-            free, total = cp.cuda.Device().mem_info
-            print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
-
-        def _cleanup():
-            gc.collect()
-            if device == "gpu":
-                cp.cuda.Stream.null.synchronize()
-                cp.get_default_memory_pool().free_all_blocks()
-                cp.get_default_pinned_memory_pool().free_all_blocks()
-
-        # Chunk sizes to test. Only use small explicit values — larger
-        # chunks compete with wave arrays + FFT workspace for VRAM.
-        scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
-
-        # --- lazy → .compute() ---
-        print("  [lazy → compute]")
-
-        # Pre-built reference (potential built once, dask batches probes)
-        result = benchmark_scan(potential, scan_gpts, device, prebuilt=True,
-                                max_batch=max_batch, n_repeats=3)
-        print_result(result)
-        _cleanup()
-
-        for cs in scan_chunk_sizes:
-            result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
-                                    potential_chunk_size=cs,
-                                    max_batch=max_batch, n_repeats=3)
-            print_result(result)
-            _cleanup()
-
-        # --- lazy → zarr (streaming to disk) ---
-        print("  [lazy → zarr]")
-
-        for cs in scan_chunk_sizes:
-            result = benchmark_scan(potential, scan_gpts, device, prebuilt=False,
-                                    potential_chunk_size=cs, to_zarr=True,
-                                    max_batch=max_batch, n_repeats=3)
-            print_result(result)
-            _cleanup()
+        if result.returncode != 0:
+            print(f"  [subprocess exited with code {result.returncode}]")
+            if result.stderr:
+                # Show last few lines of stderr (skip tracebacks)
+                lines = result.stderr.strip().split("\n")
+                for line in lines[-5:]:
+                    print(f"  stderr: {line}")
 
     print(f"\n{'=' * 90}")
     print("Done.")
 
+
+# ──────────────────────────────────────────────────────────────────────
+# Main entry point
+# ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
         description="Benchmark potential chunking for abTEM multislice"
     )
     parser.add_argument(
-        "--device",
-        choices=["cpu", "gpu", "both"],
-        default="both",
+        "--device", choices=["cpu", "gpu", "both"], default="both",
         help="Device to benchmark (default: both)",
     )
     parser.add_argument(
-        "--quick",
-        action="store_true",
+        "--quick", action="store_true",
         help="Run a quick subset of benchmarks",
     )
+    # Internal: used by subprocesses to run a single scan config
+    parser.add_argument("--_run-scan-config", type=int, default=None)
+
     args = parser.parse_args()
 
-    # Disable dask lazy evaluation for benchmarking
     config.set({"dask.lazy": False})
 
+    # If we're a subprocess running a single scan config, do just that and exit
+    if args._run_scan_config is not None:
+        run_single_scan_config(args.device, args._run_scan_config, args.quick)
+        return
+
+    # Otherwise, run the full benchmark suite
     if args.device in ("cpu", "both"):
-        run_benchmarks("cpu", quick=args.quick)
+        run_planewave_benchmarks("cpu", quick=args.quick)
+        run_scan_benchmarks_via_subprocesses("cpu", quick=args.quick)
 
     if args.device in ("gpu", "both"):
-        run_benchmarks("gpu", quick=args.quick)
+        run_planewave_benchmarks("gpu", quick=args.quick)
+        run_scan_benchmarks_via_subprocesses("gpu", quick=args.quick)
 
 
 if __name__ == "__main__":
