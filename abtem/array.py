@@ -418,6 +418,17 @@ class ComputableList(list):
         if not compute:
             return delayed_write
 
+        # Use synchronous scheduler on GPU to avoid multiple dask tasks
+        # running in parallel, each loading potential chunks + wave arrays
+        # into VRAM simultaneously.
+        is_gpu = config.get("device") == "gpu" or any(
+            hasattr(obj, "device") and obj.device == "gpu" for obj in self
+        )
+        if is_gpu:
+            check_cupy_is_installed()
+            if "scheduler" not in kwargs:
+                kwargs["scheduler"] = "synchronous"
+
         with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
