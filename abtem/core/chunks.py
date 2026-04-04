@@ -470,12 +470,14 @@ def estimate_potential_chunk_size(
             import cupy as cp
 
             free_mem, _ = cp.cuda.Device().mem_info
-            # Cap at 2 GB or 50% of currently free VRAM, whichever is
-            # smaller. The 2 GB cap prevents over-allocation: even when
-            # most VRAM appears free, wave arrays, FFT workspaces, and
-            # transmission functions will consume significant additional
-            # memory during propagation.
-            max_budget = 2 * 1024**3  # 2 GB
+            # Cap at 1 GB or 50% of currently free VRAM, whichever is
+            # smaller. The cap prevents over-allocation: even when most
+            # VRAM appears free, wave arrays, FFT workspaces, probe
+            # arrays, and transmission functions consume significant
+            # additional memory during propagation — especially for
+            # scanned measurements where batch_size × gpts² waves are
+            # co-resident with the potential chunk.
+            max_budget = 1 * 1024**3  # 1 GB
             budget_bytes = min(int(free_mem * 0.50), max_budget)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
