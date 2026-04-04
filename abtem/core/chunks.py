@@ -424,16 +424,18 @@ def estimate_potential_chunk_size(
     many slices can be held simultaneously when the potential is instead built
     in smaller chunks via ``generate_chunked_slices()``.
 
-    The budget accounts for the potential slice (real-valued) and its
-    transmission function (complex-valued, 2× the size), giving 3× the raw
-    slice size per slice held in memory.
+    The budget accounts for the potential slice (real-valued), its
+    transmission function (complex-valued, 2× the size), and transient
+    allocations from FFTs, atom projections, and Gaussian integrals during
+    ``build()``, giving ~8× the raw slice size per slice held in memory.
 
-    On GPU the budget is 25% of currently free VRAM (queried via cupy at
+    On GPU the budget is 10% of currently free VRAM (queried via cupy at
     call time after releasing dead pool blocks). Because this is called
     during multislice propagation, the free VRAM already excludes memory
-    consumed by wave arrays, probes, and FFT workspaces. The 25% fraction
-    leaves headroom for build temporaries during potential construction.
-    Falls back to ``dask.chunk-size-gpu`` when cupy is unavailable.
+    consumed by wave arrays, probes, and FFT workspaces. The conservative
+    10% fraction leaves headroom for build temporaries that are not fully
+    captured by the per-slice estimate. Falls back to
+    ``dask.chunk-size-gpu`` when cupy is unavailable.
 
     Parameters
     ----------
@@ -456,9 +458,11 @@ def estimate_potential_chunk_size(
 
     slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
 
-    # Transmission function is complex, so 2× the potential slice size;
-    # total 3× per slice held in memory (potential + transmission).
-    effective_per_slice = slice_bytes * 3
+    # The per-slice cost during ``build()`` includes the output array
+    # (real, 1×), the transmission function (complex, 2×), and transient
+    # allocations from FFTs, atom projections, and Gaussian integrals.
+    # Empirically the peak is ~8× the raw slice size at 4096² grids.
+    effective_per_slice = slice_bytes * 8
 
     chunk_size_key = "potential.slice-chunk-size"
     chunk_size_setting = config.get(chunk_size_key, "auto")
@@ -473,13 +477,15 @@ def estimate_potential_chunk_size(
             # Release dead pool blocks so mem_info reflects genuinely
             # available VRAM, not memory held by the cupy pool from
             # previous chunks or dask tasks.
-            cp.get_default_memory_pool().free_all_blocks()
+            pool = cp.get_default_memory_pool()
+            pool.free_all_blocks()
 
-            free_mem, _ = cp.cuda.Device().mem_info
-            # Use 25% of currently free VRAM. No fixed cap — free_mem
-            # already reflects memory consumed by wave arrays, probes,
-            # and FFT workspaces when called during multislice.
-            budget_bytes = int(free_mem * 0.25)
+            free_mem, total_mem = cp.cuda.Device().mem_info
+            # Use 10% of currently free VRAM. The conservative fraction
+            # leaves headroom for build temporaries (FFTs, atom projections)
+            # that are not captured by ``effective_per_slice``, and for
+            # co-resident wave arrays in the scan path.
+            budget_bytes = int(free_mem * 0.10)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
