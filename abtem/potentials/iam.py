@@ -842,7 +842,8 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         exit_plane_after = self._exit_plane_after
 
-        for chunk_start in range(first_slice, last_slice, chunk_size):
+        chunk_start = first_slice
+        while chunk_start < last_slice:
             chunk_end = min(chunk_start + chunk_size, last_slice)
 
             # Free cupy memory pool blocks before building the next chunk.
@@ -857,15 +858,47 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 except ImportError:
                     pass
 
-            chunk = self.build(
-                first_slice=chunk_start, last_slice=chunk_end, lazy=False
-            )
+            try:
+                chunk = self.build(
+                    first_slice=chunk_start, last_slice=chunk_end, lazy=False
+                )
+            except Exception as e:
+                # If the build OOMs, halve the chunk size and retry.
+                # This makes "auto" robust — the budget estimate can't
+                # perfectly predict the build peak (which depends on atom
+                # count, grid size, and co-resident GPU allocations), so
+                # we fall back gracefully instead of failing.
+                is_oom = "OutOfMemory" in type(e).__name__ or isinstance(
+                    e, MemoryError
+                )
+                if is_oom and (chunk_end - chunk_start) > 1:
+                    import gc
+                    import warnings
+
+                    e.__traceback__ = None
+                    del e
+                    gc.collect()
+                    if self.device == "gpu":
+                        cp.get_default_memory_pool().free_all_blocks()
+
+                    new_size = max(1, (chunk_end - chunk_start) // 2)
+                    warnings.warn(
+                        f"Potential chunk build OOM for {chunk_end - chunk_start} "
+                        f"slices at {self.gpts}, reducing to {new_size} slices.",
+                        stacklevel=2,
+                    )
+                    chunk_size = new_size
+                    continue  # retry with smaller chunk_size
+                else:
+                    raise
+
             # Remap exit planes to chunk-local indices (build() sets the
             # full potential's exit_planes which are global indices).
             chunk._exit_planes = tuple(
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
             )
             yield chunk
+            chunk_start = chunk_end
 
     @property
     def ensemble_axes_metadata(self):
