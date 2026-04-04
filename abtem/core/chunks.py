@@ -428,12 +428,13 @@ def estimate_potential_chunk_size(
     transmission function (complex-valued, 2x the size), giving 3x the raw
     slice size per slice held in memory.
 
-    On GPU the budget is the minimum of 2 GB and 50% of currently free VRAM
-    (queried via cupy at call time). The 2 GB cap prevents over-allocation
-    when most of VRAM is nominally free but will be consumed by wave arrays,
-    FFT workspaces, and transmission functions during propagation. A 0.75
-    safety factor is applied on top. Falls back to ``dask.chunk-size-gpu``
-    when cupy is unavailable.
+    On GPU the budget is 25% of currently free VRAM (queried via cupy at
+    call time). Because this is called during multislice propagation, the
+    free VRAM already excludes memory consumed by wave arrays, probes, and
+    FFT workspaces. The conservative 25% fraction accounts for large
+    temporary allocations during potential building from atoms (projecting
+    atoms to grid, interpolation), which can be 5-15× the final slice
+    size. Falls back to ``dask.chunk-size-gpu`` when cupy is unavailable.
 
     Parameters
     ----------
@@ -470,21 +471,18 @@ def estimate_potential_chunk_size(
             import cupy as cp
 
             free_mem, _ = cp.cuda.Device().mem_info
-            # Cap at 1 GB or 50% of currently free VRAM, whichever is
-            # smaller. The cap prevents over-allocation: even when most
-            # VRAM appears free, wave arrays, FFT workspaces, probe
-            # arrays, and transmission functions consume significant
-            # additional memory during propagation — especially for
-            # scanned measurements where batch_size × gpts² waves are
-            # co-resident with the potential chunk.
-            max_budget = 1 * 1024**3  # 1 GB
-            budget_bytes = min(int(free_mem * 0.50), max_budget)
+            # Use 25% of currently free VRAM. No fixed cap — free_mem
+            # already reflects memory consumed by wave arrays, probes,
+            # and FFT workspaces when called during multislice. The low
+            # fraction accounts for large temporary allocations during
+            # potential building (projecting atoms to grid, interpolation)
+            # that can be 5-15× the final slice size.
+            budget_bytes = int(free_mem * 0.25)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
         budget_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
 
-    safety_factor = 0.75
-    chunk_size = max(1, int(budget_bytes * safety_factor / effective_per_slice))
+    chunk_size = max(1, int(budget_bytes / effective_per_slice))
 
     return min(chunk_size, 4096)

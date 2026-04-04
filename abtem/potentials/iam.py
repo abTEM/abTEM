@@ -844,6 +844,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
 
         for chunk_start in range(first_slice, last_slice, chunk_size):
             chunk_end = min(chunk_start + chunk_size, last_slice)
+
+            # Free cupy memory pool blocks before building the next chunk.
+            # The build process creates large temporary arrays (atom
+            # projection, interpolation) that inflate the pool; without
+            # cleanup these dead blocks prevent new allocations.
+            if self.device == "gpu":
+                try:
+                    import cupy as cp
+
+                    cp.get_default_memory_pool().free_all_blocks()
+                except ImportError:
+                    pass
+
             chunk = self.build(
                 first_slice=chunk_start, last_slice=chunk_end, lazy=False
             )
