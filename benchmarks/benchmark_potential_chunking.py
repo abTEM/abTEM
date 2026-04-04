@@ -428,8 +428,11 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
 # Scan benchmarks — each config runs in a SEPARATE SUBPROCESS
 # ──────────────────────────────────────────────────────────────────────
 
-def run_single_scan_config(device: str, config_index: int, quick: bool):
-    """Run one scan config (called in a subprocess). Prints results to stdout."""
+def run_single_scan_benchmark(
+    device: str, config_index: int, quick: bool,
+    prebuilt: bool, chunk_size: int | str, to_zarr: bool,
+):
+    """Run ONE scan benchmark (called in a subprocess). Prints one result line."""
     config.set({"dask.lazy": False})
 
     scan_configs = get_scan_configs(device, quick)
@@ -439,85 +442,91 @@ def run_single_scan_config(device: str, config_index: int, quick: bool):
         warmup_gpu()
 
     potential = make_large_potential(gpts, reps, device=device)
-    num_slices = len(potential)
-    mem_gb = estimate_potential_memory_mb(potential) / 1000
-    n_positions = scan_gpts[0] * scan_gpts[1]
-    n_batches = (n_positions + max_batch - 1) // max_batch
-
-    print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
-          f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch={max_batch} ──")
-    print(f"  {n_positions} positions, {n_batches} batches")
-
-    if device == "gpu":
-        import cupy as cp
-        free, total = cp.cuda.Device().mem_info
-        print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
-
-    scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
-
-    # --- lazy → .compute() ---
-    print("  [lazy → compute]")
 
     print_result(benchmark_scan(
-        potential, scan_gpts, device, prebuilt=True, max_batch=max_batch))
-    _gpu_cleanup()
-
-    for cs in scan_chunk_sizes:
-        print_result(benchmark_scan(
-            potential, scan_gpts, device, prebuilt=False,
-            potential_chunk_size=cs, max_batch=max_batch))
-        _gpu_cleanup()
-
-    # --- lazy → zarr ---
-    print("  [lazy → zarr]")
-
-    for cs in scan_chunk_sizes:
-        print_result(benchmark_scan(
-            potential, scan_gpts, device, prebuilt=False,
-            potential_chunk_size=cs, to_zarr=True, max_batch=max_batch))
-        _gpu_cleanup()
-
+        potential, scan_gpts, device,
+        prebuilt=prebuilt,
+        potential_chunk_size=chunk_size,
+        max_batch=max_batch,
+        to_zarr=to_zarr,
+    ))
     sys.stdout.flush()
 
 
+def _run_scan_subprocess(
+    script: str, device: str, config_index: int, quick: bool,
+    prebuilt: bool, chunk_size: int | str, to_zarr: bool,
+):
+    """Spawn a fresh subprocess for one scan benchmark and print its output."""
+    cmd = [
+        sys.executable, script,
+        "--device", device,
+        "--_run-scan-bench", str(config_index),
+        "--_prebuilt" if prebuilt else "--_no-prebuilt",
+        "--_chunk-size", str(chunk_size),
+    ]
+    if to_zarr:
+        cmd.append("--_to-zarr")
+    if quick:
+        cmd.append("--quick")
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "TQDM_DISABLE": "1"},
+    )
+
+    if result.stdout:
+        print(result.stdout, end="")
+
+    if result.returncode != 0:
+        if result.stderr:
+            lines = result.stderr.strip().split("\n")
+            for line in lines[-3:]:
+                print(f"  stderr: {line}")
+
+
 def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
-    """Spawn a fresh subprocess for each scan config."""
+    """Spawn a fresh subprocess for EACH scan benchmark."""
     print(f"\n{'=' * 90}")
     print(f"Scan Benchmark (Probe + GridScan, lazy path) — device={device}")
-    print(f"Each config runs in a fresh subprocess for clean VRAM.")
+    print(f"Each benchmark runs in a fresh subprocess for clean VRAM.")
     print(f"{'=' * 90}")
 
     scan_configs = get_scan_configs(device, quick)
     script = os.path.abspath(__file__)
+    scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
 
     for i, (gpts, reps, scan_gpts, max_batch) in enumerate(scan_configs):
-        cmd = [
-            sys.executable, script,
-            "--device", device,
-            "--_run-scan-config", str(i),
-        ]
-        if quick:
-            cmd.append("--quick")
+        potential = make_large_potential(gpts, reps, device=device)
+        num_slices = len(potential)
+        mem_gb = estimate_potential_memory_mb(potential) / 1000
+        n_positions = scan_gpts[0] * scan_gpts[1]
+        n_batches = (n_positions + max_batch - 1) // max_batch
+        del potential
 
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={**os.environ, "TQDM_DISABLE": "1"},
-        )
+        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
+              f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch={max_batch} ──")
+        print(f"  {n_positions} positions, {n_batches} batches")
 
-        # Print subprocess stdout directly
-        if result.stdout:
-            print(result.stdout, end="")
+        # --- lazy → .compute() ---
+        print("  [lazy → compute]")
 
-        if result.returncode != 0:
-            print(f"  [subprocess exited with code {result.returncode}]")
-            if result.stderr:
-                # Show last few lines of stderr (skip tracebacks)
-                lines = result.stderr.strip().split("\n")
-                for line in lines[-5:]:
-                    print(f"  stderr: {line}")
+        _run_scan_subprocess(script, device, i, quick,
+                             prebuilt=True, chunk_size="auto", to_zarr=False)
+
+        for cs in scan_chunk_sizes:
+            _run_scan_subprocess(script, device, i, quick,
+                                 prebuilt=False, chunk_size=cs, to_zarr=False)
+
+        # --- lazy → zarr ---
+        print("  [lazy → zarr]")
+
+        for cs in scan_chunk_sizes:
+            _run_scan_subprocess(script, device, i, quick,
+                                 prebuilt=False, chunk_size=cs, to_zarr=True)
 
     print(f"\n{'=' * 90}")
     print("Done.")
@@ -539,16 +548,28 @@ def main():
         "--quick", action="store_true",
         help="Run a quick subset of benchmarks",
     )
-    # Internal: used by subprocesses to run a single scan config
-    parser.add_argument("--_run-scan-config", type=int, default=None)
+    # Internal: used by subprocesses to run a single scan benchmark
+    parser.add_argument("--_run-scan-bench", type=int, default=None)
+    parser.add_argument("--_prebuilt", action="store_true", default=False)
+    parser.add_argument("--_no-prebuilt", action="store_true", default=False)
+    parser.add_argument("--_chunk-size", type=str, default="auto")
+    parser.add_argument("--_to-zarr", action="store_true", default=False)
 
     args = parser.parse_args()
 
     config.set({"dask.lazy": False})
 
-    # If we're a subprocess running a single scan config, do just that and exit
-    if args._run_scan_config is not None:
-        run_single_scan_config(args.device, args._run_scan_config, args.quick)
+    # If we're a subprocess running a single scan benchmark
+    if args._run_scan_bench is not None:
+        cs: int | str = args._chunk_size
+        try:
+            cs = int(cs)
+        except ValueError:
+            pass  # keep as string ("auto")
+        run_single_scan_benchmark(
+            args.device, args._run_scan_bench, args.quick,
+            prebuilt=args._prebuilt, chunk_size=cs, to_zarr=args._to_zarr,
+        )
         return
 
     # Otherwise, run the full benchmark suite
