@@ -308,16 +308,17 @@ def print_result(r: dict):
 def get_planewave_configs(device: str, quick: bool):
     if quick:
         return [((512, 512), (2, 2, 10))]
-    configs = [((2048, 2048), (10, 10, 60))]
+    configs = []
     if device == "gpu":
         configs.extend([
-            ((2048, 2048), (10, 10, 200)),
-            ((4096, 4096), (20, 20, 60)),
+            # ~22 GB — just fits in 24 GB VRAM
             ((4096, 4096), (20, 20, 120)),
-            # Exceeds 24 GB VRAM — build(lazy=False) should OOM,
-            # chunked multislice should succeed.
+            # ~36 GB — exceeds 24 GB VRAM; build(lazy=False) OOMs,
+            # chunked multislice succeeds.
             ((4096, 4096), (20, 20, 200)),
         ])
+    else:
+        configs.append(((2048, 2048), (10, 10, 60)))
     return configs
 
 
@@ -325,16 +326,18 @@ def get_scan_configs(device: str, quick: bool):
     """Return list of (gpts, repetitions, scan_gpts, max_batch)."""
     if quick:
         return [((128, 128), (2, 2, 4), (4, 4), 4)]
-    configs = [
-        # Medium: shows pre-built vs chunked scaling
-        ((1024, 1024), (2, 2, 10), (16, 16), 8),
-        ((1024, 1024), (2, 2, 10), (32, 32), 8),
-    ]
+    configs = []
     if device == "gpu":
-        configs.append(
-            # Large: potential exceeds VRAM, must chunk
-            ((2048, 2048), (10, 10, 200), (8, 8), 4),
-        )
+        configs.extend([
+            # ~11 GB potential — fits in VRAM, pre-built should work
+            ((2048, 2048), (10, 10, 60), (4, 4), 4),
+            # ~22 GB potential — tight fit, pre-built may OOM
+            ((4096, 4096), (20, 20, 120), (4, 4), 4),
+            # ~36 GB potential — exceeds VRAM, must chunk
+            ((4096, 4096), (20, 20, 200), (4, 4), 2),
+        ])
+    else:
+        configs.append(((1024, 1024), (2, 2, 10), (8, 8), 4))
     return configs
 
 
