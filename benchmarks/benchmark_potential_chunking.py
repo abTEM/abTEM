@@ -314,6 +314,9 @@ def get_planewave_configs(device: str, quick: bool):
             ((2048, 2048), (10, 10, 200)),
             ((4096, 4096), (20, 20, 60)),
             ((4096, 4096), (20, 20, 120)),
+            # Exceeds 24 GB VRAM — build(lazy=False) should OOM,
+            # chunked multislice should succeed.
+            ((4096, 4096), (20, 20, 200)),
         ])
     return configs
 
@@ -323,12 +326,15 @@ def get_scan_configs(device: str, quick: bool):
     if quick:
         return [((128, 128), (2, 2, 4), (4, 4), 4)]
     configs = [
-        ((512, 512), (2, 2, 10), (16, 16), 8),
-        ((512, 512), (2, 2, 10), (32, 32), 8),
+        # Medium: shows pre-built vs chunked scaling
         ((1024, 1024), (2, 2, 10), (16, 16), 8),
+        ((1024, 1024), (2, 2, 10), (32, 32), 8),
     ]
     if device == "gpu":
-        configs.append(((2048, 2048), (10, 10, 200), (8, 8), 4))
+        configs.append(
+            # Large: potential exceeds VRAM, must chunk
+            ((2048, 2048), (10, 10, 200), (8, 8), 4),
+        )
     return configs
 
 
