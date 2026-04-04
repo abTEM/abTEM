@@ -329,12 +329,13 @@ def get_scan_configs(device: str, quick: bool):
     configs = []
     if device == "gpu":
         configs.extend([
-            # ~11 GB potential — fits in VRAM, pre-built should work
+            # ~3 GB potential — fits in VRAM, shows pre-built advantage
             ((2048, 2048), (10, 10, 60), (4, 4), 4),
-            # ~22 GB potential — tight fit, pre-built may OOM
-            ((4096, 4096), (20, 20, 120), (4, 4), 4),
-            # ~36 GB potential — exceeds VRAM, must chunk
-            ((4096, 4096), (20, 20, 200), (4, 4), 2),
+            # ~22 GB potential — tight fit, pre-built OOMs
+            ((4096, 4096), (20, 20, 120), (4, 4), 2),
+            # ~36 GB potential — exceeds VRAM, must chunk;
+            # batch=1 to minimize wave memory at 4096² resolution
+            ((4096, 4096), (20, 20, 200), (4, 4), 1),
         ])
     else:
         configs.append(((1024, 1024), (2, 2, 10), (8, 8), 4))
