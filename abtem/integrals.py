@@ -223,8 +223,9 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         )  # noqa
 
     def get_gaussians(self, symbol, gpts, sampling):
-        if symbol in self._gaussians:
-            return self._gaussian[(symbol, gpts, sampling)]
+        key = (symbol, gpts, sampling)
+        if key in self._gaussians:
+            return self._gaussians[key]
 
         return gaussian_projected_scattering_factors(symbol, gpts, sampling)
 
@@ -249,7 +250,7 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         for i in range(5):
             temp = xp.zeros_like(array, dtype=xp.complex64)
             superpose_deltas(positions, temp, weights=weights[i])
-            array += fft2(temp, overwrite_x=False) * gaussians[i].astype(xp.complex64)
+            array += fft2(temp, overwrite_x=True) * gaussians[i].astype(xp.complex64)
 
         return array
 
@@ -293,7 +294,14 @@ class GaussianProjectionIntegrals(FieldIntegrator):
                 positions, symbol, a, b, gpts, sampling, device
             )
 
-        return ifft2(array / sinc(gpts, sampling, device)).real
+        if not hasattr(self, "_sinc_cache"):
+            self._sinc_cache = {}
+
+        sinc_key = (gpts, sampling, device)
+        if sinc_key not in self._sinc_cache:
+            self._sinc_cache[sinc_key] = sinc(gpts, sampling, device)
+
+        return ifft2(array / self._sinc_cache[sinc_key]).real
 
 
 def sinc(
