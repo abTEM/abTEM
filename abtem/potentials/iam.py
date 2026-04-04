@@ -879,6 +879,9 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     del e
                     gc.collect()
                     if self.device == "gpu":
+                        # Synchronize to ensure all pending GPU ops complete,
+                        # then release dead pool blocks before retrying.
+                        cp.cuda.Device().synchronize()
                         cp.get_default_memory_pool().free_all_blocks()
 
                     new_size = max(1, (chunk_end - chunk_start) // 2)
