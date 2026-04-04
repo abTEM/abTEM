@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import warnings
@@ -420,16 +421,22 @@ class ComputableList(list):
 
         # Use synchronous scheduler on GPU to avoid multiple dask tasks
         # running in parallel, each loading potential chunks + wave arrays
-        # into VRAM simultaneously.
+        # into VRAM simultaneously. We must use dask.config.set() rather
+        # than just passing scheduler= to dask.compute(), because the
+        # delayed graph contains inner array.compute() calls that would
+        # otherwise use dask's default threaded scheduler.
         is_gpu = config.get("device") == "gpu" or any(
             hasattr(obj, "device") and obj.device == "gpu" for obj in self
         )
         if is_gpu:
             check_cupy_is_installed()
-            if "scheduler" not in kwargs:
-                kwargs["scheduler"] = "synchronous"
 
-        with _compute_context(
+        scheduler_ctx = (
+            dask.config.set(scheduler="synchronous") if is_gpu
+            else contextlib.nullcontext()
+        )
+
+        with scheduler_ctx, _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
             output = dask.compute(delayed_write, **kwargs)[0]
