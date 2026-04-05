@@ -497,7 +497,7 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
 
     scan_configs = get_scan_configs(device, quick)
     script = os.path.abspath(__file__)
-    scan_chunk_sizes: list[int | str] = [1, 10, 50, "auto"]
+    scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
 
     for i, (gpts, reps, scan_gpts, max_batch) in enumerate(scan_configs):
         potential = make_large_potential(gpts, reps, device=device)
