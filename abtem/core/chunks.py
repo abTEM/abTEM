@@ -424,19 +424,23 @@ def estimate_potential_chunk_size(
     many slices can be held simultaneously when the potential is instead built
     in smaller chunks via ``generate_chunked_slices()``.
 
-    The budget accounts for the potential slice (real-valued), its
-    transmission function (complex-valued, 2× the size), and transient
-    allocations from FFTs, atom projections, and Gaussian integrals during
-    ``build()``, giving ~4× the raw slice size per slice held in memory
-    (with Gaussian and sinc caching active).
+    The per-slice cost includes the output array (real, 1×), the
+    transmission function (complex, 2×), transient build allocations (FFTs,
+    atom projections), and FFT workspace during wave propagation. On GPU
+    this is compounded by CuPy memory pool fragmentation — the pool may
+    hold large contiguous blocks for live arrays (waves, probes) that
+    prevent new allocations even when total free bytes suffice. The
+    effective per-slice cost under fragmentation is empirically ~8× the
+    raw slice size for scan workloads at 4096² grids.
 
-    On GPU the budget is 25% of effectively free VRAM (queried via cupy
-    at call time after releasing dead pool blocks). Because this is
-    called during multislice propagation, the free VRAM already excludes
-    memory consumed by wave arrays, probes, and FFT workspaces. The
-    4× per-slice cost estimate captures build temporaries, and 25%
-    provides a good balance between throughput and safety. Falls back to
-    ``dask.chunk-size-gpu`` when cupy is unavailable.
+    On GPU the budget uses the CUDA-reported free memory **without**
+    calling ``free_all_blocks()`` first. Dead pool blocks represent
+    recent memory pressure from build/propagation temporaries;
+    leaving them gives a conservative estimate that accounts for pool
+    fragmentation. ``free_all_blocks`` is still called in
+    ``generate_chunked_slices`` before each build where it helps the
+    actual allocation succeed. Falls back to ``dask.chunk-size-gpu``
+    when cupy is unavailable.
 
     Parameters
     ----------
@@ -457,19 +461,13 @@ def estimate_potential_chunk_size(
     if dtype is None:
         dtype = np.dtype(get_dtype(complex=False))
 
-    slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
-
-    # The per-slice cost during ``build()`` includes the output array
-    # (real, 1×), the transmission function (complex, 2×), and transient
-    # allocations from FFTs, atom projections, and Gaussian integrals.
-    # With cached Gaussians/sinc the peak is ~4× the raw slice size.
-    effective_per_slice = slice_bytes * 4
-
     chunk_size_key = "potential.slice-chunk-size"
     chunk_size_setting = config.get(chunk_size_key, "auto")
 
     if chunk_size_setting != "auto":
         return int(chunk_size_setting)
+
+    slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
 
     if device == "gpu":
         try:
@@ -477,19 +475,34 @@ def estimate_potential_chunk_size(
 
             pool = cp.get_default_memory_pool()
 
-            # Release dead pool blocks so mem_info reflects genuinely
-            # available VRAM, not memory held by the cupy pool from
-            # previous chunks or dask tasks.
-            pool.free_all_blocks()
-
+            # Do NOT call free_all_blocks() here. Dead pool blocks
+            # represent recent memory pressure from build temporaries
+            # and FFT workspaces across previous scan batches. By
+            # leaving them in the pool, the CUDA-reported free_mem
+            # naturally stays low, giving a conservative estimate
+            # that self-adapts as the pool fills up over batches.
+            # free_all_blocks IS still called in generate_chunked_slices
+            # before each build, where it helps the actual allocation.
             free_mem, total_mem = cp.cuda.Device().mem_info
+
+            # Also cross-check against pool live usage. This guards
+            # the rare case where dead blocks were released by someone
+            # else (e.g. cuFFT plan cache eviction), making free_mem
+            # higher than the live-data picture suggests.
             pool_used = pool.used_bytes()
             effective_free = min(free_mem, total_mem - pool_used)
-            # Use 25% of effectively free VRAM.
+
+            # Per-slice cost: output array (1×) + transmission function
+            # (2×) + build temporaries (FFTs, Gaussian integrals) +
+            # propagation FFT workspace. Empirically ~8× at 4096²
+            # when the pool is fragmented by wave/probe allocations.
+            effective_per_slice = slice_bytes * 8
             budget_bytes = int(effective_free * 0.25)
         except (ImportError, Exception):
+            effective_per_slice = slice_bytes * 4
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
+        effective_per_slice = slice_bytes * 4
         budget_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
 
     chunk_size = max(1, int(budget_bytes / effective_per_slice))
