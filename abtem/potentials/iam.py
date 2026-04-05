@@ -884,14 +884,17 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                         cp.cuda.Device().synchronize()
                         cp.get_default_memory_pool().free_all_blocks()
 
-                    new_size = max(1, (chunk_end - chunk_start) // 2)
+                    # Fall back to chunk=1 immediately rather than
+                    # halving incrementally. Repeated OOM/cleanup cycles
+                    # can fragment the CuPy pool, making intermediate
+                    # sizes fail even when total free bytes suffice.
                     warnings.warn(
                         f"Potential chunk build OOM for {chunk_end - chunk_start} "
-                        f"slices at {self.gpts}, reducing to {new_size} slices.",
+                        f"slices at {self.gpts}, falling back to chunk=1.",
                         stacklevel=2,
                     )
-                    chunk_size = new_size
-                    continue  # retry with smaller chunk_size
+                    chunk_size = 1
+                    continue  # retry with chunk_size=1
                 else:
                     raise
 
