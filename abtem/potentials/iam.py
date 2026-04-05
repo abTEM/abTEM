@@ -903,6 +903,20 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             chunk._exit_planes = tuple(
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
             )
+
+            # Free dead pool blocks AFTER build, BEFORE yielding.
+            # The build creates large temporaries (Gaussian projections,
+            # FFT workspaces) that become dead pool blocks after build()
+            # returns. Without this cleanup, those dead blocks occupy
+            # CUDA VRAM during propagation, causing OOM when
+            # conventional_multislice_step tries to allocate the
+            # transmission function and FFT workspace.
+            if self.device == "gpu":
+                try:
+                    cp.get_default_memory_pool().free_all_blocks()
+                except (ImportError, Exception):
+                    pass
+
             yield chunk
             chunk_start = chunk_end
 
