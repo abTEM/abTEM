@@ -429,12 +429,12 @@ def estimate_potential_chunk_size(
     allocations from FFTs, atom projections, and Gaussian integrals during
     ``build()``, giving ~8× the raw slice size per slice held in memory.
 
-    On GPU the budget is 10% of currently free VRAM (queried via cupy at
+    On GPU the budget is 25% of currently free VRAM (queried via cupy at
     call time after releasing dead pool blocks). Because this is called
     during multislice propagation, the free VRAM already excludes memory
-    consumed by wave arrays, probes, and FFT workspaces. The conservative
-    10% fraction leaves headroom for build temporaries that are not fully
-    captured by the per-slice estimate. Falls back to
+    consumed by wave arrays, probes, and FFT workspaces. The 8× per-slice
+    cost estimate already captures most build temporaries, so 25% provides
+    a good balance between throughput and safety margin. Falls back to
     ``dask.chunk-size-gpu`` when cupy is unavailable.
 
     Parameters
@@ -481,11 +481,19 @@ def estimate_potential_chunk_size(
             pool.free_all_blocks()
 
             free_mem, total_mem = cp.cuda.Device().mem_info
-            # Use 10% of currently free VRAM. The conservative fraction
-            # leaves headroom for build temporaries (FFTs, atom projections)
-            # that are not captured by ``effective_per_slice``, and for
-            # co-resident wave arrays in the scan path.
-            budget_bytes = int(free_mem * 0.10)
+            # Also check pool-level usage: the pool may hold blocks
+            # that are live (referenced by cupy arrays). This gives a
+            # tighter bound than free_mem alone, which can be inflated
+            # by free_all_blocks() releasing dead blocks.
+            pool_used = pool.used_bytes()
+            effective_free = min(free_mem, total_mem - pool_used)
+            # Use 25% of effectively free VRAM. The 8× per-slice cost
+            # already accounts for build temporaries (FFTs, atom
+            # projections, Gaussian integrals), so 25% provides a
+            # good balance between throughput and safety. In the scan
+            # path, free VRAM is already reduced by co-resident wave
+            # arrays and probes, which naturally limits chunk size.
+            budget_bytes = int(effective_free * 0.25)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
