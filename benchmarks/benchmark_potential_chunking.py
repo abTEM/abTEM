@@ -511,22 +511,12 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
               f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch={max_batch} ──")
         print(f"  {n_positions} positions, {n_batches} batches")
 
-        # --- lazy → .compute() ---
-        print("  [lazy → compute]")
-
         _run_scan_subprocess(script, device, i, quick,
                              prebuilt=True, chunk_size="auto", to_zarr=False)
 
         for cs in scan_chunk_sizes:
             _run_scan_subprocess(script, device, i, quick,
                                  prebuilt=False, chunk_size=cs, to_zarr=False)
-
-        # --- lazy → zarr ---
-        print("  [lazy → zarr]")
-
-        for cs in scan_chunk_sizes:
-            _run_scan_subprocess(script, device, i, quick,
-                                 prebuilt=False, chunk_size=cs, to_zarr=True)
 
     print(f"\n{'=' * 90}")
     print("Done.")
