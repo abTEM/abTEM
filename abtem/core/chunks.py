@@ -427,14 +427,15 @@ def estimate_potential_chunk_size(
     The budget accounts for the potential slice (real-valued), its
     transmission function (complex-valued, 2× the size), and transient
     allocations from FFTs, atom projections, and Gaussian integrals during
-    ``build()``, giving ~8× the raw slice size per slice held in memory.
+    ``build()``, giving ~5× the raw slice size per slice held in memory
+    (with Gaussian and sinc caching active).
 
     On GPU the budget is 25% of currently free VRAM (queried via cupy at
     call time after releasing dead pool blocks). Because this is called
     during multislice propagation, the free VRAM already excludes memory
-    consumed by wave arrays, probes, and FFT workspaces. The 8× per-slice
-    cost estimate already captures most build temporaries, so 25% provides
-    a good balance between throughput and safety margin. Falls back to
+    consumed by wave arrays, probes, and FFT workspaces. The 5× per-slice
+    cost estimate captures build temporaries, and 25% provides a good
+    balance between throughput and safety margin. Falls back to
     ``dask.chunk-size-gpu`` when cupy is unavailable.
 
     Parameters
@@ -461,8 +462,8 @@ def estimate_potential_chunk_size(
     # The per-slice cost during ``build()`` includes the output array
     # (real, 1×), the transmission function (complex, 2×), and transient
     # allocations from FFTs, atom projections, and Gaussian integrals.
-    # Empirically the peak is ~8× the raw slice size at 4096² grids.
-    effective_per_slice = slice_bytes * 8
+    # With cached Gaussians/sinc the peak is ~5× the raw slice size.
+    effective_per_slice = slice_bytes * 5
 
     chunk_size_key = "potential.slice-chunk-size"
     chunk_size_setting = config.get(chunk_size_key, "auto")
