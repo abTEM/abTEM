@@ -431,12 +431,11 @@ def estimate_potential_chunk_size(
     (with Gaussian and sinc caching active).
 
     On GPU the budget is 25% of effectively free VRAM (queried via cupy
-    at call time **without** releasing dead pool blocks first). Dead
-    blocks reflect recent memory pressure from build temporaries and
-    FFT workspaces; by leaving them in place the estimate stays
-    conservatively realistic. The 4× per-slice cost estimate captures
-    build temporaries, and 25% provides a good balance between
-    throughput and safety margin. Falls back to
+    at call time after releasing dead pool blocks). Because this is
+    called during multislice propagation, the free VRAM already excludes
+    memory consumed by wave arrays, probes, and FFT workspaces. The
+    4× per-slice cost estimate captures build temporaries, and 25%
+    provides a good balance between throughput and safety. Falls back to
     ``dask.chunk-size-gpu`` when cupy is unavailable.
 
     Parameters
@@ -478,20 +477,15 @@ def estimate_potential_chunk_size(
 
             pool = cp.get_default_memory_pool()
 
-            # Do NOT call free_all_blocks() here. Dead pool blocks
-            # reflect recent memory pressure (build temporaries, FFT
-            # workspaces) that will recur during the next chunk. By
-            # leaving them in the pool, pool.used_bytes() gives a
-            # realistic upper bound on live + recently-needed memory,
-            # and free_mem stays conservatively low. This prevents
-            # overestimating available VRAM in the scan path where
-            # wave arrays + propagation temporaries dominate.
-            # (free_all_blocks IS called in generate_chunked_slices
-            # right before each build, where it helps the build
-            # succeed.)
+            # Release dead pool blocks so mem_info reflects genuinely
+            # available VRAM, not memory held by the cupy pool from
+            # previous chunks or dask tasks.
+            pool.free_all_blocks()
+
             free_mem, total_mem = cp.cuda.Device().mem_info
             pool_used = pool.used_bytes()
             effective_free = min(free_mem, total_mem - pool_used)
+            # Use 25% of effectively free VRAM.
             budget_bytes = int(effective_free * 0.25)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
