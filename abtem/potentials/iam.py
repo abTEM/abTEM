@@ -846,14 +846,19 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         while chunk_start < last_slice:
             chunk_end = min(chunk_start + chunk_size, last_slice)
 
-            # Free cupy memory pool blocks before building the next chunk.
-            # The build process creates large temporary arrays (atom
-            # projection, interpolation) that inflate the pool; without
-            # cleanup these dead blocks prevent new allocations.
+            # Synchronize and free cupy memory pool blocks before building
+            # the next chunk. CuPy uses CUDA event-based memory management:
+            # arrays "freed" by Python remain in pool.used_bytes() until the
+            # CUDA operations using them complete. Without synchronize(),
+            # free_all_blocks() only releases chunks whose events have already
+            # fired, leaving pending-event memory resident. Over many chunks /
+            # scan batches, this accumulates and causes OOM even when the
+            # logical memory usage is low.
             if self.device == "gpu":
                 try:
                     import cupy as cp
 
+                    cp.cuda.Device().synchronize()
                     cp.get_default_memory_pool().free_all_blocks()
                 except ImportError:
                     pass
@@ -904,15 +909,18 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
             )
 
-            # Free dead pool blocks AFTER build, BEFORE yielding.
-            # The build creates large temporaries (Gaussian projections,
-            # FFT workspaces) that become dead pool blocks after build()
-            # returns. Without this cleanup, those dead blocks occupy
-            # CUDA VRAM during propagation, causing OOM when
-            # conventional_multislice_step tries to allocate the
-            # transmission function and FFT workspace.
+            # Synchronize and free dead pool blocks AFTER build, BEFORE
+            # yielding. The build creates large temporary GPU arrays
+            # (Gaussian projections, FFT workspaces) that become dead pool
+            # blocks after build() returns. Synchronizing first ensures all
+            # async CUDA operations on those temporaries have completed so
+            # their CUDA events fire, allowing free_all_blocks() to return
+            # the full set of dead blocks to CUDA. This gives propagation
+            # a clean memory budget for the transmission function and FFT
+            # workspace allocations.
             if self.device == "gpu":
                 try:
+                    cp.cuda.Device().synchronize()
                     cp.get_default_memory_pool().free_all_blocks()
                 except (ImportError, Exception):
                     pass
