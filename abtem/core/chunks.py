@@ -427,15 +427,16 @@ def estimate_potential_chunk_size(
     The budget accounts for the potential slice (real-valued), its
     transmission function (complex-valued, 2× the size), and transient
     allocations from FFTs, atom projections, and Gaussian integrals during
-    ``build()``, giving ~5× the raw slice size per slice held in memory
+    ``build()``, giving ~4× the raw slice size per slice held in memory
     (with Gaussian and sinc caching active).
 
-    On GPU the budget is 25% of currently free VRAM (queried via cupy at
-    call time after releasing dead pool blocks). Because this is called
-    during multislice propagation, the free VRAM already excludes memory
-    consumed by wave arrays, probes, and FFT workspaces. The 5× per-slice
-    cost estimate captures build temporaries, and 25% provides a good
-    balance between throughput and safety margin. Falls back to
+    On GPU the budget is 25% of effectively free VRAM (queried via cupy
+    at call time **without** releasing dead pool blocks first). Dead
+    blocks reflect recent memory pressure from build temporaries and
+    FFT workspaces; by leaving them in place the estimate stays
+    conservatively realistic. The 4× per-slice cost estimate captures
+    build temporaries, and 25% provides a good balance between
+    throughput and safety margin. Falls back to
     ``dask.chunk-size-gpu`` when cupy is unavailable.
 
     Parameters
@@ -462,8 +463,8 @@ def estimate_potential_chunk_size(
     # The per-slice cost during ``build()`` includes the output array
     # (real, 1×), the transmission function (complex, 2×), and transient
     # allocations from FFTs, atom projections, and Gaussian integrals.
-    # With cached Gaussians/sinc the peak is ~5× the raw slice size.
-    effective_per_slice = slice_bytes * 5
+    # With cached Gaussians/sinc the peak is ~4× the raw slice size.
+    effective_per_slice = slice_bytes * 4
 
     chunk_size_key = "potential.slice-chunk-size"
     chunk_size_setting = config.get(chunk_size_key, "auto")
@@ -475,25 +476,22 @@ def estimate_potential_chunk_size(
         try:
             import cupy as cp
 
-            # Release dead pool blocks so mem_info reflects genuinely
-            # available VRAM, not memory held by the cupy pool from
-            # previous chunks or dask tasks.
             pool = cp.get_default_memory_pool()
-            pool.free_all_blocks()
 
+            # Do NOT call free_all_blocks() here. Dead pool blocks
+            # reflect recent memory pressure (build temporaries, FFT
+            # workspaces) that will recur during the next chunk. By
+            # leaving them in the pool, pool.used_bytes() gives a
+            # realistic upper bound on live + recently-needed memory,
+            # and free_mem stays conservatively low. This prevents
+            # overestimating available VRAM in the scan path where
+            # wave arrays + propagation temporaries dominate.
+            # (free_all_blocks IS called in generate_chunked_slices
+            # right before each build, where it helps the build
+            # succeed.)
             free_mem, total_mem = cp.cuda.Device().mem_info
-            # Also check pool-level usage: the pool may hold blocks
-            # that are live (referenced by cupy arrays). This gives a
-            # tighter bound than free_mem alone, which can be inflated
-            # by free_all_blocks() releasing dead blocks.
             pool_used = pool.used_bytes()
             effective_free = min(free_mem, total_mem - pool_used)
-            # Use 25% of effectively free VRAM. The 8× per-slice cost
-            # already accounts for build temporaries (FFTs, atom
-            # projections, Gaussian integrals), so 25% provides a
-            # good balance between throughput and safety. In the scan
-            # path, free VRAM is already reduced by co-resident wave
-            # arrays and probes, which naturally limits chunk size.
             budget_bytes = int(effective_free * 0.25)
         except (ImportError, Exception):
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
