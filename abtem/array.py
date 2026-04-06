@@ -426,7 +426,7 @@ class ComputableList(list):
         # delayed graph contains inner array.compute() calls that would
         # otherwise use dask's default threaded scheduler.
         is_gpu = config.get("device") == "gpu" or any(
-            hasattr(obj, "device") and obj.device == "gpu" for obj in self
+            _is_gpu_array_object(obj) for obj in self
         )
         if is_gpu:
             check_cupy_is_installed()
@@ -509,6 +509,29 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's array data or computation graph involves GPU (CuPy) arrays.
+
+    Detects GPU even when the output meta is numpy, e.g. when a detector with
+    to_cpu=True produces CPU-resident results from GPU wave computations. In that
+    case get_array_module(obj.array) returns numpy (wrong for scheduler selection),
+    but the input wave arrays in the dask graph have CuPy meta.
+    """
+    if hasattr(obj, "device") and obj.device == "gpu":
+        return True
+    # Walk the dask graph layers: if any layer's _meta is a CuPy array, the
+    # computation involves GPU even if the output meta is numpy (to_cpu=True case).
+    if hasattr(obj, "_array") and isinstance(obj._array, da.Array):
+        try:
+            for layer in obj._array.__dask_graph__().layers.values():
+                meta = getattr(layer, "_meta", None)
+                if meta is not None and get_array_module(meta) is cp:
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -517,7 +540,7 @@ def _compute(
     **kwargs,
 ) -> tuple[list[ArrayObjectType], tuple]:
     is_gpu = config.get("device") == "gpu" or any(
-        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
+        _is_gpu_array_object(obj) for obj in array_objects
     )
 
     if is_gpu:
