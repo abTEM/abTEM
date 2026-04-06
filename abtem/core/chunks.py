@@ -494,9 +494,10 @@ def estimate_potential_chunk_size(
 
             # Per-slice cost: output array (1×) + transmission function
             # (2×) + build temporaries (FFTs, Gaussian integrals) +
-            # propagation FFT workspace. Empirically ~8× at 4096²
-            # when the pool is fragmented by wave/probe allocations.
-            effective_per_slice = slice_bytes * 8
+            # propagation FFT workspace. 5× is less conservative than the
+            # original 8× now that the synchronous scheduler prevents
+            # concurrent batch execution from multiplying peak VRAM.
+            effective_per_slice = slice_bytes * 5
             budget_bytes = int(effective_free * 0.25)
         except (ImportError, Exception):
             effective_per_slice = slice_bytes * 4
