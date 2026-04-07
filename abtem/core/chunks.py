@@ -509,3 +509,61 @@ def estimate_potential_chunk_size(
     chunk_size = max(1, int(budget_bytes / effective_per_slice))
 
     return min(chunk_size, 4096)
+
+
+def estimate_scan_batch_size(
+    gpts: tuple[int, int],
+    dtype,
+    device: str,
+) -> int:
+    """
+    Estimate the maximum number of probe wavefunctions per scan batch.
+
+    For GPU, queries free CUDA memory at graph-construction time and
+    allocates up to half of it for probe wavefunctions. This is
+    intentionally generous because ``estimate_potential_chunk_size`` is
+    called at *computation* time (inside ``generate_chunked_slices``) when
+    the probe batch is already resident in VRAM; it therefore sees the
+    reduced free memory and sizes the potential chunk to fit in what
+    remains. The two estimates are thus naturally coordinated without
+    requiring explicit cross-referencing.
+
+    For CPU, falls back to the ``dask.chunk-size`` configuration key.
+
+    Parameters
+    ----------
+    gpts : tuple of int
+        Spatial grid size ``(ny, nx)`` of each probe wavefunction.
+    dtype : dtype-like
+        Wavefunction dtype (typically ``complex64``).
+    device : str
+        ``"gpu"`` or ``"cpu"``.
+
+    Returns
+    -------
+    int
+        Maximum number of probe wavefunctions per batch (≥ 1).
+    """
+    per_probe_bytes = int(np.prod(gpts)) * np.dtype(dtype).itemsize
+
+    if device == "gpu":
+        try:
+            import cupy as cp
+
+            free_mem, _ = cp.cuda.Device().mem_info
+
+            # Allocate up to 50 % of currently-free VRAM for probe
+            # wavefunctions.  A 1.5× overhead factor covers transient
+            # copies made during transmission-function multiply and FFT
+            # propagation.  The potential chunk (sized by
+            # estimate_potential_chunk_size at computation time) plus FFT
+            # workspaces account for the remaining ~50 % of free VRAM.
+            probe_budget = int(free_mem * 0.5)
+            per_probe_effective = max(1, int(per_probe_bytes * 1.5))
+            return max(1, probe_budget // per_probe_effective)
+        except (ImportError, Exception):
+            chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
+    else:
+        chunk_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
+
+    return max(1, chunk_bytes // max(1, per_probe_bytes))
