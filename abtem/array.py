@@ -510,26 +510,18 @@ def _compute_context(
 
 
 def _is_gpu_array_object(obj) -> bool:
-    """Return True if obj's array data or computation graph involves GPU (CuPy) arrays.
+    """Return True if obj's computation involves GPU (CuPy) arrays.
 
-    Detects GPU even when the output meta is numpy, e.g. when a detector with
-    to_cpu=True produces CPU-resident results from GPU wave computations. In that
-    case get_array_module(obj.array) returns numpy (wrong for scheduler selection),
-    but the input wave arrays in the dask graph have CuPy meta.
+    Detects GPU even when the output array has numpy meta, e.g. when a detector
+    with to_cpu=True produces CPU-resident results from GPU wave computations.
+    In that case get_array_module(obj.array) returns numpy, but _device is set
+    to "gpu" in apply_transform to record where the computation occurred.
     """
-    if hasattr(obj, "device") and obj.device == "gpu":
+    if get_array_module(obj.array) is cp:
         return True
-    # Walk the dask graph layers: if any layer's _meta is a CuPy array, the
-    # computation involves GPU even if the output meta is numpy (to_cpu=True case).
-    if hasattr(obj, "_array") and isinstance(obj._array, da.Array):
-        try:
-            for layer in obj._array.__dask_graph__().layers.values():
-                meta = getattr(layer, "_meta", None)
-                if meta is not None and get_array_module(meta) is cp:
-                    return True
-        except Exception:
-            pass
-    return False
+    # CPU-resident output of a GPU computation (to_cpu=True case): _device records
+    # the computation device, following the same convention as WavesBuilder._device.
+    return getattr(obj, "_device", None) == "gpu"
 
 
 def _compute(
@@ -1660,6 +1652,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             output = cls.from_array_and_metadata(
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
+            # When the source was on GPU but the output is CPU-resident
+            # (e.g. AnnularDetector with to_cpu=True), record the computation
+            # device so _compute() selects the synchronous scheduler.
+            # Uses the same _device convention as WavesBuilder.
+            if get_array_module(self.array) is cp:
+                output._device = "gpu"
             outputs.append(output)
 
         if len(outputs) > 1:
