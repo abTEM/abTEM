@@ -113,6 +113,55 @@ class PeakVRAMTracker:
         return self.peak_bytes / 1e6
 
 
+class GPUUtilTracker:
+    """Context manager that samples GPU compute utilization in a background thread.
+
+    Uses ``pynvml`` (ships with ``nvidia-ml-py``, commonly installed alongside
+    CUDA drivers). If unavailable, all samples are ``None``.
+    """
+
+    def __init__(self, interval: float = 0.05):
+        self.interval = interval
+        self.samples: list[int] = []
+        self._stop = threading.Event()
+        self._thread = None
+        self._handle = None
+
+    def _sample_loop(self):
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        except Exception:
+            return
+        while not self._stop.is_set():
+            try:
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                self.samples.append(util.gpu)
+            except Exception:
+                pass
+            self._stop.wait(self.interval)
+
+    def __enter__(self):
+        self.samples = []
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+
+    @property
+    def mean_util(self) -> float | None:
+        return (sum(self.samples) / len(self.samples)) if self.samples else None
+
+    @property
+    def peak_util(self) -> int | None:
+        return max(self.samples) if self.samples else None
+
+
 def _gpu_cleanup():
     gc.collect()
     try:
@@ -254,12 +303,15 @@ def benchmark_scan(
 
     _gpu_cleanup()
 
-    tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else None
+    vram_tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else None
+    util_tracker = GPUUtilTracker(interval=0.05) if device == "gpu" else None
     run_path = os.path.join(zarr_dir, "run.zarr") if zarr_dir else None
 
     t0 = time.perf_counter()
-    if tracker:
-        tracker.__enter__()
+    if vram_tracker:
+        vram_tracker.__enter__()
+    if util_tracker:
+        util_tracker.__enter__()
 
     try:
         lazy_result = probe.scan(
@@ -272,8 +324,10 @@ def benchmark_scan(
             lazy_result.compute()
         del lazy_result
     except Exception as e:
-        if tracker:
-            tracker.__exit__(None, None, None)
+        if vram_tracker:
+            vram_tracker.__exit__(None, None, None)
+        if util_tracker:
+            util_tracker.__exit__(None, None, None)
         e.__traceback__ = None
         _gpu_cleanup()
         if zarr_dir:
@@ -283,8 +337,10 @@ def benchmark_scan(
     if device == "gpu":
         import cupy as cp
         cp.cuda.Stream.null.synchronize()
-    if tracker:
-        tracker.__exit__(None, None, None)
+    if vram_tracker:
+        vram_tracker.__exit__(None, None, None)
+    if util_tracker:
+        util_tracker.__exit__(None, None, None)
 
     elapsed = time.perf_counter() - t0
 
@@ -295,8 +351,10 @@ def benchmark_scan(
         shutil.rmtree(zarr_dir, ignore_errors=True)
 
     out = {"label": label, "time": elapsed}
-    if tracker:
-        out["peak_vram_mb"] = tracker.peak_mb
+    if vram_tracker:
+        out["peak_vram_mb"] = vram_tracker.peak_mb
+    if util_tracker:
+        out["mean_gpu_util"] = util_tracker.mean_util
     return out
 
 
@@ -306,11 +364,13 @@ def benchmark_scan(
 
 def print_result(r: dict):
     if "error" in r:
-        print(f"  {r['label']:<55s}  ERROR: {r['error']}")
+        print(f"  {r['label']:<60s}  ERROR: {r['error']}")
     else:
         vram = r.get("peak_vram_mb")
+        util = r.get("mean_gpu_util")
         vram_str = f"  vram={vram / 1000:5.1f}GB" if vram else ""
-        print(f"  {r['label']:<55s}  {r['time']:8.3f}s{vram_str}")
+        util_str = f"  gpu={util:3.0f}%" if util is not None else ""
+        print(f"  {r['label']:<60s}  {r['time']:8.3f}s{vram_str}{util_str}")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -446,6 +506,7 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
 def run_single_scan_benchmark(
     device: str, config_index: int, quick: bool,
     prebuilt: bool, chunk_size: int | str, to_zarr: bool,
+    batch_size: int | str = "auto",
 ):
     """Run ONE scan benchmark (called in a subprocess). Prints one result line."""
     config.set({"dask.lazy": False})
@@ -462,7 +523,7 @@ def run_single_scan_benchmark(
         potential, scan_gpts, device,
         prebuilt=prebuilt,
         potential_chunk_size=chunk_size,
-        max_batch="auto",
+        max_batch=batch_size,
         to_zarr=to_zarr,
     ))
     sys.stdout.flush()
@@ -471,6 +532,7 @@ def run_single_scan_benchmark(
 def _run_scan_subprocess(
     script: str, device: str, config_index: int, quick: bool,
     prebuilt: bool, chunk_size: int | str, to_zarr: bool,
+    batch_size: int | str = "auto",
 ):
     """Spawn a fresh subprocess for one scan benchmark and print its output."""
     cmd = [
@@ -479,6 +541,7 @@ def _run_scan_subprocess(
         "--_run-scan-bench", str(config_index),
         "--_prebuilt" if prebuilt else "--_no-prebuilt",
         "--_chunk-size", str(chunk_size),
+        "--_batch-size", str(batch_size),
     ]
     if to_zarr:
         cmd.append("--_to-zarr")
@@ -512,7 +575,10 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
 
     scan_configs = get_scan_configs(device, quick)
     script = os.path.abspath(__file__)
-    scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
+    # Potential chunk sizes to test for the batch-size sweep
+    best_chunk: int | str = "auto"
+    # Explicit batch sizes to sweep (plus "auto" which uses VRAM estimate)
+    batch_sizes: list[int | str] = [1, 2, 4, 8, 16, "auto"]
 
     for i, (gpts, reps, scan_gpts) in enumerate(scan_configs):
         potential = make_large_potential(gpts, reps, device=device)
@@ -522,15 +588,20 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
         del potential
 
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
-              f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch=auto ──")
-        print(f"  {n_positions} positions")
+              f"scan={scan_gpts[0]}x{scan_gpts[1]} ──")
+        print(f"  {n_positions} positions — sweeping batch size, chunk={best_chunk}")
 
         _run_scan_subprocess(script, device, i, quick,
-                             prebuilt=True, chunk_size="auto", to_zarr=False)
+                             prebuilt=True, chunk_size=best_chunk, to_zarr=False,
+                             batch_size="auto")
 
-        for cs in scan_chunk_sizes:
+        for bs in batch_sizes:
+            # Skip batch sizes larger than the total number of positions
+            if isinstance(bs, int) and bs > n_positions:
+                continue
             _run_scan_subprocess(script, device, i, quick,
-                                 prebuilt=False, chunk_size=cs, to_zarr=False)
+                                 prebuilt=False, chunk_size=best_chunk, to_zarr=False,
+                                 batch_size=bs)
 
     print(f"\n{'=' * 90}")
     print("Done.")
@@ -557,6 +628,7 @@ def main():
     parser.add_argument("--_prebuilt", action="store_true", default=False)
     parser.add_argument("--_no-prebuilt", action="store_true", default=False)
     parser.add_argument("--_chunk-size", type=str, default="auto")
+    parser.add_argument("--_batch-size", type=str, default="auto")
     parser.add_argument("--_to-zarr", action="store_true", default=False)
 
     args = parser.parse_args()
@@ -570,9 +642,15 @@ def main():
             cs = int(cs)
         except ValueError:
             pass  # keep as string ("auto")
+        bs: int | str = args._batch_size
+        try:
+            bs = int(bs)
+        except ValueError:
+            pass  # keep as string ("auto")
         run_single_scan_benchmark(
             args.device, args._run_scan_bench, args.quick,
             prebuilt=args._prebuilt, chunk_size=cs, to_zarr=args._to_zarr,
+            batch_size=bs,
         )
         return
 
