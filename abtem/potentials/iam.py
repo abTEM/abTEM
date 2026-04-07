@@ -846,84 +846,15 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         while chunk_start < last_slice:
             chunk_end = min(chunk_start + chunk_size, last_slice)
 
-            # Synchronize and free cupy memory pool blocks before building
-            # the next chunk. CuPy uses CUDA event-based memory management:
-            # arrays "freed" by Python remain in pool.used_bytes() until the
-            # CUDA operations using them complete. Without synchronize(),
-            # free_all_blocks() only releases chunks whose events have already
-            # fired, leaving pending-event memory resident. Over many chunks /
-            # scan batches, this accumulates and causes OOM even when the
-            # logical memory usage is low.
-            if self.device == "gpu":
-                try:
-                    import cupy as cp
-
-                    cp.cuda.Device().synchronize()
-                    cp.get_default_memory_pool().free_all_blocks()
-                except ImportError:
-                    pass
-
-            try:
-                chunk = self.build(
-                    first_slice=chunk_start, last_slice=chunk_end, lazy=False
-                )
-            except Exception as e:
-                # If the build OOMs, halve the chunk size and retry.
-                # This makes "auto" robust — the budget estimate can't
-                # perfectly predict the build peak (which depends on atom
-                # count, grid size, and co-resident GPU allocations), so
-                # we fall back gracefully instead of failing.
-                is_oom = "OutOfMemory" in type(e).__name__ or isinstance(
-                    e, MemoryError
-                )
-                if is_oom and (chunk_end - chunk_start) > 1:
-                    import gc
-                    import warnings
-
-                    e.__traceback__ = None
-                    del e
-                    gc.collect()
-                    if self.device == "gpu":
-                        # Synchronize to ensure all pending GPU ops complete,
-                        # then release dead pool blocks before retrying.
-                        cp.cuda.Device().synchronize()
-                        cp.get_default_memory_pool().free_all_blocks()
-
-                    # Fall back to chunk=1 immediately rather than
-                    # halving incrementally. Repeated OOM/cleanup cycles
-                    # can fragment the CuPy pool, making intermediate
-                    # sizes fail even when total free bytes suffice.
-                    warnings.warn(
-                        f"Potential chunk build OOM for {chunk_end - chunk_start} "
-                        f"slices at {self.gpts}, falling back to chunk=1.",
-                        stacklevel=2,
-                    )
-                    chunk_size = 1
-                    continue  # retry with chunk_size=1
-                else:
-                    raise
+            chunk = self.build(
+                first_slice=chunk_start, last_slice=chunk_end, lazy=False
+            )
 
             # Remap exit planes to chunk-local indices (build() sets the
             # full potential's exit_planes which are global indices).
             chunk._exit_planes = tuple(
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
             )
-
-            # Synchronize and free dead pool blocks AFTER build, BEFORE
-            # yielding. The build creates large temporary GPU arrays
-            # (Gaussian projections, FFT workspaces) that become dead pool
-            # blocks after build() returns. Synchronizing first ensures all
-            # async CUDA operations on those temporaries have completed so
-            # their CUDA events fire, allowing free_all_blocks() to return
-            # the full set of dead blocks to CUDA. This gives propagation
-            # a clean memory budget for the transmission function and FFT
-            # workspace allocations.
-            if self.device == "gpu":
-                try:
-                    cp.cuda.Device().synchronize()
-                    cp.get_default_memory_pool().free_all_blocks()
-                except (ImportError, Exception):
-                    pass
 
             yield chunk
             chunk_start = chunk_end
