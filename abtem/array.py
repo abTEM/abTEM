@@ -514,14 +514,10 @@ def _is_gpu_array_object(obj) -> bool:
 
     Detects GPU even when the output array has numpy meta, e.g. when a detector
     with to_cpu=True produces CPU-resident results from GPU wave computations.
-    In that case get_array_module(obj.array) returns numpy, but _device is set
-    to "gpu" in apply_transform to record where the computation occurred.
+    ArrayObject.device checks _device first (set in apply_transform when the source
+    was GPU), so this correctly handles the to_cpu=True case.
     """
-    if get_array_module(obj.array) is cp:
-        return True
-    # CPU-resident output of a GPU computation (to_cpu=True case): _device records
-    # the computation device, following the same convention as WavesBuilder._device.
-    return getattr(obj, "_device", None) == "gpu"
+    return hasattr(obj, "device") and obj.device == "gpu"
 
 
 def _compute(
@@ -865,6 +861,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        # _device may be set explicitly (e.g. for CPU-resident measurements that
+        # were produced by GPU computation) following the WavesBuilder convention.
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
@@ -1294,7 +1294,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if i not in squeezed
         ]
 
-        return self.__class__(**kwargs)
+        result = self.__class__(**kwargs)
+        if hasattr(self, "_device"):
+            result._device = self._device
+        return result
 
     def ensure_lazy(self, chunks: Chunks = "auto") -> Self:
         """Creates an equivalent lazy version of the array object.
