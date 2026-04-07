@@ -406,11 +406,11 @@ def get_scan_configs(device: str, quick: bool):
     if device == "gpu":
         configs.extend([
             # ~3 GB potential — fits in VRAM, shows pre-built advantage
-            ((2048, 2048), (10, 10, 60), (4, 4)),
+            ((2048, 2048), (10, 10, 60), (8, 8)),
             # ~22 GB potential — tight fit, pre-built OOMs
-            ((4096, 4096), (20, 20, 120), (4, 4)),
+            ((4096, 4096), (20, 20, 120), (8, 8)),
             # ~36 GB potential — exceeds VRAM, must chunk
-            ((4096, 4096), (20, 20, 200), (4, 4)),
+            ((4096, 4096), (20, 20, 200), (8, 8)),
         ])
     else:
         configs.append(((1024, 1024), (2, 2, 10), (8, 8)))
@@ -578,7 +578,7 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
     # Potential chunk sizes to test for the batch-size sweep
     best_chunk: int | str = "auto"
     # Explicit batch sizes to sweep (plus "auto" which uses VRAM estimate)
-    batch_sizes: list[int | str] = [1, 2, 4, 8, 16, "auto"]
+    batch_sizes: list[int | str] = [1, 2, 4, 8, 16, 32, 64, "auto"]
 
     for i, (gpts, reps, scan_gpts) in enumerate(scan_configs):
         potential = make_large_potential(gpts, reps, device=device)
