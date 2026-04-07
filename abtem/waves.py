@@ -1193,7 +1193,13 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def apply_transform(
         self, transform, max_batch: int | str = "auto", lazy: bool = True
     ):
-        return self.build(lazy=lazy).apply_transform(transform, max_batch=max_batch)
+        built = self.build(lazy=lazy)
+        # Propagate the builder's device so that ArrayObject.apply_transform
+        # can apply VRAM-aware batch sizing.  The lazy-built Waves array has
+        # a numpy dask meta (computation hasn't run yet), so its device
+        # property would incorrectly return "cpu" without this.
+        built._device = self._device
+        return built.apply_transform(transform, max_batch=max_batch)
 
     def check_can_build(self):
         """Check whether the wave functions can be built."""
