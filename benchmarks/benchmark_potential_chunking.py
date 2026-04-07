@@ -407,10 +407,10 @@ def get_scan_configs(device: str, quick: bool):
         configs.extend([
             # ~3 GB potential — fits in VRAM, shows pre-built advantage
             ((2048, 2048), (10, 10, 60), (8, 8)),
-            # ~22 GB potential — tight fit, pre-built OOMs
+            # ~14 GB potential — tight fit, pre-built OOMs
+            ((4096, 4096), (20, 20, 75), (8, 8)),
+            # ~22 GB potential — exceeds VRAM, must chunk
             ((4096, 4096), (20, 20, 120), (8, 8)),
-            # ~36 GB potential — exceeds VRAM, must chunk
-            ((4096, 4096), (20, 20, 200), (8, 8)),
         ])
     else:
         configs.append(((1024, 1024), (2, 2, 10), (8, 8)))
@@ -558,12 +558,16 @@ def _run_scan_subprocess(
 
     if result.stdout:
         print(result.stdout, end="")
+    elif result.returncode != 0:
+        # Process died without printing anything (e.g. OOM killed by kernel
+        # before Python exception handling could run).
+        label = f"chunk={chunk_size}, batch={batch_size}"
+        print(f"  {label:<60s}  KILLED (OOM or crash, exit {result.returncode})")
 
-    if result.returncode != 0:
-        if result.stderr:
-            lines = result.stderr.strip().split("\n")
-            for line in lines[-3:]:
-                print(f"  stderr: {line}")
+    if result.returncode != 0 and result.stderr:
+        lines = result.stderr.strip().split("\n")
+        for line in lines[-3:]:
+            print(f"  stderr: {line}")
 
 
 def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
