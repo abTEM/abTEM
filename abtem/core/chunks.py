@@ -553,13 +553,14 @@ def estimate_scan_batch_size(
             free_mem, _ = cp.cuda.Device().mem_info
 
             # Allocate up to 50 % of currently-free VRAM for probe
-            # wavefunctions.  A 1.5× overhead factor covers transient
-            # copies made during transmission-function multiply and FFT
-            # propagation.  The potential chunk (sized by
-            # estimate_potential_chunk_size at computation time) plus FFT
-            # workspaces account for the remaining ~50 % of free VRAM.
+            # wavefunctions.  A 6× overhead factor accounts for transient
+            # copies during transmission-function multiply, FFT workspaces,
+            # and cuFFT plan buffers.  Empirically: 4096² uses ~756 MB/probe
+            # (5.6× raw wavefunction), 2048² uses ~147 MB/probe (4.4×).
+            # The potential chunk (sized by estimate_potential_chunk_size at
+            # computation time) plus remaining workspace fills the other 50%.
             probe_budget = int(free_mem * 0.5)
-            per_probe_effective = max(1, int(per_probe_bytes * 1.5))
+            per_probe_effective = max(1, int(per_probe_bytes * 6))
             return max(1, probe_budget // per_probe_effective)
         except (ImportError, Exception):
             chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
