@@ -208,7 +208,7 @@ def benchmark_scan(
     device: str,
     prebuilt: bool,
     potential_chunk_size: int | str = "auto",
-    max_batch: int = 8,
+    max_batch: int | str = "auto",
     energy: float = 200e3,
     to_zarr: bool = False,
 ) -> dict:
@@ -220,13 +220,25 @@ def benchmark_scan(
     detector = AnnularDetector(inner=40, outer=200)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=scan_gpts)
 
+    # Resolve the effective batch size for display before building the graph.
+    # Use the potential's gpts as a proxy for the probe grid size.
+    if max_batch == "auto" and device == "gpu":
+        from abtem.core.chunks import estimate_scan_batch_size
+        effective_batch = min(
+            estimate_scan_batch_size(potential.gpts, np.dtype("complex64"), "gpu"),
+            scan_gpts[0] * scan_gpts[1],
+        )
+        batch_label = f"auto({effective_batch})"
+    else:
+        batch_label = str(max_batch)
+
     if prebuilt:
         cs_label = "pre-built"
     else:
         cs_label = f"chunk={potential_chunk_size}"
     if to_zarr:
         cs_label += " (zarr)"
-    label = f"{cs_label}, scan={scan_gpts}, batch={max_batch}"
+    label = f"{cs_label}, scan={scan_gpts}, batch={batch_label}"
 
     if prebuilt:
         try:
@@ -323,22 +335,25 @@ def get_planewave_configs(device: str, quick: bool):
 
 
 def get_scan_configs(device: str, quick: bool):
-    """Return list of (gpts, repetitions, scan_gpts, max_batch)."""
+    """Return list of (gpts, repetitions, scan_gpts) tuples.
+
+    Batch size is determined automatically at runtime via
+    ``estimate_scan_batch_size`` so that available VRAM is fully exploited.
+    """
     if quick:
-        return [((128, 128), (2, 2, 4), (4, 4), 4)]
+        return [((128, 128), (2, 2, 4), (4, 4))]
     configs = []
     if device == "gpu":
         configs.extend([
             # ~3 GB potential — fits in VRAM, shows pre-built advantage
-            ((2048, 2048), (10, 10, 60), (4, 4), 4),
+            ((2048, 2048), (10, 10, 60), (4, 4)),
             # ~22 GB potential — tight fit, pre-built OOMs
-            ((4096, 4096), (20, 20, 120), (4, 4), 2),
-            # ~36 GB potential — exceeds VRAM, must chunk;
-            # batch=1 to minimize wave memory at 4096² resolution
-            ((4096, 4096), (20, 20, 200), (4, 4), 1),
+            ((4096, 4096), (20, 20, 120), (4, 4)),
+            # ~36 GB potential — exceeds VRAM, must chunk
+            ((4096, 4096), (20, 20, 200), (4, 4)),
         ])
     else:
-        configs.append(((1024, 1024), (2, 2, 10), (8, 8), 4))
+        configs.append(((1024, 1024), (2, 2, 10), (8, 8)))
     return configs
 
 
@@ -436,7 +451,7 @@ def run_single_scan_benchmark(
     config.set({"dask.lazy": False})
 
     scan_configs = get_scan_configs(device, quick)
-    gpts, reps, scan_gpts, max_batch = scan_configs[config_index]
+    gpts, reps, scan_gpts = scan_configs[config_index]
 
     if device == "gpu":
         warmup_gpu()
@@ -447,7 +462,7 @@ def run_single_scan_benchmark(
         potential, scan_gpts, device,
         prebuilt=prebuilt,
         potential_chunk_size=chunk_size,
-        max_batch=max_batch,
+        max_batch="auto",
         to_zarr=to_zarr,
     ))
     sys.stdout.flush()
@@ -499,17 +514,16 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
     script = os.path.abspath(__file__)
     scan_chunk_sizes: list[int | str] = [1, 10, "auto"]
 
-    for i, (gpts, reps, scan_gpts, max_batch) in enumerate(scan_configs):
+    for i, (gpts, reps, scan_gpts) in enumerate(scan_configs):
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
         mem_gb = estimate_potential_memory_mb(potential) / 1000
         n_positions = scan_gpts[0] * scan_gpts[1]
-        n_batches = (n_positions + max_batch - 1) // max_batch
         del potential
 
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
-              f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch={max_batch} ──")
-        print(f"  {n_positions} positions, {n_batches} batches")
+              f"scan={scan_gpts[0]}x{scan_gpts[1]}, batch=auto ──")
+        print(f"  {n_positions} positions")
 
         _run_scan_subprocess(script, device, i, quick,
                              prebuilt=True, chunk_size="auto", to_zarr=False)
