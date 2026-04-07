@@ -1568,6 +1568,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self.base_shape))
+            elif max_batch == "auto" and self.device == "gpu":
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(
+                    self.base_shape, self.dtype, "gpu"
+                )
+                # Convert probes → total elements so validate_chunks
+                # receives an int and skips its own config-based "auto" path.
+                max_batch = int(n_probes * np.prod(self.base_shape))
 
             chunks = transform._default_ensemble_chunks + self._lazy_array.chunks
 
