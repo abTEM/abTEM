@@ -57,6 +57,7 @@ dev = [
     "isort>=7.0.0",
     "jupyterlab-code-formatter>=3.0.2",
     "mypy>=1.19.1",
+    "nvidia-ml-py",
     "pre-commit>=4.5.1",
     "ruff>=0.15.0",
     "types-pyyaml>=6.0.12.20250915",
