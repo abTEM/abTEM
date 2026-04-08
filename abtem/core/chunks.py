@@ -424,14 +424,17 @@ def estimate_potential_chunk_size(
     many slices can be held simultaneously when the potential is instead built
     in smaller chunks via ``generate_chunked_slices()``.
 
-    The per-slice cost includes the output array (real, 1×), the
-    transmission function (complex, 2×), transient build allocations (FFTs,
-    atom projections), and FFT workspace during wave propagation. On GPU
-    this is compounded by CuPy memory pool fragmentation — the pool may
-    hold large contiguous blocks for live arrays (waves, probes) that
-    prevent new allocations even when total free bytes suffice. The
-    effective per-slice cost under fragmentation is empirically ~5× the
-    raw slice size for scan workloads at 4096² grids.
+    On GPU the per-slice cost accounts for CuPy memory pool fragmentation —
+    the pool may hold large contiguous blocks for live arrays (waves, probes)
+    that prevent new allocations even when total free bytes suffice.  The
+    effective per-slice cost under fragmentation is empirically ~5× the raw
+    slice size for scan workloads at 4096² grids.
+
+    On CPU there is no pool fragmentation and system RAM is typically
+    abundant.  The budget is therefore the raw slice size (1×), meaning
+    ``dask.chunk-size`` directly controls how many slices fit.  In
+    practice the cap in :meth:`generate_chunked_slices` collapses this
+    to a single chunk whenever the whole potential fits within the budget.
 
     On GPU the budget uses the CUDA-reported free memory without calling
     ``free_all_blocks()`` first. Dead pool blocks represent recent memory
@@ -495,10 +498,15 @@ def estimate_potential_chunk_size(
             effective_per_slice = slice_bytes * 5
             budget_bytes = int(effective_free * 0.25)
         except (ImportError, Exception):
-            effective_per_slice = slice_bytes * 4
+            effective_per_slice = slice_bytes * 5
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
-        effective_per_slice = slice_bytes * 4
+        # On CPU, system RAM is abundant and there is no memory-pool
+        # fragmentation.  Use the raw slice size as the unit cost (1×)
+        # so that the dask.chunk-size budget directly controls how many
+        # slices fit.  The cap in generate_chunked_slices will collapse
+        # this to a single chunk whenever the whole potential fits.
+        effective_per_slice = slice_bytes
         budget_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
 
     chunk_size = max(1, int(budget_bytes / effective_per_slice))
