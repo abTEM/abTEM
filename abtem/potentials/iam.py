@@ -196,14 +196,13 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
             )
 
         xp = get_array_module(self.device)
+        exit_plane_after = self._exit_plane_after
 
         for chunk_start in range(first_slice, last_slice, chunk_size):
             chunk_end = min(chunk_start + chunk_size, last_slice)
-            n_slices = chunk_end - chunk_start
 
             arrays = []
             slice_thicknesses = []
-            exit_plane_after = self._exit_plane_after
 
             for slic in self.generate_slices(chunk_start, chunk_end):
                 arrays.append(slic.array)
@@ -213,8 +212,6 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
             exit_planes = tuple(
                 np.where(exit_plane_after[chunk_start:chunk_end])[0]
             )
-
-            from abtem.potentials.iam import PotentialArray
 
             chunk = PotentialArray(
                 array,
