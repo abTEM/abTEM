@@ -430,17 +430,15 @@ def estimate_potential_chunk_size(
     this is compounded by CuPy memory pool fragmentation — the pool may
     hold large contiguous blocks for live arrays (waves, probes) that
     prevent new allocations even when total free bytes suffice. The
-    effective per-slice cost under fragmentation is empirically ~8× the
+    effective per-slice cost under fragmentation is empirically ~5× the
     raw slice size for scan workloads at 4096² grids.
 
-    On GPU the budget uses the CUDA-reported free memory **without**
-    calling ``free_all_blocks()`` first. Dead pool blocks represent
-    recent memory pressure from build/propagation temporaries;
-    leaving them gives a conservative estimate that accounts for pool
-    fragmentation. ``free_all_blocks`` is still called in
-    ``generate_chunked_slices`` before each build where it helps the
-    actual allocation succeed. Falls back to ``dask.chunk-size-gpu``
-    when cupy is unavailable.
+    On GPU the budget uses the CUDA-reported free memory without calling
+    ``free_all_blocks()`` first. Dead pool blocks represent recent memory
+    pressure from build/propagation temporaries; leaving them gives a
+    conservative estimate that self-adapts as the pool fills up over
+    successive scan batches. Falls back to ``dask.chunk-size-gpu`` when
+    CuPy is unavailable.
 
     Parameters
     ----------
@@ -475,20 +473,17 @@ def estimate_potential_chunk_size(
 
             pool = cp.get_default_memory_pool()
 
-            # Do NOT call free_all_blocks() here. Dead pool blocks
-            # represent recent memory pressure from build temporaries
-            # and FFT workspaces across previous scan batches. By
-            # leaving them in the pool, the CUDA-reported free_mem
-            # naturally stays low, giving a conservative estimate
-            # that self-adapts as the pool fills up over batches.
-            # free_all_blocks IS still called in generate_chunked_slices
-            # before each build, where it helps the actual allocation.
+            # Use CUDA-reported free memory without calling
+            # free_all_blocks() first. Dead pool blocks represent recent
+            # memory pressure and keep the estimate conservative, which
+            # is the desired behaviour as the pool fills over successive
+            # scan batches.
             free_mem, total_mem = cp.cuda.Device().mem_info
 
-            # Also cross-check against pool live usage. This guards
-            # the rare case where dead blocks were released by someone
-            # else (e.g. cuFFT plan cache eviction), making free_mem
-            # higher than the live-data picture suggests.
+            # Cross-check against pool live usage. This guards the rare
+            # case where dead blocks were released by someone else (e.g.
+            # cuFFT plan cache eviction), making free_mem higher than the
+            # live-data picture suggests.
             pool_used = pool.used_bytes()
             effective_free = min(free_mem, total_mem - pool_used)
 
@@ -522,9 +517,9 @@ def _nearest_power_of_two(n: int) -> int:
 
     Examples
     --------
-    59 → 64  (64 ≤ 59 * 1.25 = 73.75, use upper)
-    14 → 16  (16 ≤ 14 * 1.25 = 17.5,  use upper)
-    20 → 16  (32  > 20 * 1.25 = 25,   use lower)
+    59 → 64  (int(59 * 1.25) = 73;  64 ≤ 73,  use upper)
+    14 → 16  (int(14 * 1.25) = 17;  16 ≤ 17,  use upper)
+    20 → 16  (int(20 * 1.25) = 25;  32 > 25,  use lower)
     """
     if n <= 1:
         return 1

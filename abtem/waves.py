@@ -1085,9 +1085,14 @@ class Waves(BaseWaves, ArrayObject):
             converted to measurements after running the multislice algorithm.
             See `abtem.measurements.detect` for a list of implemented detectors. If
             not given, returns the wave functions themselves.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
-
 
         Returns
         -------
@@ -1558,6 +1563,12 @@ class PlaneWave(WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
 

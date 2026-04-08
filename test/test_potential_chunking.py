@@ -5,6 +5,7 @@ import pytest
 from ase.build import bulk
 
 from abtem import PlaneWave, Potential
+from abtem.core.chunks import _nearest_power_of_two, estimate_potential_chunk_size
 from abtem.potentials.iam import PotentialArray
 
 
@@ -20,6 +21,47 @@ def si_potential_with_exit_planes():
     """A silicon potential with multiple exit planes."""
     atoms = bulk("Si", cubic=True) * (2, 2, 6)
     return Potential(atoms, gpts=(64, 64), slice_thickness=1.0, exit_planes=5)
+
+
+class TestNearestPowerOfTwo:
+    """Unit tests for the _nearest_power_of_two helper."""
+
+    @pytest.mark.parametrize(
+        "n, expected",
+        [
+            (1, 1),    # already a power of two
+            (2, 2),    # already a power of two
+            (4, 4),    # already a power of two
+            (8, 8),    # already a power of two
+            (3, 2),    # int(3 * 1.25)=3; ceil=4 > 3 → lower
+            (14, 16),  # int(14 * 1.25)=17; ceil=16 <= 17 → upper
+            (59, 64),  # int(59 * 1.25)=73; ceil=64 <= 73 → upper
+            (20, 16),  # int(20 * 1.25)=25; ceil=32 > 25 → lower
+            (100, 64),  # int(100 * 1.25)=125; ceil=128 > 125 → lower
+            (65, 64),  # int(65 * 1.25)=81; ceil=128 > 81 → lower
+        ],
+    )
+    def test_rounding(self, n, expected):
+        assert _nearest_power_of_two(n) == expected
+
+
+class TestEstimatePotentialChunkSize:
+    """Unit tests for estimate_potential_chunk_size."""
+
+    def test_config_override(self):
+        """The potential.slice-chunk-size config key must short-circuit estimation."""
+        from abtem.core import config
+
+        with config.set({"potential.slice-chunk-size": 7}):
+            assert estimate_potential_chunk_size((64, 64)) == 7
+
+    def test_cpu_returns_positive_int(self):
+        assert estimate_potential_chunk_size((64, 64), device="cpu") >= 1
+
+    def test_larger_gpts_gives_smaller_chunk(self):
+        small = estimate_potential_chunk_size((64, 64), device="cpu")
+        large = estimate_potential_chunk_size((512, 512), device="cpu")
+        assert large <= small
 
 
 class TestChunkedSlicesCorrectness:
@@ -129,6 +171,29 @@ class TestMultisliceWithChunking:
 
         assert np.allclose(ref.array, result.array), (
             f"Mismatch with chunk_size={chunk_size}, "
+            f"max diff={np.abs(ref.array - result.array).max()}"
+        )
+
+    def test_chunked_matches_prebuilt_potential_array(self, si_potential):
+        """Chunked unbuilt potential must match passing a pre-built PotentialArray.
+
+        This is stronger than comparing two chunked runs: the pre-built path
+        exercises ``FieldArray.generate_chunked_slices`` (array-view slicing)
+        while the unbuilt path exercises ``_FieldBuilderFromAtoms.generate_chunked_slices``
+        (on-the-fly build). Agreement between the two confirms that neither
+        chunker introduces numerical error relative to the underlying atom
+        integration.
+        """
+        waves = PlaneWave(energy=200e3, gpts=si_potential.gpts)
+        waves.grid.match(si_potential)
+
+        prebuilt = si_potential.build(lazy=False)
+        ref = waves.multislice(prebuilt, lazy=False)
+
+        result = waves.multislice(si_potential, potential_chunk_size=3, lazy=False)
+
+        assert np.allclose(ref.array, result.array, atol=1e-6), (
+            f"Chunked unbuilt potential differs from pre-built reference; "
             f"max diff={np.abs(ref.array - result.array).max()}"
         )
 
