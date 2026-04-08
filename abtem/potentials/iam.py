@@ -185,7 +185,10 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
             A chunk of contiguous potential slices with correctly assigned
             exit planes.
         """
-        from abtem.core.chunks import estimate_potential_chunk_size
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
 
         if last_slice is None:
             last_slice = len(self)
@@ -195,15 +198,19 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
                 self.gpts, self.device
             )
 
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
         xp = get_array_module(self.device)
         exit_plane_after = self._exit_plane_after
 
-        for chunk_start in range(first_slice, last_slice, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, last_slice)
-
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
             arrays = []
             slice_thicknesses = []
-
             for slic in self.generate_slices(chunk_start, chunk_end):
                 arrays.append(slic.array)
                 slice_thicknesses.extend(slic.slice_thickness)
@@ -827,7 +834,10 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         PotentialArray
             An eagerly computed chunk of contiguous potential slices.
         """
-        from abtem.core.chunks import estimate_potential_chunk_size
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
 
         if last_slice is None:
             last_slice = len(self)
@@ -837,12 +847,16 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 self.gpts, self.device
             )
 
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
         exit_plane_after = self._exit_plane_after
 
-        chunk_start = first_slice
-        while chunk_start < last_slice:
-            chunk_end = min(chunk_start + chunk_size, last_slice)
-
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
             chunk = self.build(
                 first_slice=chunk_start, last_slice=chunk_end, lazy=False
             )
@@ -854,7 +868,6 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             )
 
             yield chunk
-            chunk_start = chunk_end
 
     @property
     def ensemble_axes_metadata(self):
@@ -1169,7 +1182,10 @@ class FieldArray(BaseField, ArrayObject):
         PotentialArray
             A view into the existing array covering a chunk of slices.
         """
-        from abtem.core.chunks import estimate_potential_chunk_size
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
 
         if last_slice is None:
             last_slice = len(self)
@@ -1179,11 +1195,16 @@ class FieldArray(BaseField, ArrayObject):
                 self.gpts, self.device
             )
 
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
         exit_plane_after = self._exit_plane_after
 
-        for chunk_start in range(first_slice, last_slice, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, last_slice)
-
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
             s = (0,) * (len(self.array.shape) - 3) + (
                 slice(chunk_start, chunk_end),
             )

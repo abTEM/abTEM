@@ -204,11 +204,19 @@ def run_benchmarks(device: str, quick: bool, repeats: int = 3) -> dict:
 
         if chunking:
             from abtem.core.chunks import estimate_potential_chunk_size
-            auto_cs = estimate_potential_chunk_size(gpts, device)
+            import math
+            auto_cs = min(
+                estimate_potential_chunk_size(gpts, device), n_slices
+            )
+            auto_nchunks = math.ceil(n_slices / auto_cs)
         else:
-            auto_cs = None
+            auto_cs, auto_nchunks = None, None
 
-        cs_note = f"  auto chunk_size={auto_cs}" if auto_cs is not None else ""
+        cs_note = (
+            f"  auto: {auto_nchunks} chunk(s) of ≤{auto_cs} slices"
+            if auto_cs is not None
+            else ""
+        )
         print(f"\n  {gpts[0]}×{gpts[1]}, {n_slices} slices, {mem_gb:.2f} GB{cs_note}")
 
         row = {"gpts": list(gpts), "n_slices": n_slices, "mem_gb": mem_gb,
