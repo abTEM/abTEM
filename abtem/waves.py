@@ -419,6 +419,8 @@ class Waves(BaseWaves, ArrayObject):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
