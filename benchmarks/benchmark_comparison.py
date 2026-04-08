@@ -34,12 +34,14 @@ import argparse
 import gc
 import inspect
 import json
+import os
 import sys
 import time
-import os
 
 import numpy as np
 from ase.build import bulk
+
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 # Ensure we import from the repo root when run directly.
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -200,9 +202,17 @@ def run_benchmarks(device: str, quick: bool, repeats: int = 3) -> dict:
         n_slices = len(pot)
         mem_gb = n_slices * gpts[0] * gpts[1] * 4 / 1e9
 
-        print(f"\n  {gpts[0]}×{gpts[1]}, {n_slices} slices, {mem_gb:.2f} GB")
+        if chunking:
+            from abtem.core.chunks import estimate_potential_chunk_size
+            auto_cs = estimate_potential_chunk_size(gpts, device)
+        else:
+            auto_cs = None
 
-        row = {"gpts": list(gpts), "n_slices": n_slices, "mem_gb": mem_gb, "times": {}}
+        cs_note = f"  auto chunk_size={auto_cs}" if auto_cs is not None else ""
+        print(f"\n  {gpts[0]}×{gpts[1]}, {n_slices} slices, {mem_gb:.2f} GB{cs_note}")
+
+        row = {"gpts": list(gpts), "n_slices": n_slices, "mem_gb": mem_gb,
+               "auto_chunk_size": auto_cs, "times": {}}
 
         try:
             t = bench_planewave_prebuilt(pot, device, repeats)
