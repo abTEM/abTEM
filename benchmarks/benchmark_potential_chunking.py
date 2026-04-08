@@ -116,8 +116,8 @@ class PeakVRAMTracker:
 class GPUUtilTracker:
     """Context manager that samples GPU compute utilization in a background thread.
 
-    Uses ``pynvml`` (ships with ``nvidia-ml-py``, commonly installed alongside
-    CUDA drivers). If unavailable, all samples are ``None``.
+    Uses the ``pynvml`` API from ``nvidia-ml-py`` (``pip install nvidia-ml-py``).
+    If unavailable, all samples are ``None``.
     """
 
     def __init__(self, interval: float = 0.05):
@@ -129,7 +129,10 @@ class GPUUtilTracker:
 
     def _sample_loop(self):
         try:
-            import pynvml
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                import pynvml
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         except Exception:
