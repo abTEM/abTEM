@@ -1665,10 +1665,12 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
             # When the source was on GPU but the output is CPU-resident
-            # (e.g. AnnularDetector with to_cpu=True), record the computation
-            # device so _compute() selects the synchronous scheduler.
-            # Uses the same _device convention as WavesBuilder.
-            if get_array_module(self.array) is cp:
+            # Record the computation device on the output so _compute()
+            # selects the synchronous scheduler for GPU work.  Check
+            # self.device (which honours _device on lazy arrays) rather
+            # than inspecting the dask-array module, which always returns
+            # numpy for a not-yet-computed lazy array.
+            if self.device == "gpu":
                 output._device = "gpu"
             outputs.append(output)
 
