@@ -1195,11 +1195,19 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def apply_transform(
         self, transform, max_batch: int | str = "auto", lazy: bool = True
     ):
-        built = self.build(lazy=lazy)
-        # Propagate the builder's device so that ArrayObject.apply_transform
-        # can apply VRAM-aware batch sizing.  The lazy-built Waves array has
-        # a numpy dask meta (computation hasn't run yet), so its device
-        # property would incorrectly return "cpu" without this.
+        # Resolve VRAM-aware batch size *before* building so that
+        # _build_validated receives the correct probe count and creates
+        # the right dask chunks.  If we let max_batch="auto" reach
+        # _build_validated it falls back to the dask.chunk-size-gpu config
+        # (512 MB default → batch≈2 at 4096²), ignoring free CUDA memory.
+        if max_batch == "auto" and self._device == "gpu":
+            from abtem.core.chunks import estimate_scan_batch_size
+
+            max_batch = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+
+        built = self.build(lazy=lazy, max_batch=max_batch)
+        # Keep _device so that ArrayObject.apply_transform can select the
+        # synchronous scheduler for GPU work and propagate device to outputs.
         built._device = self._device
         return built.apply_transform(transform, max_batch=max_batch)
 
