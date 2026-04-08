@@ -511,6 +511,32 @@ def estimate_potential_chunk_size(
     return min(chunk_size, 4096)
 
 
+def _nearest_power_of_two(n: int) -> int:
+    """Round n to the nearest power of two.
+
+    Prefers the *upper* power when it fits within 25 % of the raw estimate
+    (i.e. when ``ceil_pot <= n * 1.25``).  This lets the auto-sizing snap
+    to GPU-friendly batch sizes (8, 16, 32, 64 …) without meaningfully
+    exceeding the VRAM budget, since the raw estimate already uses only
+    50 % of free VRAM as headroom.
+
+    Examples
+    --------
+    59 → 64  (64 ≤ 59 * 1.25 = 73.75, use upper)
+    14 → 16  (16 ≤ 14 * 1.25 = 17.5,  use upper)
+    20 → 16  (32  > 20 * 1.25 = 25,   use lower)
+    """
+    if n <= 1:
+        return 1
+    floor_pot = 1 << (n.bit_length() - 1)   # largest power of two ≤ n
+    ceil_pot = floor_pot << 1                # smallest power of two ≥ n
+    if n == floor_pot:
+        return n                             # already a power of two
+    if ceil_pot <= int(n * 1.25):
+        return ceil_pot
+    return floor_pot
+
+
 def estimate_scan_batch_size(
     gpts: tuple[int, int],
     dtype,
@@ -527,6 +553,10 @@ def estimate_scan_batch_size(
     reduced free memory and sizes the potential chunk to fit in what
     remains. The two estimates are thus naturally coordinated without
     requiring explicit cross-referencing.
+
+    The raw estimate is rounded to the nearest power of two (preferring
+    the upper power when within 25 % headroom) so that batch sizes snap
+    to GPU-friendly values such as 8, 16, 32, 64.
 
     For CPU, falls back to the ``dask.chunk-size`` configuration key.
 
@@ -561,7 +591,8 @@ def estimate_scan_batch_size(
             # computation time) plus remaining workspace fills the other 50%.
             probe_budget = int(free_mem * 0.5)
             per_probe_effective = max(1, int(per_probe_bytes * 6))
-            return max(1, probe_budget // per_probe_effective)
+            n_probes = max(1, probe_budget // per_probe_effective)
+            return _nearest_power_of_two(n_probes)
         except (ImportError, Exception):
             chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
