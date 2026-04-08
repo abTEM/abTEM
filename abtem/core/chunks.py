@@ -431,10 +431,10 @@ def estimate_potential_chunk_size(
     slice size for scan workloads at 4096² grids.
 
     On CPU there is no pool fragmentation and system RAM is typically
-    abundant.  The budget is therefore the raw slice size (1×), meaning
-    ``dask.chunk-size`` directly controls how many slices fit.  In
-    practice the cap in :meth:`generate_chunked_slices` collapses this
-    to a single chunk whenever the whole potential fits within the budget.
+    abundant.  The default is therefore to place the entire potential in
+    a single chunk (no chunking), matching pre-chunking behaviour.  Set
+    ``potential.slice-chunk-size`` in the configuration to a positive
+    integer to enable CPU chunking when memory is genuinely limited.
 
     On GPU the budget uses the CUDA-reported free memory without calling
     ``free_all_blocks()`` first. Dead pool blocks represent recent memory
@@ -501,13 +501,13 @@ def estimate_potential_chunk_size(
             effective_per_slice = slice_bytes * 5
             budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
     else:
-        # On CPU, system RAM is abundant and there is no memory-pool
-        # fragmentation.  Use the raw slice size as the unit cost (1×)
-        # so that the dask.chunk-size budget directly controls how many
-        # slices fit.  The cap in generate_chunked_slices will collapse
-        # this to a single chunk whenever the whole potential fits.
-        effective_per_slice = slice_bytes
-        budget_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
+        # On CPU, system RAM is typically abundant and there is no
+        # memory-pool fragmentation.  The default is therefore to place
+        # the entire potential in a single chunk (no chunking), matching
+        # the pre-chunking behaviour.  The potential.slice-chunk-size
+        # config key (checked above) allows an explicit override when
+        # memory is genuinely limited.
+        return 4096
 
     chunk_size = max(1, int(budget_bytes / effective_per_slice))
 
