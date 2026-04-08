@@ -230,8 +230,9 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         return gaussian_projected_scattering_factors(symbol, gpts, sampling)
 
     def get_corrections(self, symbol, gpts, sampling):
-        if symbol in self._corrections:
-            return self._corrections[(symbol, gpts, sampling)]
+        key = (symbol, gpts, sampling)
+        if key in self._corrections:
+            return self._corrections[key]
 
         return correction_projected_scattering_factors(symbol, gpts, sampling)
 
