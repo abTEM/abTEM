@@ -1358,6 +1358,15 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         if lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self._valid_gpts))
+            elif max_batch == "auto" and self.device == "gpu":
+                # Query free CUDA memory to pick a probe batch that fits in
+                # VRAM.  The config-based fallback (dask.chunk-size-gpu,
+                # default 512 MB) gives only ~2 probes at 4096², which is
+                # far below the GPU-optimal batch size.
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+                max_batch = int(n_probes * np.prod(self._valid_gpts))
 
             chunks = self._default_ensemble_chunks + self._valid_gpts
 
