@@ -373,14 +373,12 @@ def benchmark_scan(
 # ──────────────────────────────────────────────────────────────────────
 
 def _resolve_chunk_label(chunk_size: int | str, potential, device: str) -> str:
-    """Return a display label for the chunk size, resolving 'auto' to 'auto(N)'."""
-    import math
+    """Return a display label for the chunk size, resolving 'auto' to 'auto(N slices)'."""
     from abtem.core.chunks import estimate_potential_chunk_size
     n_slices = len(potential)
     if chunk_size == "auto":
         cs = min(estimate_potential_chunk_size(potential.gpts, device), n_slices)
-        n_chunks = math.ceil(n_slices / cs)
-        return f"chunk=auto({n_chunks})"
+        return f"chunk=auto({cs})"
     return f"chunk={chunk_size}"
 
 
