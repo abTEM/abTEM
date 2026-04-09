@@ -416,8 +416,6 @@ def get_planewave_configs(device: str, quick: bool):
             # ~36 GB — exceeds 24 GB VRAM; build(lazy=False) OOMs,
             # chunked multislice succeeds.
             ((4096, 4096), (20, 20, 200)),
-            # 16384²: one slice ≈ 1.07 GB → auto chunk_size=1 on a 25 GB GPU
-            ((16384, 16384), (1, 1, 5)),
         ])
     else:
         configs.append(((2048, 2048), (10, 10, 60)))
@@ -602,10 +600,10 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     overhead ``estimate_potential_chunk_size`` returns 1 — so the auto path
     naturally processes one slice at a time without any manual override.
 
-    Only a handful of slices are used to keep runtime manageable.  Both a
-    PlaneWave and a minimal Probe scan (2×2 positions → single scan batch,
-    so the potential is never rebuilt across batches) are tested to confirm
-    that neither OOMs.
+    Note: at 16384² the wavefunction FFT workspace alone consumes ~24 GB,
+    leaving no room for the potential slice.  This test is therefore expected
+    to OOM — it documents the upper limit of what fits on a 25 GB GPU rather
+    than asserting success.
 
     Only meaningful on GPU; on CPU the potential is a single chunk by default.
     """
