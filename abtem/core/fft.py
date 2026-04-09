@@ -246,7 +246,6 @@ def _fft_dispatch(
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
-        _configure_cufft_cache()
         return getattr(cp.fft, func_name)(x, **kwargs)
 
 
