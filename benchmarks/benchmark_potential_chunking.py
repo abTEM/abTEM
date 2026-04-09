@@ -589,6 +589,63 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Single-slice stress test
+# ──────────────────────────────────────────────────────────────────────
+
+def run_single_slice_stress_test(device: str, quick: bool = False):
+    """Stress-test with chunk_size=1: one potential slice built at a time.
+
+    This simulates the extreme case where only a single slice fits in device
+    memory, proving that the chunked path does not OOM regardless of potential
+    size.  Both a PlaneWave and a minimal Probe scan (2×2 positions, so the
+    potential is never rebuilt across batches) are timed.
+
+    Only meaningful on GPU where potential chunking is active; on CPU the
+    potential is already a single chunk by default.
+    """
+    print(f"\n{'=' * 90}")
+    print(f"Single-slice stress test (chunk_size=1) — device={device}")
+    print(f"{'=' * 90}")
+
+    if quick:
+        gpts, reps = (512, 512), (2, 2, 10)
+        scan_gpts = (2, 2)
+    else:
+        # ~22 GB potential — well above VRAM; chunk_size=1 forces 326 individual builds
+        gpts, reps = (4096, 4096), (20, 20, 120)
+        scan_gpts = (2, 2)  # 4 positions → 1 scan batch, potential built once
+
+    potential = make_large_potential(gpts, reps, device=device)
+    num_slices = len(potential)
+    mem_gb = estimate_potential_memory_mb(potential) / 1000
+
+    print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
+    if device == "gpu":
+        import cupy as cp
+        free, total = cp.cuda.Device().mem_info
+        print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+
+    print("\n  [PlaneWave multislice, chunk_size=1]")
+    print_result(benchmark_multislice(potential, chunk_size=1, device=device))
+    _gpu_cleanup()
+
+    print("\n  [Probe scan (2×2 positions), chunk_size=1]")
+    # Run in-process: 2×2 is tiny, and _gpu_cleanup() above cleared any
+    # residual allocations from the PlaneWave run.
+    _gpu_cleanup()
+    print_result(benchmark_scan(
+        potential, scan_gpts, device,
+        prebuilt=False,
+        potential_chunk_size=1,
+        max_batch="auto",
+    ))
+    _gpu_cleanup()
+
+    print(f"\n{'=' * 90}")
+    print("Done.")
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Main entry point
 # ──────────────────────────────────────────────────────────────────────
 
@@ -643,6 +700,7 @@ def main():
     if args.device in ("gpu", "both"):
         run_planewave_benchmarks("gpu", quick=args.quick)
         run_scan_benchmarks_via_subprocesses("gpu", quick=args.quick)
+        run_single_slice_stress_test("gpu", quick=args.quick)
 
 
 if __name__ == "__main__":
