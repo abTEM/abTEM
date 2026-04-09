@@ -185,6 +185,44 @@ def _fftw_dispatch(
 
 U = TypeVar("U", np.ndarray, da.core.Array)
 
+_cufft_cache_configured = False
+
+
+def _configure_cufft_cache():
+    """Apply ``cupy.fft-cache-size`` from the abTEM config to the cuFFT plan cache.
+
+    Called once on the first GPU FFT.  The config value is interpreted as a
+    memory limit (bytes) on the total workspace held by cached plans:
+
+    * ``0 MB``  — disable plan caching entirely (plans destroyed after each
+      call, workspace freed immediately).
+    * ``-1``    — unlimited (CuPy default, plans cached indefinitely).
+    * Any positive value — cap the total cached workspace at that many bytes.
+
+    Disabling the cache (``0 MB``) trades a small per-FFT overhead for
+    significantly reduced persistent GPU memory usage, which matters when
+    the problem is too large to fit in VRAM with all plans cached.
+    """
+    global _cufft_cache_configured
+    if _cufft_cache_configured:
+        return
+    _cufft_cache_configured = True
+
+    raw = config.get("cupy.fft-cache-size", "0 MB")
+    # Accept plain int (bytes) or a string with units via dask's parse_bytes
+    if isinstance(raw, str):
+        from dask.utils import parse_bytes
+        limit = parse_bytes(raw)
+    else:
+        limit = int(raw)
+
+    cache = cp.fft.config.get_plan_cache()
+    if limit == 0:
+        cache.set_size(0)   # disable caching entirely
+    elif limit > 0:
+        cache.set_memsize(limit)
+    # limit < 0 → leave at CuPy default (unlimited)
+
 
 def _fft_dispatch(
     x: U,
@@ -217,6 +255,7 @@ def _fft_dispatch(
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
+        _configure_cufft_cache()
         return getattr(cp.fft, func_name)(x, **kwargs)
 
 
