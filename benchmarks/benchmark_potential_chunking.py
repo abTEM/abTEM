@@ -459,20 +459,7 @@ def get_scan_configs(device: str, quick: bool):
 def run_planewave_benchmarks(device: str, quick: bool = False):
     print(f"\n{'=' * 90}")
     print(f"PlaneWave Benchmark (chunked multislice) — device={device}")
-    print(f"abTEM version: {abtem.__version__}")
     print(f"{'=' * 90}")
-
-    if device == "gpu":
-        try:
-            import cupy as cp
-            dev = cp.cuda.Device()
-            free, total = dev.mem_info
-            print(f"GPU: {cp.cuda.runtime.getDeviceProperties(0)['name'].decode()}")
-            print(f"VRAM: {total / 1e9:.1f} GB total, {free / 1e9:.1f} GB free")
-            warmup_gpu()
-        except ImportError:
-            print("ERROR: cupy not available, cannot run GPU benchmarks")
-            return
 
     for gpts, reps in get_planewave_configs(device, quick):
         potential = make_large_potential(gpts, reps, device=device)
@@ -584,8 +571,6 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
                              prebuilt=False, chunk_size="auto", to_zarr=False,
                              batch_size="auto")
 
-    print(f"\n{'=' * 90}")
-    print("Done.")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -652,9 +637,6 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
         ))
         _gpu_cleanup()
 
-    print(f"\n{'=' * 90}")
-    print("Done.")
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Main entry point
@@ -704,6 +686,18 @@ def main():
         return
 
     # Otherwise, run the full benchmark suite
+    print(f"abTEM version: {abtem.__version__}")
+    if args.device in ("gpu", "both"):
+        try:
+            import cupy as cp
+            free, total = cp.cuda.Device().mem_info
+            print(f"GPU: {cp.cuda.runtime.getDeviceProperties(0)['name'].decode()}")
+            print(f"VRAM: {total / 1e9:.1f} GB total, {free / 1e9:.1f} GB free")
+            warmup_gpu()
+        except ImportError:
+            print("ERROR: cupy not available, cannot run GPU benchmarks")
+            return
+
     if args.device in ("cpu", "both"):
         run_planewave_benchmarks("cpu", quick=args.quick)
         run_scan_benchmarks_via_subprocesses("cpu", quick=args.quick)
@@ -712,6 +706,9 @@ def main():
         run_planewave_benchmarks("gpu", quick=args.quick)
         run_single_slice_stress_test("gpu", quick=args.quick)
         run_scan_benchmarks_via_subprocesses("gpu", quick=args.quick)
+
+    print(f"\n{'=' * 90}")
+    print("Done.")
 
 
 if __name__ == "__main__":
