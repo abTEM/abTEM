@@ -598,44 +598,35 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
 
     if quick:
         gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
-        slice_configs = [("auto", 2.0)]
     else:
         # 16384²: one slice ≈ 1.07 GB → auto chunk_size = 1 on a 25 GB GPU.
         # Si cubic cell is 5.43 Å in z; slice_thickness=6.0 Å → exactly 1 slice.
         gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
-        slice_configs = [
-            (6.0, "1 slice — no chunking needed; tests wavefunction FFT footprint"),
-            (2.0, "~14 slices — exercises chunk_size=1 path"),
-        ]
 
-    for slice_thickness, description in slice_configs:
-        potential = make_large_potential(gpts, reps, device=device,
-                                        slice_thickness=slice_thickness)
-        num_slices = len(potential)
-        mem_gb = estimate_potential_memory_mb(potential) / 1000
+    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
+    num_slices = len(potential)
+    mem_gb = estimate_potential_memory_mb(potential) / 1000
 
-        if device == "gpu":
-            import cupy as cp
-            free, total = cp.cuda.Device().mem_info
-            print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), "
-                  f"{mem_gb:.2f} GB — {description} ──")
-            print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
-        else:
-            print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), "
-                  f"{mem_gb:.2f} GB — {description} ──")
+    if device == "gpu":
+        import cupy as cp
+        free, total = cp.cuda.Device().mem_info
+        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
+        print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+    else:
+        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
 
-        print("\n  [PlaneWave multislice]")
-        print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
-        _gpu_cleanup()
+    print("\n  [PlaneWave multislice]")
+    print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
+    _gpu_cleanup()
 
-        print("\n  [Probe scan (2×2 positions)]")
-        print_result(benchmark_scan(
-            potential, scan_gpts, device,
-            prebuilt=False,
-            potential_chunk_size="auto",
-            max_batch="auto",
-        ))
-        _gpu_cleanup()
+    print("\n  [Probe scan (2×2 positions)]")
+    print_result(benchmark_scan(
+        potential, scan_gpts, device,
+        prebuilt=False,
+        potential_chunk_size="auto",
+        max_batch="auto",
+    ))
+    _gpu_cleanup()
 
 
 # ──────────────────────────────────────────────────────────────────────
