@@ -393,6 +393,10 @@ def get_planewave_configs(device: str, quick: bool):
     configs = []
     if device == "gpu":
         configs.extend([
+            # ~3 GB — small, fits easily
+            ((2048, 2048), (10, 10, 60)),
+            # ~14 GB — tight fit
+            ((4096, 4096), (20, 20, 75)),
             # ~22 GB — just fits in 24 GB VRAM
             ((4096, 4096), (20, 20, 120)),
             # ~36 GB — exceeds 24 GB VRAM; build(lazy=False) OOMs,
@@ -421,6 +425,8 @@ def get_scan_configs(device: str, quick: bool):
             ((4096, 4096), (20, 20, 75), (8, 8)),
             # ~22 GB potential — exceeds VRAM, must chunk
             ((4096, 4096), (20, 20, 120), (8, 8)),
+            # ~36 GB potential — well exceeds VRAM, heavy chunking required
+            ((4096, 4096), (20, 20, 200), (8, 8)),
         ])
     else:
         configs.extend([
