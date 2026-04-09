@@ -442,8 +442,6 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
             print("ERROR: cupy not available, cannot run GPU benchmarks")
             return
 
-    chunk_sizes: list[int | str] = [1, 10, 50, "auto"]
-
     for gpts, reps in get_planewave_configs(device, quick):
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
@@ -456,49 +454,7 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
-        # Full build reference
-        print("\n  [Full build reference]")
-        full_build_ok = False
-        try:
-            t0 = time.perf_counter()
-            full = potential.build(lazy=False)
-            t1 = time.perf_counter()
-            print(f"  build(lazy=False) all {num_slices} slices:  {t1 - t0:.3f}s")
-            full_build_ok = True
-            del full
-        except (MemoryError, Exception) as e:
-            print(f"  build(lazy=False) FAILED ({type(e).__name__}): {e}")
-            print(f"  >>> This is expected — potential ({mem_gb:.1f} GB) exceeds available memory.")
-            e.__traceback__ = None
-            del e
-        _gpu_cleanup()
-
-        # Build only
-        print("\n  [Potential build (generate_chunked_slices)]")
-        for cs in chunk_sizes:
-            if isinstance(cs, int) and cs > num_slices:
-                continue
-            print_result(benchmark_build_only(potential, cs, device))
-
-        # Full multislice
-        print("\n  [Full multislice (PlaneWave, 200 keV)]")
-        if full_build_ok:
-            try:
-                prebuilt = potential.build(lazy=False)
-                r = benchmark_multislice(prebuilt, "auto", device)
-                r["label"] = "pre-built PotentialArray, chunk=auto"
-                print_result(r)
-                del prebuilt
-            except (MemoryError, Exception) as e:
-                print(f"  pre-built PotentialArray: OOM ({type(e).__name__})")
-        else:
-            print(f"  pre-built PotentialArray: SKIPPED (full build failed above)")
-        _gpu_cleanup()
-
-        for cs in chunk_sizes:
-            if isinstance(cs, int) and cs > num_slices:
-                continue
-            print_result(benchmark_multislice(potential, cs, device))
+        print_result(benchmark_multislice(potential, "auto", device))
         _gpu_cleanup()
 
 
