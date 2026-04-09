@@ -274,12 +274,19 @@ def benchmark_scan(
 
     # Resolve the effective batch size for display before building the graph.
     # Use the potential's gpts as a proxy for the probe grid size.
-    if max_batch == "auto" and device == "gpu":
-        from abtem.core.chunks import estimate_scan_batch_size
-        effective_batch = min(
-            estimate_scan_batch_size(potential.gpts, np.dtype("complex64"), "gpu"),
-            scan_gpts[0] * scan_gpts[1],
-        )
+    n_pos = scan_gpts[0] * scan_gpts[1]
+    if max_batch == "auto":
+        if device == "gpu":
+            from abtem.core.chunks import estimate_scan_batch_size
+            effective_batch = min(
+                estimate_scan_batch_size(potential.gpts, np.dtype("complex64"), "gpu"),
+                n_pos,
+            )
+        else:
+            from dask.utils import parse_bytes
+            chunk_bytes = parse_bytes(config.get("dask.chunk-size"))
+            wave_bytes = int(np.prod(potential.gpts)) * np.dtype("complex64").itemsize
+            effective_batch = min(max(1, chunk_bytes // wave_bytes), n_pos)
         batch_label = f"auto({effective_batch})"
     else:
         batch_label = str(max_batch)
@@ -416,7 +423,12 @@ def get_scan_configs(device: str, quick: bool):
             ((4096, 4096), (20, 20, 120), (8, 8)),
         ])
     else:
-        configs.append(((1024, 1024), (2, 2, 10), (8, 8)))
+        configs.extend([
+            # ~0.7 GB potential, 64 positions
+            ((1024, 1024), (4, 4, 20), (8, 8)),
+            # ~0.7 GB potential, 256 positions — larger scan to stress potential-first
+            ((1024, 1024), (4, 4, 20), (16, 16)),
+        ])
     return configs
 
 
