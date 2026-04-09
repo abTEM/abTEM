@@ -546,7 +546,7 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
         del potential
 
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
-              f"scan={scan_gpts[0]}x{scan_gpts[1]} ({n_positions} positions) ──")
+              f"scan={scan_gpts[0]}x{scan_gpts[1]} ──")
 
         _run_scan_subprocess(script, device, i, quick,
                              prebuilt=False, chunk_size="auto", to_zarr=False,
