@@ -593,50 +593,57 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
 # ──────────────────────────────────────────────────────────────────────
 
 def run_single_slice_stress_test(device: str, quick: bool = False):
-    """Stress-test with chunk_size=1: one potential slice built at a time.
+    """Stress-test where a single potential slice barely fits in device memory.
 
-    This simulates the extreme case where only a single slice fits in device
-    memory, proving that the chunked path does not OOM regardless of potential
-    size.  Both a PlaneWave and a minimal Probe scan (2×2 positions, so the
-    potential is never rebuilt across batches) are timed.
+    A 16384² grid produces ~1.07 GB per float32 slice.  On a 25 GB GPU the
+    VRAM budget for potential chunks is ~6.2 GB, and with 5× fragmentation
+    overhead ``estimate_potential_chunk_size`` returns 1 — so the auto path
+    naturally processes one slice at a time without any manual override.
 
-    Only meaningful on GPU where potential chunking is active; on CPU the
-    potential is already a single chunk by default.
+    Only a handful of slices are used to keep runtime manageable.  Both a
+    PlaneWave and a minimal Probe scan (2×2 positions → single scan batch,
+    so the potential is never rebuilt across batches) are tested to confirm
+    that neither OOMs.
+
+    Only meaningful on GPU; on CPU the potential is a single chunk by default.
     """
     print(f"\n{'=' * 90}")
-    print(f"Single-slice stress test (chunk_size=1) — device={device}")
+    print(f"Single-slice stress test — device={device}")
     print(f"{'=' * 90}")
 
     if quick:
-        gpts, reps = (512, 512), (2, 2, 10)
+        # 4096² still gives auto chunk_size ~18, not 1 — use explicit override
+        # in quick mode just to exercise the code path quickly
+        gpts, reps = (4096, 4096), (1, 1, 4)
         scan_gpts = (2, 2)
     else:
-        # ~22 GB potential — well above VRAM; chunk_size=1 forces 326 individual builds
-        gpts, reps = (4096, 4096), (20, 20, 120)
+        # 16384²: one slice ≈ 1.07 GB → auto chunk_size = 1 on a 25 GB GPU
+        gpts, reps = (16384, 16384), (1, 1, 5)
         scan_gpts = (2, 2)  # 4 positions → 1 scan batch, potential built once
 
     potential = make_large_potential(gpts, reps, device=device)
     num_slices = len(potential)
     mem_gb = estimate_potential_memory_mb(potential) / 1000
 
-    print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
     if device == "gpu":
         import cupy as cp
         free, total = cp.cuda.Device().mem_info
+        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
         print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+    else:
+        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
 
-    print("\n  [PlaneWave multislice, chunk_size=1]")
-    print_result(benchmark_multislice(potential, chunk_size=1, device=device))
+    print("\n  [PlaneWave multislice]")
+    print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
     _gpu_cleanup()
 
-    print("\n  [Probe scan (2×2 positions), chunk_size=1]")
+    print("\n  [Probe scan (2×2 positions)]")
     # Run in-process: 2×2 is tiny, and _gpu_cleanup() above cleared any
     # residual allocations from the PlaneWave run.
-    _gpu_cleanup()
     print_result(benchmark_scan(
         potential, scan_gpts, device,
         prebuilt=False,
-        potential_chunk_size=1,
+        potential_chunk_size="auto",
         max_batch="auto",
     ))
     _gpu_cleanup()
