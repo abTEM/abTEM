@@ -543,14 +543,21 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
         mem_gb = estimate_potential_memory_mb(potential) / 1000
+        n_positions = scan_gpts[0] * scan_gpts[1]
         del potential
 
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
-              f"scan={scan_gpts[0]}x{scan_gpts[1]} ──")
+              f"scan={scan_gpts[0]}x{scan_gpts[1]} ({n_positions} positions) ──")
 
+        # auto-batch: VRAM-aware scan batching; potential chunks rebuilt once per batch
         _run_scan_subprocess(script, device, i, quick,
                              prebuilt=False, chunk_size="auto", to_zarr=False,
                              batch_size="auto")
+
+        # potential-first: all positions in one batch; each potential chunk built once
+        _run_scan_subprocess(script, device, i, quick,
+                             prebuilt=False, chunk_size="auto", to_zarr=False,
+                             batch_size=n_positions)
 
     print(f"\n{'=' * 90}")
     print("Done.")
