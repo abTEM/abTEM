@@ -458,7 +458,7 @@ def get_scan_configs(device: str, quick: bool):
 
 def run_planewave_benchmarks(device: str, quick: bool = False):
     print(f"\n{'=' * 90}")
-    print(f"Potential Chunking Benchmark — device={device}")
+    print(f"PlaneWave Benchmark (chunked multislice) — device={device}")
     print(f"abTEM version: {abtem.__version__}")
     print(f"{'=' * 90}")
 
@@ -710,8 +710,8 @@ def main():
 
     if args.device in ("gpu", "both"):
         run_planewave_benchmarks("gpu", quick=args.quick)
-        run_scan_benchmarks_via_subprocesses("gpu", quick=args.quick)
         run_single_slice_stress_test("gpu", quick=args.quick)
+        run_scan_benchmarks_via_subprocesses("gpu", quick=args.quick)
 
 
 if __name__ == "__main__":
