@@ -610,8 +610,12 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     if device == "gpu":
         import cupy as cp
         free, total = cp.cuda.Device().mem_info
+        pool = cp.get_default_memory_pool()
+        cache = cp.fft.config.get_plan_cache()
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
         print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+        print(f"  CuPy pool: used={pool.used_bytes()/1e9:.2f} GB  free={pool.free_bytes()/1e9:.2f} GB")
+        print(f"  cuFFT plan cache: {cache}")
     else:
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
 
