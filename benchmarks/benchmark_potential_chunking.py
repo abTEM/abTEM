@@ -574,25 +574,7 @@ def _run_scan_subprocess(
 
 
 def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
-    """Spawn a fresh subprocess for EACH scan benchmark.
-
-    Two execution strategies are compared for each configuration:
-
-    * **auto-batch** (current default, ``max_batch="auto"``): scan positions are
-      split into memory-aware batches.  Each batch independently propagates
-      through *all* potential chunks, so every chunk is built once per batch.
-      Total potential builds = N_batches × N_chunks.
-
-    * **potential-first** (``max_batch=N_positions``): all scan positions form a
-      single batch.  The simulation iterates through the potential chunks once,
-      passing all wavefunctions through each chunk before moving to the next.
-      Total potential builds = N_chunks (minimised).  The trade-off is that all
-      wavefunctions must be resident simultaneously; this may OOM on devices with
-      limited memory.
-
-    A pre-built reference (the entire potential built eagerly upfront) is also
-    timed when it fits in memory.
-    """
+    """Spawn a fresh subprocess for EACH scan benchmark."""
     print(f"\n{'=' * 90}")
     print(f"Scan Benchmark (Probe + GridScan, lazy path) — device={device}")
     print(f"Each benchmark runs in a fresh subprocess for clean VRAM.")
@@ -605,27 +587,14 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
         potential = make_large_potential(gpts, reps, device=device)
         num_slices = len(potential)
         mem_gb = estimate_potential_memory_mb(potential) / 1000
-        n_positions = scan_gpts[0] * scan_gpts[1]
         del potential
 
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
               f"scan={scan_gpts[0]}x{scan_gpts[1]} ({n_positions} positions) ──")
-        print(f"  Comparing: prebuilt reference | auto-batch | potential-first")
 
-        # Reference: eager full build, then scan
-        _run_scan_subprocess(script, device, i, quick,
-                             prebuilt=True, chunk_size="auto", to_zarr=False,
-                             batch_size="auto")
-
-        # Path A: current default — VRAM-aware scan batching, chunked potential
         _run_scan_subprocess(script, device, i, quick,
                              prebuilt=False, chunk_size="auto", to_zarr=False,
                              batch_size="auto")
-
-        # Path B: potential-first — all positions in one batch, each chunk built once
-        _run_scan_subprocess(script, device, i, quick,
-                             prebuilt=False, chunk_size="auto", to_zarr=False,
-                             batch_size=n_positions)
 
     print(f"\n{'=' * 90}")
     print("Done.")
