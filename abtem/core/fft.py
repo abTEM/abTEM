@@ -185,31 +185,22 @@ def _fftw_dispatch(
 
 U = TypeVar("U", np.ndarray, da.core.Array)
 
-_cufft_cache_configured = False
-
-
 def _configure_cufft_cache():
     """Apply ``cupy.fft-cache-size`` from the abTEM config to the cuFFT plan cache.
 
-    Called once on the first GPU FFT.  The config value is interpreted as a
-    memory limit (bytes) on the total workspace held by cached plans:
+    Called on every GPU FFT dispatch so that runtime config changes take effect.
+    The config value is a memory limit on the total workspace held by cached plans:
 
-    * ``0 MB``  — disable plan caching entirely (plans destroyed after each
-      call, workspace freed immediately).
-    * ``-1``    — unlimited (CuPy default, plans cached indefinitely).
-    * Any positive value — cap the total cached workspace at that many bytes.
-
-    Disabling the cache (``0 MB``) trades a small per-FFT overhead for
-    significantly reduced persistent GPU memory usage, which matters when
-    the problem is too large to fit in VRAM with all plans cached.
+    * ``0 MB``     — disable plan caching entirely (plans destroyed after each
+                     call, workspace freed immediately).  Use when VRAM is very
+                     tight; trades a small per-FFT planning overhead for zero
+                     persistent workspace.
+    * positive     — allow up to N bytes of cached workspace (``set_memsize``).
+                     Plans are reused for repeated same-shape transforms but the
+                     total persistent workspace is bounded.
+    * ``-1``       — unlimited (CuPy default, plans cached indefinitely).
     """
-    global _cufft_cache_configured
-    if _cufft_cache_configured:
-        return
-    _cufft_cache_configured = True
-
     raw = config.get("cupy.fft-cache-size", "0 MB")
-    # Accept plain int (bytes) or a string with units via dask's parse_bytes
     if isinstance(raw, str):
         from dask.utils import parse_bytes
         limit = parse_bytes(raw)
@@ -218,7 +209,7 @@ def _configure_cufft_cache():
 
     cache = cp.fft.config.get_plan_cache()
     if limit == 0:
-        cache.set_size(0)   # disable caching entirely
+        cache.set_size(0)       # disable caching entirely
     elif limit > 0:
         cache.set_memsize(limit)
     # limit < 0 → leave at CuPy default (unlimited)
