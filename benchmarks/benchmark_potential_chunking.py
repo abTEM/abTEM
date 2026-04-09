@@ -190,7 +190,7 @@ def benchmark_multislice(
     waves = PlaneWave(energy=energy, gpts=potential.gpts, device=device)
     waves.grid.match(potential)
 
-    label = f"gpts={potential.gpts}, slices={len(potential)}, chunk={chunk_size}"
+    label = f"gpts={potential.gpts}, slices={len(potential)}, {_resolve_chunk_label(chunk_size, potential, device)}"
 
     gc.collect()
     if device == "gpu":
@@ -294,7 +294,7 @@ def benchmark_scan(
     if prebuilt:
         cs_label = "pre-built"
     else:
-        cs_label = f"chunk={potential_chunk_size}"
+        cs_label = _resolve_chunk_label(potential_chunk_size, potential, device)
     if to_zarr:
         cs_label += " (zarr)"
     label = f"{cs_label}, scan={scan_gpts}, batch={batch_label}"
@@ -371,6 +371,18 @@ def benchmark_scan(
 # ──────────────────────────────────────────────────────────────────────
 # Output formatting
 # ──────────────────────────────────────────────────────────────────────
+
+def _resolve_chunk_label(chunk_size: int | str, potential, device: str) -> str:
+    """Return a display label for the chunk size, resolving 'auto' to 'auto(N)'."""
+    import math
+    from abtem.core.chunks import estimate_potential_chunk_size
+    n_slices = len(potential)
+    if chunk_size == "auto":
+        cs = min(estimate_potential_chunk_size(potential.gpts, device), n_slices)
+        n_chunks = math.ceil(n_slices / cs)
+        return f"chunk=auto({n_chunks})"
+    return f"chunk={chunk_size}"
+
 
 def print_result(r: dict):
     if "error" in r:
