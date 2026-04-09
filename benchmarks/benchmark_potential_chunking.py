@@ -610,7 +610,9 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     else:
         # 16384²: one slice ≈ 1.07 GB → auto chunk_size = 1 on a 25 GB GPU.
         # Si cubic cell is 5.43 Å in z; slice_thickness=6.0 Å → exactly 1 slice.
-        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
+        # 4×4 = 16 scan positions: enough to exercise batching (auto-batch ≈ 2
+        # for 16384² on 25 GB GPU → ~8 batch iterations).
+        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (4, 4)
 
     potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
     num_slices = len(potential)
