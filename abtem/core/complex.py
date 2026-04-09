@@ -36,9 +36,26 @@ if cp is not None:
         operation="z = x * x + y * y",
         name="abs_squared",
     )
+    # Fused kernels: compute exp(i*x) = cos(x) + i*sin(x) directly from a
+    # real-valued input, avoiding the intermediate complex allocation that
+    # cp.exp(1j*x) would create.
+    _complex_exp_cupy_float32 = cp.ElementwiseKernel(
+        in_params="float32 x",
+        out_params="complex64 z",
+        operation="z = thrust::complex<float>(cosf(x), sinf(x))",
+        name="complex_exp_float32",
+    )
+    _complex_exp_cupy_float64 = cp.ElementwiseKernel(
+        in_params="float64 x",
+        out_params="complex128 z",
+        operation="z = thrust::complex<double>(cos(x), sin(x))",
+        name="complex_exp_float64",
+    )
 else:
     _abs2_cupy_float32 = None
     _abs2_cupy_float64 = None
+    _complex_exp_cupy_float32 = None
+    _complex_exp_cupy_float64 = None
 
 
 def abs2(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.Array:
@@ -80,7 +97,13 @@ def complex_exponential(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.A
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
-        return cp.exp(1.0j * x)
+        if x.dtype == np.float32:
+            return _complex_exp_cupy_float32(x)
+        elif x.dtype == np.float64:
+            return _complex_exp_cupy_float64(x)
+        else:
+            # Fallback for complex or other dtypes (e.g. already-complex input)
+            return cp.exp(1.0j * x)
 
     raise ValueError(
         "complex_exponential only supports numpy arrays, dask arrays and cupy arrays."

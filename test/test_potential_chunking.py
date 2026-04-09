@@ -6,6 +6,7 @@ from ase.build import bulk
 
 from abtem import PlaneWave, Potential
 from abtem.core.chunks import _nearest_power_of_two, estimate_potential_chunk_size
+from abtem.core.complex import complex_exponential
 from abtem.potentials.iam import PotentialArray
 
 
@@ -230,3 +231,34 @@ class TestMultisliceWithChunking:
         )
 
         assert np.allclose(ref.array, result.array)
+
+
+class TestComplexExponential:
+    """Verify the fused GPU complex_exponential kernel against the CPU reference."""
+
+    @pytest.mark.parametrize("dtype,expected_cdtype", [
+        (np.float32, np.complex64),
+        (np.float64, np.complex128),
+    ])
+    def test_cpu_matches_reference(self, dtype, expected_cdtype):
+        x = np.linspace(-np.pi, np.pi, 64, dtype=dtype)
+        result = complex_exponential(x)
+        expected = np.exp(1j * x).astype(expected_cdtype)
+        assert result.dtype == expected_cdtype
+        assert np.allclose(result, expected, atol=1e-6)
+
+    @pytest.mark.parametrize("dtype,expected_cdtype", [
+        (np.float32, np.complex64),
+        (np.float64, np.complex128),
+    ])
+    def test_gpu_matches_cpu(self, dtype, expected_cdtype):
+        cp = pytest.importorskip("cupy")
+        x_cpu = np.linspace(-np.pi, np.pi, 64, dtype=dtype)
+        x_gpu = cp.asarray(x_cpu)
+
+        result_cpu = complex_exponential(x_cpu)
+        result_gpu = complex_exponential(x_gpu)
+
+        assert isinstance(result_gpu, cp.ndarray)
+        assert result_gpu.dtype == expected_cdtype
+        assert np.allclose(cp.asnumpy(result_gpu), result_cpu, atol=1e-6)
