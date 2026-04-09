@@ -600,10 +600,10 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     overhead ``estimate_potential_chunk_size`` returns 1 — so the auto path
     naturally processes one slice at a time without any manual override.
 
-    Note: at 16384² the wavefunction FFT workspace alone consumes ~24 GB,
-    leaving no room for the potential slice.  This test is therefore expected
-    to OOM — it documents the upper limit of what fits on a 25 GB GPU rather
-    than asserting success.
+    Two cases are tested:
+    - 1 slice (slice_thickness > cell z-extent): no chunking required at all;
+      reveals whether the wavefunction FFT workspace alone fits in VRAM.
+    - Several slices (slice_thickness=2.0): exercises the chunk_size=1 path.
 
     Only meaningful on GPU; on CPU the potential is a single chunk by default.
     """
@@ -612,41 +612,45 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     print(f"{'=' * 90}")
 
     if quick:
-        # 4096² still gives auto chunk_size ~18, not 1 — use explicit override
-        # in quick mode just to exercise the code path quickly
-        gpts, reps = (4096, 4096), (1, 1, 4)
-        scan_gpts = (2, 2)
+        gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
+        slice_configs = [("auto", 2.0)]
     else:
-        # 16384²: one slice ≈ 1.07 GB → auto chunk_size = 1 on a 25 GB GPU
-        gpts, reps = (16384, 16384), (1, 1, 5)
-        scan_gpts = (2, 2)  # 4 positions → 1 scan batch, potential built once
+        # 16384²: one slice ≈ 1.07 GB → auto chunk_size = 1 on a 25 GB GPU.
+        # Si cubic cell is 5.43 Å in z; slice_thickness=6.0 Å → exactly 1 slice.
+        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
+        slice_configs = [
+            (6.0, "1 slice — no chunking needed; tests wavefunction FFT footprint"),
+            (2.0, "~14 slices — exercises chunk_size=1 path"),
+        ]
 
-    potential = make_large_potential(gpts, reps, device=device)
-    num_slices = len(potential)
-    mem_gb = estimate_potential_memory_mb(potential) / 1000
+    for slice_thickness, description in slice_configs:
+        potential = make_large_potential(gpts, reps, device=device,
+                                        slice_thickness=slice_thickness)
+        num_slices = len(potential)
+        mem_gb = estimate_potential_memory_mb(potential) / 1000
 
-    if device == "gpu":
-        import cupy as cp
-        free, total = cp.cuda.Device().mem_info
-        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
-        print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
-    else:
-        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
+        if device == "gpu":
+            import cupy as cp
+            free, total = cp.cuda.Device().mem_info
+            print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), "
+                  f"{mem_gb:.2f} GB — {description} ──")
+            print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+        else:
+            print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), "
+                  f"{mem_gb:.2f} GB — {description} ──")
 
-    print("\n  [PlaneWave multislice]")
-    print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
-    _gpu_cleanup()
+        print("\n  [PlaneWave multislice]")
+        print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
+        _gpu_cleanup()
 
-    print("\n  [Probe scan (2×2 positions)]")
-    # Run in-process: 2×2 is tiny, and _gpu_cleanup() above cleared any
-    # residual allocations from the PlaneWave run.
-    print_result(benchmark_scan(
-        potential, scan_gpts, device,
-        prebuilt=False,
-        potential_chunk_size="auto",
-        max_batch="auto",
-    ))
-    _gpu_cleanup()
+        print("\n  [Probe scan (2×2 positions)]")
+        print_result(benchmark_scan(
+            potential, scan_gpts, device,
+            prebuilt=False,
+            potential_chunk_size="auto",
+            max_batch="auto",
+        ))
+        _gpu_cleanup()
 
     print(f"\n{'=' * 90}")
     print("Done.")
