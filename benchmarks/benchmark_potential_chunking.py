@@ -416,6 +416,8 @@ def get_planewave_configs(device: str, quick: bool):
             # ~36 GB — exceeds 24 GB VRAM; build(lazy=False) OOMs,
             # chunked multislice succeeds.
             ((4096, 4096), (20, 20, 200)),
+            # 16384²: one slice ≈ 1.07 GB → auto chunk_size=1 on a 25 GB GPU
+            ((16384, 16384), (1, 1, 5)),
         ])
     else:
         configs.append(((2048, 2048), (10, 10, 60)))
