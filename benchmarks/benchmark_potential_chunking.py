@@ -596,6 +596,15 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     print(f"Single-slice stress test — device={device}")
     print(f"{'=' * 90}")
 
+    # Disable the cuFFT plan cache so workspace is freed after every FFT call.
+    # This is essential for grids where the persistent workspace would OOM.
+    if device == "gpu":
+        try:
+            import cupy as cp
+            cp.fft.config.get_plan_cache().set_size(0)
+        except Exception:
+            pass
+
     if quick:
         gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
     else:
