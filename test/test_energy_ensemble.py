@@ -297,6 +297,46 @@ class TestWavesEnergyEnsembleDiffractionPatterns:
         assert result is not None
 
 
+class TestCTFEnergyEnsemble:
+    """Regression tests for CTF / Aperture with energy-ensemble Probe."""
+
+    def _probe(self):
+        return Probe(
+            sampling=0.05, extent=20, energy=[40e3, 60e3, 80e3], semiangle_cutoff=20
+        )
+
+    def test_probe_ctf_is_energy_ensemble(self):
+        """probe.ctf must not raise and must expose EnergyAxis."""
+        ctf = self._probe().ctf
+        assert len(ctf.ensemble_axes_metadata) == 1
+        assert isinstance(ctf.ensemble_axes_metadata[0], EnergyAxis)
+        assert tuple(ctf.ensemble_axes_metadata[0].values) == (40e3, 60e3, 80e3)
+
+    def test_ctf_scalar_energy_no_ensemble_axis(self):
+        """A single-energy CTF has no energy ensemble axis."""
+        from abtem.transfer import CTF
+        ctf = CTF(energy=60e3, semiangle_cutoff=20)
+        assert ctf.energy == 60e3
+        assert ctf._energy_distribution is None
+        energy_axes = [a for a in ctf.ensemble_axes_metadata if isinstance(a, EnergyAxis)]
+        assert energy_axes == []
+
+    def test_ctf_to_diffraction_patterns(self):
+        """to_diffraction_patterns() on an energy-ensemble CTF produces ensemble output."""
+        dp = self._probe().ctf.to_diffraction_patterns(max_angle=20)
+        assert dp.array.shape[0] == 3
+        assert isinstance(dp.ensemble_axes_metadata[0], EnergyAxis)
+
+    def test_aperture_energy_ensemble(self):
+        """Aperture also accepts energy as a distribution via the same path."""
+        from abtem.transfer import Aperture
+        from abtem.distributions import DistributionFromValues
+
+        ap = Aperture(semiangle_cutoff=20, energy=DistributionFromValues([40e3, 60e3, 80e3]))
+        assert len(ap.ensemble_axes_metadata) == 1
+        assert isinstance(ap.ensemble_axes_metadata[0], EnergyAxis)
+
+
 # ---------------------------------------------------------------------------
 # SrTiO3 fixture used by BlochWaves tests
 # ---------------------------------------------------------------------------
