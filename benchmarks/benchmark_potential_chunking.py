@@ -634,14 +634,15 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
     _gpu_cleanup()
 
-    print("\n  [Probe scan (2×2 positions)]")
-    print_result(benchmark_scan(
-        potential, scan_gpts, device,
-        prebuilt=False,
-        potential_chunk_size="auto",
-        max_batch="auto",
-    ))
-    _gpu_cleanup()
+    print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
+    for batch in (2, "auto"):
+        print_result(benchmark_scan(
+            potential, scan_gpts, device,
+            prebuilt=False,
+            potential_chunk_size="auto",
+            max_batch=batch,
+        ))
+        _gpu_cleanup()
 
 
 # ──────────────────────────────────────────────────────────────────────
