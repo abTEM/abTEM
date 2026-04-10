@@ -552,6 +552,8 @@ def interpolate_radial_functions(
                     )
 
 
+
+
 class ProjectionIntegralTable:
     """
     A ProjectionIntegrator calculating finite projections of radial potential
@@ -589,11 +591,32 @@ class ProjectionIntegralTable:
     def values(self) -> np.ndarray:
         return self._values
 
+    def _interp_at(self, z: np.ndarray) -> np.ndarray:
+        """Vectorised linear interpolation of the table along the limits axis.
+
+        Uses searchsorted + manual lerp instead of constructing a new
+        ``scipy.interpolate.interp1d`` object on every call, which is the
+        dominant per-slice overhead for large atom counts.
+        """
+        limits = self._limits
+        values = self._values
+        n = len(limits)
+
+        # Clamp indices so we can extrapolate linearly at the boundaries.
+        idx = np.searchsorted(limits, z, side="right") - 1
+        idx = np.clip(idx, 0, n - 2)
+
+        # Fractional position between limits[idx] and limits[idx+1].
+        dz = limits[idx + 1] - limits[idx]
+        t = (z - limits[idx]) / dz
+
+        # values shape: (n_limits, n_radial) → index with (n_atoms,) → (n_atoms, n_radial)
+        v0 = values[idx]       # (n_atoms, n_radial)
+        v1 = values[idx + 1]   # (n_atoms, n_radial)
+        return v0 + t[:, None] * (v1 - v0)
+
     def integrate(self, a: float | np.ndarray, b: float | np.ndarray) -> np.ndarray:
-        f = interp1d(
-            self.limits, self.values, axis=0, kind="linear", fill_value="extrapolate"
-        )
-        return f(b) - f(a)
+        return self._interp_at(b) - self._interp_at(a)
 
 
 def optimize_cutoff(func: Callable, tolerance: float, a: float, b: float) -> float:
