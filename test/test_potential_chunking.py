@@ -233,6 +233,78 @@ class TestMultisliceWithChunking:
         assert np.allclose(ref.array, result.array)
 
 
+class TestDiskMeshgridIter:
+    """Verify that disk_meshgrid_iter produces the same indices as disk_meshgrid."""
+
+    @pytest.mark.parametrize("r", [0, 1, 5, 20, 100])
+    def test_matches_disk_meshgrid(self, r):
+        from abtem.core.grid import disk_meshgrid, disk_meshgrid_iter
+
+        reference = disk_meshgrid(r)
+        # Concatenate all chunks from the iterator.
+        chunks = list(disk_meshgrid_iter(r, chunk_size=500))
+        if len(chunks) == 0:
+            result = np.empty((0, 2), dtype=np.int32)
+        else:
+            result = np.concatenate(chunks)
+
+        assert result.dtype == np.int32
+        assert result.shape[1] == 2
+
+        # Sort both by (row, col) for comparison.
+        ref_sorted = reference[np.lexsort((reference[:, 1], reference[:, 0]))]
+        res_sorted = result[np.lexsort((result[:, 1], result[:, 0]))]
+        np.testing.assert_array_equal(ref_sorted, res_sorted)
+
+    def test_chunk_size_respected(self):
+        from abtem.core.grid import disk_meshgrid_iter
+
+        # r=50 → π*50² ≈ 7854 indices.
+        # With chunk_size=1000 we expect ~8 chunks, each ≤ ~1100 entries
+        # (one row can add up to 101 entries which may slightly exceed chunk_size).
+        chunks = list(disk_meshgrid_iter(50, chunk_size=1000))
+        assert len(chunks) >= 7
+        # No chunk should be much larger than chunk_size + max row width.
+        for c in chunks:
+            assert c.shape[0] <= 1000 + 2 * 50 + 1
+
+
+class TestFiniteProjectionChunked:
+    """Verify finite projection builds correctly and is deterministic."""
+
+    def test_finite_builds_without_error(self):
+        """Finite projection should build without error on CPU."""
+        atoms = bulk("Si", cubic=True) * (2, 2, 2)
+        pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
+                        projection="finite")
+        result = pot.build(lazy=False)
+        # Should produce non-zero potential slices.
+        assert len(result) > 0
+        assert any(np.any(s.array != 0) for s in result)
+
+    def test_finite_deterministic(self):
+        """Two builds of the same finite potential must be identical."""
+        atoms = bulk("Si", cubic=True) * (2, 2, 2)
+        pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
+                        projection="finite")
+        arr1 = pot.build(lazy=False)
+        arr2 = pot.build(lazy=False)
+        for s1, s2 in zip(arr1, arr2):
+            np.testing.assert_array_equal(s1.array, s2.array)
+
+    def test_finite_multislice_chunked(self):
+        """Finite-projection multislice must be identical across chunk sizes."""
+        atoms = bulk("Si", cubic=True) * (2, 2, 4)
+        pot = Potential(atoms, gpts=(64, 64), slice_thickness=2.0,
+                        projection="finite")
+        waves = PlaneWave(energy=200e3, gpts=pot.gpts)
+        waves.grid.match(pot)
+
+        ref = waves.multislice(pot, potential_chunk_size=len(pot) + 1, lazy=False)
+        chunked = waves.multislice(pot, potential_chunk_size=2, lazy=False)
+        np.testing.assert_allclose(ref.array, chunked.array, atol=1e-10)
+
+
 class TestComplexExponential:
     """Verify the fused GPU complex_exponential kernel against the CPU reference."""
 
