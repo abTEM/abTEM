@@ -514,9 +514,6 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
-        print_result(benchmark_multislice(potential_inf, "auto", device, projection="infinite"))
-        _gpu_cleanup()
-
         crystal_inf = make_crystal_potential(gpts, reps, device=device, projection="infinite")
         creps = (crystal_inf.repetitions[0], crystal_inf.repetitions[1])
         unit_g = crystal_inf.potential_unit.gpts
@@ -524,12 +521,15 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
         print_result(benchmark_multislice(crystal_inf, "auto", device, projection="crystal(inf)"))
         _gpu_cleanup()
 
-        potential_fin = make_large_potential(gpts, reps, device=device, projection="finite")
-        print_result(benchmark_multislice(potential_fin, "auto", device, projection="finite"))
+        print_result(benchmark_multislice(potential_inf, "auto", device, projection="infinite"))
         _gpu_cleanup()
 
         crystal_fin = make_crystal_potential(gpts, reps, device=device, projection="finite")
         print_result(benchmark_multislice(crystal_fin, "auto", device, projection="crystal(fin)"))
+        _gpu_cleanup()
+
+        potential_fin = make_large_potential(gpts, reps, device=device, projection="finite")
+        print_result(benchmark_multislice(potential_fin, "auto", device, projection="finite"))
         _gpu_cleanup()
 
 
@@ -638,11 +638,11 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
         for projection in ("infinite", "finite"):
             _run_scan_subprocess(script, device, i, quick,
                                  prebuilt=False, chunk_size="auto", to_zarr=False,
-                                 batch_size="auto", projection=projection)
-            _run_scan_subprocess(script, device, i, quick,
-                                 prebuilt=False, chunk_size="auto", to_zarr=False,
                                  batch_size="auto", projection=projection,
                                  use_crystal=True)
+            _run_scan_subprocess(script, device, i, quick,
+                                 prebuilt=False, chunk_size="auto", to_zarr=False,
+                                 batch_size="auto", projection=projection)
 
 
 
@@ -872,15 +872,15 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     script = os.path.abspath(__file__)
     print("\n  [PlaneWave multislice]")
     for projection in ("infinite", "finite"):
-        run_stress_plane_subprocess(script, device, quick, projection=projection)
         run_stress_plane_subprocess(script, device, quick, projection=projection,
                                     use_crystal=True)
+        run_stress_plane_subprocess(script, device, quick, projection=projection)
 
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
     for projection in ("infinite", "finite"):
-        run_stress_scan_subprocess(script, device, "auto", quick, projection=projection)
         run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
                                    use_crystal=True)
+        run_stress_scan_subprocess(script, device, "auto", quick, projection=projection)
 
 
 # ──────────────────────────────────────────────────────────────────────
