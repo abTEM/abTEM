@@ -12,6 +12,8 @@ Usage:
     python benchmarks/benchmark_potential_chunking.py --device gpu
     python benchmarks/benchmark_potential_chunking.py --device cpu
     python benchmarks/benchmark_potential_chunking.py --device gpu --quick
+    python benchmarks/benchmark_potential_chunking.py --stress-only
+    python benchmarks/benchmark_potential_chunking.py --stress-only --quick
 """
 
 import argparse
@@ -804,6 +806,10 @@ def main():
         "--quick", action="store_true",
         help="Run a quick subset of benchmarks",
     )
+    parser.add_argument(
+        "--stress-only", action="store_true",
+        help="Run only the single-slice stress test (GPU only)",
+    )
     # Internal: used by subprocesses to run a single scan benchmark
     parser.add_argument("--_run-scan-bench", type=int, default=None)
     parser.add_argument("--_prebuilt", action="store_true", default=False)
@@ -870,14 +876,17 @@ def main():
             print("ERROR: cupy not available, cannot run GPU benchmarks")
             return
 
-    if args.device in ("cpu", "both"):
-        run_planewave_benchmarks("cpu", quick=args.quick)
-        run_scan_benchmarks_via_subprocesses("cpu", quick=args.quick)
-
-    if args.device in ("gpu", "both"):
-        run_planewave_benchmarks("gpu", quick=args.quick)
+    if args.stress_only:
         run_single_slice_stress_test("gpu", quick=args.quick)
-        run_scan_benchmarks_via_subprocesses("gpu", quick=args.quick)
+    else:
+        if args.device in ("cpu", "both"):
+            run_planewave_benchmarks("cpu", quick=args.quick)
+            run_scan_benchmarks_via_subprocesses("cpu", quick=args.quick)
+
+        if args.device in ("gpu", "both"):
+            run_planewave_benchmarks("gpu", quick=args.quick)
+            run_single_slice_stress_test("gpu", quick=args.quick)
+            run_scan_benchmarks_via_subprocesses("gpu", quick=args.quick)
 
     print(f"\n{'=' * 90}")
     print("Done.")
