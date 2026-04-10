@@ -40,6 +40,7 @@ from ase.build import bulk
 import abtem
 from abtem import AnnularDetector, PlaneWave, Potential, Probe
 from abtem.core import config
+from abtem.potentials.iam import CrystalPotential
 from abtem.scan import GridScan
 
 
@@ -60,6 +61,40 @@ def make_large_potential(
         atoms, gpts=gpts, slice_thickness=slice_thickness, device=device,
         projection=projection,
     )
+
+
+def _nearest_divisor(n: int, target: int) -> int:
+    """Return the largest divisor of *n* that is <= *target*."""
+    best = 1
+    for d in range(1, target + 1):
+        if n % d == 0:
+            best = d
+    return best
+
+
+def make_crystal_potential(
+    gpts: tuple[int, int],
+    repetitions: tuple[int, int, int],
+    device: str = "cpu",
+    slice_thickness: float = 2.0,
+    projection: str = "infinite",
+) -> CrystalPotential:
+    """Create a CrystalPotential by tiling a single Si unit cell.
+
+    The xy repetitions are adjusted to the nearest divisor of *gpts* so that
+    the unit-cell gpts are integers.  The z repetitions are kept as-is.
+    """
+    rx = _nearest_divisor(gpts[0], repetitions[0])
+    ry = _nearest_divisor(gpts[1], repetitions[1])
+    reps = (rx, ry, repetitions[2])
+    unit_gpts = (gpts[0] // rx, gpts[1] // ry)
+
+    atoms = bulk("Si", cubic=True)
+    unit = Potential(
+        atoms, gpts=unit_gpts, slice_thickness=slice_thickness,
+        device=device, projection=projection,
+    )
+    return CrystalPotential(unit, repetitions=reps)
 
 
 def estimate_potential_memory_mb(potential: Potential) -> float:
@@ -486,6 +521,13 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
         print_result(benchmark_multislice(potential_fin, "auto", device, projection="finite"))
         _gpu_cleanup()
 
+        crystal_pot = make_crystal_potential(gpts, reps, device=device, projection="infinite")
+        creps = (crystal_pot.repetitions[0], crystal_pot.repetitions[1])
+        unit_g = crystal_pot.potential_unit.gpts
+        print(f"  [CrystalPotential: {creps[0]}×{creps[1]} tiles of {unit_g[0]}×{unit_g[1]}]")
+        print_result(benchmark_multislice(crystal_pot, "auto", device, projection="crystal(inf)"))
+        _gpu_cleanup()
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Scan benchmarks — each config runs in a SEPARATE SUBPROCESS
@@ -496,6 +538,7 @@ def run_single_scan_benchmark(
     prebuilt: bool, chunk_size: int | str, to_zarr: bool,
     batch_size: int | str = "auto",
     projection: str = "infinite",
+    use_crystal: bool = False,
 ):
     """Run ONE scan benchmark (called in a subprocess). Prints one result line."""
     config.set({"dask.lazy": False})
@@ -506,7 +549,11 @@ def run_single_scan_benchmark(
     if device == "gpu":
         warmup_gpu()
 
-    potential = make_large_potential(gpts, reps, device=device, projection=projection)
+    if use_crystal:
+        potential = make_crystal_potential(gpts, reps, device=device, projection=projection)
+        projection = f"crystal({projection[:3]})"
+    else:
+        potential = make_large_potential(gpts, reps, device=device, projection=projection)
 
     print_result(benchmark_scan(
         potential, scan_gpts, device,
@@ -524,6 +571,7 @@ def _run_scan_subprocess(
     prebuilt: bool, chunk_size: int | str, to_zarr: bool,
     batch_size: int | str = "auto",
     projection: str = "infinite",
+    use_crystal: bool = False,
 ):
     """Spawn a fresh subprocess for one scan benchmark and print its output."""
     cmd = [
@@ -537,6 +585,8 @@ def _run_scan_subprocess(
     ]
     if to_zarr:
         cmd.append("--_to-zarr")
+    if use_crystal:
+        cmd.append("--_use-crystal")
     if quick:
         cmd.append("--quick")
 
@@ -586,6 +636,11 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
                                  prebuilt=False, chunk_size="auto", to_zarr=False,
                                  batch_size="auto", projection=projection)
 
+        _run_scan_subprocess(script, device, i, quick,
+                             prebuilt=False, chunk_size="auto", to_zarr=False,
+                             batch_size="auto", projection="infinite",
+                             use_crystal=True)
+
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -595,6 +650,7 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
 def run_stress_scan_subprocess(
     script: str, device: str, batch: int | str, quick: bool,
     projection: str = "infinite",
+    use_crystal: bool = False,
 ):
     """Spawn a fresh subprocess for one stress-test scan attempt.
 
@@ -607,6 +663,8 @@ def run_stress_scan_subprocess(
         "--_run-stress-scan", str(batch),
         "--_projection", projection,
     ]
+    if use_crystal:
+        cmd.append("--_use-crystal")
     if quick:
         cmd.append("--quick")
 
@@ -634,7 +692,8 @@ def run_stress_scan_subprocess(
 
 
 def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
-                                    projection: str = "infinite"):
+                                    projection: str = "infinite",
+                                    use_crystal: bool = False):
     """Run one stress-test scan attempt (called in a subprocess)."""
     config.set({"dask.lazy": False})
 
@@ -652,20 +711,33 @@ def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
     else:
         gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
 
-    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
-                                     projection=projection)
+    if use_crystal:
+        # Use more xy repetitions so CrystalPotential tiles a small unit cell.
+        if quick:
+            reps = (4, 4, 4)    # unit_gpts = (1024, 1024)
+        else:
+            reps = (16, 16, 5)  # unit_gpts = (1024, 1024)
+        potential = make_crystal_potential(gpts, reps, device=device,
+                                          slice_thickness=6.0, projection=projection)
+        proj_label = f"crystal({projection[:3]})"
+    else:
+        potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
+                                         projection=projection)
+        proj_label = projection
+
     print_result(benchmark_scan(
         potential, scan_gpts, device,
         prebuilt=False,
         potential_chunk_size="auto",
         max_batch=batch,
-        projection=projection,
+        projection=proj_label,
     ))
     sys.stdout.flush()
 
 
 def run_stress_plane_subprocess(
     script: str, device: str, quick: bool, projection: str = "infinite",
+    use_crystal: bool = False,
 ):
     """Spawn a fresh subprocess for one stress-test PlaneWave attempt."""
     cmd = [
@@ -674,6 +746,8 @@ def run_stress_plane_subprocess(
         "--_run-stress-plane",
         "--_projection", projection,
     ]
+    if use_crystal:
+        cmd.append("--_use-crystal")
     if quick:
         cmd.append("--quick")
 
@@ -700,7 +774,8 @@ def run_stress_plane_subprocess(
 
 
 def run_single_plane_for_stress_test(device: str, quick: bool,
-                                     projection: str = "infinite"):
+                                     projection: str = "infinite",
+                                     use_crystal: bool = False):
     """Run one stress-test PlaneWave attempt (called in a subprocess)."""
     config.set({"dask.lazy": False})
 
@@ -717,10 +792,21 @@ def run_single_plane_for_stress_test(device: str, quick: bool,
     else:
         gpts, reps = (16384, 16384), (1, 1, 5)
 
-    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
-                                     projection=projection)
+    if use_crystal:
+        if quick:
+            reps = (4, 4, 4)    # unit_gpts = (1024, 1024)
+        else:
+            reps = (16, 16, 5)  # unit_gpts = (1024, 1024)
+        potential = make_crystal_potential(gpts, reps, device=device,
+                                          slice_thickness=6.0, projection=projection)
+        proj_label = f"crystal({projection[:3]})"
+    else:
+        potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
+                                         projection=projection)
+        proj_label = projection
+
     print_result(benchmark_multislice(potential, chunk_size="auto", device=device,
-                                      projection=projection))
+                                      projection=proj_label))
     sys.stdout.flush()
 
 
@@ -784,10 +870,14 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     print("\n  [PlaneWave multislice]")
     for projection in ("infinite", "finite"):
         run_stress_plane_subprocess(script, device, quick, projection=projection)
+    run_stress_plane_subprocess(script, device, quick, projection="infinite",
+                                use_crystal=True)
 
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
     for projection in ("infinite", "finite"):
         run_stress_scan_subprocess(script, device, "auto", quick, projection=projection)
+    run_stress_scan_subprocess(script, device, "auto", quick, projection="infinite",
+                               use_crystal=True)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -818,6 +908,7 @@ def main():
     parser.add_argument("--_batch-size", type=str, default="auto")
     parser.add_argument("--_to-zarr", action="store_true", default=False)
     parser.add_argument("--_projection", type=str, default="infinite")
+    parser.add_argument("--_use-crystal", action="store_true", default=False)
     # Internal: used by subprocesses to run one stress-test scan attempt
     parser.add_argument("--_run-stress-scan", type=str, default=None)
     # Internal: used by subprocesses to run one stress-test PlaneWave attempt
@@ -830,7 +921,8 @@ def main():
     # If we're a subprocess running a stress-test PlaneWave attempt
     if args._run_stress_plane:
         run_single_plane_for_stress_test(args.device, args.quick,
-                                         projection=args._projection)
+                                         projection=args._projection,
+                                         use_crystal=args._use_crystal)
         return
 
     # If we're a subprocess running a stress-test scan attempt
@@ -841,7 +933,8 @@ def main():
         except ValueError:
             pass  # keep as string ("auto")
         run_single_scan_for_stress_test(args.device, batch, args.quick,
-                                        projection=args._projection)
+                                        projection=args._projection,
+                                        use_crystal=args._use_crystal)
         return
 
     # If we're a subprocess running a single scan benchmark
@@ -860,6 +953,7 @@ def main():
             args.device, args._run_scan_bench, args.quick,
             prebuilt=args._prebuilt, chunk_size=cs, to_zarr=args._to_zarr,
             batch_size=bs, projection=args._projection,
+            use_crystal=args._use_crystal,
         )
         return
 

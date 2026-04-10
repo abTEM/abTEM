@@ -1834,29 +1834,48 @@ class CrystalPotential(_PotentialBuilder):
         else:
             rng = np.random.default_rng(self.seeds[0])
 
+        if last_slice is None:
+            last_slice = len(self)
+
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
-        start = first_slice
-        stop = first_slice + 1
+        unit_slices = len(self.potential_unit)
+        global_idx = 0  # global slice counter across all z-repetitions
 
         for i in range(self.repetitions[2]):
+            # Always draw from the RNG to keep the frozen-phonon sequence
+            # consistent regardless of first_slice.
             potential = potentials[rng.integers(0, potentials.shape[0])]
+
+            if global_idx + unit_slices <= first_slice:
+                # This entire z-repetition is before the requested window;
+                # skip building its generator (unit is already built).
+                global_idx += unit_slices
+                continue
+
+            if global_idx >= last_slice:
+                # Past the requested window; nothing more to yield.
+                return
+
             generator = potential.generate_slices()
 
-            for j in range(len(self.potential_unit)):
-                slic = next(generator).tile(self.repetitions[:2])
+            for j in range(unit_slices):
+                slic_obj = next(generator)
 
-                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+                if global_idx >= first_slice:
+                    slic = slic_obj.tile(self.repetitions[:2])
 
-                slic._exit_planes = exit_planes
+                    exit_planes = tuple(
+                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
+                    )
+                    slic._exit_planes = exit_planes
 
-                start += 1
-                stop += 1
+                    if return_depth:
+                        yield cum_thickness[global_idx], slic
+                    else:
+                        yield slic
 
-                if return_depth:
-                    yield cum_thickness[stop - 1], slic
-                else:
-                    yield slic
+                global_idx += 1
 
-                if j == last_slice:
-                    break
+                if global_idx >= last_slice:
+                    return
