@@ -7,7 +7,7 @@ from ase.build import bulk
 from abtem import PlaneWave, Potential
 from abtem.core.chunks import _nearest_power_of_two, estimate_potential_chunk_size
 from abtem.core.complex import complex_exponential
-from abtem.potentials.iam import PotentialArray
+from abtem.potentials.iam import CrystalPotential, PotentialArray
 
 
 @pytest.fixture
@@ -303,6 +303,88 @@ class TestFiniteProjectionChunked:
         ref = waves.multislice(pot, potential_chunk_size=len(pot) + 1, lazy=False)
         chunked = waves.multislice(pot, potential_chunk_size=2, lazy=False)
         np.testing.assert_allclose(ref.array, chunked.array, atol=1e-10)
+
+
+class TestCrystalPotentialChunking:
+    """Verify that CrystalPotential generates the correct slices when chunked."""
+
+    @pytest.fixture
+    def crystal_potential(self):
+        """Si CrystalPotential: 4×4 xy tiles, 10 z-reps → 30 slices."""
+        atoms = bulk("Si", cubic=True)
+        unit = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+        return CrystalPotential(unit, repetitions=(4, 4, 10))
+
+    def test_total_slice_count(self, crystal_potential):
+        """CrystalPotential must report the correct total slice count."""
+        unit_slices = len(crystal_potential.potential_unit)
+        assert len(crystal_potential) == unit_slices * crystal_potential.repetitions[2]
+
+    def test_chunked_slices_correct_total(self, crystal_potential):
+        """Sum of chunk lengths must equal len(potential), not a multiple."""
+        for chunk_size in [1, 3, 5, len(crystal_potential)]:
+            chunks = list(crystal_potential.generate_chunked_slices(chunk_size=chunk_size))
+            total = sum(len(c) for c in chunks)
+            assert total == len(crystal_potential), (
+                f"chunk_size={chunk_size}: got {total} slices, "
+                f"expected {len(crystal_potential)}"
+            )
+
+    @pytest.mark.parametrize("chunk_size", [1, 3, 5])
+    def test_chunked_multislice_matches_full(self, crystal_potential, chunk_size):
+        """Multislice through CrystalPotential must be identical for all chunk sizes."""
+        waves = PlaneWave(energy=200e3, gpts=crystal_potential.gpts)
+        waves.grid.match(crystal_potential)
+
+        ref = waves.multislice(
+            crystal_potential,
+            potential_chunk_size=len(crystal_potential) + 1,
+            lazy=False,
+        )
+        chunked = waves.multislice(
+            crystal_potential,
+            potential_chunk_size=chunk_size,
+            lazy=False,
+        )
+        assert np.allclose(ref.array, chunked.array), (
+            f"chunk_size={chunk_size}: "
+            f"max diff={np.abs(ref.array - chunked.array).max()}"
+        )
+
+    def test_crystal_matches_explicit_supercell(self):
+        """CrystalPotential multislice result must match an explicit supercell Potential."""
+        atoms_unit = bulk("Si", cubic=True)
+        unit = Potential(atoms_unit, gpts=(32, 32), slice_thickness=2.0)
+        crys = CrystalPotential(unit, repetitions=(2, 2, 3))
+
+        atoms_full = bulk("Si", cubic=True) * (2, 2, 3)
+        full = Potential(atoms_full, gpts=(64, 64), slice_thickness=2.0)
+
+        waves = PlaneWave(energy=200e3, gpts=crys.gpts)
+        waves.grid.match(crys)
+
+        ref = waves.multislice(full, lazy=False)
+        result = waves.multislice(crys, lazy=False)
+
+        # Numerical agreement: same physics, different code path.
+        assert np.allclose(ref.array, result.array, atol=1e-5), (
+            f"max diff={np.abs(ref.array - result.array).max()}"
+        )
+
+    def test_slice_range_within_z_rep(self, crystal_potential):
+        """generate_slices with first/last slice within one z-rep must work."""
+        unit_slices = len(crystal_potential.potential_unit)
+        first, last = 1, unit_slices  # second slice onward in first z-rep
+        slices = list(crystal_potential.generate_slices(first, last))
+        assert len(slices) == last - first
+
+    def test_slice_range_spanning_z_reps(self, crystal_potential):
+        """generate_slices spanning multiple z-reps must return the right count."""
+        unit_slices = len(crystal_potential.potential_unit)
+        first = unit_slices - 1
+        last = unit_slices + 2
+        slices = list(crystal_potential.generate_slices(first, last))
+        assert len(slices) == last - first
 
 
 class TestComplexExponential:

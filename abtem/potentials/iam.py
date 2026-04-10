@@ -1901,10 +1901,13 @@ class CrystalPotential(_PotentialBuilder):
         else:
             rng = np.random.default_rng(self.seeds[0])
 
+        if last_slice is None:
+            last_slice = len(self)
+
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
-        start = first_slice
-        stop = first_slice + 1
+        unit_slices = len(self.potential_unit)
+        global_idx = 0  # global slice counter across all z-repetitions
 
         # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
         # Without it each (z-rep, unit-slice) pair re-tiles the same array via
@@ -1933,28 +1936,42 @@ class CrystalPotential(_PotentialBuilder):
             return slic
 
         for i in range(self.repetitions[2]):
+            # Always draw from the RNG to keep the frozen-phonon sequence
+            # consistent regardless of first_slice.
             config_idx = int(rng.integers(0, potentials.shape[0]))
 
-            for j in range(len(self.potential_unit)):
+            if global_idx + unit_slices <= first_slice:
+                # This entire z-repetition is before the requested window;
+                # advance the counter and skip.
+                global_idx += unit_slices
+                continue
+
+            if global_idx >= last_slice:
+                # Past the requested window; nothing more to yield.
+                return
+
+            for j in range(unit_slices):
+                # Always call _tiled_slice to advance the generator in order
+                # (j=0, j=1, …) even for slices before first_slice in a
+                # partially-overlapping rep. The tiling cache ensures each
+                # (config_idx, j) pair is tiled at most once.
                 slic = _tiled_slice(config_idx, j)
 
-                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+                if global_idx >= first_slice:
+                    exit_planes = tuple(
+                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
+                    )
+                    # Mutating the cached slice's exit_planes is safe: consumer
+                    # reads exit_planes immediately on each yield and holds no
+                    # back-reference across iterations.
+                    slic._exit_planes = exit_planes
 
-                # Mutating the cached slice is safe in the standard sequential
-                # consumption pattern (the consumer reads ``slic.exit_planes``
-                # immediately upon receiving the yield and never holds a back-
-                # reference across iterations — see multislice.py:672). Reset
-                # the value on every yield so re-entering the same cached
-                # slice on a different z-rep still carries the right metadata.
-                slic._exit_planes = exit_planes
+                    if return_depth:
+                        yield cum_thickness[global_idx], slic
+                    else:
+                        yield slic
 
-                start += 1
-                stop += 1
+                global_idx += 1
 
-                if return_depth:
-                    yield cum_thickness[stop - 1], slic
-                else:
-                    yield slic
-
-                if j == last_slice:
-                    break
+                if global_idx >= last_slice:
+                    return
