@@ -1246,6 +1246,34 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         )
 
     def _calculate_new_array(self, waves: Waves):
+        from abtem.core.axes import EnergyAxis
+
+        # Eager energy-ensemble path: iterate per-energy so that each call
+        # receives a single-energy Waves and _valid_energy resolves correctly.
+        energy_axis_idx = next(
+            (
+                i
+                for i, ax in enumerate(waves.ensemble_axes_metadata)
+                if isinstance(ax, EnergyAxis) and len(ax.values) > 1
+            ),
+            None,
+        )
+        if energy_axis_idx is not None:
+            import numpy as np
+
+            energy_axis = waves.ensemble_axes_metadata[energy_axis_idx]
+            per_energy = []
+            for j in range(len(energy_axis.values)):
+                idx = (slice(None),) * energy_axis_idx + (j,)
+                member = waves.__class__(**waves.get_items(idx))
+                per_energy.append(self._calculate_new_array(member))
+            if isinstance(per_energy[0], tuple):
+                return tuple(
+                    np.stack([r[k] for r in per_energy], axis=energy_axis_idx)
+                    for k in range(len(per_energy[0]))
+                )
+            return np.stack(per_energy, axis=energy_axis_idx)
+
         measurements = self.multislice_func(
             waves=waves,
             potential=self.potential,

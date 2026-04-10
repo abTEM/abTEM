@@ -139,6 +139,24 @@ class TestProbeEnergyEnsemble:
         assert isinstance(loaded.ensemble_axes_metadata[0], EnergyAxis)
         assert loaded.ensemble_axes_metadata[0].values == tuple(ENERGIES)
 
+    def test_multislice_eager(self):
+        """Probe.multislice(lazy=False) with energy ensemble produces per-energy exit waves."""
+        import ase.build
+        atoms = ase.build.mx2(vacuum=2)
+        atoms = abtem.orthogonalize_cell(atoms)
+        potential = abtem.Potential(atoms, sampling=0.1)
+        repeated = abtem.CrystalPotential(potential, (2, 1, 1))
+        probe = Probe(
+            sampling=0.1, extent=10, energy=[40e3, 60e3, 80e3], semiangle_cutoff=20
+        ).match_grid(repeated)
+        result = probe.multislice(repeated, lazy=False)
+        assert isinstance(result, Waves)
+        energy_axes = [
+            ax for ax in result.ensemble_axes_metadata if isinstance(ax, EnergyAxis)
+        ]
+        assert len(energy_axes) == 1
+        assert tuple(energy_axes[0].values) == (40e3, 60e3, 80e3)
+
 
 class TestWavesEnergyEnsemble:
     def test_list_energy(self):
