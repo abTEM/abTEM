@@ -54,41 +54,58 @@ def sum_run_length_encoded(array, result, separators):
         )
 
 
-@cuda.jit
-def _interpolate_radial_functions(
-    array,
-    positions,
-    disk_indices,
-    sampling,
-    radial_gpts,
-    radial_functions,
-    radial_derivatives,
-    dt,
-):
-    j, i = cuda.grid(2)
+_interpolate_radial_raw = cp.RawKernel(r"""
+extern "C" __global__ void interpolate_radial(
+    float* __restrict__ array,
+    const float* __restrict__ positions,   // (n_atoms, 3) row-major
+    const int* __restrict__ disk_indices,  // (n_disk, 2)  row-major
+    const float sampling_0,
+    const float sampling_1,
+    const float* __restrict__ radial_gpts, // (n_radial,)
+    const float* __restrict__ radial_funcs,// (n_atoms, n_radial) row-major
+    const float* __restrict__ radial_deriv,// (n_atoms, n_radial) row-major
+    const float dt,
+    const float r0,                        // radial_gpts[0]
+    const int n_radial,
+    const int n_disk,
+    const int n_atoms,
+    const int rows,
+    const int cols
+) {
+    // x-dim: disk index,  y-dim: atom index
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (i < positions.shape[0]) & (j < disk_indices.shape[0]):
-        k = round(positions[i, 0] / sampling[0]) + disk_indices[j, 0]
-        m = round(positions[i, 1] / sampling[1]) + disk_indices[j, 1]
+    if (i >= n_atoms || j >= n_disk) return;
 
-        if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
-            r_interp = math.sqrt(
-                (k * sampling[0] - positions[i, 0]) ** 2
-                + (m * sampling[1] - positions[i, 1]) ** 2
-            )
+    float px = positions[i * 3];
+    float py = positions[i * 3 + 1];
 
-            idx = int(math.log(r_interp / radial_gpts[0] + 1e-12) / dt)
+    int k = __float2int_rn(px / sampling_0) + disk_indices[j * 2];
+    int m = __float2int_rn(py / sampling_1) + disk_indices[j * 2 + 1];
 
-            if idx < 0:
-                cuda.atomic.add(array, (k, m), radial_functions[i, 0])
+    if (k < 0 || k >= rows || m < 0 || m >= cols) return;
 
-            elif idx < radial_gpts.shape[0] - 1:
-                slope = radial_derivatives[i, idx]
-                cuda.atomic.add(
-                    array,
-                    (k, m),
-                    radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope,
-                )
+    float dx = k * sampling_0 - px;
+    float dy = m * sampling_1 - py;
+    float r = sqrtf(dx * dx + dy * dy);
+
+    int idx = __float2int_rd(logf(r / r0 + 1e-12f) / dt);
+
+    float val;
+    int base = i * n_radial;
+    if (idx < 0) {
+        val = radial_funcs[base];
+    } else if (idx < n_radial - 1) {
+        float slope = radial_deriv[base + idx];
+        val = radial_funcs[base + idx] + (r - radial_gpts[idx]) * slope;
+    } else {
+        return;
+    }
+
+    atomicAdd(&array[k * cols + m], val);
+}
+""", "interpolate_radial")
 
 
 def interpolate_radial_functions(
@@ -103,25 +120,38 @@ def interpolate_radial_functions(
     if len(positions) == 0:
         return array
 
-    # x-axis carries disk_indices (can be millions for large arrays → needs
+    n_disk = disk_indices.shape[0]
+    n_atoms = positions.shape[0]
+    n_radial = radial_gpts.shape[0]
+    rows, cols = array.shape
+
+    dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (n_radial - 1)).item()
+    r0 = float(radial_gpts[0].item())
+
+    # x-axis carries disk_indices (can be hundreds of millions → needs
     # gridDim.x limit of 2^31-1); y-axis carries positions (atoms per slice,
     # typically O(100) → well within gridDim.y limit of 65535).
-    threadsperblock = (256, 1)
-    blockspergrid_x = int(math.ceil(disk_indices.shape[0] / threadsperblock[0]))
-    blockspergrid_y = int(math.ceil(positions.shape[0] / threadsperblock[1]))
-    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    block = (256, 1, 1)
+    grid = (math.ceil(n_disk / 256), n_atoms, 1)
 
-    dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
+    # Ensure contiguous float32 / int32 arrays.
+    positions_f = cp.ascontiguousarray(positions[:, :2].astype(cp.float32))
+    # Pack into (n_atoms, 3) with a dummy column so stride matches kernel.
+    pos3 = cp.zeros((n_atoms, 3), dtype=cp.float32)
+    pos3[:, :2] = positions_f
+    disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32))
+    rg = cp.ascontiguousarray(radial_gpts.astype(cp.float32))
+    rf = cp.ascontiguousarray(radial_functions.astype(cp.float32))
+    rd = cp.ascontiguousarray(radial_derivative.astype(cp.float32))
 
-    _interpolate_radial_functions[blockspergrid, threadsperblock](
-        array,
-        positions,
-        disk_indices,
-        sampling,
-        radial_gpts,
-        radial_functions,
-        radial_derivative,
-        dt,
+    _interpolate_radial_raw(
+        grid, block,
+        (array, pos3, disk_i32,
+         cp.float32(sampling[0]), cp.float32(sampling[1]),
+         rg, rf, rd,
+         cp.float32(dt), cp.float32(r0),
+         np.int32(n_radial), np.int32(n_disk), np.int32(n_atoms),
+         np.int32(rows), np.int32(cols)),
     )
 
 
