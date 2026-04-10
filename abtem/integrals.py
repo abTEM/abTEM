@@ -24,6 +24,7 @@ from abtem.core.backend import (
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import (
     disk_meshgrid,
+    disk_meshgrid_iter,
     polar_spatial_frequencies,
     spatial_frequencies,
 )
@@ -824,9 +825,8 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             shifted_a = a - positions[:, 2]
             shifted_b = b - positions[:, 2]
 
-            disk_indices = xp.asarray(
-                disk_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
-            )
+            disk_radius = int(np.ceil(table.radial_gpts[-1] / np.min(sampling)))
+
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
 
             positions = xp.asarray(positions, dtype=get_dtype(complex=False))
@@ -842,16 +842,26 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 temp = array
 
             if xp is cp:
-                interpolate_radial_functions_cuda(
-                    array=temp,
-                    positions=positions,
-                    disk_indices=disk_indices,
-                    sampling=sampling,
-                    radial_gpts=xp.asarray(table.radial_gpts),
-                    radial_functions=radial_potential,
-                    radial_derivative=radial_potential_derivative,
-                )
+                radial_gpts_dev = xp.asarray(table.radial_gpts)
+                # Process disk indices in chunks to avoid allocating the
+                # full array on the GPU.  For very fine sampling the disk
+                # can contain hundreds of millions of pixels (>5 GB) which
+                # would exceed device memory.  The CUDA kernel accumulates
+                # via atomic adds, so multiple calls produce the same result.
+                for disk_chunk_cpu in disk_meshgrid_iter(disk_radius):
+                    disk_chunk = cp.asarray(disk_chunk_cpu)
+                    interpolate_radial_functions_cuda(
+                        array=temp,
+                        positions=positions,
+                        disk_indices=disk_chunk,
+                        sampling=sampling,
+                        radial_gpts=radial_gpts_dev,
+                        radial_functions=radial_potential,
+                        radial_derivative=radial_potential_derivative,
+                    )
+                    del disk_chunk
             else:
+                disk_indices = disk_meshgrid(disk_radius)
                 interpolate_radial_functions(
                     array=temp,
                     positions=positions,
