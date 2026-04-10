@@ -577,6 +577,73 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
 # Single-slice stress test
 # ──────────────────────────────────────────────────────────────────────
 
+def run_stress_scan_subprocess(
+    script: str, device: str, batch: int | str, quick: bool,
+):
+    """Spawn a fresh subprocess for one stress-test scan attempt.
+
+    A hard GPU fault (CUDA_ERROR_ILLEGAL_ADDRESS) corrupts the CUDA context
+    and cannot be recovered in-process, so each attempt runs isolated.
+    """
+    cmd = [
+        sys.executable, script,
+        "--device", device,
+        "--_run-stress-scan", str(batch),
+    ]
+    if quick:
+        cmd.append("--quick")
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "TQDM_DISABLE": "1"},
+    )
+
+    if result.stdout:
+        print(result.stdout, end="")
+    elif result.returncode != 0:
+        label = f"chunk=auto, batch={batch}"
+        print(f"  {label:<60s}  KILLED (GPU fault or OOM, exit {result.returncode})")
+
+    if result.returncode != 0 and result.stderr:
+        # Show only the first meaningful error line to avoid flooding output.
+        for line in result.stderr.split("\n"):
+            line = line.strip()
+            if "Error" in line or "error" in line:
+                print(f"  stderr: {line}")
+                break
+
+
+def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool):
+    """Run one stress-test scan attempt (called in a subprocess)."""
+    config.set({"dask.lazy": False})
+
+    # Disable the cuFFT plan cache so workspace is freed after every FFT call.
+    if device == "gpu":
+        try:
+            import cupy as cp
+            cp.fft.config.get_plan_cache().set_size(0)
+        except Exception:
+            pass
+        warmup_gpu()
+
+    if quick:
+        gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
+    else:
+        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (4, 4)
+
+    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
+    print_result(benchmark_scan(
+        potential, scan_gpts, device,
+        prebuilt=False,
+        potential_chunk_size="auto",
+        max_batch=batch,
+    ))
+    sys.stdout.flush()
+
+
 def run_single_slice_stress_test(device: str, quick: bool = False):
     """Stress-test where a single potential slice barely fits in device memory.
 
@@ -617,6 +684,7 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
     num_slices = len(potential)
     mem_gb = estimate_potential_memory_mb(potential) / 1000
+    del potential
 
     if device == "gpu":
         import cupy as cp
@@ -630,19 +698,20 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     else:
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
 
+    # PlaneWave runs in-process (no scan positions → no batch-size risk).
+    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
     print("\n  [PlaneWave multislice]")
     print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
+    del potential
     _gpu_cleanup()
 
+    # Each scan attempt runs in a fresh subprocess: a hard GPU fault
+    # (CUDA_ERROR_ILLEGAL_ADDRESS on OOM) corrupts the CUDA context and
+    # cannot be recovered in the same process.
+    script = os.path.abspath(__file__)
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
     for batch in (2, "auto"):
-        print_result(benchmark_scan(
-            potential, scan_gpts, device,
-            prebuilt=False,
-            potential_chunk_size="auto",
-            max_batch=batch,
-        ))
-        _gpu_cleanup()
+        run_stress_scan_subprocess(script, device, batch, quick)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -668,10 +737,22 @@ def main():
     parser.add_argument("--_chunk-size", type=str, default="auto")
     parser.add_argument("--_batch-size", type=str, default="auto")
     parser.add_argument("--_to-zarr", action="store_true", default=False)
+    # Internal: used by subprocesses to run one stress-test scan attempt
+    parser.add_argument("--_run-stress-scan", type=str, default=None)
 
     args = parser.parse_args()
 
     config.set({"dask.lazy": False})
+
+    # If we're a subprocess running a stress-test scan attempt
+    if args._run_stress_scan is not None:
+        batch: int | str = args._run_stress_scan
+        try:
+            batch = int(batch)
+        except ValueError:
+            pass  # keep as string ("auto")
+        run_single_scan_for_stress_test(args.device, batch, args.quick)
+        return
 
     # If we're a subprocess running a single scan benchmark
     if args._run_scan_bench is not None:
