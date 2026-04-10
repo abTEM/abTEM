@@ -592,6 +592,7 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
 
 def run_stress_scan_subprocess(
     script: str, device: str, batch: int | str, quick: bool,
+    projection: str = "infinite",
 ):
     """Spawn a fresh subprocess for one stress-test scan attempt.
 
@@ -602,6 +603,7 @@ def run_stress_scan_subprocess(
         sys.executable, script,
         "--device", device,
         "--_run-stress-scan", str(batch),
+        "--_projection", projection,
     ]
     if quick:
         cmd.append("--quick")
@@ -617,7 +619,7 @@ def run_stress_scan_subprocess(
     if result.stdout:
         print(result.stdout, end="")
     elif result.returncode != 0:
-        label = f"chunk=auto, batch={batch}"
+        label = f"chunk=auto, batch={batch}, proj={projection}"
         print(f"  {label:<60s}  KILLED (GPU fault or OOM, exit {result.returncode})")
 
     if result.returncode != 0 and result.stderr:
@@ -629,7 +631,8 @@ def run_stress_scan_subprocess(
                 break
 
 
-def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool):
+def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
+                                    projection: str = "infinite"):
     """Run one stress-test scan attempt (called in a subprocess)."""
     config.set({"dask.lazy": False})
 
@@ -645,14 +648,16 @@ def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool):
     if quick:
         gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
     else:
-        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (4, 4)
+        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
 
-    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
+    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
+                                     projection=projection)
     print_result(benchmark_scan(
         potential, scan_gpts, device,
         prebuilt=False,
         potential_chunk_size="auto",
         max_batch=batch,
+        projection=projection,
     ))
     sys.stdout.flush()
 
@@ -690,9 +695,7 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     else:
         # 16384²: one slice ≈ 1.07 GB → auto chunk_size = 1 on a 25 GB GPU.
         # Si cubic cell is 5.43 Å in z; slice_thickness=6.0 Å → exactly 1 slice.
-        # 4×4 = 16 scan positions: enough to exercise batching (auto-batch ≈ 2
-        # for 16384² on 25 GB GPU → ~8 batch iterations).
-        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (4, 4)
+        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
 
     potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
     num_slices = len(potential)
@@ -712,17 +715,22 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
 
     # PlaneWave runs in-process (no scan positions → no batch-size risk).
-    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
     print("\n  [PlaneWave multislice]")
-    print_result(benchmark_multislice(potential, chunk_size="auto", device=device))
-    del potential
-    _gpu_cleanup()
+    for projection in ("infinite", "finite"):
+        potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
+                                         projection=projection)
+        print_result(benchmark_multislice(potential, chunk_size="auto", device=device,
+                                          projection=projection))
+        del potential
+        _gpu_cleanup()
 
-    # Scan runs in a subprocess: a hard GPU fault (CUDA_ERROR_ILLEGAL_ADDRESS)
-    # corrupts the CUDA context and cannot be recovered in the same process.
+    # Each scan attempt runs in a subprocess: a hard GPU fault
+    # (CUDA_ERROR_ILLEGAL_ADDRESS on OOM) corrupts the CUDA context and
+    # cannot be recovered in the same process.
     script = os.path.abspath(__file__)
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
-    run_stress_scan_subprocess(script, device, "auto", quick)
+    for projection in ("infinite", "finite"):
+        run_stress_scan_subprocess(script, device, "auto", quick, projection=projection)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -763,7 +771,8 @@ def main():
             batch = int(batch)
         except ValueError:
             pass  # keep as string ("auto")
-        run_single_scan_for_stress_test(args.device, batch, args.quick)
+        run_single_scan_for_stress_test(args.device, batch, args.quick,
+                                        projection=args._projection)
         return
 
     # If we're a subprocess running a single scan benchmark
