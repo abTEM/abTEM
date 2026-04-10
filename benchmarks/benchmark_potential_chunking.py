@@ -50,11 +50,13 @@ def make_large_potential(
     repetitions: tuple[int, int, int],
     device: str = "cpu",
     slice_thickness: float = 2.0,
+    projection: str = "infinite",
 ) -> Potential:
     """Create a large silicon potential for benchmarking."""
     atoms = bulk("Si", cubic=True) * repetitions
     return Potential(
         atoms, gpts=gpts, slice_thickness=slice_thickness, device=device,
+        projection=projection,
     )
 
 
@@ -185,12 +187,13 @@ def benchmark_multislice(
     chunk_size: int | str,
     device: str,
     energy: float = 200e3,
+    projection: str = "infinite",
 ) -> dict:
     """Benchmark a single multislice run with given chunk size."""
     waves = PlaneWave(energy=energy, gpts=potential.gpts, device=device)
     waves.grid.match(potential)
 
-    label = f"gpts={potential.gpts}, slices={len(potential)}, {_resolve_chunk_label(chunk_size, potential, device)}"
+    label = f"gpts={potential.gpts}, slices={len(potential)}, {_resolve_chunk_label(chunk_size, potential, device)}, proj={projection}"
 
     gc.collect()
     if device == "gpu":
@@ -263,6 +266,7 @@ def benchmark_scan(
     max_batch: int | str = "auto",
     energy: float = 200e3,
     to_zarr: bool = False,
+    projection: str = "infinite",
 ) -> dict:
     """Benchmark a Probe + GridScan measurement using the lazy path."""
     import shutil
@@ -297,7 +301,7 @@ def benchmark_scan(
         cs_label = _resolve_chunk_label(potential_chunk_size, potential, device)
     if to_zarr:
         cs_label += " (zarr)"
-    label = f"{cs_label}, scan={scan_gpts}, batch={batch_label}"
+    label = f"{cs_label}, scan={scan_gpts}, batch={batch_label}, proj={projection}"
 
     if prebuilt:
         try:
@@ -462,9 +466,9 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
     print(f"{'=' * 90}")
 
     for gpts, reps in get_planewave_configs(device, quick):
-        potential = make_large_potential(gpts, reps, device=device)
-        num_slices = len(potential)
-        mem_gb = estimate_potential_memory_mb(potential) / 1000
+        potential_inf = make_large_potential(gpts, reps, device=device, projection="infinite")
+        num_slices = len(potential_inf)
+        mem_gb = estimate_potential_memory_mb(potential_inf) / 1000
 
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB potential ──")
 
@@ -473,7 +477,11 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
-        print_result(benchmark_multislice(potential, "auto", device))
+        print_result(benchmark_multislice(potential_inf, "auto", device, projection="infinite"))
+        _gpu_cleanup()
+
+        potential_fin = make_large_potential(gpts, reps, device=device, projection="finite")
+        print_result(benchmark_multislice(potential_fin, "auto", device, projection="finite"))
         _gpu_cleanup()
 
 
@@ -485,6 +493,7 @@ def run_single_scan_benchmark(
     device: str, config_index: int, quick: bool,
     prebuilt: bool, chunk_size: int | str, to_zarr: bool,
     batch_size: int | str = "auto",
+    projection: str = "infinite",
 ):
     """Run ONE scan benchmark (called in a subprocess). Prints one result line."""
     config.set({"dask.lazy": False})
@@ -495,7 +504,7 @@ def run_single_scan_benchmark(
     if device == "gpu":
         warmup_gpu()
 
-    potential = make_large_potential(gpts, reps, device=device)
+    potential = make_large_potential(gpts, reps, device=device, projection=projection)
 
     print_result(benchmark_scan(
         potential, scan_gpts, device,
@@ -503,6 +512,7 @@ def run_single_scan_benchmark(
         potential_chunk_size=chunk_size,
         max_batch=batch_size,
         to_zarr=to_zarr,
+        projection=projection,
     ))
     sys.stdout.flush()
 
@@ -511,6 +521,7 @@ def _run_scan_subprocess(
     script: str, device: str, config_index: int, quick: bool,
     prebuilt: bool, chunk_size: int | str, to_zarr: bool,
     batch_size: int | str = "auto",
+    projection: str = "infinite",
 ):
     """Spawn a fresh subprocess for one scan benchmark and print its output."""
     cmd = [
@@ -520,6 +531,7 @@ def _run_scan_subprocess(
         "--_prebuilt" if prebuilt else "--_no-prebuilt",
         "--_chunk-size", str(chunk_size),
         "--_batch-size", str(batch_size),
+        "--_projection", projection,
     ]
     if to_zarr:
         cmd.append("--_to-zarr")
@@ -539,7 +551,7 @@ def _run_scan_subprocess(
     elif result.returncode != 0:
         # Process died without printing anything (e.g. OOM killed by kernel
         # before Python exception handling could run).
-        label = f"chunk={chunk_size}, batch={batch_size}"
+        label = f"chunk={chunk_size}, batch={batch_size}, proj={projection}"
         print(f"  {label:<60s}  KILLED (OOM or crash, exit {result.returncode})")
 
     if result.returncode != 0 and result.stderr:
@@ -567,9 +579,10 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slices, {mem_gb:.2f} GB, "
               f"scan={scan_gpts[0]}x{scan_gpts[1]} ──")
 
-        _run_scan_subprocess(script, device, i, quick,
-                             prebuilt=False, chunk_size="auto", to_zarr=False,
-                             batch_size="auto")
+        for projection in ("infinite", "finite"):
+            _run_scan_subprocess(script, device, i, quick,
+                                 prebuilt=False, chunk_size="auto", to_zarr=False,
+                                 batch_size="auto", projection=projection)
 
 
 
@@ -735,6 +748,7 @@ def main():
     parser.add_argument("--_chunk-size", type=str, default="auto")
     parser.add_argument("--_batch-size", type=str, default="auto")
     parser.add_argument("--_to-zarr", action="store_true", default=False)
+    parser.add_argument("--_projection", type=str, default="infinite")
     # Internal: used by subprocesses to run one stress-test scan attempt
     parser.add_argument("--_run-stress-scan", type=str, default=None)
 
@@ -767,7 +781,7 @@ def main():
         run_single_scan_benchmark(
             args.device, args._run_scan_bench, args.quick,
             prebuilt=args._prebuilt, chunk_size=cs, to_zarr=args._to_zarr,
-            batch_size=bs,
+            batch_size=bs, projection=args._projection,
         )
         return
 
