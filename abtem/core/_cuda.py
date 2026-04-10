@@ -65,7 +65,7 @@ def _interpolate_radial_functions(
     radial_derivatives,
     dt,
 ):
-    i, j = cuda.grid(2)
+    j, i = cuda.grid(2)
 
     if (i < positions.shape[0]) & (j < disk_indices.shape[0]):
         k = round(positions[i, 0] / sampling[0]) + disk_indices[j, 0]
@@ -103,9 +103,12 @@ def interpolate_radial_functions(
     if len(positions) == 0:
         return array
 
-    threadsperblock = (1, 256)
-    blockspergrid_x = int(math.ceil(positions.shape[0] / threadsperblock[0]))
-    blockspergrid_y = int(math.ceil(disk_indices.shape[0] / threadsperblock[1]))
+    # x-axis carries disk_indices (can be millions for large arrays → needs
+    # gridDim.x limit of 2^31-1); y-axis carries positions (atoms per slice,
+    # typically O(100) → well within gridDim.y limit of 65535).
+    threadsperblock = (256, 1)
+    blockspergrid_x = int(math.ceil(disk_indices.shape[0] / threadsperblock[0]))
+    blockspergrid_y = int(math.ceil(positions.shape[0] / threadsperblock[1]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
     dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
