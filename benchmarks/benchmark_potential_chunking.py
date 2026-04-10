@@ -662,6 +662,66 @@ def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
     sys.stdout.flush()
 
 
+def run_stress_plane_subprocess(
+    script: str, device: str, quick: bool, projection: str = "infinite",
+):
+    """Spawn a fresh subprocess for one stress-test PlaneWave attempt."""
+    cmd = [
+        sys.executable, script,
+        "--device", device,
+        "--_run-stress-plane",
+        "--_projection", projection,
+    ]
+    if quick:
+        cmd.append("--quick")
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "TQDM_DISABLE": "1"},
+    )
+
+    if result.stdout:
+        print(result.stdout, end="")
+    elif result.returncode != 0:
+        label = f"chunk=auto, proj={projection}"
+        print(f"  {label:<60s}  KILLED (GPU fault or OOM, exit {result.returncode})")
+
+    if result.returncode != 0 and result.stderr:
+        for line in result.stderr.split("\n"):
+            line = line.strip()
+            if "Error" in line or "error" in line:
+                print(f"  stderr: {line}")
+                break
+
+
+def run_single_plane_for_stress_test(device: str, quick: bool,
+                                     projection: str = "infinite"):
+    """Run one stress-test PlaneWave attempt (called in a subprocess)."""
+    config.set({"dask.lazy": False})
+
+    if device == "gpu":
+        try:
+            import cupy as cp
+            cp.fft.config.get_plan_cache().set_size(0)
+        except Exception:
+            pass
+        warmup_gpu()
+
+    if quick:
+        gpts, reps = (4096, 4096), (1, 1, 4)
+    else:
+        gpts, reps = (16384, 16384), (1, 1, 5)
+
+    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
+                                     projection=projection)
+    print_result(benchmark_multislice(potential, chunk_size="auto", device=device,
+                                      projection=projection))
+    sys.stdout.flush()
+
+
 def run_single_slice_stress_test(device: str, quick: bool = False):
     """Stress-test where a single potential slice barely fits in device memory.
 
@@ -714,20 +774,15 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     else:
         print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
 
-    # PlaneWave runs in-process (no scan positions → no batch-size risk).
+    # Both PlaneWave and scan run in subprocesses: after the infinite run
+    # the Numba CUDA compiler and cuFFT context retain device memory that
+    # free_all_blocks() cannot reclaim, leaving insufficient headroom for
+    # the finite projection's large disk_indices array.
+    script = os.path.abspath(__file__)
     print("\n  [PlaneWave multislice]")
     for projection in ("infinite", "finite"):
-        potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0,
-                                         projection=projection)
-        print_result(benchmark_multislice(potential, chunk_size="auto", device=device,
-                                          projection=projection))
-        del potential
-        _gpu_cleanup()
+        run_stress_plane_subprocess(script, device, quick, projection=projection)
 
-    # Each scan attempt runs in a subprocess: a hard GPU fault
-    # (CUDA_ERROR_ILLEGAL_ADDRESS on OOM) corrupts the CUDA context and
-    # cannot be recovered in the same process.
-    script = os.path.abspath(__file__)
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
     for projection in ("infinite", "finite"):
         run_stress_scan_subprocess(script, device, "auto", quick, projection=projection)
@@ -759,10 +814,18 @@ def main():
     parser.add_argument("--_projection", type=str, default="infinite")
     # Internal: used by subprocesses to run one stress-test scan attempt
     parser.add_argument("--_run-stress-scan", type=str, default=None)
+    # Internal: used by subprocesses to run one stress-test PlaneWave attempt
+    parser.add_argument("--_run-stress-plane", action="store_true", default=False)
 
     args = parser.parse_args()
 
     config.set({"dask.lazy": False})
+
+    # If we're a subprocess running a stress-test PlaneWave attempt
+    if args._run_stress_plane:
+        run_single_plane_for_stress_test(args.device, args.quick,
+                                         projection=args._projection)
+        return
 
     # If we're a subprocess running a stress-test scan attempt
     if args._run_stress_scan is not None:
