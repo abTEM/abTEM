@@ -705,13 +705,11 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     del potential
     _gpu_cleanup()
 
-    # Each scan attempt runs in a fresh subprocess: a hard GPU fault
-    # (CUDA_ERROR_ILLEGAL_ADDRESS on OOM) corrupts the CUDA context and
-    # cannot be recovered in the same process.
+    # Scan runs in a subprocess: a hard GPU fault (CUDA_ERROR_ILLEGAL_ADDRESS)
+    # corrupts the CUDA context and cannot be recovered in the same process.
     script = os.path.abspath(__file__)
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
-    for batch in (2, "auto"):
-        run_stress_scan_subprocess(script, device, batch, quick)
+    run_stress_scan_subprocess(script, device, "auto", quick)
 
 
 # ──────────────────────────────────────────────────────────────────────
