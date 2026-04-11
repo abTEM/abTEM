@@ -225,12 +225,18 @@ def benchmark_multislice(
     device: str,
     energy: float = 200e3,
     projection: str = "infinite",
+    precision: str = "float32",
 ) -> dict:
     """Benchmark a single multislice run with given chunk size."""
+    prec_label = "f64" if precision == "float64" else "f32"
     waves = PlaneWave(energy=energy, gpts=potential.gpts, device=device)
     waves.grid.match(potential)
 
-    label = f"gpts={potential.gpts}, slices={len(potential)}, {_resolve_chunk_label(chunk_size, potential, device)}, proj={projection}"
+    label = (
+        f"gpts={potential.gpts}, slices={len(potential)}, "
+        f"{_resolve_chunk_label(chunk_size, potential, device)}, "
+        f"proj={projection}, prec={prec_label}"
+    )
 
     gc.collect()
     if device == "gpu":
@@ -245,9 +251,10 @@ def benchmark_multislice(
         tracker.__enter__()
 
     try:
-        result = waves.multislice(
-            potential, potential_chunk_size=chunk_size, lazy=False
-        )
+        with config.set({"precision": precision}):
+            result = waves.multislice(
+                potential, potential_chunk_size=chunk_size, lazy=False
+            )
     except Exception as e:
         if tracker:
             tracker.__exit__(None, None, None)
@@ -304,6 +311,7 @@ def benchmark_scan(
     energy: float = 200e3,
     to_zarr: bool = False,
     projection: str = "infinite",
+    precision: str = "float32",
 ) -> dict:
     """Benchmark a Probe + GridScan measurement using the lazy path."""
     import shutil
@@ -338,7 +346,8 @@ def benchmark_scan(
         cs_label = _resolve_chunk_label(potential_chunk_size, potential, device)
     if to_zarr:
         cs_label += " (zarr)"
-    label = f"{cs_label}, scan={scan_gpts}, batch={batch_label}, proj={projection}"
+    prec_label = "f64" if precision == "float64" else "f32"
+    label = f"{cs_label}, scan={scan_gpts}, batch={batch_label}, proj={projection}, prec={prec_label}"
 
     if prebuilt:
         try:
@@ -365,15 +374,16 @@ def benchmark_scan(
         util_tracker.__enter__()
 
     try:
-        lazy_result = probe.scan(
-            pot, scan=scan, detectors=detector, lazy=True,
-            max_batch=max_batch, potential_chunk_size=potential_chunk_size,
-        )
-        if to_zarr:
-            lazy_result.to_zarr(run_path, overwrite=True)
-        else:
-            lazy_result.compute()
-        del lazy_result
+        with config.set({"precision": precision}):
+            lazy_result = probe.scan(
+                pot, scan=scan, detectors=detector, lazy=True,
+                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
+            )
+            if to_zarr:
+                lazy_result.to_zarr(run_path, overwrite=True)
+            else:
+                lazy_result.compute()
+            del lazy_result
     except Exception as e:
         if vram_tracker:
             vram_tracker.__exit__(None, None, None)
@@ -518,19 +528,27 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
         creps = (crystal_inf.repetitions[0], crystal_inf.repetitions[1])
         unit_g = crystal_inf.potential_unit.gpts
         print(f"  [CrystalPotential: {creps[0]}×{creps[1]} tiles of {unit_g[0]}×{unit_g[1]}]")
-        print_result(benchmark_multislice(crystal_inf, "auto", device, projection="crystal(inf)"))
-        _gpu_cleanup()
-
-        print_result(benchmark_multislice(potential_inf, "auto", device, projection="infinite"))
-        _gpu_cleanup()
+        for prec in ("float32", "float64"):
+            print_result(benchmark_multislice(crystal_inf, "auto", device,
+                                              projection="crystal(inf)", precision=prec))
+            _gpu_cleanup()
 
         crystal_fin = make_crystal_potential(gpts, reps, device=device, projection="finite")
-        print_result(benchmark_multislice(crystal_fin, "auto", device, projection="crystal(fin)"))
-        _gpu_cleanup()
+        for prec in ("float32", "float64"):
+            print_result(benchmark_multislice(crystal_fin, "auto", device,
+                                              projection="crystal(fin)", precision=prec))
+            _gpu_cleanup()
+
+        for prec in ("float32", "float64"):
+            print_result(benchmark_multislice(potential_inf, "auto", device,
+                                              projection="infinite", precision=prec))
+            _gpu_cleanup()
 
         potential_fin = make_large_potential(gpts, reps, device=device, projection="finite")
-        print_result(benchmark_multislice(potential_fin, "auto", device, projection="finite"))
-        _gpu_cleanup()
+        for prec in ("float32", "float64"):
+            print_result(benchmark_multislice(potential_fin, "auto", device,
+                                              projection="finite", precision=prec))
+            _gpu_cleanup()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -543,6 +561,7 @@ def run_single_scan_benchmark(
     batch_size: int | str = "auto",
     projection: str = "infinite",
     use_crystal: bool = False,
+    precision: str = "float32",
 ):
     """Run ONE scan benchmark (called in a subprocess). Prints one result line."""
     config.set({"dask.lazy": False})
@@ -566,6 +585,7 @@ def run_single_scan_benchmark(
         max_batch=batch_size,
         to_zarr=to_zarr,
         projection=projection,
+        precision=precision,
     ))
     sys.stdout.flush()
 
@@ -576,6 +596,7 @@ def _run_scan_subprocess(
     batch_size: int | str = "auto",
     projection: str = "infinite",
     use_crystal: bool = False,
+    precision: str = "float32",
 ):
     """Spawn a fresh subprocess for one scan benchmark and print its output."""
     cmd = [
@@ -586,6 +607,7 @@ def _run_scan_subprocess(
         "--_chunk-size", str(chunk_size),
         "--_batch-size", str(batch_size),
         "--_projection", projection,
+        "--_precision", precision,
     ]
     if to_zarr:
         cmd.append("--_to-zarr")
@@ -636,13 +658,16 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
               f"scan={scan_gpts[0]}x{scan_gpts[1]} ──")
 
         for projection in ("infinite", "finite"):
-            _run_scan_subprocess(script, device, i, quick,
-                                 prebuilt=False, chunk_size="auto", to_zarr=False,
-                                 batch_size="auto", projection=projection,
-                                 use_crystal=True)
-            _run_scan_subprocess(script, device, i, quick,
-                                 prebuilt=False, chunk_size="auto", to_zarr=False,
-                                 batch_size="auto", projection=projection)
+            for prec in ("float32", "float64"):
+                _run_scan_subprocess(script, device, i, quick,
+                                     prebuilt=False, chunk_size="auto", to_zarr=False,
+                                     batch_size="auto", projection=projection,
+                                     use_crystal=True, precision=prec)
+            for prec in ("float32", "float64"):
+                _run_scan_subprocess(script, device, i, quick,
+                                     prebuilt=False, chunk_size="auto", to_zarr=False,
+                                     batch_size="auto", projection=projection,
+                                     precision=prec)
 
 
 
@@ -654,6 +679,7 @@ def run_stress_scan_subprocess(
     script: str, device: str, batch: int | str, quick: bool,
     projection: str = "infinite",
     use_crystal: bool = False,
+    precision: str = "float32",
 ):
     """Spawn a fresh subprocess for one stress-test scan attempt.
 
@@ -665,6 +691,7 @@ def run_stress_scan_subprocess(
         "--device", device,
         "--_run-stress-scan", str(batch),
         "--_projection", projection,
+        "--_precision", precision,
     ]
     if use_crystal:
         cmd.append("--_use-crystal")
@@ -696,7 +723,8 @@ def run_stress_scan_subprocess(
 
 def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
                                     projection: str = "infinite",
-                                    use_crystal: bool = False):
+                                    use_crystal: bool = False,
+                                    precision: str = "float32"):
     """Run one stress-test scan attempt (called in a subprocess)."""
     config.set({"dask.lazy": False})
 
@@ -734,6 +762,7 @@ def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
         potential_chunk_size="auto",
         max_batch=batch,
         projection=proj_label,
+        precision=precision,
     ))
     sys.stdout.flush()
 
@@ -741,6 +770,7 @@ def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
 def run_stress_plane_subprocess(
     script: str, device: str, quick: bool, projection: str = "infinite",
     use_crystal: bool = False,
+    precision: str = "float32",
 ):
     """Spawn a fresh subprocess for one stress-test PlaneWave attempt."""
     cmd = [
@@ -748,6 +778,7 @@ def run_stress_plane_subprocess(
         "--device", device,
         "--_run-stress-plane",
         "--_projection", projection,
+        "--_precision", precision,
     ]
     if use_crystal:
         cmd.append("--_use-crystal")
@@ -778,7 +809,8 @@ def run_stress_plane_subprocess(
 
 def run_single_plane_for_stress_test(device: str, quick: bool,
                                      projection: str = "infinite",
-                                     use_crystal: bool = False):
+                                     use_crystal: bool = False,
+                                     precision: str = "float32"):
     """Run one stress-test PlaneWave attempt (called in a subprocess)."""
     config.set({"dask.lazy": False})
 
@@ -809,7 +841,7 @@ def run_single_plane_for_stress_test(device: str, quick: bool,
         proj_label = projection
 
     print_result(benchmark_multislice(potential, chunk_size="auto", device=device,
-                                      projection=proj_label))
+                                      projection=proj_label, precision=precision))
     sys.stdout.flush()
 
 
@@ -872,15 +904,21 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
     script = os.path.abspath(__file__)
     print("\n  [PlaneWave multislice]")
     for projection in ("infinite", "finite"):
-        run_stress_plane_subprocess(script, device, quick, projection=projection,
-                                    use_crystal=True)
-        run_stress_plane_subprocess(script, device, quick, projection=projection)
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        use_crystal=True, precision=prec)
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        precision=prec)
 
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
     for projection in ("infinite", "finite"):
-        run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
-                                   use_crystal=True)
-        run_stress_scan_subprocess(script, device, "auto", quick, projection=projection)
+        for prec in ("float32", "float64"):
+            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                       use_crystal=True, precision=prec)
+        for prec in ("float32", "float64"):
+            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                       precision=prec)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -911,6 +949,7 @@ def main():
     parser.add_argument("--_batch-size", type=str, default="auto")
     parser.add_argument("--_to-zarr", action="store_true", default=False)
     parser.add_argument("--_projection", type=str, default="infinite")
+    parser.add_argument("--_precision", type=str, default="float32")
     parser.add_argument("--_use-crystal", action="store_true", default=False)
     # Internal: used by subprocesses to run one stress-test scan attempt
     parser.add_argument("--_run-stress-scan", type=str, default=None)
@@ -925,7 +964,8 @@ def main():
     if args._run_stress_plane:
         run_single_plane_for_stress_test(args.device, args.quick,
                                          projection=args._projection,
-                                         use_crystal=args._use_crystal)
+                                         use_crystal=args._use_crystal,
+                                         precision=args._precision)
         return
 
     # If we're a subprocess running a stress-test scan attempt
@@ -937,7 +977,8 @@ def main():
             pass  # keep as string ("auto")
         run_single_scan_for_stress_test(args.device, batch, args.quick,
                                         projection=args._projection,
-                                        use_crystal=args._use_crystal)
+                                        use_crystal=args._use_crystal,
+                                        precision=args._precision)
         return
 
     # If we're a subprocess running a single scan benchmark
@@ -956,7 +997,7 @@ def main():
             args.device, args._run_scan_bench, args.quick,
             prebuilt=args._prebuilt, chunk_size=cs, to_zarr=args._to_zarr,
             batch_size=bs, projection=args._projection,
-            use_crystal=args._use_crystal,
+            use_crystal=args._use_crystal, precision=args._precision,
         )
         return
 
