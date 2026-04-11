@@ -437,15 +437,28 @@ def _resolve_chunk_label(chunk_size: int | str, potential, device: str) -> str:
     return f"chunk={chunk_size}"
 
 
+def _format_error(msg: str) -> str:
+    """Shorten error messages for display; keep OOM size info concise."""
+    import re
+    if "Out of memory" in msg or "OutOfMemoryError" in msg:
+        sizes = re.findall(r"[\d,]+(?= bytes)", msg)
+        if len(sizes) >= 2:
+            tried_gb = int(sizes[0].replace(",", "")) / 1e9
+            used_gb  = int(sizes[1].replace(",", "")) / 1e9
+            return f"OOM (tried {tried_gb:.1f} GB, {used_gb:.1f} GB in use)"
+    # Fallback: first line, at most 100 chars
+    return msg.split("\n")[0][:100]
+
+
 def print_result(r: dict):
     if "error" in r:
-        print(f"  {r['label']:<60s}  ERROR: {r['error']}")
+        print(f"  {r['label']:<72s}  ERROR: {_format_error(r['error'])}")
     else:
         vram = r.get("peak_vram_mb")
         util = r.get("mean_gpu_util")
         vram_str = f"  vram={vram / 1000:5.1f}GB" if vram else ""
         util_str = f"  gpu={util:3.0f}%" if util is not None else ""
-        print(f"  {r['label']:<60s}  {r['time']:8.3f}s{vram_str}{util_str}")
+        print(f"  {r['label']:<72s}  {r['time']:8.3f}s{vram_str}{util_str}")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -629,8 +642,10 @@ def _run_scan_subprocess(
     elif result.returncode != 0:
         # Process died without printing anything (e.g. OOM killed by kernel
         # before Python exception handling could run).
-        label = f"chunk={chunk_size}, batch={batch_size}, proj={projection}"
-        print(f"  {label:<60s}  KILLED (OOM or crash, exit {result.returncode})")
+        prec_label = "f64" if precision == "float64" else "f32"
+        proj_label = f"crystal({projection[:3]})" if use_crystal else projection
+        label = f"chunk={chunk_size}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
+        print(f"  {label:<72s}  KILLED (OOM or crash, exit {result.returncode})")
 
     if result.returncode != 0 and result.stderr:
         lines = result.stderr.strip().split("\n")
@@ -680,6 +695,7 @@ def run_stress_scan_subprocess(
     projection: str = "infinite",
     use_crystal: bool = False,
     precision: str = "float32",
+    stress_size: str = "large",
 ):
     """Spawn a fresh subprocess for one stress-test scan attempt.
 
@@ -692,6 +708,7 @@ def run_stress_scan_subprocess(
         "--_run-stress-scan", str(batch),
         "--_projection", projection,
         "--_precision", precision,
+        "--_stress-size", stress_size,
     ]
     if use_crystal:
         cmd.append("--_use-crystal")
@@ -709,8 +726,10 @@ def run_stress_scan_subprocess(
     if result.stdout:
         print(result.stdout, end="")
     elif result.returncode != 0:
-        label = f"chunk=auto, batch={batch}, proj={projection}"
-        print(f"  {label:<60s}  KILLED (GPU fault or OOM, exit {result.returncode})")
+        prec_label = "f64" if precision == "float64" else "f32"
+        proj_label = f"crystal({projection[:3]})" if use_crystal else projection
+        label = f"chunk=auto, batch={batch}, proj={proj_label}, prec={prec_label}"
+        print(f"  {label:<72s}  KILLED (GPU fault or OOM, exit {result.returncode})")
 
     if result.returncode != 0 and result.stderr:
         # Show only the first meaningful error line to avoid flooding output.
@@ -724,7 +743,8 @@ def run_stress_scan_subprocess(
 def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
                                     projection: str = "infinite",
                                     use_crystal: bool = False,
-                                    precision: str = "float32"):
+                                    precision: str = "float32",
+                                    stress_size: str = "large"):
     """Run one stress-test scan attempt (called in a subprocess)."""
     config.set({"dask.lazy": False})
 
@@ -737,17 +757,16 @@ def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
             pass
         warmup_gpu()
 
-    if quick:
-        gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
+    if stress_size == "medium":
+        gpts, reps, scan_gpts = ((2048, 2048), (1, 1, 4), (2, 2)) if quick else ((8192, 8192), (1, 1, 5), (2, 2))
     else:
-        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
+        gpts, reps, scan_gpts = ((4096, 4096), (1, 1, 4), (2, 2)) if quick else ((16384, 16384), (1, 1, 5), (2, 2))
 
     if use_crystal:
-        # Use more xy repetitions so CrystalPotential tiles a small unit cell.
-        if quick:
-            reps = (4, 4, 4)    # unit_gpts = (1024, 1024)
+        if stress_size == "medium":
+            reps = (2, 2, 4) if quick else (8, 8, 5)    # unit_gpts = (1024, 1024)
         else:
-            reps = (16, 16, 5)  # unit_gpts = (1024, 1024)
+            reps = (4, 4, 4) if quick else (16, 16, 5)  # unit_gpts = (1024, 1024)
         potential = make_crystal_potential(gpts, reps, device=device,
                                           slice_thickness=6.0, projection=projection)
         proj_label = f"crystal({projection[:3]})"
@@ -771,6 +790,7 @@ def run_stress_plane_subprocess(
     script: str, device: str, quick: bool, projection: str = "infinite",
     use_crystal: bool = False,
     precision: str = "float32",
+    stress_size: str = "large",
 ):
     """Spawn a fresh subprocess for one stress-test PlaneWave attempt."""
     cmd = [
@@ -779,6 +799,7 @@ def run_stress_plane_subprocess(
         "--_run-stress-plane",
         "--_projection", projection,
         "--_precision", precision,
+        "--_stress-size", stress_size,
     ]
     if use_crystal:
         cmd.append("--_use-crystal")
@@ -796,8 +817,10 @@ def run_stress_plane_subprocess(
     if result.stdout:
         print(result.stdout, end="")
     elif result.returncode != 0:
-        label = f"chunk=auto, proj={projection}"
-        print(f"  {label:<60s}  KILLED (GPU fault or OOM, exit {result.returncode})")
+        prec_label = "f64" if precision == "float64" else "f32"
+        proj_label = f"crystal({projection[:3]})" if use_crystal else projection
+        label = f"chunk=auto, proj={proj_label}, prec={prec_label}"
+        print(f"  {label:<72s}  KILLED (GPU fault or OOM, exit {result.returncode})")
 
     if result.returncode != 0 and result.stderr:
         for line in result.stderr.split("\n"):
@@ -810,7 +833,8 @@ def run_stress_plane_subprocess(
 def run_single_plane_for_stress_test(device: str, quick: bool,
                                      projection: str = "infinite",
                                      use_crystal: bool = False,
-                                     precision: str = "float32"):
+                                     precision: str = "float32",
+                                     stress_size: str = "large"):
     """Run one stress-test PlaneWave attempt (called in a subprocess)."""
     config.set({"dask.lazy": False})
 
@@ -822,16 +846,16 @@ def run_single_plane_for_stress_test(device: str, quick: bool,
             pass
         warmup_gpu()
 
-    if quick:
-        gpts, reps = (4096, 4096), (1, 1, 4)
+    if stress_size == "medium":
+        gpts, reps = ((2048, 2048), (1, 1, 4)) if quick else ((8192, 8192), (1, 1, 5))
     else:
-        gpts, reps = (16384, 16384), (1, 1, 5)
+        gpts, reps = ((4096, 4096), (1, 1, 4)) if quick else ((16384, 16384), (1, 1, 5))
 
     if use_crystal:
-        if quick:
-            reps = (4, 4, 4)    # unit_gpts = (1024, 1024)
+        if stress_size == "medium":
+            reps = (2, 2, 4) if quick else (8, 8, 5)    # unit_gpts = (1024, 1024)
         else:
-            reps = (16, 16, 5)  # unit_gpts = (1024, 1024)
+            reps = (4, 4, 4) if quick else (16, 16, 5)  # unit_gpts = (1024, 1024)
         potential = make_crystal_potential(gpts, reps, device=device,
                                           slice_thickness=6.0, projection=projection)
         proj_label = f"crystal({projection[:3]})"
@@ -920,6 +944,41 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
             run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
                                        precision=prec)
 
+    # ── Medium stress test (8192² non-quick / 2048² quick) ────────────
+    # One slice at 8192² ≈ 0.27 GB fp32 / 0.54 GB fp64; wavefunction
+    # (complex128) ≈ 0.54 GB — both fit comfortably in 24 GB VRAM.
+    if quick:
+        m_gpts, m_reps = (2048, 2048), (1, 1, 4)
+    else:
+        m_gpts, m_reps = (8192, 8192), (1, 1, 5)
+
+    m_potential = make_large_potential(m_gpts, m_reps, device=device, slice_thickness=6.0)
+    m_num_slices = len(m_potential)
+    m_mem_gb = estimate_potential_memory_mb(m_potential) / 1000
+    del m_potential
+
+    print(f"\n── {m_gpts[0]}x{m_gpts[1]} (medium / fp64-capable), "
+          f"{m_num_slices} slice(s), {m_mem_gb:.2f} GB ──")
+
+    print("\n  [PlaneWave multislice — medium]")
+    for projection in ("infinite", "finite"):
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        use_crystal=True, precision=prec,
+                                        stress_size="medium")
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        precision=prec, stress_size="medium")
+
+    print(f"\n  [Probe scan (2×2 positions) — medium]")
+    for projection in ("infinite", "finite"):
+        for prec in ("float32", "float64"):
+            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                       use_crystal=True, precision=prec, stress_size="medium")
+        for prec in ("float32", "float64"):
+            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                       precision=prec, stress_size="medium")
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Main entry point
@@ -955,6 +1014,8 @@ def main():
     parser.add_argument("--_run-stress-scan", type=str, default=None)
     # Internal: used by subprocesses to run one stress-test PlaneWave attempt
     parser.add_argument("--_run-stress-plane", action="store_true", default=False)
+    # Internal: stress test size ("large" = 16384², "medium" = 8192²)
+    parser.add_argument("--_stress-size", type=str, default="large")
 
     args = parser.parse_args()
 
@@ -965,7 +1026,8 @@ def main():
         run_single_plane_for_stress_test(args.device, args.quick,
                                          projection=args._projection,
                                          use_crystal=args._use_crystal,
-                                         precision=args._precision)
+                                         precision=args._precision,
+                                         stress_size=args._stress_size)
         return
 
     # If we're a subprocess running a stress-test scan attempt
@@ -978,7 +1040,8 @@ def main():
         run_single_scan_for_stress_test(args.device, batch, args.quick,
                                         projection=args._projection,
                                         use_crystal=args._use_crystal,
-                                        precision=args._precision)
+                                        precision=args._precision,
+                                        stress_size=args._stress_size)
         return
 
     # If we're a subprocess running a single scan benchmark
