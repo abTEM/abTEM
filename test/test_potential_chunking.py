@@ -5,6 +5,7 @@ import pytest
 from ase.build import bulk
 
 from abtem import PlaneWave, Potential
+from abtem.core import config as abtem_config
 from abtem.core.chunks import _nearest_power_of_two, estimate_potential_chunk_size
 from abtem.core.complex import complex_exponential
 from abtem.potentials.iam import CrystalPotential, PotentialArray
@@ -385,6 +386,52 @@ class TestCrystalPotentialChunking:
         last = unit_slices + 2
         slices = list(crystal_potential.generate_slices(first, last))
         assert len(slices) == last - first
+
+    def test_generate_chunked_slices_no_list_accumulation(self, crystal_potential):
+        """Each chunk must be a single contiguous array, not a concatenation artefact.
+
+        The override pre-allocates and fills in-place, so each chunk array
+        must have exactly chunk_size slices — never more.
+        """
+        chunk_size = 3
+        for chunk in crystal_potential.generate_chunked_slices(chunk_size=chunk_size):
+            assert chunk.array.shape[0] <= chunk_size
+
+    def test_dtype_follows_precision_config(self, crystal_potential):
+        """Chunk dtype must reflect the abtem precision config (float32 / float64)."""
+        for precision, expected in [("float32", np.float32), ("float64", np.float64)]:
+            with abtem_config.set({"precision": precision}):
+                # Re-build inside the config context so the unit is built at
+                # the configured precision.
+                atoms = bulk("Si", cubic=True)
+                unit = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+                crys = CrystalPotential(unit, repetitions=(4, 4, 10))
+                chunks = list(crys.generate_chunked_slices(chunk_size=4))
+                for chunk in chunks:
+                    assert chunk.array.dtype == expected, (
+                        f"precision={precision}: got {chunk.array.dtype}"
+                    )
+
+    def test_multislice_float64_matches_float32(self, crystal_potential):
+        """Multislice at float64 must agree with float32 to within tolerances."""
+        waves32 = PlaneWave(energy=200e3, gpts=crystal_potential.gpts)
+        waves32.grid.match(crystal_potential)
+
+        with abtem_config.set({"precision": "float32"}):
+            atoms = bulk("Si", cubic=True)
+            unit32 = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+            crys32 = CrystalPotential(unit32, repetitions=(4, 4, 10))
+            result32 = waves32.multislice(crys32, lazy=False)
+
+        with abtem_config.set({"precision": "float64"}):
+            atoms = bulk("Si", cubic=True)
+            unit64 = Potential(atoms, gpts=(32, 32), slice_thickness=2.0)
+            crys64 = CrystalPotential(unit64, repetitions=(4, 4, 10))
+            result64 = waves32.multislice(crys64, lazy=False)
+
+        assert np.allclose(
+            np.abs(result32.array), np.abs(result64.array), atol=1e-4
+        ), f"max diff: {np.abs(np.abs(result32.array) - np.abs(result64.array)).max()}"
 
 
 class TestComplexExponential:
