@@ -484,6 +484,39 @@ def _parse_result_line(line: str) -> dict | None:
     return None
 
 
+def _classify_subprocess_error(stderr: str, returncode: int) -> str:
+    """Turn subprocess stderr + exit code into a concise one-line error string.
+
+    Recognises common CUDA faults and OOM patterns so callers don't need to
+    show a separate ``stderr:`` line for every known error type.
+    """
+    if not stderr:
+        return f"KILLED (exit {returncode})"
+
+    # Hard GPU faults — CUDA error codes embedded in the traceback
+    m = re.search(r"(CUDA_ERROR_\w+)", stderr)
+    if m:
+        code = m.group(1)
+        # Give a slightly friendlier suffix for the two most common codes.
+        friendly = {
+            "CUDA_ERROR_ILLEGAL_ADDRESS": "illegal memory access",
+            "CUDA_ERROR_OUT_OF_MEMORY": "out of memory",
+        }.get(code, "")
+        suffix = f" ({friendly})" if friendly else ""
+        return f"{code}{suffix}"
+
+    # Python-level OOM (cupy / torch style)
+    if "OutOfMemoryError" in stderr or "Out of memory" in stderr:
+        return _format_error(stderr)
+
+    # Generic fallback
+    for line in stderr.splitlines():
+        line = line.strip()
+        if "Error" in line or "error" in line:
+            return line[:100]
+    return f"KILLED (exit {returncode})"
+
+
 def print_result(r: dict):
     _collected_results.append(r)
     if "error" in r:
@@ -678,20 +711,21 @@ def _run_scan_subprocess(
             r = _parse_result_line(line)
             if r is not None:
                 _collected_results.append(r)
+        # Partial run — subprocess printed something but still crashed.
+        if result.returncode != 0 and result.stderr:
+            for line in result.stderr.splitlines():
+                line = line.strip()
+                if "Error" in line or "error" in line:
+                    print(f"  stderr: {line}")
+                    break
     elif result.returncode != 0:
-        # Process died without printing anything (e.g. OOM killed by kernel
-        # before Python exception handling could run).
+        # Process died before printing anything — classify the error from stderr.
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk={chunk_size}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
-        error_msg = f"KILLED (OOM or crash, exit {result.returncode})"
+        error_msg = _classify_subprocess_error(result.stderr, result.returncode)
         _collected_results.append({"label": label, "error": error_msg})
-        print(f"  {label:<72s}  {error_msg}")
-
-    if result.returncode != 0 and result.stderr:
-        lines = result.stderr.strip().split("\n")
-        for line in lines[-3:]:
-            print(f"  stderr: {line}")
+        print(f"  {label:<72s}  ERROR: {error_msg}")
 
 
 def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
@@ -770,21 +804,19 @@ def run_stress_scan_subprocess(
             r = _parse_result_line(line)
             if r is not None:
                 _collected_results.append(r)
+        if result.returncode != 0 and result.stderr:
+            for line in result.stderr.splitlines():
+                line = line.strip()
+                if "Error" in line or "error" in line:
+                    print(f"  stderr: {line}")
+                    break
     elif result.returncode != 0:
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk=auto, batch={batch}, proj={proj_label}, prec={prec_label}"
-        error_msg = f"KILLED (GPU fault or OOM, exit {result.returncode})"
+        error_msg = _classify_subprocess_error(result.stderr, result.returncode)
         _collected_results.append({"label": label, "error": error_msg})
-        print(f"  {label:<72s}  {error_msg}")
-
-    if result.returncode != 0 and result.stderr:
-        # Show only the first meaningful error line to avoid flooding output.
-        for line in result.stderr.split("\n"):
-            line = line.strip()
-            if "Error" in line or "error" in line:
-                print(f"  stderr: {line}")
-                break
+        print(f"  {label:<72s}  ERROR: {error_msg}")
 
 
 def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
@@ -867,20 +899,19 @@ def run_stress_plane_subprocess(
             r = _parse_result_line(line)
             if r is not None:
                 _collected_results.append(r)
+        if result.returncode != 0 and result.stderr:
+            for line in result.stderr.splitlines():
+                line = line.strip()
+                if "Error" in line or "error" in line:
+                    print(f"  stderr: {line}")
+                    break
     elif result.returncode != 0:
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk=auto, proj={proj_label}, prec={prec_label}"
-        error_msg = f"KILLED (GPU fault or OOM, exit {result.returncode})"
+        error_msg = _classify_subprocess_error(result.stderr, result.returncode)
         _collected_results.append({"label": label, "error": error_msg})
-        print(f"  {label:<72s}  {error_msg}")
-
-    if result.returncode != 0 and result.stderr:
-        for line in result.stderr.split("\n"):
-            line = line.strip()
-            if "Error" in line or "error" in line:
-                print(f"  stderr: {line}")
-                break
+        print(f"  {label:<72s}  ERROR: {error_msg}")
 
 
 def run_single_plane_for_stress_test(device: str, quick: bool,
