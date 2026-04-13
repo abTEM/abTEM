@@ -39,13 +39,32 @@ import numpy as np
 from ase.build import bulk
 
 import abtem
+from abtem import AnnularDetector, PlaneWave, Potential, Probe
+from abtem.core import config
+from abtem.scan import GridScan
+
+# Optional features — fall back gracefully on older abTEM installations.
+try:
+    from abtem.potentials.iam import CrystalPotential
+    _HAS_CRYSTAL_POTENTIAL = True
+except ImportError:
+    CrystalPotential = None  # type: ignore[assignment,misc]
+    _HAS_CRYSTAL_POTENTIAL = False
+
+try:
+    from abtem.core.chunks import estimate_potential_chunk_size as _estimate_potential_chunk_size
+    _HAS_ESTIMATE_CHUNK_SIZE = True
+except ImportError:
+    _HAS_ESTIMATE_CHUNK_SIZE = False
+
+try:
+    from abtem.core.chunks import estimate_scan_batch_size as _estimate_scan_batch_size
+    _HAS_ESTIMATE_SCAN_BATCH_SIZE = True
+except ImportError:
+    _HAS_ESTIMATE_SCAN_BATCH_SIZE = False
 
 # Accumulates all benchmark results for optional JSON output (--output-json).
 _collected_results: list[dict] = []
-from abtem import AnnularDetector, PlaneWave, Potential, Probe
-from abtem.core import config
-from abtem.potentials.iam import CrystalPotential
-from abtem.scan import GridScan
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -82,12 +101,17 @@ def make_crystal_potential(
     device: str = "cpu",
     slice_thickness: float = 2.0,
     projection: str = "infinite",
-) -> CrystalPotential:
+):
     """Create a CrystalPotential by tiling a single Si unit cell.
 
     The xy repetitions are adjusted to the nearest divisor of *gpts* so that
     the unit-cell gpts are integers.  The z repetitions are kept as-is.
     """
+    if not _HAS_CRYSTAL_POTENTIAL:
+        raise RuntimeError(
+            "CrystalPotential is not available in this abTEM version; "
+            "skipping crystal benchmarks."
+        )
     rx = _nearest_divisor(gpts[0], repetitions[0])
     ry = _nearest_divisor(gpts[1], repetitions[1])
     reps = (rx, ry, repetitions[2])
@@ -329,10 +353,9 @@ def benchmark_scan(
     # Use the potential's gpts as a proxy for the probe grid size.
     n_pos = scan_gpts[0] * scan_gpts[1]
     if max_batch == "auto":
-        if device == "gpu":
-            from abtem.core.chunks import estimate_scan_batch_size
+        if device == "gpu" and _HAS_ESTIMATE_SCAN_BATCH_SIZE:
             effective_batch = min(
-                estimate_scan_batch_size(potential.gpts, np.dtype("complex64"), "gpu"),
+                _estimate_scan_batch_size(potential.gpts, np.dtype("complex64"), "gpu"),
                 n_pos,
             )
         else:
@@ -429,15 +452,20 @@ def benchmark_scan(
 
 def _resolve_chunk_label(chunk_size: int | str, potential, device: str) -> str:
     """Return a display label for the chunk size, resolving 'auto' to 'auto(NxM)'
-    where N is the number of chunks and M is the (maximum) slices per chunk."""
+    where N is the number of chunks and M is the (maximum) slices per chunk.
+
+    Falls back to plain 'chunk=auto' on older abTEM builds that do not expose
+    ``estimate_potential_chunk_size``.
+    """
     import math
-    from abtem.core.chunks import estimate_potential_chunk_size
     n_slices = len(potential)
     if chunk_size == "auto":
-        budget = min(estimate_potential_chunk_size(potential.gpts, device), n_slices)
-        n_chunks = math.ceil(n_slices / budget)
-        actual_cs = math.ceil(n_slices / n_chunks)
-        return f"chunk=auto({n_chunks}x{actual_cs})"
+        if _HAS_ESTIMATE_CHUNK_SIZE:
+            budget = min(_estimate_potential_chunk_size(potential.gpts, device), n_slices)
+            n_chunks = math.ceil(n_slices / budget)
+            actual_cs = math.ceil(n_slices / n_chunks)
+            return f"chunk=auto({n_chunks}x{actual_cs})"
+        return "chunk=auto"
     return f"chunk={chunk_size}"
 
 
@@ -623,20 +651,21 @@ def run_planewave_benchmarks(device: str, quick: bool = False):
             free, total = cp.cuda.Device().mem_info
             print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
 
-        crystal_inf = make_crystal_potential(gpts, reps, device=device, projection="infinite")
-        creps = (crystal_inf.repetitions[0], crystal_inf.repetitions[1])
-        unit_g = crystal_inf.potential_unit.gpts
-        print(f"  [CrystalPotential: {creps[0]}×{creps[1]} tiles of {unit_g[0]}×{unit_g[1]}]")
-        for prec in ("float32", "float64"):
-            print_result(benchmark_multislice(crystal_inf, "auto", device,
-                                              projection="crystal(inf)", precision=prec))
-            _gpu_cleanup()
+        if _HAS_CRYSTAL_POTENTIAL:
+            crystal_inf = make_crystal_potential(gpts, reps, device=device, projection="infinite")
+            creps = (crystal_inf.repetitions[0], crystal_inf.repetitions[1])
+            unit_g = crystal_inf.potential_unit.gpts
+            print(f"  [CrystalPotential: {creps[0]}×{creps[1]} tiles of {unit_g[0]}×{unit_g[1]}]")
+            for prec in ("float32", "float64"):
+                print_result(benchmark_multislice(crystal_inf, "auto", device,
+                                                  projection="crystal(inf)", precision=prec))
+                _gpu_cleanup()
 
-        crystal_fin = make_crystal_potential(gpts, reps, device=device, projection="finite")
-        for prec in ("float32", "float64"):
-            print_result(benchmark_multislice(crystal_fin, "auto", device,
-                                              projection="crystal(fin)", precision=prec))
-            _gpu_cleanup()
+            crystal_fin = make_crystal_potential(gpts, reps, device=device, projection="finite")
+            for prec in ("float32", "float64"):
+                print_result(benchmark_multislice(crystal_fin, "auto", device,
+                                                  projection="crystal(fin)", precision=prec))
+                _gpu_cleanup()
 
         for prec in ("float32", "float64"):
             print_result(benchmark_multislice(potential_inf, "auto", device,
@@ -766,11 +795,12 @@ def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
               f"scan={scan_gpts[0]}x{scan_gpts[1]} ──")
 
         for projection in ("infinite", "finite"):
-            for prec in ("float32", "float64"):
-                _run_scan_subprocess(script, device, i, quick,
-                                     prebuilt=False, chunk_size="auto", to_zarr=False,
-                                     batch_size="auto", projection=projection,
-                                     use_crystal=True, precision=prec)
+            if _HAS_CRYSTAL_POTENTIAL:
+                for prec in ("float32", "float64"):
+                    _run_scan_subprocess(script, device, i, quick,
+                                         prebuilt=False, chunk_size="auto", to_zarr=False,
+                                         batch_size="auto", projection=projection,
+                                         use_crystal=True, precision=prec)
             for prec in ("float32", "float64"):
                 _run_scan_subprocess(script, device, i, quick,
                                      prebuilt=False, chunk_size="auto", to_zarr=False,
@@ -1048,19 +1078,21 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
 
     print("\n  [PlaneWave multislice — medium]")
     for projection in ("infinite", "finite"):
-        for prec in ("float32", "float64"):
-            run_stress_plane_subprocess(script, device, quick, projection=projection,
-                                        use_crystal=True, precision=prec,
-                                        stress_size="medium")
+        if _HAS_CRYSTAL_POTENTIAL:
+            for prec in ("float32", "float64"):
+                run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                            use_crystal=True, precision=prec,
+                                            stress_size="medium")
         for prec in ("float32", "float64"):
             run_stress_plane_subprocess(script, device, quick, projection=projection,
                                         precision=prec, stress_size="medium")
 
     print("\n  [Probe scan (2×2 positions) — medium]")
     for projection in ("infinite", "finite"):
-        for prec in ("float32", "float64"):
-            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
-                                       use_crystal=True, precision=prec, stress_size="medium")
+        if _HAS_CRYSTAL_POTENTIAL:
+            for prec in ("float32", "float64"):
+                run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                           use_crystal=True, precision=prec, stress_size="medium")
         for prec in ("float32", "float64"):
             run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
                                        precision=prec, stress_size="medium")
@@ -1093,18 +1125,20 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
 
     print("\n  [PlaneWave multislice]")
     for projection in ("infinite", "finite"):
-        for prec in ("float32", "float64"):
-            run_stress_plane_subprocess(script, device, quick, projection=projection,
-                                        use_crystal=True, precision=prec)
+        if _HAS_CRYSTAL_POTENTIAL:
+            for prec in ("float32", "float64"):
+                run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                            use_crystal=True, precision=prec)
         for prec in ("float32", "float64"):
             run_stress_plane_subprocess(script, device, quick, projection=projection,
                                         precision=prec)
 
     print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
     for projection in ("infinite", "finite"):
-        for prec in ("float32", "float64"):
-            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
-                                       use_crystal=True, precision=prec)
+        if _HAS_CRYSTAL_POTENTIAL:
+            for prec in ("float32", "float64"):
+                run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                           use_crystal=True, precision=prec)
         for prec in ("float32", "float64"):
             run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
                                        precision=prec)
