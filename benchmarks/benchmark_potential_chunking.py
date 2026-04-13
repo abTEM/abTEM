@@ -63,6 +63,14 @@ try:
 except ImportError:
     _HAS_ESTIMATE_SCAN_BATCH_SIZE = False
 
+try:
+    import inspect as _inspect
+    _HAS_POTENTIAL_CHUNK_SIZE_KWARG = (
+        "potential_chunk_size" in _inspect.signature(PlaneWave.multislice).parameters
+    )
+except Exception:
+    _HAS_POTENTIAL_CHUNK_SIZE_KWARG = False
+
 # Accumulates all benchmark results for optional JSON output (--output-json).
 _collected_results: list[dict] = []
 
@@ -280,9 +288,8 @@ def benchmark_multislice(
 
     try:
         with config.set({"precision": precision}):
-            result = waves.multislice(
-                potential, potential_chunk_size=chunk_size, lazy=False
-            )
+            _ms_kwargs = {"potential_chunk_size": chunk_size} if _HAS_POTENTIAL_CHUNK_SIZE_KWARG else {}
+            result = waves.multislice(potential, lazy=False, **_ms_kwargs)
     except Exception as e:
         if tracker:
             tracker.__exit__(None, None, None)
@@ -402,9 +409,10 @@ def benchmark_scan(
 
     try:
         with config.set({"precision": precision}):
+            _scan_kwargs = {"potential_chunk_size": potential_chunk_size} if _HAS_POTENTIAL_CHUNK_SIZE_KWARG else {}
             lazy_result = probe.scan(
                 pot, scan=scan, detectors=detector, lazy=True,
-                max_batch=max_batch, potential_chunk_size=potential_chunk_size,
+                max_batch=max_batch, **_scan_kwargs,
             )
             if to_zarr:
                 lazy_result.to_zarr(run_path, overwrite=True)
