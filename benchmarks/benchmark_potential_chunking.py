@@ -484,11 +484,27 @@ def _parse_result_line(line: str) -> dict | None:
     return None
 
 
-def _classify_subprocess_error(stderr: str, returncode: int) -> str:
+def _stress_gpts(stress_size: str, quick: bool) -> tuple[int, int]:
+    """Return the grid size used by a stress-test subprocess."""
+    if stress_size == "medium":
+        return (2048, 2048) if quick else (8192, 8192)
+    else:  # "large"
+        return (4096, 4096) if quick else (16384, 16384)
+
+
+def _classify_subprocess_error(
+    stderr: str,
+    returncode: int,
+    mem_hint: tuple[float, float] | None = None,
+) -> str:
     """Turn subprocess stderr + exit code into a concise one-line error string.
 
     Recognises common CUDA faults and OOM patterns so callers don't need to
     show a separate ``stderr:`` line for every known error type.
+
+    *mem_hint* is an optional ``(tried_gb, in_use_gb)`` pair that is appended
+    to OOM messages when available, matching the format produced by Python-level
+    ``OutOfMemoryError`` messages.
     """
     if not stderr:
         return f"KILLED (exit {returncode})"
@@ -501,6 +517,9 @@ def _classify_subprocess_error(stderr: str, returncode: int) -> str:
     if m:
         code = m.group(1)
         if code in ("CUDA_ERROR_ILLEGAL_ADDRESS", "CUDA_ERROR_OUT_OF_MEMORY"):
+            if mem_hint:
+                tried_gb, in_use_gb = mem_hint
+                return f"OOM (tried ~{tried_gb:.1f} GB, ~{in_use_gb:.1f} GB in use)"
             return "OOM"
         return f"CUDA error: {code}"
 
@@ -789,6 +808,19 @@ def run_stress_scan_subprocess(
     if quick:
         cmd.append("--quick")
 
+    # Estimate memory figures before spawning so we can annotate OOM messages.
+    mem_hint: tuple[float, float] | None = None
+    if device == "gpu":
+        try:
+            import cupy as cp
+            free, total = cp.cuda.Device().mem_info
+            in_use_gb = (total - free) / 1e9
+            g = _stress_gpts(stress_size, quick)
+            wf_bytes = g[0] * g[1] * (16 if precision == "float64" else 8)
+            mem_hint = (wf_bytes / 1e9, in_use_gb)
+        except Exception:
+            pass
+
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -813,7 +845,7 @@ def run_stress_scan_subprocess(
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk=auto, batch={batch}, proj={proj_label}, prec={prec_label}"
-        error_msg = _classify_subprocess_error(result.stderr, result.returncode)
+        error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
         _collected_results.append({"label": label, "error": error_msg})
         print(f"  {label:<72s}  ERROR: {error_msg}")
 
@@ -884,6 +916,18 @@ def run_stress_plane_subprocess(
     if quick:
         cmd.append("--quick")
 
+    mem_hint: tuple[float, float] | None = None
+    if device == "gpu":
+        try:
+            import cupy as cp
+            free, total = cp.cuda.Device().mem_info
+            in_use_gb = (total - free) / 1e9
+            g = _stress_gpts(stress_size, quick)
+            wf_bytes = g[0] * g[1] * (16 if precision == "float64" else 8)
+            mem_hint = (wf_bytes / 1e9, in_use_gb)
+        except Exception:
+            pass
+
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -908,7 +952,7 @@ def run_stress_plane_subprocess(
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk=auto, proj={proj_label}, prec={prec_label}"
-        error_msg = _classify_subprocess_error(result.stderr, result.returncode)
+        error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
         _collected_results.append({"label": label, "error": error_msg})
         print(f"  {label:<72s}  ERROR: {error_msg}")
 
@@ -931,18 +975,14 @@ def run_single_plane_for_stress_test(device: str, quick: bool,
 
     if stress_size == "medium":
         gpts, reps = ((2048, 2048), (1, 1, 4)) if quick else ((8192, 8192), (1, 1, 5))
-    elif stress_size == "xlarge":
-        gpts, reps = ((8192, 8192), (1, 1, 4)) if quick else ((32768, 32768), (1, 1, 5))
     else:  # "large"
         gpts, reps = ((4096, 4096), (1, 1, 4)) if quick else ((16384, 16384), (1, 1, 5))
 
     if use_crystal:
         if stress_size == "medium":
-            reps = (2, 2, 4) if quick else (8, 8, 5)      # unit_gpts = (1024, 1024)
-        elif stress_size == "xlarge":
-            reps = (4, 4, 4) if quick else (16, 16, 5)    # unit_gpts = (2048, 2048)
+            reps = (2, 2, 4) if quick else (8, 8, 5)    # unit_gpts = (1024, 1024)
         else:  # "large"
-            reps = (4, 4, 4) if quick else (16, 16, 5)    # unit_gpts = (1024, 1024)
+            reps = (4, 4, 4) if quick else (16, 16, 5)  # unit_gpts = (1024, 1024)
         potential = make_crystal_potential(gpts, reps, device=device,
                                           slice_thickness=6.0, projection=projection)
         proj_label = f"crystal({projection[:3]})"
@@ -1068,33 +1108,6 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
         for prec in ("float32", "float64"):
             run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
                                        precision=prec)
-
-    # ── Xlarge stress test (32768² non-quick / 8192² quick) ───────────
-    # PlaneWave only — the wavefunction alone is ~8.6 GB fp32 / 17 GB fp64
-    # so most variants will OOM; CrystalPotential fp32 may survive because
-    # the potential contribution is only ~64 MB (one 2048² slice at a time).
-    if quick:
-        xl_gpts, xl_reps = (8192, 8192), (1, 1, 4)
-    else:
-        xl_gpts, xl_reps = (32768, 32768), (1, 1, 5)
-
-    xl_potential = make_large_potential(xl_gpts, xl_reps, device=device, slice_thickness=6.0)
-    xl_num_slices = len(xl_potential)
-    xl_mem_gb = estimate_potential_memory_mb(xl_potential) / 1000
-    del xl_potential
-
-    print(f"\n── {xl_gpts[0]}x{xl_gpts[1]} (xlarge), "
-          f"{xl_num_slices} slice(s), {xl_mem_gb:.2f} GB ──  [fp32 crystal only expected to succeed]")
-
-    print("\n  [PlaneWave multislice — xlarge]")
-    for projection in ("infinite", "finite"):
-        for prec in ("float32", "float64"):
-            run_stress_plane_subprocess(script, device, quick, projection=projection,
-                                        use_crystal=True, precision=prec,
-                                        stress_size="xlarge")
-        for prec in ("float32", "float64"):
-            run_stress_plane_subprocess(script, device, quick, projection=projection,
-                                        precision=prec, stress_size="xlarge")
 
 
 # ──────────────────────────────────────────────────────────────────────
