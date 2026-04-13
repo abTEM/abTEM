@@ -58,6 +58,9 @@ def energy2wavelength(energy: float) -> float:
         Relativistic de Broglie wavelength [Å].
     """
 
+    if energy <= 0:
+        raise ValueError(f"Electron energy must be positive, got {energy} eV")
+
     return float(
         units._hplanck
         * units._c

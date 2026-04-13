@@ -107,7 +107,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
 
         is_exit_plane = np.zeros(len(self), dtype=bool)
         for i in range(len(is_exit_plane)):
-            if i == exit_planes[exit_plane_index]:
+            if exit_plane_index < len(exit_planes) and i == exit_planes[exit_plane_index]:
                 is_exit_plane[i] = True
                 exit_plane_index += 1
 
