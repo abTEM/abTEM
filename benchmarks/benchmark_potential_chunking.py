@@ -20,6 +20,7 @@ import argparse
 import gc
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -38,6 +39,9 @@ import numpy as np
 from ase.build import bulk
 
 import abtem
+
+# Accumulates all benchmark results for optional JSON output (--output-json).
+_collected_results: list[dict] = []
 from abtem import AnnularDetector, PlaneWave, Potential, Probe
 from abtem.core import config
 from abtem.potentials.iam import CrystalPotential
@@ -439,7 +443,6 @@ def _resolve_chunk_label(chunk_size: int | str, potential, device: str) -> str:
 
 def _format_error(msg: str) -> str:
     """Shorten error messages for display; keep OOM size info concise."""
-    import re
     if "Out of memory" in msg or "OutOfMemoryError" in msg:
         sizes = re.findall(r"[\d,]+(?= bytes)", msg)
         if len(sizes) >= 2:
@@ -450,7 +453,39 @@ def _format_error(msg: str) -> str:
     return msg.split("\n")[0][:100]
 
 
+def _parse_result_line(line: str) -> dict | None:
+    """Parse a single ``print_result`` output line back into a result dict.
+
+    Used by subprocess wrappers to capture results into ``_collected_results``
+    without requiring a separate IPC channel.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    # Success: "  {label:<72}  {time:8.3f}s[  vram={gb:5.1f}GB][  gpu={util:3.0f}%]"
+    m = re.match(
+        r"^(.+?)\s{2,}([\d.]+)s(?:\s+vram=([ \d.]+)GB)?(?:\s+gpu=\s*(\d+)%)?$", line
+    )
+    if m:
+        r: dict = {"label": m.group(1).strip(), "time": float(m.group(2))}
+        if m.group(3):
+            r["peak_vram_mb"] = float(m.group(3).strip()) * 1000
+        if m.group(4):
+            r["mean_gpu_util"] = float(m.group(4))
+        return r
+    # Error
+    m = re.match(r"^(.+?)\s{2,}ERROR:\s*(.+)$", line)
+    if m:
+        return {"label": m.group(1).strip(), "error": m.group(2).strip()}
+    # Killed
+    m = re.match(r"^(.+?)\s{2,}KILLED\s+(.+)$", line)
+    if m:
+        return {"label": m.group(1).strip(), "error": f"KILLED {m.group(2).strip()}"}
+    return None
+
+
 def print_result(r: dict):
+    _collected_results.append(r)
     if "error" in r:
         print(f"  {r['label']:<72s}  ERROR: {_format_error(r['error'])}")
     else:
@@ -639,13 +674,19 @@ def _run_scan_subprocess(
 
     if result.stdout:
         print(result.stdout, end="")
+        for line in result.stdout.splitlines():
+            r = _parse_result_line(line)
+            if r is not None:
+                _collected_results.append(r)
     elif result.returncode != 0:
         # Process died without printing anything (e.g. OOM killed by kernel
         # before Python exception handling could run).
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk={chunk_size}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
-        print(f"  {label:<72s}  KILLED (OOM or crash, exit {result.returncode})")
+        error_msg = f"KILLED (OOM or crash, exit {result.returncode})"
+        _collected_results.append({"label": label, "error": error_msg})
+        print(f"  {label:<72s}  {error_msg}")
 
     if result.returncode != 0 and result.stderr:
         lines = result.stderr.strip().split("\n")
@@ -725,11 +766,17 @@ def run_stress_scan_subprocess(
 
     if result.stdout:
         print(result.stdout, end="")
+        for line in result.stdout.splitlines():
+            r = _parse_result_line(line)
+            if r is not None:
+                _collected_results.append(r)
     elif result.returncode != 0:
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk=auto, batch={batch}, proj={proj_label}, prec={prec_label}"
-        print(f"  {label:<72s}  KILLED (GPU fault or OOM, exit {result.returncode})")
+        error_msg = f"KILLED (GPU fault or OOM, exit {result.returncode})"
+        _collected_results.append({"label": label, "error": error_msg})
+        print(f"  {label:<72s}  {error_msg}")
 
     if result.returncode != 0 and result.stderr:
         # Show only the first meaningful error line to avoid flooding output.
@@ -816,11 +863,17 @@ def run_stress_plane_subprocess(
 
     if result.stdout:
         print(result.stdout, end="")
+        for line in result.stdout.splitlines():
+            r = _parse_result_line(line)
+            if r is not None:
+                _collected_results.append(r)
     elif result.returncode != 0:
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk=auto, proj={proj_label}, prec={prec_label}"
-        print(f"  {label:<72s}  KILLED (GPU fault or OOM, exit {result.returncode})")
+        error_msg = f"KILLED (GPU fault or OOM, exit {result.returncode})"
+        _collected_results.append({"label": label, "error": error_msg})
+        print(f"  {label:<72s}  {error_msg}")
 
     if result.returncode != 0 and result.stderr:
         for line in result.stderr.split("\n"):
@@ -897,56 +950,15 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
         except Exception:
             pass
 
-    if quick:
-        gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
-    else:
-        # 16384²: one slice ≈ 1.07 GB → auto chunk_size = 1 on a 25 GB GPU.
-        # Si cubic cell is 5.43 Å in z; slice_thickness=6.0 Å → exactly 1 slice.
-        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
-
-    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
-    num_slices = len(potential)
-    mem_gb = estimate_potential_memory_mb(potential) / 1000
-    del potential
-
-    if device == "gpu":
-        import cupy as cp
-        free, total = cp.cuda.Device().mem_info
-        pool = cp.get_default_memory_pool()
-        cache = cp.fft.config.get_plan_cache()
-        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
-        print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
-        print(f"  CuPy pool: used={pool.used_bytes()/1e9:.2f} GB  free={pool.free_bytes()/1e9:.2f} GB")
-        print(f"  cuFFT plan cache: {cache}")
-    else:
-        print(f"\n── {gpts[0]}x{gpts[1]}, {num_slices} slice(s), {mem_gb:.2f} GB ──")
-
     # Both PlaneWave and scan run in subprocesses: after the infinite run
     # the Numba CUDA compiler and cuFFT context retain device memory that
     # free_all_blocks() cannot reclaim, leaving insufficient headroom for
     # the finite projection's large disk_indices array.
     script = os.path.abspath(__file__)
-    print("\n  [PlaneWave multislice]")
-    for projection in ("infinite", "finite"):
-        for prec in ("float32", "float64"):
-            run_stress_plane_subprocess(script, device, quick, projection=projection,
-                                        use_crystal=True, precision=prec)
-        for prec in ("float32", "float64"):
-            run_stress_plane_subprocess(script, device, quick, projection=projection,
-                                        precision=prec)
-
-    print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
-    for projection in ("infinite", "finite"):
-        for prec in ("float32", "float64"):
-            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
-                                       use_crystal=True, precision=prec)
-        for prec in ("float32", "float64"):
-            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
-                                       precision=prec)
 
     # ── Medium stress test (8192² non-quick / 2048² quick) ────────────
-    # One slice at 8192² ≈ 0.27 GB fp32 / 0.54 GB fp64; wavefunction
-    # (complex128) ≈ 0.54 GB — both fit comfortably in 24 GB VRAM.
+    # One slice at 8192² ≈ 0.27 GB fp32 / 0.54 GB fp64 — fits fp64 within
+    # 24 GB VRAM; use this section to confirm fp64 works correctly.
     if quick:
         m_gpts, m_reps = (2048, 2048), (1, 1, 4)
     else:
@@ -970,7 +982,7 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
             run_stress_plane_subprocess(script, device, quick, projection=projection,
                                         precision=prec, stress_size="medium")
 
-    print(f"\n  [Probe scan (2×2 positions) — medium]")
+    print("\n  [Probe scan (2×2 positions) — medium]")
     for projection in ("infinite", "finite"):
         for prec in ("float32", "float64"):
             run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
@@ -978,6 +990,50 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
         for prec in ("float32", "float64"):
             run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
                                        precision=prec, stress_size="medium")
+
+    # ── Large stress test (16384² non-quick / 4096² quick) ────────────
+    # One slice at 16384² ≈ 1.07 GB fp32 → auto chunk_size = 1 on a 25 GB GPU.
+    # Si cubic cell is 5.43 Å in z; slice_thickness=6.0 Å → exactly 1 slice.
+    # fp64 is expected to OOM at this size.
+    if quick:
+        gpts, reps, scan_gpts = (4096, 4096), (1, 1, 4), (2, 2)
+    else:
+        gpts, reps, scan_gpts = (16384, 16384), (1, 1, 5), (2, 2)
+
+    potential = make_large_potential(gpts, reps, device=device, slice_thickness=6.0)
+    num_slices = len(potential)
+    mem_gb = estimate_potential_memory_mb(potential) / 1000
+    del potential
+
+    if device == "gpu":
+        import cupy as cp
+        free, total = cp.cuda.Device().mem_info
+        pool = cp.get_default_memory_pool()
+        cache = cp.fft.config.get_plan_cache()
+        print(f"\n── {gpts[0]}x{gpts[1]} (large), {num_slices} slice(s), {mem_gb:.2f} GB ──")
+        print(f"  GPU VRAM: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB total")
+        print(f"  CuPy pool: used={pool.used_bytes()/1e9:.2f} GB  free={pool.free_bytes()/1e9:.2f} GB")
+        print(f"  cuFFT plan cache: {cache}")
+    else:
+        print(f"\n── {gpts[0]}x{gpts[1]} (large), {num_slices} slice(s), {mem_gb:.2f} GB ──")
+
+    print("\n  [PlaneWave multislice]")
+    for projection in ("infinite", "finite"):
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        use_crystal=True, precision=prec)
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        precision=prec)
+
+    print(f"\n  [Probe scan ({scan_gpts[0]}×{scan_gpts[1]} positions)]")
+    for projection in ("infinite", "finite"):
+        for prec in ("float32", "float64"):
+            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                       use_crystal=True, precision=prec)
+        for prec in ("float32", "float64"):
+            run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
+                                       precision=prec)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -999,6 +1055,10 @@ def main():
     parser.add_argument(
         "--stress-only", action="store_true",
         help="Run only the single-slice stress test (GPU only)",
+    )
+    parser.add_argument(
+        "--output-json", type=str, default=None, metavar="PATH",
+        help="Write all benchmark results to a JSON file for later comparison",
     )
     # Internal: used by subprocesses to run a single scan benchmark
     parser.add_argument("--_run-scan-bench", type=int, default=None)
@@ -1091,6 +1151,17 @@ def main():
 
     print(f"\n{'=' * 90}")
     print("Done.")
+
+    if args.output_json:
+        meta = {
+            "abtem_version": abtem.__version__,
+            "device": args.device,
+            "quick": args.quick,
+        }
+        output = {"meta": meta, "results": _collected_results}
+        with open(args.output_json, "w") as f:
+            json.dump(output, f, indent=2)
+        print(f"Results written to {args.output_json}")
 
 
 if __name__ == "__main__":
