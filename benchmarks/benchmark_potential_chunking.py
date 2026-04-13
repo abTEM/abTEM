@@ -493,17 +493,16 @@ def _classify_subprocess_error(stderr: str, returncode: int) -> str:
     if not stderr:
         return f"KILLED (exit {returncode})"
 
-    # Hard GPU faults — CUDA error codes embedded in the traceback
+    # Hard GPU faults — CUDA error codes embedded in the traceback.
+    # Both ILLEGAL_ADDRESS and OUT_OF_MEMORY are treated as OOM: in a
+    # memory-pressure context ILLEGAL_ADDRESS arises when an allocation
+    # partially succeeds and a kernel then touches the guard region.
     m = re.search(r"(CUDA_ERROR_\w+)", stderr)
     if m:
         code = m.group(1)
-        # Give a slightly friendlier suffix for the two most common codes.
-        friendly = {
-            "CUDA_ERROR_ILLEGAL_ADDRESS": "illegal memory access",
-            "CUDA_ERROR_OUT_OF_MEMORY": "out of memory",
-        }.get(code, "")
-        suffix = f" ({friendly})" if friendly else ""
-        return f"{code}{suffix}"
+        if code in ("CUDA_ERROR_ILLEGAL_ADDRESS", "CUDA_ERROR_OUT_OF_MEMORY"):
+            return "OOM"
+        return f"CUDA error: {code}"
 
     # Python-level OOM (cupy / torch style)
     if "OutOfMemoryError" in stderr or "Out of memory" in stderr:
@@ -932,14 +931,18 @@ def run_single_plane_for_stress_test(device: str, quick: bool,
 
     if stress_size == "medium":
         gpts, reps = ((2048, 2048), (1, 1, 4)) if quick else ((8192, 8192), (1, 1, 5))
-    else:
+    elif stress_size == "xlarge":
+        gpts, reps = ((8192, 8192), (1, 1, 4)) if quick else ((32768, 32768), (1, 1, 5))
+    else:  # "large"
         gpts, reps = ((4096, 4096), (1, 1, 4)) if quick else ((16384, 16384), (1, 1, 5))
 
     if use_crystal:
         if stress_size == "medium":
-            reps = (2, 2, 4) if quick else (8, 8, 5)    # unit_gpts = (1024, 1024)
-        else:
-            reps = (4, 4, 4) if quick else (16, 16, 5)  # unit_gpts = (1024, 1024)
+            reps = (2, 2, 4) if quick else (8, 8, 5)      # unit_gpts = (1024, 1024)
+        elif stress_size == "xlarge":
+            reps = (4, 4, 4) if quick else (16, 16, 5)    # unit_gpts = (2048, 2048)
+        else:  # "large"
+            reps = (4, 4, 4) if quick else (16, 16, 5)    # unit_gpts = (1024, 1024)
         potential = make_crystal_potential(gpts, reps, device=device,
                                           slice_thickness=6.0, projection=projection)
         proj_label = f"crystal({projection[:3]})"
@@ -1065,6 +1068,33 @@ def run_single_slice_stress_test(device: str, quick: bool = False):
         for prec in ("float32", "float64"):
             run_stress_scan_subprocess(script, device, "auto", quick, projection=projection,
                                        precision=prec)
+
+    # ── Xlarge stress test (32768² non-quick / 8192² quick) ───────────
+    # PlaneWave only — the wavefunction alone is ~8.6 GB fp32 / 17 GB fp64
+    # so most variants will OOM; CrystalPotential fp32 may survive because
+    # the potential contribution is only ~64 MB (one 2048² slice at a time).
+    if quick:
+        xl_gpts, xl_reps = (8192, 8192), (1, 1, 4)
+    else:
+        xl_gpts, xl_reps = (32768, 32768), (1, 1, 5)
+
+    xl_potential = make_large_potential(xl_gpts, xl_reps, device=device, slice_thickness=6.0)
+    xl_num_slices = len(xl_potential)
+    xl_mem_gb = estimate_potential_memory_mb(xl_potential) / 1000
+    del xl_potential
+
+    print(f"\n── {xl_gpts[0]}x{xl_gpts[1]} (xlarge), "
+          f"{xl_num_slices} slice(s), {xl_mem_gb:.2f} GB ──  [fp32 crystal only expected to succeed]")
+
+    print("\n  [PlaneWave multislice — xlarge]")
+    for projection in ("infinite", "finite"):
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        use_crystal=True, precision=prec,
+                                        stress_size="xlarge")
+        for prec in ("float32", "float64"):
+            run_stress_plane_subprocess(script, device, quick, projection=projection,
+                                        precision=prec, stress_size="xlarge")
 
 
 # ──────────────────────────────────────────────────────────────────────
