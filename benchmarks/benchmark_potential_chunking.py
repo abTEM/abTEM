@@ -590,52 +590,36 @@ def print_result(r: dict):
 def get_planewave_configs(device: str, quick: bool):
     if quick:
         return [((512, 512), (2, 2, 10))]
-    configs = []
-    if device == "gpu":
-        configs.extend([
-            # ~3 GB — small, fits easily
-            ((2048, 2048), (10, 10, 60)),
-            # ~14 GB — tight fit
-            ((4096, 4096), (20, 20, 75)),
-            # ~22 GB — just fits in 24 GB VRAM
-            ((4096, 4096), (20, 20, 120)),
-            # ~36 GB — exceeds 24 GB VRAM; build(lazy=False) OOMs,
-            # chunked multislice succeeds.
-            ((4096, 4096), (20, 20, 200)),
-        ])
-    else:
-        configs.append(((2048, 2048), (10, 10, 60)))
-    return configs
+    return [
+        # ~3 GB
+        ((2048, 2048), (10, 10, 60)),
+        # ~14 GB
+        ((4096, 4096), (20, 20, 75)),
+        # ~22 GB
+        ((4096, 4096), (20, 20, 120)),
+        # ~36 GB — exceeds GPU VRAM; chunked multislice still succeeds on both
+        ((4096, 4096), (20, 20, 200)),
+    ]
 
 
 def get_scan_configs(device: str, quick: bool):
     """Return list of (gpts, repetitions, scan_gpts) tuples.
 
-    Batch size is determined automatically at runtime via
-    ``estimate_scan_batch_size`` so that available VRAM is fully exploited.
+    Identical configs are used for CPU and GPU so that results are directly
+    comparable.  Batch size is determined automatically at runtime.
     """
     if quick:
         return [((128, 128), (2, 2, 4), (4, 4))]
-    configs = []
-    if device == "gpu":
-        configs.extend([
-            # ~3 GB potential — fits in VRAM, shows pre-built advantage
-            ((2048, 2048), (10, 10, 60), (8, 8)),
-            # ~14 GB potential — tight fit, pre-built OOMs
-            ((4096, 4096), (20, 20, 75), (8, 8)),
-            # ~22 GB potential — exceeds VRAM, must chunk
-            ((4096, 4096), (20, 20, 120), (8, 8)),
-            # ~36 GB potential — well exceeds VRAM, heavy chunking required
-            ((4096, 4096), (20, 20, 200), (8, 8)),
-        ])
-    else:
-        configs.extend([
-            # ~0.7 GB potential, 64 positions
-            ((1024, 1024), (4, 4, 20), (8, 8)),
-            # ~0.7 GB potential, 256 positions — larger scan to stress potential-first
-            ((1024, 1024), (4, 4, 20), (16, 16)),
-        ])
-    return configs
+    return [
+        # ~3 GB potential
+        ((2048, 2048), (10, 10, 60), (8, 8)),
+        # ~14 GB potential
+        ((4096, 4096), (20, 20, 75), (8, 8)),
+        # ~22 GB potential
+        ((4096, 4096), (20, 20, 120), (8, 8)),
+        # ~36 GB potential
+        ((4096, 4096), (20, 20, 200), (8, 8)),
+    ]
 
 
 # ──────────────────────────────────────────────────────────────────────
