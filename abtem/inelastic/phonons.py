@@ -52,7 +52,7 @@ def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
 
     if clean:
         atoms.constraints = None
-        atoms.calc = True
+        atoms.calc = None
 
     return atoms
 

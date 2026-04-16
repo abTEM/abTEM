@@ -133,16 +133,20 @@ class AxisMetadata:
     def coordinates(self, n: int) -> tuple:
         return tuple(np.arange(n))
 
-    def format_type(self):
+    def format_type(self) -> str:
+        """Return the axis type name (the class name)."""
         return self.__class__.__name__
 
-    def format_label(self, units: Optional[str] = None):
+    def format_label(self, units: Optional[str] = None) -> str:
+        """Return a formatted label string, optionally with units."""
         return format_label(self, units=units)
 
     def format_title(self, *args: Any, **kwargs: Any) -> str:
+        """Return a formatted title string for display."""
         return f"{self.label}"
 
-    def item_metadata(self, item, metadata=None):
+    def item_metadata(self, item, metadata=None) -> dict:
+        """Return metadata associated with a specific item along this axis."""
         return {}
 
     def to_ordinal_axis(self, n):
@@ -162,10 +166,12 @@ class AxisMetadata:
         arr = da.from_array(arr, chunks=1)
         return arr
 
-    def copy(self):
+    def copy(self) -> AxisMetadata:
+        """Return a deep copy of this axis metadata."""
         return copy(self)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
+        """Serialize this axis metadata to a dictionary."""
         d = dataclasses.asdict(self)
         for key, value in d.items():
             if isinstance(value, np.ndarray):
@@ -175,6 +181,7 @@ class AxisMetadata:
         return d
 
     def concatenate(self, other: AxisMetadata) -> AxisMetadata:
+        """Concatenate this axis metadata with another compatible axis metadata."""
         if not self._concatenate:
             raise RuntimeError()
 
@@ -184,11 +191,13 @@ class AxisMetadata:
         return self
 
     @staticmethod
-    def from_dict(d):
+    def from_dict(d) -> AxisMetadata:
+        """Reconstruct an AxisMetadata instance from a dictionary."""
         cls = globals()[d["type"]]
         return cls(**{key: value for key, value in d.items() if key != "type"})
 
-    def limits(self, n=None):
+    def limits(self, n=None) -> tuple:
+        """Return the (min, max) coordinate limits for this axis."""
         coordinates = self.coordinates(n)
         min_limit = coordinates[0]
         max_limit = coordinates[-1]
