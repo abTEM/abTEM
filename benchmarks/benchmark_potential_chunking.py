@@ -297,6 +297,54 @@ class GPUUtilTracker:
         return max(self.samples) if self.samples else None
 
 
+class CPUUtilTracker:
+    """Context manager that samples per-process CPU utilization.
+
+    Uses ``psutil.Process().cpu_percent()`` which reports utilization as a
+    percentage of *one* CPU core, so values above 100 % are normal on
+    multi-core systems (e.g. 1400 % ≈ 14 cores fully occupied).  This makes
+    it easy to judge how well the computation parallelises.
+
+    If ``psutil`` is not installed the sample list stays empty and
+    ``mean_util`` returns ``None`` — the field is simply omitted from results.
+    """
+
+    def __init__(self, interval: float = 0.1):
+        self.interval = interval
+        self.samples: list[float] = []
+        self._stop = threading.Event()
+        self._thread = None
+
+    def _sample_loop(self):
+        try:
+            import psutil
+            proc = psutil.Process()
+            proc.cpu_percent(interval=None)  # first call always returns 0.0 — discard
+        except Exception:
+            return
+        while not self._stop.is_set():
+            try:
+                self.samples.append(proc.cpu_percent(interval=None))
+            except Exception:
+                pass
+            self._stop.wait(self.interval)
+
+    def __enter__(self):
+        self.samples = []
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+
+    @property
+    def mean_util(self) -> float | None:
+        return (sum(self.samples) / len(self.samples)) if self.samples else None
+
+
 def _gpu_cleanup():
     gc.collect()
     try:
@@ -339,11 +387,13 @@ def benchmark_multislice(
 
     tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
     util_tracker = GPUUtilTracker(interval=0.05) if device == "gpu" else None
+    cpu_tracker = CPUUtilTracker(interval=0.1)
 
     t0 = time.perf_counter()
     tracker.__enter__()
     if util_tracker:
         util_tracker.__enter__()
+    cpu_tracker.__enter__()
 
     try:
         with config.set({"precision": precision}):
@@ -353,6 +403,7 @@ def benchmark_multislice(
         tracker.__exit__(None, None, None)
         if util_tracker:
             util_tracker.__exit__(None, None, None)
+        cpu_tracker.__exit__(None, None, None)
         msg = f"{type(e).__name__}: {e}"
         e.__traceback__ = None
         del e
@@ -364,6 +415,7 @@ def benchmark_multislice(
     tracker.__exit__(None, None, None)
     if util_tracker:
         util_tracker.__exit__(None, None, None)
+    cpu_tracker.__exit__(None, None, None)
 
     elapsed = time.perf_counter() - t0
     del result
@@ -376,6 +428,8 @@ def benchmark_multislice(
             out["mean_gpu_util"] = util_tracker.mean_util
     else:
         out["peak_ram_mb"] = tracker.peak_mb
+    if cpu_tracker.mean_util is not None:
+        out["mean_cpu_util"] = cpu_tracker.mean_util
     return out
 
 
@@ -464,12 +518,14 @@ def benchmark_scan(
 
     mem_tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
     util_tracker = GPUUtilTracker(interval=0.05) if device == "gpu" else None
+    cpu_tracker = CPUUtilTracker(interval=0.1)
     run_path = os.path.join(zarr_dir, "run.zarr") if zarr_dir else None
 
     t0 = time.perf_counter()
     mem_tracker.__enter__()
     if util_tracker:
         util_tracker.__enter__()
+    cpu_tracker.__enter__()
 
     try:
         with config.set({"precision": precision}):
@@ -487,6 +543,7 @@ def benchmark_scan(
         mem_tracker.__exit__(None, None, None)
         if util_tracker:
             util_tracker.__exit__(None, None, None)
+        cpu_tracker.__exit__(None, None, None)
         e.__traceback__ = None
         _gpu_cleanup()
         if zarr_dir:
@@ -499,6 +556,7 @@ def benchmark_scan(
     mem_tracker.__exit__(None, None, None)
     if util_tracker:
         util_tracker.__exit__(None, None, None)
+    cpu_tracker.__exit__(None, None, None)
 
     elapsed = time.perf_counter() - t0
 
@@ -515,6 +573,8 @@ def benchmark_scan(
         out["peak_ram_mb"] = mem_tracker.peak_mb
     if util_tracker:
         out["mean_gpu_util"] = util_tracker.mean_util
+    if cpu_tracker.mean_util is not None:
+        out["mean_cpu_util"] = cpu_tracker.mean_util
     return out
 
 
@@ -562,12 +622,13 @@ def _parse_result_line(line: str) -> dict | None:
     line = line.strip()
     if not line:
         return None
-    # Success: "  {label:<80}  {time:8.3f}s[\tvram={gb:5.1f}GB][\tram={gb:5.1f}GB][\tgpu={util:3.0f}%]"
+    # Success: "  {label:<80}  {time:8.3f}s[\tvram=X.XGB][\t ram=X.XGB][\tgpu=XX%][\tcpu=XXXX%]"
     m = re.match(
         r"^(.+?)\s{2,}([\d.]+)s"
         r"(?:\s+vram=([ \d.]+)GB)?"
         r"(?:\s+ram=([ \d.]+)GB)?"
-        r"(?:\s+gpu=\s*(\d+(?:\.\d+)?)%)?$",
+        r"(?:\s+gpu=\s*(\d+(?:\.\d+)?)%)?"
+        r"(?:\s+cpu=\s*(\d+(?:\.\d+)?)%)?$",
         line,
     )
     if m:
@@ -578,6 +639,8 @@ def _parse_result_line(line: str) -> dict | None:
             r["peak_ram_mb"] = float(m.group(4).strip()) * 1000
         if m.group(5):
             r["mean_gpu_util"] = float(m.group(5))
+        if m.group(6):
+            r["mean_cpu_util"] = float(m.group(6))
         return r
     # Error
     m = re.match(r"^(.+?)\s{2,}ERROR:\s*(.+)$", line)
@@ -650,13 +713,15 @@ def print_result(r: dict):
     if "error" in r:
         print(f"  {r['label']:<{W}s}  ERROR: {_format_error(r['error'])}")
     else:
-        vram = r.get("peak_vram_mb")
-        ram  = r.get("peak_ram_mb")
-        util = r.get("mean_gpu_util")
+        vram     = r.get("peak_vram_mb")
+        ram      = r.get("peak_ram_mb")
+        gpu_util = r.get("mean_gpu_util")
+        cpu_util = r.get("mean_cpu_util")
         mem_str  = f"\tvram={vram / 1000:5.1f}GB" if vram else (
                    f"\t ram={ram / 1000:5.1f}GB"  if ram  else "")
-        util_str = f"\tgpu={util:3.0f}%" if util is not None else ""
-        print(f"  {r['label']:<{W}s}  {r['time']:8.3f}s{mem_str}{util_str}")
+        gpu_str  = f"\tgpu={gpu_util:3.0f}%" if gpu_util is not None else ""
+        cpu_str  = f"\tcpu={cpu_util:4.0f}%" if cpu_util is not None else ""
+        print(f"  {r['label']:<{W}s}  {r['time']:8.3f}s{mem_str}{gpu_str}{cpu_str}")
 
 
 # ──────────────────────────────────────────────────────────────────────
