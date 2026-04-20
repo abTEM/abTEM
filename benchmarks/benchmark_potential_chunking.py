@@ -902,7 +902,8 @@ def _run_scan_subprocess(
         # Process died before printing anything — classify the error from stderr.
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
-        label = f"chunk={chunk_size}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
+        _, _, scan_gpts = get_scan_configs(device, quick)[config_index]
+        label = f"chunk={chunk_size}, scan={scan_gpts}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode)
         _collected_results.append({"label": label, "error": error_msg})
         print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
@@ -1007,7 +1008,7 @@ def run_stress_scan_subprocess(
     elif result.returncode != 0:
         prec_label = "f64" if precision == "float64" else "f32"
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
-        label = f"chunk=auto, batch={batch}, proj={proj_label}, prec={prec_label}"
+        label = f"chunk=auto, scan=(2, 2), batch={batch}, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
         _collected_results.append({"label": label, "error": error_msg})
         print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
