@@ -188,6 +188,63 @@ class PeakVRAMTracker:
         return self.peak_bytes / 1e6
 
 
+def _current_rss_mb() -> float:
+    """Return current process RSS in MB.
+
+    Reads ``/proc/self/status`` on Linux; falls back to
+    ``resource.getrusage`` on other platforms (macOS returns bytes for
+    ``ru_maxrss``, Linux returns kilobytes).
+    """
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1e3  # kB → MB
+    except Exception:
+        pass
+    try:
+        import resource
+        import platform
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        if platform.system() == "Darwin":
+            return ru.ru_maxrss / 1e6  # bytes → MB
+        return ru.ru_maxrss / 1e3      # kB → MB
+    except Exception:
+        return 0.0
+
+
+class PeakRAMTracker:
+    """Context manager that samples process RSS in a background thread."""
+
+    def __init__(self, interval: float = 0.05):
+        self.interval = interval
+        self._peak_mb = 0.0
+        self._stop = threading.Event()
+        self._thread = None
+
+    def _sample_loop(self):
+        while not self._stop.is_set():
+            rss = _current_rss_mb()
+            if rss > self._peak_mb:
+                self._peak_mb = rss
+            self._stop.wait(self.interval)
+
+    def __enter__(self):
+        self._peak_mb = 0.0
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+
+    @property
+    def peak_mb(self) -> float:
+        return self._peak_mb
+
+
 class GPUUtilTracker:
     """Context manager that samples GPU compute utilization in a background thread.
 
@@ -280,19 +337,17 @@ def benchmark_multislice(
         cp.get_default_memory_pool().free_all_blocks()
         cp.cuda.Stream.null.synchronize()
 
-    tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else None
+    tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
 
     t0 = time.perf_counter()
-    if tracker:
-        tracker.__enter__()
+    tracker.__enter__()
 
     try:
         with config.set({"precision": precision}):
             _ms_kwargs = {"potential_chunk_size": chunk_size} if _HAS_POTENTIAL_CHUNK_SIZE_KWARG else {}
             result = waves.multislice(potential, lazy=False, **_ms_kwargs)
     except Exception as e:
-        if tracker:
-            tracker.__exit__(None, None, None)
+        tracker.__exit__(None, None, None)
         msg = f"{type(e).__name__}: {e}"
         e.__traceback__ = None
         del e
@@ -301,16 +356,17 @@ def benchmark_multislice(
 
     if device == "gpu":
         cp.cuda.Stream.null.synchronize()
-    if tracker:
-        tracker.__exit__(None, None, None)
+    tracker.__exit__(None, None, None)
 
     elapsed = time.perf_counter() - t0
     del result
     _gpu_cleanup()
 
     out = {"label": label, "time": elapsed}
-    if tracker:
+    if device == "gpu":
         out["peak_vram_mb"] = tracker.peak_mb
+    else:
+        out["peak_ram_mb"] = tracker.peak_mb
     return out
 
 
@@ -397,13 +453,12 @@ def benchmark_scan(
 
     _gpu_cleanup()
 
-    vram_tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else None
+    mem_tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
     util_tracker = GPUUtilTracker(interval=0.05) if device == "gpu" else None
     run_path = os.path.join(zarr_dir, "run.zarr") if zarr_dir else None
 
     t0 = time.perf_counter()
-    if vram_tracker:
-        vram_tracker.__enter__()
+    mem_tracker.__enter__()
     if util_tracker:
         util_tracker.__enter__()
 
@@ -420,8 +475,7 @@ def benchmark_scan(
                 lazy_result.compute()
             del lazy_result
     except Exception as e:
-        if vram_tracker:
-            vram_tracker.__exit__(None, None, None)
+        mem_tracker.__exit__(None, None, None)
         if util_tracker:
             util_tracker.__exit__(None, None, None)
         e.__traceback__ = None
@@ -433,8 +487,7 @@ def benchmark_scan(
     if device == "gpu":
         import cupy as cp
         cp.cuda.Stream.null.synchronize()
-    if vram_tracker:
-        vram_tracker.__exit__(None, None, None)
+    mem_tracker.__exit__(None, None, None)
     if util_tracker:
         util_tracker.__exit__(None, None, None)
 
@@ -447,8 +500,10 @@ def benchmark_scan(
         shutil.rmtree(zarr_dir, ignore_errors=True)
 
     out = {"label": label, "time": elapsed}
-    if vram_tracker:
-        out["peak_vram_mb"] = vram_tracker.peak_mb
+    if device == "gpu":
+        out["peak_vram_mb"] = mem_tracker.peak_mb
+    else:
+        out["peak_ram_mb"] = mem_tracker.peak_mb
     if util_tracker:
         out["mean_gpu_util"] = util_tracker.mean_util
     return out
@@ -498,16 +553,22 @@ def _parse_result_line(line: str) -> dict | None:
     line = line.strip()
     if not line:
         return None
-    # Success: "  {label:<72}  {time:8.3f}s[  vram={gb:5.1f}GB][  gpu={util:3.0f}%]"
+    # Success: "  {label:<72}  {time:8.3f}s[  vram={gb:5.1f}GB][  ram={gb:5.1f}GB][  gpu={util:3.0f}%]"
     m = re.match(
-        r"^(.+?)\s{2,}([\d.]+)s(?:\s+vram=([ \d.]+)GB)?(?:\s+gpu=\s*(\d+)%)?$", line
+        r"^(.+?)\s{2,}([\d.]+)s"
+        r"(?:\s+vram=([ \d.]+)GB)?"
+        r"(?:\s+ram=([ \d.]+)GB)?"
+        r"(?:\s+gpu=\s*(\d+)%)?$",
+        line,
     )
     if m:
         r: dict = {"label": m.group(1).strip(), "time": float(m.group(2))}
         if m.group(3):
             r["peak_vram_mb"] = float(m.group(3).strip()) * 1000
         if m.group(4):
-            r["mean_gpu_util"] = float(m.group(4))
+            r["peak_ram_mb"] = float(m.group(4).strip()) * 1000
+        if m.group(5):
+            r["mean_gpu_util"] = float(m.group(5))
         return r
     # Error
     m = re.match(r"^(.+?)\s{2,}ERROR:\s*(.+)$", line)
@@ -577,10 +638,12 @@ def print_result(r: dict):
         print(f"  {r['label']:<72s}  ERROR: {_format_error(r['error'])}")
     else:
         vram = r.get("peak_vram_mb")
+        ram  = r.get("peak_ram_mb")
         util = r.get("mean_gpu_util")
         vram_str = f"  vram={vram / 1000:5.1f}GB" if vram else ""
+        ram_str  = f"  ram={ram / 1000:5.1f}GB"   if ram  else ""
         util_str = f"  gpu={util:3.0f}%" if util is not None else ""
-        print(f"  {r['label']:<72s}  {r['time']:8.3f}s{vram_str}{util_str}")
+        print(f"  {r['label']:<72s}  {r['time']:8.3f}s{vram_str}{ram_str}{util_str}")
 
 
 # ──────────────────────────────────────────────────────────────────────

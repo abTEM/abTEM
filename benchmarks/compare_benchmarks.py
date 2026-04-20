@@ -19,6 +19,10 @@ Then compare:
 
 Labels that appear in only one file are flagged as "old only" / "new only".
 Entries where either side is an error or was killed are also highlighted.
+
+Output columns are tab-separated so the table can be piped through
+``column -t -s $'\\t'`` for additional alignment, or imported into a
+spreadsheet.
 """
 
 import json
@@ -53,28 +57,35 @@ def _normalize_label(label: str) -> str:
 
 def _time_str(r: dict | None) -> str:
     if r is None:
-        return "    (absent)"
+        return "(absent)"
     if "error" in r:
         err = r["error"]
-        tag = err[:20] if not err.startswith("KILLED") else "KILLED"
-        return f"  ERR:{tag:<16s}"
-    return f"{r['time']:9.3f}s"
+        tag = err[:24] if not err.startswith("KILLED") else "KILLED"
+        return f"ERR:{tag}"
+    return f"{r['time']:.3f}s"
 
 
-def _vram_str(r: dict | None) -> str:
-    if r is None or "peak_vram_mb" not in r:
-        return "      "
-    return f"{r['peak_vram_mb'] / 1000:5.1f}G"
+def _mem_str(r: dict | None) -> str:
+    """Return a memory string for either GPU (vRAM) or CPU (RAM) results."""
+    if r is None:
+        return ""
+    vram = r.get("peak_vram_mb")
+    ram  = r.get("peak_ram_mb")
+    if vram:
+        return f"{vram / 1000:.1f}G"
+    if ram:
+        return f"{ram / 1000:.1f}G"
+    return ""
 
 
 def _speedup_str(old_r: dict | None, new_r: dict | None) -> str:
     old_t = old_r.get("time") if old_r and "error" not in old_r else None
     new_t = new_r.get("time") if new_r and "error" not in new_r else None
     if old_t is None or new_t is None or new_t == 0:
-        return "     n/a"
+        return "n/a"
     ratio = old_t / new_t
     sign = "▲" if ratio >= 1.0 else "▼"
-    return f"{sign}{ratio:6.2f}×"
+    return f"{sign}{ratio:.2f}×"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -109,9 +120,6 @@ def _build_pairs(old_results: list[dict], new_results: list[dict]) -> list[tuple
         seen_norms[_normalize_label(r["label"])] = None
 
     # Consume from each group positionally.
-    old_pos: dict[str, int] = defaultdict(int)
-    new_pos: dict[str, int] = defaultdict(int)
-
     pairs: list[tuple] = []
     for norm in seen_norms:
         old_list = old_groups[norm]
@@ -149,23 +157,8 @@ def main():
 
     pairs = _build_pairs(old_results, new_results)
 
-    # ── Header ──────────────────────────────────────────────────────
-    W = 72
-    print(f"\n{'=' * (W + 58)}")
-    print(f"Benchmark comparison")
-    print(f"  OLD ({old_path}): abTEM {old_meta.get('abtem_version', '?')}  "
-          f"device={old_meta.get('device', '?')}  quick={old_meta.get('quick', '?')}")
-    print(f"  NEW ({new_path}): abTEM {new_meta.get('abtem_version', '?')}  "
-          f"device={new_meta.get('device', '?')}  quick={new_meta.get('quick', '?')}")
-    print(f"{'=' * (W + 58)}")
-    print(f"  {'Label':<{W}}  {'Old time':>11}  {'vRAM':>6}  "
-          f"{'New time':>11}  {'vRAM':>6}  {'Speedup':>8}")
-    print(f"  {'-' * W}  {'-' * 11}  {'-' * 6}  {'-' * 11}  {'-' * 6}  {'-' * 8}")
-
-    # ── Per-entry rows ───────────────────────────────────────────────
-    ratios: list[float] = []
-    n_faster = n_slower = n_same = 0
-
+    # ── Pre-collect rows so we can compute dynamic label width ───────
+    rows: list[tuple[str, dict | None, dict | None]] = []
     for _norm, display_label, old_r, new_r in pairs:
         if old_r is None:
             marker = " [new only]"
@@ -173,7 +166,29 @@ def main():
             marker = " [old only]"
         else:
             marker = ""
+        rows.append((display_label + marker, old_r, new_r))
 
+    W = max((len(lbl) for lbl, _, _ in rows), default=40)
+    W = max(W, 40)
+
+    # ── Header ──────────────────────────────────────────────────────
+    SEP = "=" * (W + 2 + 14 + 8 + 14 + 8 + 10)
+    print(f"\n{SEP}")
+    print("Benchmark comparison")
+    print(f"  OLD ({old_path}): abTEM {old_meta.get('abtem_version', '?')}  "
+          f"device={old_meta.get('device', '?')}  quick={old_meta.get('quick', '?')}")
+    print(f"  NEW ({new_path}): abTEM {new_meta.get('abtem_version', '?')}  "
+          f"device={new_meta.get('device', '?')}  quick={new_meta.get('quick', '?')}")
+    print(SEP)
+    # Tab-separated column headers; label is padded to W for alignment.
+    print(f"  {'Label':{W}}\t{'Old time':>12}\t{'Mem':>6}\t{'New time':>12}\t{'Mem':>6}\t{'Speedup':>8}")
+    print(f"  {'-'*W}\t{'-'*12}\t{'-'*6}\t{'-'*12}\t{'-'*6}\t{'-'*8}")
+
+    # ── Per-entry rows ───────────────────────────────────────────────
+    ratios: list[float] = []
+    n_faster = n_slower = n_same = 0
+
+    for label_col, old_r, new_r in rows:
         sp = _speedup_str(old_r, new_r)
 
         old_t = old_r.get("time") if old_r and "error" not in old_r else None
@@ -188,14 +203,17 @@ def main():
             else:
                 n_same += 1
 
-        label_col = display_label + marker
         print(
-            f"  {label_col:<{W}}  {_time_str(old_r):>11}  {_vram_str(old_r):>6}  "
-            f"{_time_str(new_r):>11}  {_vram_str(new_r):>6}  {sp:>8}"
+            f"  {label_col:{W}}"
+            f"\t{_time_str(old_r):>12}"
+            f"\t{_mem_str(old_r):>6}"
+            f"\t{_time_str(new_r):>12}"
+            f"\t{_mem_str(new_r):>6}"
+            f"\t{sp:>8}"
         )
 
     # ── Summary ─────────────────────────────────────────────────────
-    print(f"\n{'=' * (W + 58)}")
+    print(f"\n{SEP}")
     n_compared = len(ratios)
     if n_compared > 0:
         geo_mean = math.exp(sum(math.log(r) for r in ratios) / n_compared)
