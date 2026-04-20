@@ -338,9 +338,12 @@ def benchmark_multislice(
         cp.cuda.Stream.null.synchronize()
 
     tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
+    util_tracker = GPUUtilTracker(interval=0.05) if device == "gpu" else None
 
     t0 = time.perf_counter()
     tracker.__enter__()
+    if util_tracker:
+        util_tracker.__enter__()
 
     try:
         with config.set({"precision": precision}):
@@ -348,6 +351,8 @@ def benchmark_multislice(
             result = waves.multislice(potential, lazy=False, **_ms_kwargs)
     except Exception as e:
         tracker.__exit__(None, None, None)
+        if util_tracker:
+            util_tracker.__exit__(None, None, None)
         msg = f"{type(e).__name__}: {e}"
         e.__traceback__ = None
         del e
@@ -357,6 +362,8 @@ def benchmark_multislice(
     if device == "gpu":
         cp.cuda.Stream.null.synchronize()
     tracker.__exit__(None, None, None)
+    if util_tracker:
+        util_tracker.__exit__(None, None, None)
 
     elapsed = time.perf_counter() - t0
     del result
@@ -365,6 +372,8 @@ def benchmark_multislice(
     out = {"label": label, "time": elapsed}
     if device == "gpu":
         out["peak_vram_mb"] = tracker.peak_mb
+        if util_tracker:
+            out["mean_gpu_util"] = util_tracker.mean_util
     else:
         out["peak_ram_mb"] = tracker.peak_mb
     return out
@@ -553,12 +562,12 @@ def _parse_result_line(line: str) -> dict | None:
     line = line.strip()
     if not line:
         return None
-    # Success: "  {label:<72}  {time:8.3f}s[  vram={gb:5.1f}GB][  ram={gb:5.1f}GB][  gpu={util:3.0f}%]"
+    # Success: "  {label:<80}  {time:8.3f}s[\tvram={gb:5.1f}GB][\tram={gb:5.1f}GB][\tgpu={util:3.0f}%]"
     m = re.match(
         r"^(.+?)\s{2,}([\d.]+)s"
         r"(?:\s+vram=([ \d.]+)GB)?"
         r"(?:\s+ram=([ \d.]+)GB)?"
-        r"(?:\s+gpu=\s*(\d+)%)?$",
+        r"(?:\s+gpu=\s*(\d+(?:\.\d+)?)%)?$",
         line,
     )
     if m:
@@ -632,18 +641,22 @@ def _classify_subprocess_error(
     return f"KILLED (exit {returncode})"
 
 
+_LABEL_WIDTH = 80  # Column width for the label field in print_result output.
+
+
 def print_result(r: dict):
     _collected_results.append(r)
+    W = _LABEL_WIDTH
     if "error" in r:
-        print(f"  {r['label']:<72s}  ERROR: {_format_error(r['error'])}")
+        print(f"  {r['label']:<{W}s}  ERROR: {_format_error(r['error'])}")
     else:
         vram = r.get("peak_vram_mb")
         ram  = r.get("peak_ram_mb")
         util = r.get("mean_gpu_util")
-        vram_str = f"  vram={vram / 1000:5.1f}GB" if vram else ""
-        ram_str  = f"  ram={ram / 1000:5.1f}GB"   if ram  else ""
-        util_str = f"  gpu={util:3.0f}%" if util is not None else ""
-        print(f"  {r['label']:<72s}  {r['time']:8.3f}s{vram_str}{ram_str}{util_str}")
+        mem_str  = f"\tvram={vram / 1000:5.1f}GB" if vram else (
+                   f"\t ram={ram / 1000:5.1f}GB"  if ram  else "")
+        util_str = f"\tgpu={util:3.0f}%" if util is not None else ""
+        print(f"  {r['label']:<{W}s}  {r['time']:8.3f}s{mem_str}{util_str}")
 
 
 # ──────────────────────────────────────────────────────────────────────
