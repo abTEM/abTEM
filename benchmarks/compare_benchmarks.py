@@ -48,20 +48,45 @@ def load(path: str) -> dict:
 def _normalize_label(label: str) -> str:
     """Return a canonical label suitable for cross-version matching.
 
-    Newer abTEM resolves 'chunk=auto' to 'chunk=auto(NxM)' when
-    ``estimate_potential_chunk_size`` is available.  Strip the parenthetical
-    so results from old and new installations can be matched.
+    Strips version-specific parentheticals so that results from different
+    abTEM versions can be paired:
+
+    * ``chunk=auto(NxM)``  → ``chunk=auto``   (new versions resolve the chunk
+      count and size; old versions just say 'auto')
+    * ``batch=auto(N)``    → ``batch=auto``   (auto-tuned batch size depends on
+      available VRAM and therefore differs between versions)
     """
-    return re.sub(r'\bchunk=auto\(\d+x\d+\)', 'chunk=auto', label)
+    label = re.sub(r'\bchunk=auto\(\d+x\d+\)', 'chunk=auto', label)
+    label = re.sub(r'\bbatch=auto\(\d+\)', 'batch=auto', label)
+    return label
+
+
+def _err_tag(err: str) -> str:
+    """Condense a benchmark error string to a short tag for table display."""
+    if err.startswith("OOM") or "OutOfMemory" in err or "Out of memory" in err:
+        return "OOM"
+    if err.startswith("KILLED"):
+        return "KILLED"
+    # Map known CUDA error codes to short descriptive tags.
+    m = re.search(r"CUDA_ERROR_(\w+)", err)
+    if m:
+        _CUDA_SHORT = {
+            "OUT_OF_MEMORY":     "OOM",
+            "ILLEGAL_ADDRESS":   "OOM",       # memory-pressure hard fault
+            "INVALID_VALUE":     "CUDA:INVAL", # e.g. kernel launch grid too large
+            "LAUNCH_FAILED":     "CUDA:LAUNCH",
+        }
+        return _CUDA_SHORT.get(m.group(1), f"CUDA:{m.group(1)[:8]}")
+    if "CudaAPIError" in err or "cudaError" in err:
+        return "CUDA_ERR"
+    return "ERR"
 
 
 def _time_str(r: dict | None) -> str:
     if r is None:
         return "(absent)"
     if "error" in r:
-        err = r["error"]
-        tag = err[:24] if not err.startswith("KILLED") else "KILLED"
-        return f"ERR:{tag}"
+        return _err_tag(r["error"])
     return f"{r['time']:.3f}s"
 
 
@@ -76,6 +101,25 @@ def _mem_str(r: dict | None) -> str:
     if ram:
         return f"{ram / 1000:.1f}G"
     return ""
+
+
+def _mem_val(r: dict | None) -> float | None:
+    """Return memory in MB, or None when unavailable."""
+    if r is None or "error" in r:
+        return None
+    v = r.get("peak_vram_mb") or r.get("peak_ram_mb")
+    return v or None
+
+
+def _mem_delta_str(old_r: dict | None, new_r: dict | None) -> str:
+    """Return new/old memory ratio (positive = new uses more memory)."""
+    old_m = _mem_val(old_r)
+    new_m = _mem_val(new_r)
+    if old_m is None or new_m is None or old_m == 0:
+        return ""
+    ratio = new_m / old_m
+    sign = "▲" if ratio > 1.02 else ("▼" if ratio < 0.98 else "≈")
+    return f"{sign}{ratio:.2f}×"
 
 
 def _gpu_str(r: dict | None) -> str:
@@ -211,15 +255,23 @@ def main():
     print(f"  NEW ({new_path}): abTEM {new_meta.get('abtem_version', '?')}  "
           f"device={new_meta.get('device', '?')}  quick={new_meta.get('quick', '?')}")
     print(SEP)
+    # Detect whether any matched pair has memory on both sides (for ΔMem col).
+    has_mem_delta = any(
+        _mem_val(old_r) is not None and _mem_val(new_r) is not None
+        for _, old_r, new_r in rows
+    )
+
     # Tab-separated column headers; label is padded to W for alignment.
     gpu_hdr = f"\t{'GPU%':>5}" if has_gpu_util else ""
     cpu_hdr = f"\t{'CPU%':>5}" if has_cpu_util else ""
+    dmem_hdr = f"\t{'ΔMem':>8}" if has_mem_delta else ""
     print(f"  {'Label':{W}}\t{'Old time':>12}\t{'Mem':>6}{gpu_hdr}{cpu_hdr}"
-          f"\t{'New time':>12}\t{'Mem':>6}{gpu_hdr}{cpu_hdr}\t{'Speedup':>8}")
+          f"\t{'New time':>12}\t{'Mem':>6}{gpu_hdr}{cpu_hdr}\t{'Speedup':>8}{dmem_hdr}")
     dash6 = f"\t{'-'*6}" if has_gpu_util else ""
     dash6c = f"\t{'-'*6}" if has_cpu_util else ""
+    dmem_dash = f"\t{'-'*8}" if has_mem_delta else ""
     print(f"  {'-'*W}\t{'-'*12}\t{'-'*6}{dash6}{dash6c}"
-          f"\t{'-'*12}\t{'-'*6}{dash6}{dash6c}\t{'-'*8}")
+          f"\t{'-'*12}\t{'-'*6}{dash6}{dash6c}\t{'-'*8}{dmem_dash}")
 
     # ── Per-entry rows ───────────────────────────────────────────────
     ratios: list[float] = []
@@ -240,10 +292,11 @@ def main():
             else:
                 n_same += 1
 
-        old_gpu = f"\t{_gpu_str(old_r):>5}" if has_gpu_util else ""
-        new_gpu = f"\t{_gpu_str(new_r):>5}" if has_gpu_util else ""
-        old_cpu = f"\t{_cpu_str(old_r):>5}" if has_cpu_util else ""
-        new_cpu = f"\t{_cpu_str(new_r):>5}" if has_cpu_util else ""
+        old_gpu  = f"\t{_gpu_str(old_r):>5}"        if has_gpu_util  else ""
+        new_gpu  = f"\t{_gpu_str(new_r):>5}"        if has_gpu_util  else ""
+        old_cpu  = f"\t{_cpu_str(old_r):>5}"        if has_cpu_util  else ""
+        new_cpu  = f"\t{_cpu_str(new_r):>5}"        if has_cpu_util  else ""
+        dmem_col = f"\t{_mem_delta_str(old_r, new_r):>8}" if has_mem_delta else ""
         print(
             f"  {label_col:{W}}"
             f"\t{_time_str(old_r):>12}"
@@ -255,6 +308,7 @@ def main():
             f"{new_gpu}"
             f"{new_cpu}"
             f"\t{sp:>8}"
+            f"{dmem_col}"
         )
 
     # ── Summary ─────────────────────────────────────────────────────
