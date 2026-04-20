@@ -905,7 +905,7 @@ def _run_scan_subprocess(
         label = f"chunk={chunk_size}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode)
         _collected_results.append({"label": label, "error": error_msg})
-        print(f"  {label:<72s}  ERROR: {error_msg}")
+        print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
 
 
 def run_scan_benchmarks_via_subprocesses(device: str, quick: bool = False):
@@ -1010,7 +1010,7 @@ def run_stress_scan_subprocess(
         label = f"chunk=auto, batch={batch}, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
         _collected_results.append({"label": label, "error": error_msg})
-        print(f"  {label:<72s}  ERROR: {error_msg}")
+        print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
 
 
 def run_single_scan_for_stress_test(device: str, batch: int | str, quick: bool,
@@ -1117,7 +1117,7 @@ def run_stress_plane_subprocess(
         label = f"chunk=auto, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
         _collected_results.append({"label": label, "error": error_msg})
-        print(f"  {label:<72s}  ERROR: {error_msg}")
+        print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
 
 
 def run_single_plane_for_stress_test(device: str, quick: bool,
