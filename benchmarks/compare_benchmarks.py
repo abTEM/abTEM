@@ -78,6 +78,16 @@ def _mem_str(r: dict | None) -> str:
     return ""
 
 
+def _gpu_str(r: dict | None) -> str:
+    """Return GPU utilization string, or blank when absent (CPU runs, old JSON)."""
+    if r is None:
+        return ""
+    util = r.get("mean_gpu_util")
+    if util is None:
+        return ""
+    return f"{util:.0f}%"
+
+
 def _speedup_str(old_r: dict | None, new_r: dict | None) -> str:
     old_t = old_r.get("time") if old_r and "error" not in old_r else None
     new_t = new_r.get("time") if new_r and "error" not in new_r else None
@@ -171,8 +181,14 @@ def main():
     W = max((len(lbl) for lbl, _, _ in rows), default=40)
     W = max(W, 40)
 
+    # Detect whether any result has GPU util so we can omit the column for
+    # CPU-only comparisons.
+    all_results = old_results + new_results
+    has_gpu_util = any(r.get("mean_gpu_util") is not None for r in all_results)
+
     # ── Header ──────────────────────────────────────────────────────
-    SEP = "=" * (W + 2 + 14 + 8 + 14 + 8 + 10)
+    gpu_cols = 2 * (1 + 5) if has_gpu_util else 0   # two "\t{GPU%:>5}" columns
+    SEP = "=" * (W + 2 + 14 + 8 + gpu_cols + 14 + 8 + 10)
     print(f"\n{SEP}")
     print("Benchmark comparison")
     print(f"  OLD ({old_path}): abTEM {old_meta.get('abtem_version', '?')}  "
@@ -181,8 +197,9 @@ def main():
           f"device={new_meta.get('device', '?')}  quick={new_meta.get('quick', '?')}")
     print(SEP)
     # Tab-separated column headers; label is padded to W for alignment.
-    print(f"  {'Label':{W}}\t{'Old time':>12}\t{'Mem':>6}\t{'New time':>12}\t{'Mem':>6}\t{'Speedup':>8}")
-    print(f"  {'-'*W}\t{'-'*12}\t{'-'*6}\t{'-'*12}\t{'-'*6}\t{'-'*8}")
+    gpu_hdr = f"\t{'GPU%':>5}" if has_gpu_util else ""
+    print(f"  {'Label':{W}}\t{'Old time':>12}\t{'Mem':>6}{gpu_hdr}\t{'New time':>12}\t{'Mem':>6}{gpu_hdr}\t{'Speedup':>8}")
+    print(f"  {'-'*W}\t{'-'*12}\t{'-'*6}{('-'*6 if has_gpu_util else '')}\t{'-'*12}\t{'-'*6}{('-'*6 if has_gpu_util else '')}\t{'-'*8}")
 
     # ── Per-entry rows ───────────────────────────────────────────────
     ratios: list[float] = []
@@ -203,12 +220,16 @@ def main():
             else:
                 n_same += 1
 
+        old_gpu = f"\t{_gpu_str(old_r):>5}" if has_gpu_util else ""
+        new_gpu = f"\t{_gpu_str(new_r):>5}" if has_gpu_util else ""
         print(
             f"  {label_col:{W}}"
             f"\t{_time_str(old_r):>12}"
             f"\t{_mem_str(old_r):>6}"
+            f"{old_gpu}"
             f"\t{_time_str(new_r):>12}"
             f"\t{_mem_str(new_r):>6}"
+            f"{new_gpu}"
             f"\t{sp:>8}"
         )
 
