@@ -379,57 +379,73 @@ def benchmark_multislice(
         f"proj={projection}, prec={prec_label}"
     )
 
+    n_reps = GPU_REPEATS if device == "gpu" else 1
     gc.collect()
-    if device == "gpu":
-        import cupy as cp
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.cuda.Stream.null.synchronize()
 
-    tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
-    util_tracker = GPUUtilTracker(interval=0.05) if device == "gpu" else None
-    cpu_tracker = CPUUtilTracker(interval=0.1)
+    times: list[float] = []
+    peak_mbs: list[float] = []
+    gpu_utils: list[float] = []
+    cpu_utils: list[float] = []
 
-    t0 = time.perf_counter()
-    tracker.__enter__()
-    if util_tracker:
-        util_tracker.__enter__()
-    cpu_tracker.__enter__()
+    for _rep in range(n_reps):
+        if device == "gpu":
+            import cupy as cp
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.cuda.Stream.null.synchronize()
 
-    try:
-        with config.set({"precision": precision}):
-            _ms_kwargs = {"potential_chunk_size": chunk_size} if _HAS_POTENTIAL_CHUNK_SIZE_KWARG else {}
-            result = waves.multislice(potential, lazy=False, **_ms_kwargs)
-    except Exception as e:
+        tracker     = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
+        util_tracker = GPUUtilTracker(interval=0.05)  if device == "gpu" else None
+        cpu_tracker  = CPUUtilTracker(interval=0.1)
+
+        t0 = time.perf_counter()
+        tracker.__enter__()
+        if util_tracker:
+            util_tracker.__enter__()
+        cpu_tracker.__enter__()
+
+        try:
+            with config.set({"precision": precision}):
+                _ms_kwargs = {"potential_chunk_size": chunk_size} if _HAS_POTENTIAL_CHUNK_SIZE_KWARG else {}
+                result = waves.multislice(potential, lazy=False, **_ms_kwargs)
+        except Exception as e:
+            tracker.__exit__(None, None, None)
+            if util_tracker:
+                util_tracker.__exit__(None, None, None)
+            cpu_tracker.__exit__(None, None, None)
+            msg = f"{type(e).__name__}: {e}"
+            e.__traceback__ = None
+            del e
+            _gpu_cleanup()
+            return {"label": label, "error": msg}
+
+        if device == "gpu":
+            cp.cuda.Stream.null.synchronize()
         tracker.__exit__(None, None, None)
         if util_tracker:
             util_tracker.__exit__(None, None, None)
         cpu_tracker.__exit__(None, None, None)
-        msg = f"{type(e).__name__}: {e}"
-        e.__traceback__ = None
-        del e
+
+        times.append(time.perf_counter() - t0)
+        peak_mbs.append(tracker.peak_mb)
+        if util_tracker and util_tracker.mean_util is not None:
+            gpu_utils.append(util_tracker.mean_util)
+        if cpu_tracker.mean_util is not None:
+            cpu_utils.append(cpu_tracker.mean_util)
+
+        del result
         _gpu_cleanup()
-        return {"label": label, "error": msg}
 
+    out = {"label": label, "time": sum(times) / len(times)}
+    if n_reps > 1:
+        out["n_repeats"] = n_reps
     if device == "gpu":
-        cp.cuda.Stream.null.synchronize()
-    tracker.__exit__(None, None, None)
-    if util_tracker:
-        util_tracker.__exit__(None, None, None)
-    cpu_tracker.__exit__(None, None, None)
-
-    elapsed = time.perf_counter() - t0
-    del result
-    _gpu_cleanup()
-
-    out = {"label": label, "time": elapsed}
-    if device == "gpu":
-        out["peak_vram_mb"] = tracker.peak_mb
-        if util_tracker:
-            out["mean_gpu_util"] = util_tracker.mean_util
+        out["peak_vram_mb"] = sum(peak_mbs) / len(peak_mbs)
+        if gpu_utils:
+            out["mean_gpu_util"] = sum(gpu_utils) / len(gpu_utils)
     else:
-        out["peak_ram_mb"] = tracker.peak_mb
-    if cpu_tracker.mean_util is not None:
-        out["mean_cpu_util"] = cpu_tracker.mean_util
+        out["peak_ram_mb"] = sum(peak_mbs) / len(peak_mbs)
+    if cpu_utils:
+        out["mean_cpu_util"] = sum(cpu_utils) / len(cpu_utils)
     return out
 
 
@@ -513,68 +529,87 @@ def benchmark_scan(
         pot = potential
 
     zarr_dir = tempfile.mkdtemp(prefix="abtem_bench_") if to_zarr else None
+    run_path  = os.path.join(zarr_dir, "run.zarr") if zarr_dir else None
 
+    n_reps = GPU_REPEATS if device == "gpu" else 1
     _gpu_cleanup()
 
-    mem_tracker = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
-    util_tracker = GPUUtilTracker(interval=0.05) if device == "gpu" else None
-    cpu_tracker = CPUUtilTracker(interval=0.1)
-    run_path = os.path.join(zarr_dir, "run.zarr") if zarr_dir else None
+    times: list[float] = []
+    peak_mbs: list[float] = []
+    gpu_utils: list[float] = []
+    cpu_utils: list[float] = []
 
-    t0 = time.perf_counter()
-    mem_tracker.__enter__()
-    if util_tracker:
-        util_tracker.__enter__()
-    cpu_tracker.__enter__()
+    for _rep in range(n_reps):
+        if device == "gpu":
+            import cupy as cp
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.cuda.Stream.null.synchronize()
 
-    try:
-        with config.set({"precision": precision}):
-            _scan_kwargs = {"potential_chunk_size": potential_chunk_size} if _HAS_POTENTIAL_CHUNK_SIZE_KWARG else {}
-            lazy_result = probe.scan(
-                pot, scan=scan, detectors=detector, lazy=True,
-                max_batch=max_batch, **_scan_kwargs,
-            )
-            if to_zarr:
-                lazy_result.to_zarr(run_path, overwrite=True)
-            else:
-                lazy_result.compute()
-            del lazy_result
-    except Exception as e:
+        mem_tracker  = PeakVRAMTracker(interval=0.002) if device == "gpu" else PeakRAMTracker(interval=0.05)
+        util_tracker = GPUUtilTracker(interval=0.05)   if device == "gpu" else None
+        cpu_tracker  = CPUUtilTracker(interval=0.1)
+
+        t0 = time.perf_counter()
+        mem_tracker.__enter__()
+        if util_tracker:
+            util_tracker.__enter__()
+        cpu_tracker.__enter__()
+
+        try:
+            with config.set({"precision": precision}):
+                _scan_kwargs = {"potential_chunk_size": potential_chunk_size} if _HAS_POTENTIAL_CHUNK_SIZE_KWARG else {}
+                lazy_result = probe.scan(
+                    pot, scan=scan, detectors=detector, lazy=True,
+                    max_batch=max_batch, **_scan_kwargs,
+                )
+                if to_zarr:
+                    lazy_result.to_zarr(run_path, overwrite=True)
+                else:
+                    lazy_result.compute()
+                del lazy_result
+        except Exception as e:
+            mem_tracker.__exit__(None, None, None)
+            if util_tracker:
+                util_tracker.__exit__(None, None, None)
+            cpu_tracker.__exit__(None, None, None)
+            e.__traceback__ = None
+            _gpu_cleanup()
+            if zarr_dir:
+                shutil.rmtree(zarr_dir, ignore_errors=True)
+            return {"label": label, "error": f"{type(e).__name__}: {e}"}
+
+        if device == "gpu":
+            cp.cuda.Stream.null.synchronize()
         mem_tracker.__exit__(None, None, None)
         if util_tracker:
             util_tracker.__exit__(None, None, None)
         cpu_tracker.__exit__(None, None, None)
-        e.__traceback__ = None
+
+        times.append(time.perf_counter() - t0)
+        peak_mbs.append(mem_tracker.peak_mb)
+        if util_tracker and util_tracker.mean_util is not None:
+            gpu_utils.append(util_tracker.mean_util)
+        if cpu_tracker.mean_util is not None:
+            cpu_utils.append(cpu_tracker.mean_util)
+
         _gpu_cleanup()
-        if zarr_dir:
-            shutil.rmtree(zarr_dir, ignore_errors=True)
-        return {"label": label, "error": f"{type(e).__name__}: {e}"}
-
-    if device == "gpu":
-        import cupy as cp
-        cp.cuda.Stream.null.synchronize()
-    mem_tracker.__exit__(None, None, None)
-    if util_tracker:
-        util_tracker.__exit__(None, None, None)
-    cpu_tracker.__exit__(None, None, None)
-
-    elapsed = time.perf_counter() - t0
 
     if prebuilt:
         del pot
-    _gpu_cleanup()
     if zarr_dir:
         shutil.rmtree(zarr_dir, ignore_errors=True)
 
-    out = {"label": label, "time": elapsed}
+    out = {"label": label, "time": sum(times) / len(times)}
+    if n_reps > 1:
+        out["n_repeats"] = n_reps
     if device == "gpu":
-        out["peak_vram_mb"] = mem_tracker.peak_mb
+        out["peak_vram_mb"] = sum(peak_mbs) / len(peak_mbs)
+        if gpu_utils:
+            out["mean_gpu_util"] = sum(gpu_utils) / len(gpu_utils)
     else:
-        out["peak_ram_mb"] = mem_tracker.peak_mb
-    if util_tracker:
-        out["mean_gpu_util"] = util_tracker.mean_util
-    if cpu_tracker.mean_util is not None:
-        out["mean_cpu_util"] = cpu_tracker.mean_util
+        out["peak_ram_mb"] = sum(peak_mbs) / len(peak_mbs)
+    if cpu_utils:
+        out["mean_cpu_util"] = sum(cpu_utils) / len(cpu_utils)
     return out
 
 
@@ -704,7 +739,8 @@ def _classify_subprocess_error(
     return f"KILLED (exit {returncode})"
 
 
-_LABEL_WIDTH = 80  # Column width for the label field in print_result output.
+_LABEL_WIDTH = 80   # Column width for the label field in print_result output.
+GPU_REPEATS  = 3    # Number of timed repetitions averaged for each GPU benchmark.
 
 
 def print_result(r: dict):
@@ -721,7 +757,8 @@ def print_result(r: dict):
                    f"\t ram={ram / 1000:5.1f}GB"  if ram  else "")
         gpu_str  = f"\tgpu={gpu_util:3.0f}%" if gpu_util is not None else ""
         cpu_str  = f"\tcpu={cpu_util:4.0f}%" if cpu_util is not None else ""
-        print(f"  {r['label']:<{W}s}  {r['time']:8.3f}s{mem_str}{gpu_str}{cpu_str}")
+        rep_str  = f"  (avg {r['n_repeats']}×)" if r.get("n_repeats", 1) > 1 else ""
+        print(f"  {r['label']:<{W}s}  {r['time']:8.3f}s{mem_str}{gpu_str}{cpu_str}{rep_str}")
 
 
 # ──────────────────────────────────────────────────────────────────────
