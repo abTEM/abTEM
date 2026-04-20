@@ -23,6 +23,7 @@ Entries where either side is an error or was killed are also highlighted.
 
 import json
 import math
+import re
 import sys
 
 
@@ -38,6 +39,16 @@ def load(path: str) -> dict:
     if isinstance(data, list):
         return {"meta": {}, "results": data}
     return data
+
+
+def _normalize_label(label: str) -> str:
+    """Return a canonical label suitable for cross-version matching.
+
+    Newer abTEM resolves 'chunk=auto' to 'chunk=auto(NxM)' when
+    ``estimate_potential_chunk_size`` is available.  Strip the parenthetical
+    so results from old and new installations can be matched.
+    """
+    return re.sub(r'\bchunk=auto\(\d+x\d+\)', 'chunk=auto', label)
 
 
 def _time_str(r: dict | None) -> str:
@@ -67,6 +78,57 @@ def _speedup_str(old_r: dict | None, new_r: dict | None) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Pairing logic
+# ──────────────────────────────────────────────────────────────────────
+
+def _build_pairs(old_results: list[dict], new_results: list[dict]) -> list[tuple]:
+    """Return an ordered list of (norm_label, display_label, old_r, new_r).
+
+    Matching is done on *normalised* labels (chunk=auto(NxM) → chunk=auto)
+    to handle version differences in label verbosity.  When multiple entries
+    share the same normalised label (e.g. three different scan configs that all
+    produce 'batch=auto(1)' after normalisation), they are paired positionally
+    in encounter order rather than by label identity.
+    """
+    from collections import defaultdict
+
+    # Group each side's results by normalised label, preserving order.
+    old_groups: dict[str, list[dict]] = defaultdict(list)
+    for r in old_results:
+        old_groups[_normalize_label(r["label"])].append(r)
+
+    new_groups: dict[str, list[dict]] = defaultdict(list)
+    for r in new_results:
+        new_groups[_normalize_label(r["label"])].append(r)
+
+    # Track which normalised labels we have seen, preserving first-encounter order.
+    seen_norms: dict[str, None] = {}
+    for r in old_results:
+        seen_norms[_normalize_label(r["label"])] = None
+    for r in new_results:
+        seen_norms[_normalize_label(r["label"])] = None
+
+    # Consume from each group positionally.
+    old_pos: dict[str, int] = defaultdict(int)
+    new_pos: dict[str, int] = defaultdict(int)
+
+    pairs: list[tuple] = []
+    for norm in seen_norms:
+        old_list = old_groups[norm]
+        new_list = new_groups[norm]
+        n_pairs = max(len(old_list), len(new_list))
+
+        for i in range(n_pairs):
+            old_r = old_list[i] if i < len(old_list) else None
+            new_r = new_list[i] if i < len(new_list) else None
+            # Display label: prefer new (more detailed) when available.
+            display_label = (new_r or old_r)["label"]
+            pairs.append((norm, display_label, old_r, new_r))
+
+    return pairs
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────
 
@@ -85,16 +147,7 @@ def main():
     old_meta = old_data.get("meta", {})
     new_meta = new_data.get("meta", {})
 
-    old_by_label = {r["label"]: r for r in old_results}
-    new_by_label = {r["label"]: r for r in new_results}
-
-    # Preserve encounter order; prefer old ordering for matched entries.
-    seen: dict[str, None] = {}
-    for r in old_results:
-        seen[r["label"]] = None
-    for r in new_results:
-        seen[r["label"]] = None
-    all_labels = list(seen)
+    pairs = _build_pairs(old_results, new_results)
 
     # ── Header ──────────────────────────────────────────────────────
     W = 72
@@ -113,10 +166,7 @@ def main():
     ratios: list[float] = []
     n_faster = n_slower = n_same = 0
 
-    for label in all_labels:
-        old_r = old_by_label.get(label)
-        new_r = new_by_label.get(label)
-
+    for _norm, display_label, old_r, new_r in pairs:
         if old_r is None:
             marker = " [new only]"
         elif new_r is None:
@@ -138,9 +188,9 @@ def main():
             else:
                 n_same += 1
 
-        display_label = label + marker
+        label_col = display_label + marker
         print(
-            f"  {display_label:<{W}}  {_time_str(old_r):>11}  {_vram_str(old_r):>6}  "
+            f"  {label_col:<{W}}  {_time_str(old_r):>11}  {_vram_str(old_r):>6}  "
             f"{_time_str(new_r):>11}  {_vram_str(new_r):>6}  {sp:>8}"
         )
 
