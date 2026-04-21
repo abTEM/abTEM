@@ -610,6 +610,8 @@ def benchmark_scan(
         out["peak_ram_mb"] = sum(peak_mbs) / len(peak_mbs)
     if cpu_utils:
         out["mean_cpu_util"] = sum(cpu_utils) / len(cpu_utils)
+    out["potential_gpts"]   = list(potential.gpts)
+    out["potential_slices"] = len(potential)
     return out
 
 
