@@ -1,6 +1,7 @@
 """Module for handling Fourier transforms and convolution in *ab*TEM."""
 
 import warnings
+from itertools import product as _product
 from typing import Tuple, TypeVar, overload
 
 import dask.array as da
@@ -531,6 +532,31 @@ def fft_interpolation_masks(
     return mask1, mask2
 
 
+def _fft_interpolation_slices_1d(n1: int, n2: int) -> list[tuple[slice, slice]]:
+    """
+    Return ``(in_slice, out_slice)`` pairs giving the low- and high-frequency
+    segments to copy from an FFT-shift-free array of size ``n1`` to one of
+    size ``n2``.  Produces the same result as
+    ``out[mask2] = inp[mask1]`` with masks from
+    ``_fft_interpolation_masks_1d`` — but as contiguous slices, so cropping
+    maps to a handful of memcpys instead of an advanced-indexing kernel
+    over the full array.
+    """
+    n = min(n1, n2)
+    if n == 1:
+        return [(slice(0, 1), slice(0, 1))]
+    if n % 2 == 0:
+        h = n // 2
+        t = n // 2
+    else:
+        h = n // 2 + 1
+        t = n // 2
+    return [
+        (slice(0, h), slice(0, h)),
+        (slice(n1 - t, n1), slice(n2 - t, n2)),
+    ]
+
+
 def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = False):
     """
     Crop an array. It is assumed that the array is centered in Fourier space, this is
@@ -556,11 +582,25 @@ def fft_crop(array: np.ndarray, new_shape: tuple[int, ...], normalize: bool = Fa
     if len(new_shape) < len(array.shape):
         new_shape = array.shape[: -len(new_shape)] + new_shape
 
-    mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape)
+    # Build per-dimension slice-pair lists.  Dimensions with equal in/out size
+    # (e.g. batch dims) take a single full-slice pair; the rest contribute 1–2
+    # (in_slice, out_slice) segments matching the centered-spectrum layout.
+    # The cartesian product yields up to 2**D corner copies (D = dims that
+    # change) — typically 4 for the 2D FFT case — avoiding both the
+    # materialisation of an N-dimensional boolean mask and advanced-indexing
+    # kernels that stream the full array once per call.
+    slice_pairs: list[list[tuple[slice, slice]]] = []
+    for n1, n2 in zip(array.shape, new_shape):
+        if n1 == n2:
+            slice_pairs.append([(slice(None), slice(None))])
+        else:
+            slice_pairs.append(_fft_interpolation_slices_1d(n1, n2))
 
     new_array = xp.zeros(new_shape, dtype=array.dtype)
-
-    new_array[mask_out] = array[mask_in]
+    for combo in _product(*slice_pairs):
+        in_sl = tuple(p[0] for p in combo)
+        out_sl = tuple(p[1] for p in combo)
+        new_array[out_sl] = array[in_sl]
 
     if normalize:
         new_array = new_array * np.prod(new_array.shape) / np.prod(array.shape)
