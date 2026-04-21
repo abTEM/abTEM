@@ -17,6 +17,10 @@ Then compare:
 
     python benchmarks/compare_benchmarks.py results_old.json results_new.json
 
+Entries are grouped by potential gpts size.  Within each group, PlaneWave and
+Scan entries are shown with abbreviated labels (the repeated gpts/slices prefix
+is omitted since it is already captured by the group header).
+
 Labels that appear in only one file are flagged as "old only" / "new only".
 Entries where either side is an error or was killed are also highlighted.
 
@@ -29,6 +33,7 @@ import json
 import math
 import re
 import sys
+from collections import defaultdict
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -153,6 +158,50 @@ def _speedup_str(old_r: dict | None, new_r: dict | None) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Label parsing helpers
+# ──────────────────────────────────────────────────────────────────────
+
+def _extract_gpts(r: dict) -> str | None:
+    """Return a gpts group key string for a result dict, or None.
+
+    Tries the structured ``potential_gpts`` field first (set by newer benchmark
+    runs), then falls back to parsing ``gpts=(N, M)`` from the label string.
+    """
+    pg = r.get("potential_gpts")
+    if pg is not None:
+        return f"({pg[0]}, {pg[1]})"
+    label = r.get("label", "")
+    m = re.search(r'\bgpts=\(\s*(\d+),\s*(\d+)\s*\)', label)
+    if m:
+        return f"({m.group(1)}, {m.group(2)})"
+    return None
+
+
+def _row_type_and_short(label: str) -> tuple[str, str]:
+    """Return (type_tag, shortened_label) for grouped display.
+
+    * Scan entries  → tag = ``Scan(Nx,Ny)``, short label strips gpts/slices prefix
+      and scan= field (both are captured by the group context).
+    * PlaneWave entries → tag = ``PW``, short label strips the gpts prefix.
+    """
+    # Detect scan entries by the presence of scan=(N, M).
+    m_scan = re.search(r'\bscan=\(\s*(\d+),\s*(\d+)\s*\)', label)
+    if m_scan:
+        tag = f"Scan({m_scan.group(1)},{m_scan.group(2)})"
+        short = label
+        # Strip leading gpts=(…) and optional slices=N, prefix.
+        short = re.sub(r'^gpts=\([^)]+\),\s*(?:slices=\d+,\s*)?', '', short)
+        # Strip the scan=(…) field (and surrounding punctuation).
+        short = re.sub(r',?\s*scan=\([^)]+\)', '', short)
+        short = short.strip().strip(',').strip()
+        return tag, short
+
+    # PlaneWave entry: strip leading gpts=(…), prefix.
+    short = re.sub(r'^gpts=\([^)]+\),\s*', '', label)
+    return "PW", short
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Pairing logic
 # ──────────────────────────────────────────────────────────────────────
 
@@ -165,8 +214,6 @@ def _build_pairs(old_results: list[dict], new_results: list[dict]) -> list[tuple
     produce 'batch=auto(1)' after normalisation), they are paired positionally
     in encounter order rather than by label identity.
     """
-    from collections import defaultdict
-
     # Group each side's results by normalised label, preserving order.
     old_groups: dict[str, list[dict]] = defaultdict(list)
     for r in old_results:
@@ -221,26 +268,48 @@ def main():
 
     pairs = _build_pairs(old_results, new_results)
 
-    # ── Pre-collect rows so we can compute dynamic label width ───────
-    rows: list[tuple[str, dict | None, dict | None]] = []
+    # ── Build display rows and assign to gpts groups ──────────────────
+    # Each row: (gpts_key, type_tag, short_label, full_label, marker, old_r, new_r)
+    # Rows without a gpts key go in the special "_ungrouped" bucket.
+    group_order: list[str] = []   # preserves first-encounter order of gpts keys
+    groups: dict[str, list] = defaultdict(list)
+
     for _norm, display_label, old_r, new_r in pairs:
+        marker = ""
         if old_r is None:
             marker = " [new only]"
         elif new_r is None:
             marker = " [old only]"
-        else:
-            marker = ""
-        rows.append((display_label + marker, old_r, new_r))
 
-    W = max((len(lbl) for lbl, _, _ in rows), default=40)
-    W = max(W, 40)
+        # Determine gpts group from whichever side has the metadata.
+        gpts_key = _extract_gpts(new_r or {}) or _extract_gpts(old_r or {})
+        if gpts_key is None:
+            gpts_key = "_ungrouped"
 
-    # Detect which optional columns are present so we can omit them when empty.
+        type_tag, short_label = _row_type_and_short(display_label)
+        row = (type_tag, short_label, display_label, marker, old_r, new_r)
+
+        if gpts_key not in groups:
+            group_order.append(gpts_key)
+        groups[gpts_key].append(row)
+
+    # ── Compute column widths across all rows ─────────────────────────
     all_results = old_results + new_results
     has_gpu_util = any(r.get("mean_gpu_util") is not None for r in all_results)
     has_cpu_util = any(r.get("mean_cpu_util") is not None for r in all_results)
+    has_mem_delta = any(
+        _mem_val(old_r) is not None and _mem_val(new_r) is not None
+        for _gk, rows in groups.items()
+        for _tt, _sl, _fl, _mk, old_r, new_r in rows
+    )
 
-    # ── Header ──────────────────────────────────────────────────────
+    # W = width of the abbreviated label column (type_tag + short_label + marker).
+    W = 40
+    for rows in groups.values():
+        for type_tag, short_label, _fl, marker, _o, _n in rows:
+            W = max(W, len(type_tag) + 2 + len(short_label) + len(marker))
+    W += 1   # small breathing room
+
     SEP = "=" * (W + 2 + 14 + 8
                  + (7 if has_gpu_util else 0)
                  + (7 if has_cpu_util else 0)
@@ -248,6 +317,8 @@ def main():
                  + (7 if has_gpu_util else 0)
                  + (7 if has_cpu_util else 0)
                  + 10)
+
+    # ── Global header ─────────────────────────────────────────────────
     print(f"\n{SEP}")
     print("Benchmark comparison")
     print(f"  OLD ({old_path}): abTEM {old_meta.get('abtem_version', '?')}  "
@@ -255,61 +326,66 @@ def main():
     print(f"  NEW ({new_path}): abTEM {new_meta.get('abtem_version', '?')}  "
           f"device={new_meta.get('device', '?')}  quick={new_meta.get('quick', '?')}")
     print(SEP)
-    # Detect whether any matched pair has memory on both sides (for ΔMem col).
-    has_mem_delta = any(
-        _mem_val(old_r) is not None and _mem_val(new_r) is not None
-        for _, old_r, new_r in rows
-    )
 
-    # Tab-separated column headers; label is padded to W for alignment.
-    gpu_hdr = f"\t{'GPU%':>5}" if has_gpu_util else ""
-    cpu_hdr = f"\t{'CPU%':>5}" if has_cpu_util else ""
-    dmem_hdr = f"\t{'ΔMem':>8}" if has_mem_delta else ""
+    gpu_hdr  = f"\t{'GPU%':>5}"  if has_gpu_util  else ""
+    cpu_hdr  = f"\t{'CPU%':>5}"  if has_cpu_util  else ""
+    dmem_hdr = f"\t{'ΔMem':>8}"  if has_mem_delta else ""
     print(f"  {'Label':{W}}\t{'Old time':>12}\t{'Mem':>6}{gpu_hdr}{cpu_hdr}"
           f"\t{'New time':>12}\t{'Mem':>6}{gpu_hdr}{cpu_hdr}\t{'Speedup':>8}{dmem_hdr}")
-    dash6 = f"\t{'-'*6}" if has_gpu_util else ""
-    dash6c = f"\t{'-'*6}" if has_cpu_util else ""
+    dash6  = f"\t{'-'*6}" if has_gpu_util  else ""
+    dash6c = f"\t{'-'*6}" if has_cpu_util  else ""
     dmem_dash = f"\t{'-'*8}" if has_mem_delta else ""
     print(f"  {'-'*W}\t{'-'*12}\t{'-'*6}{dash6}{dash6c}"
           f"\t{'-'*12}\t{'-'*6}{dash6}{dash6c}\t{'-'*8}{dmem_dash}")
 
-    # ── Per-entry rows ───────────────────────────────────────────────
+    # ── Per-group output ──────────────────────────────────────────────
     ratios: list[float] = []
     n_faster = n_slower = n_same = 0
 
-    for label_col, old_r, new_r in rows:
-        sp = _speedup_str(old_r, new_r)
+    for gpts_key in group_order:
+        rows = groups[gpts_key]
 
-        old_t = old_r.get("time") if old_r and "error" not in old_r else None
-        new_t = new_r.get("time") if new_r and "error" not in new_r else None
-        if old_t and new_t:
-            ratio = old_t / new_t
-            ratios.append(ratio)
-            if ratio > 1.02:
-                n_faster += 1
-            elif ratio < 0.98:
-                n_slower += 1
-            else:
-                n_same += 1
+        # Group header line.
+        if gpts_key == "_ungrouped":
+            hdr_text = "── ungrouped "
+        else:
+            hdr_text = f"── gpts={gpts_key} "
+        print(f"\n  {hdr_text}{'─' * max(0, W - len(hdr_text))}")
 
-        old_gpu  = f"\t{_gpu_str(old_r):>5}"        if has_gpu_util  else ""
-        new_gpu  = f"\t{_gpu_str(new_r):>5}"        if has_gpu_util  else ""
-        old_cpu  = f"\t{_cpu_str(old_r):>5}"        if has_cpu_util  else ""
-        new_cpu  = f"\t{_cpu_str(new_r):>5}"        if has_cpu_util  else ""
-        dmem_col = f"\t{_mem_delta_str(old_r, new_r):>8}" if has_mem_delta else ""
-        print(
-            f"  {label_col:{W}}"
-            f"\t{_time_str(old_r):>12}"
-            f"\t{_mem_str(old_r):>6}"
-            f"{old_gpu}"
-            f"{old_cpu}"
-            f"\t{_time_str(new_r):>12}"
-            f"\t{_mem_str(new_r):>6}"
-            f"{new_gpu}"
-            f"{new_cpu}"
-            f"\t{sp:>8}"
-            f"{dmem_col}"
-        )
+        for type_tag, short_label, _display_label, marker, old_r, new_r in rows:
+            abbreviated = f"{type_tag}  {short_label}{marker}"
+            sp = _speedup_str(old_r, new_r)
+
+            old_t = old_r.get("time") if old_r and "error" not in old_r else None
+            new_t = new_r.get("time") if new_r and "error" not in new_r else None
+            if old_t and new_t:
+                ratio = old_t / new_t
+                ratios.append(ratio)
+                if ratio > 1.02:
+                    n_faster += 1
+                elif ratio < 0.98:
+                    n_slower += 1
+                else:
+                    n_same += 1
+
+            old_gpu  = f"\t{_gpu_str(old_r):>5}" if has_gpu_util  else ""
+            new_gpu  = f"\t{_gpu_str(new_r):>5}" if has_gpu_util  else ""
+            old_cpu  = f"\t{_cpu_str(old_r):>5}" if has_cpu_util  else ""
+            new_cpu  = f"\t{_cpu_str(new_r):>5}" if has_cpu_util  else ""
+            dmem_col = f"\t{_mem_delta_str(old_r, new_r):>8}" if has_mem_delta else ""
+            print(
+                f"  {abbreviated:{W}}"
+                f"\t{_time_str(old_r):>12}"
+                f"\t{_mem_str(old_r):>6}"
+                f"{old_gpu}"
+                f"{old_cpu}"
+                f"\t{_time_str(new_r):>12}"
+                f"\t{_mem_str(new_r):>6}"
+                f"{new_gpu}"
+                f"{new_cpu}"
+                f"\t{sp:>8}"
+                f"{dmem_col}"
+            )
 
     # ── Summary ─────────────────────────────────────────────────────
     print(f"\n{SEP}")
