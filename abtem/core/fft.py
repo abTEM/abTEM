@@ -185,6 +185,12 @@ def _fftw_dispatch(
 
 U = TypeVar("U", np.ndarray, da.core.Array)
 
+# Cache the parsed cuFFT cache limit + the config value it was derived from.
+# Revalidated on every GPU FFT dispatch without reparsing when the config is
+# unchanged (the common case in a hot loop).
+_CUFFT_CACHE_STATE: tuple[object, int] | None = None
+
+
 def _configure_cufft_cache():
     """Apply ``cupy.fft-cache-size`` from the abTEM config to the cuFFT plan cache.
 
@@ -200,7 +206,13 @@ def _configure_cufft_cache():
                      total persistent workspace is bounded.
     * ``-1``       — unlimited (CuPy default, plans cached indefinitely).
     """
+    global _CUFFT_CACHE_STATE
     raw = config.get("cupy.fft-cache-size", "0 MB")
+
+    # Fast path: config hasn't changed since we last applied it.
+    if _CUFFT_CACHE_STATE is not None and _CUFFT_CACHE_STATE[0] == raw:
+        return
+
     if isinstance(raw, str):
         from dask.utils import parse_bytes
         limit = parse_bytes(raw)
@@ -213,6 +225,8 @@ def _configure_cufft_cache():
     elif limit > 0:
         cache.set_memsize(limit)
     # limit < 0 → leave at CuPy default (unlimited)
+
+    _CUFFT_CACHE_STATE = (raw, limit)
 
 
 def _fft_dispatch(
@@ -246,6 +260,7 @@ def _fft_dispatch(
     check_cupy_is_installed()  # type: ignore
 
     if isinstance(x, cp.ndarray):
+        _configure_cufft_cache()
         return getattr(cp.fft, func_name)(x, **kwargs)
 
 
