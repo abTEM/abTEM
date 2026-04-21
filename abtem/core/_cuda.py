@@ -55,12 +55,19 @@ def sum_run_length_encoded(array, result, separators):
 
 
 _INTERPOLATE_RADIAL_KERNEL = r"""
+// Type-specialised round-to-nearest-int cast.  The f32 specialisation uses
+// __float2int_rn directly rather than going through double, saving a pair of
+// converts on every thread.
+template<typename T> __device__ __forceinline__ int rn_cast(T x);
+template<> __device__ __forceinline__ int rn_cast<float >(float  x) { return __float2int_rn(x);  }
+template<> __device__ __forceinline__ int rn_cast<double>(double x) { return __double2int_rn(x); }
+
 // Shared kernel body parameterised by floating-point type T.
 // Instantiated as float (f32) and double (f64) below.
 template<typename T>
 __device__ __forceinline__ void interpolate_radial_impl(
     T* __restrict__ array,
-    const T* __restrict__ positions,   // (n_atoms, 3) row-major
+    const T* __restrict__ positions,   // (n_atoms, 2) row-major -- (x, y) per atom
     const int* __restrict__ disk_indices,  // (n_disk, 2)  row-major
     const T sampling_0,
     const T sampling_1,
@@ -81,11 +88,11 @@ __device__ __forceinline__ void interpolate_radial_impl(
 
     if (i >= n_atoms || j >= n_disk) return;
 
-    T px = positions[i * 3];
-    T py = positions[i * 3 + 1];
+    T px = positions[i * 2];
+    T py = positions[i * 2 + 1];
 
-    int k = __double2int_rn((double)(px / sampling_0)) + disk_indices[j * 2];
-    int m = __double2int_rn((double)(py / sampling_1)) + disk_indices[j * 2 + 1];
+    int k = rn_cast<T>(px / sampling_0) + disk_indices[j * 2];
+    int m = rn_cast<T>(py / sampling_1) + disk_indices[j * 2 + 1];
 
     if (k < 0 || k >= rows || m < 0 || m >= cols) return;
 
@@ -182,11 +189,10 @@ def interpolate_radial_functions(
     block = (256, 1, 1)
     grid = (math.ceil(n_disk / 256), n_atoms, 1)
 
-    # Ensure contiguous arrays with the target floating-point type.
-    positions_f = cp.ascontiguousarray(positions[:, :2].astype(fp))
-    # Pack into (n_atoms, 3) with a dummy z column so stride matches kernel.
-    pos3 = cp.zeros((n_atoms, 3), dtype=fp)
-    pos3[:, :2] = positions_f
+    # Ensure contiguous arrays with the target floating-point type.  The kernel
+    # reads positions with stride 2 ((x, y) per atom), so we pass the (n_atoms, 2)
+    # slice directly — no need to pad with a dummy z column.
+    positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp))
     disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32))
     rg = cp.ascontiguousarray(radial_gpts.astype(fp))
     rf = cp.ascontiguousarray(radial_functions.astype(fp))
@@ -194,7 +200,7 @@ def interpolate_radial_functions(
 
     kernel(
         grid, block,
-        (array, pos3, disk_i32,
+        (array, positions_xy, disk_i32,
          fp(sampling[0]), fp(sampling[1]),
          rg, rf, rd,
          fp(dt), fp(r0),
