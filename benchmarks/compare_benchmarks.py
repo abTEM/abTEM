@@ -164,8 +164,13 @@ def _speedup_str(old_r: dict | None, new_r: dict | None) -> str:
 def _extract_gpts(r: dict) -> str | None:
     """Return a gpts group key string for a result dict, or None.
 
-    Tries the structured ``potential_gpts`` field first (set by newer benchmark
-    runs), then falls back to parsing ``gpts=(N, M)`` from the label string.
+    Priority:
+    1. Structured ``potential_gpts`` field (set by current benchmark code,
+       including in error returns).
+    2. ``gpts=(N, M)`` token in the label string (PlaneWave entries).
+    3. ``scan=(N, M)`` token as a fallback group for scan entries whose
+       potential size is not recorded (old-format JSON).  The key is prefixed
+       with ``scan=`` so the group header can display it differently.
     """
     pg = r.get("potential_gpts")
     if pg is not None:
@@ -174,6 +179,10 @@ def _extract_gpts(r: dict) -> str | None:
     m = re.search(r'\bgpts=\(\s*(\d+),\s*(\d+)\s*\)', label)
     if m:
         return f"({m.group(1)}, {m.group(2)})"
+    # Fallback for scan entries without a recorded potential gpts.
+    ms = re.search(r'\bscan=\(\s*(\d+),\s*(\d+)\s*\)', label)
+    if ms:
+        return f"scan=({ms.group(1)}, {ms.group(2)})"
     return None
 
 
@@ -348,6 +357,9 @@ def main():
         # Group header line.
         if gpts_key == "_ungrouped":
             hdr_text = "── ungrouped "
+        elif gpts_key.startswith("scan="):
+            # Scan entries whose potential gpts isn't recorded (old-format JSON).
+            hdr_text = f"── {gpts_key} [potential gpts unknown] "
         else:
             hdr_text = f"── gpts={gpts_key} "
         print(f"\n  {hdr_text}{'─' * max(0, W - len(hdr_text))}")
