@@ -576,7 +576,12 @@ def benchmark_scan(
             _gpu_cleanup()
             if zarr_dir:
                 shutil.rmtree(zarr_dir, ignore_errors=True)
-            return {"label": label, "error": f"{type(e).__name__}: {e}"}
+            return {
+                "label": label,
+                "error": f"{type(e).__name__}: {e}",
+                "potential_gpts": list(potential.gpts),
+                "potential_slices": len(potential),
+            }
 
         if device == "gpu":
             cp.cuda.Stream.null.synchronize()
@@ -1049,7 +1054,12 @@ def run_stress_scan_subprocess(
         proj_label = f"crystal({projection[:3]})" if use_crystal else projection
         label = f"chunk=auto, scan=(2, 2), batch={batch}, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
-        _collected_results.append({"label": label, "error": error_msg})
+        g = _stress_gpts(stress_size, quick)
+        _collected_results.append({
+            "label": label,
+            "error": error_msg,
+            "potential_gpts": list(g),
+        })
         print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
 
 
