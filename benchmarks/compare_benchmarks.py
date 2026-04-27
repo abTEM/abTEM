@@ -249,6 +249,19 @@ def _build_pairs(old_results: list[dict], new_results: list[dict]) -> list[tuple
         for i in range(n_pairs):
             old_r = old_list[i] if i < len(old_list) else None
             new_r = new_list[i] if i < len(new_list) else None
+            # Suppress extra old-only entries that arise when the old JSON was
+            # produced by concatenating multiple runs (N copies) while new has
+            # M ≤ N copies of the same normalised label.
+            #
+            # * M > 0: pairs 0..M-1 are properly matched; drop i ≥ M (old[i]
+            #   would show as a spurious "(absent)" row for new).
+            # * M = 0: we keep only i = 0 (the first representative entry); any
+            #   i > 0 are redundant duplicates from repeated old runs.
+            #
+            # Symmetric new-only extras (old_r is None, i > 0) are kept because
+            # they represent genuinely new experiments.
+            if new_r is None and i > 0:
+                continue
             # Display label: prefer new (more detailed) when available.
             display_label = (new_r or old_r)["label"]
             pairs.append((norm, display_label, old_r, new_r))
