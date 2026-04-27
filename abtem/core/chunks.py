@@ -601,17 +601,18 @@ def estimate_scan_batch_size(
             # total_mem - pool_used excludes them; taking the min is conservative.
             effective_free = min(free_mem, total_mem - pool_used)
 
-            # Joint budget split: 40 % of effective VRAM for probe-batch overhead,
-            # leaving ≥ 35 % for the potential chunk (estimate_potential_chunk_size
-            # claims 35 % of effective-free at computation time, when the probe
-            # batch is already resident).  The remaining 25 % is headroom for FFT
-            # plan caches, cuFFT workspaces, and OS/driver overhead.
-            #
+            # Allocate up to 50 % of effective VRAM for probe-batch overhead.
             # A 6× overhead factor accounts for transient copies during
             # transmission-function multiply, FFT workspaces, and cuFFT plan
             # buffers.  Empirically: 4096² uses ~756 MB/probe (5.6× raw
             # wavefunction), 2048² uses ~147 MB/probe (4.4×).
-            probe_budget = int(effective_free * 0.40)
+            #
+            # estimate_potential_chunk_size runs at *computation* time, when
+            # the probe batch is already resident; it sees the reduced free
+            # memory and sizes the potential chunk to fit in what remains.
+            # Both functions now use the same pool-aware effective_free so
+            # the two estimates operate on a consistent VRAM picture.
+            probe_budget = int(effective_free * 0.50)
             per_probe_effective = max(1, int(per_probe_bytes * 6))
             n_probes = max(1, probe_budget // per_probe_effective)
             return _nearest_power_of_two(n_probes)
