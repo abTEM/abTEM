@@ -865,7 +865,13 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 temp = array
 
             if xp is cp:
-                radial_gpts_dev = xp.asarray(table.radial_gpts)
+                # Transfer radial_gpts directly in the compute dtype so the
+                # float64-to-float32 (or float64-to-float64) conversion happens
+                # once here rather than being repeated inside
+                # interpolate_radial_functions_cuda for every disk chunk.
+                radial_gpts_dev = xp.asarray(
+                    table.radial_gpts, dtype=get_dtype(complex=False)
+                )
                 # Process disk indices in chunks to avoid allocating the
                 # full array on the GPU.  For very fine sampling the disk
                 # can contain hundreds of millions of pixels (>5 GB) which
