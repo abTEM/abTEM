@@ -1450,6 +1450,9 @@ def main():
             "quick": args.quick,
         }
         output = {"meta": meta, "results": _collected_results}
+        # Always overwrite: each run produces a fresh, self-contained file with
+        # exactly one entry per benchmark label.  compare_benchmarks.py relies
+        # on this guarantee to pair entries 1-to-1 without deduplication.
         with open(args.output_json, "w") as f:
             json.dump(output, f, indent=2)
         print(f"Results written to {args.output_json}")
