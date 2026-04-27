@@ -192,11 +192,14 @@ def interpolate_radial_functions(
     # Ensure contiguous arrays with the target floating-point type.  The kernel
     # reads positions with stride 2 ((x, y) per atom), so we pass the (n_atoms, 2)
     # slice directly — no need to pad with a dummy z column.
-    positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp))
-    disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32))
-    rg = cp.ascontiguousarray(radial_gpts.astype(fp))
-    rf = cp.ascontiguousarray(radial_functions.astype(fp))
-    rd = cp.ascontiguousarray(radial_derivative.astype(fp))
+    # copy=False avoids an unnecessary GPU allocation when the array is already
+    # the right dtype (which is the common case for all arrays except radial_gpts,
+    # which the caller should pre-convert — see integrate_on_grid in integrals.py).
+    positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp, copy=False))
+    disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32, copy=False))
+    rg = cp.ascontiguousarray(radial_gpts.astype(fp, copy=False))
+    rf = cp.ascontiguousarray(radial_functions.astype(fp, copy=False))
+    rd = cp.ascontiguousarray(radial_derivative.astype(fp, copy=False))
 
     kernel(
         grid, block,
