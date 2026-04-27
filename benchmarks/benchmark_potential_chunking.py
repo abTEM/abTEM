@@ -747,7 +747,7 @@ def _classify_subprocess_error(
 
 
 _LABEL_WIDTH = 80   # Column width for the label field in print_result output.
-GPU_REPEATS  = 3    # Number of timed repetitions averaged for each GPU benchmark.
+GPU_REPEATS  = 1    # Timed repetitions per benchmark; set from --repeats in main().
 
 
 def print_result(r: dict):
@@ -913,6 +913,7 @@ def _run_scan_subprocess(
         "--_batch-size", str(batch_size),
         "--_projection", projection,
         "--_precision", precision,
+        "--repeats", str(GPU_REPEATS),
     ]
     if to_zarr:
         cmd.append("--_to-zarr")
@@ -1010,6 +1011,7 @@ def run_stress_scan_subprocess(
         "--_projection", projection,
         "--_precision", precision,
         "--_stress-size", stress_size,
+        "--repeats", str(GPU_REPEATS),
     ]
     if use_crystal:
         cmd.append("--_use-crystal")
@@ -1123,6 +1125,7 @@ def run_stress_plane_subprocess(
         "--_projection", projection,
         "--_precision", precision,
         "--_stress-size", stress_size,
+        "--repeats", str(GPU_REPEATS),
     ]
     if use_crystal:
         cmd.append("--_use-crystal")
@@ -1351,6 +1354,14 @@ def main():
         "--output-json", type=str, default=None, metavar="PATH",
         help="Write all benchmark results to a JSON file for later comparison",
     )
+    parser.add_argument(
+        "--repeats", type=int, default=1, metavar="N",
+        help=(
+            "Number of timed repetitions to average for each GPU benchmark "
+            "(default: 1).  Use --repeats 3 to generate final timing data "
+            "with averaged results."
+        ),
+    )
     # Internal: used by subprocesses to run a single scan benchmark
     parser.add_argument("--_run-scan-bench", type=int, default=None)
     parser.add_argument("--_prebuilt", action="store_true", default=False)
@@ -1369,6 +1380,9 @@ def main():
     parser.add_argument("--_stress-size", type=str, default="large")
 
     args = parser.parse_args()
+
+    global GPU_REPEATS
+    GPU_REPEATS = max(1, args.repeats)
 
     config.set({"dask.lazy": False})
 
