@@ -35,7 +35,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
-from abtem.core.complex import complex_exponential
+from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGrid2DMixin
@@ -1398,9 +1398,9 @@ class PotentialArray(BasePotential, FieldArray):
 
     @staticmethod
     def _transmission_function(array, energy):
-        xp = get_array_module(array)
-        sigma = xp.array(energy2sigma(energy), dtype=get_dtype())
-        array = complex_exponential(sigma * array)
+        # complex_exponential_scaled fuses the sigma multiplication into the
+        # GPU sin/cos kernel, avoiding one slice-sized real temporary.
+        array = complex_exponential_scaled(array, energy2sigma(energy))
         return array
 
     @classmethod

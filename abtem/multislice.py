@@ -397,7 +397,7 @@ def conventional_multislice_step(
             energy=waves._valid_energy
         )
         transmission_function = antialias_aperture.bandlimit(
-            transmission_function, in_place=False
+            transmission_function, in_place=True
         )
 
     thickness = transmission_function.slice_thickness[0]
