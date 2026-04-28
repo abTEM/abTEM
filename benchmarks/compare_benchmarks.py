@@ -56,11 +56,15 @@ def _normalize_label(label: str) -> str:
     Strips version-specific parentheticals so that results from different
     abTEM versions can be paired:
 
+    * ``gpts=(N, M), ``    → `` ``             (new scan labels carry the
+      potential gpts as a prefix; old labels do not — strip it so both sides
+      normalize to the same key)
     * ``chunk=auto(NxM)``  → ``chunk=auto``   (new versions resolve the chunk
       count and size; old versions just say 'auto')
     * ``batch=auto(N)``    → ``batch=auto``   (auto-tuned batch size depends on
       available VRAM and therefore differs between versions)
     """
+    label = re.sub(r'^gpts=\([^)]+\),\s*', '', label)
     label = re.sub(r'\bchunk=auto\(\d+x\d+\)', 'chunk=auto', label)
     label = re.sub(r'\bbatch=auto\(\d+\)', 'batch=auto', label)
     return label
@@ -162,15 +166,21 @@ def _speedup_str(old_r: dict | None, new_r: dict | None) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def _extract_gpts(r: dict) -> str | None:
-    """Return a gpts group key string for a result dict, or None.
+    """Return a definitive gpts group key string for a result dict, or None.
 
-    Priority:
+    Only returns a key when the gpts can be determined unambiguously:
     1. Structured ``potential_gpts`` field (set by current benchmark code,
-       including in error returns).
-    2. ``gpts=(N, M)`` token in the label string (PlaneWave entries).
-    3. ``scan=(N, M)`` token as a fallback group for scan entries whose
-       potential size is not recorded (old-format JSON).  The key is prefixed
-       with ``scan=`` so the group header can display it differently.
+       including in error returns for stress-test subprocesses).
+    2. ``gpts=(N, M)`` token in the label string (PlaneWave entries and new
+       scan entries that carry the potential gpts as a label prefix).
+
+    The ``scan=(N, M)`` fallback is intentionally *not* included here.
+    Callers try both sides of a pair with this function before falling
+    back to ``_extract_scan_group`` — this ensures that a definitive key
+    from either side of the pair wins over the scan= fallback from the
+    other side.  Without this separation a truthy ``"scan=(8, 8)"`` from
+    new_r would short-circuit the ``or`` and silently discard a correct
+    ``potential_gpts`` value on old_r.
     """
     pg = r.get("potential_gpts")
     if pg is not None:
@@ -179,7 +189,17 @@ def _extract_gpts(r: dict) -> str | None:
     m = re.search(r'\bgpts=\(\s*(\d+),\s*(\d+)\s*\)', label)
     if m:
         return f"({m.group(1)}, {m.group(2)})"
-    # Fallback for scan entries without a recorded potential gpts.
+    return None
+
+
+def _extract_scan_group(r: dict) -> str | None:
+    """Return a scan-based group key as a last resort, or None.
+
+    Used when neither side of a pair has a definitive gpts source.
+    The returned key is prefixed with ``scan=`` so the group header
+    can display it differently (``[potential gpts unknown]``).
+    """
+    label = r.get("label", "")
     ms = re.search(r'\bscan=\(\s*(\d+),\s*(\d+)\s*\)', label)
     if ms:
         return f"scan=({ms.group(1)}, {ms.group(2)})"
@@ -286,8 +306,14 @@ def main():
         elif new_r is None:
             marker = " [old only]"
 
-        # Determine gpts group from whichever side has the metadata.
-        gpts_key = _extract_gpts(new_r or {}) or _extract_gpts(old_r or {})
+        # Determine gpts group.  Try definitive sources (potential_gpts field or
+        # gpts= label token) on new side first, then old side, then fall back to
+        # the scan= group token if neither side has a definitive key.
+        gpts_key = (
+            _extract_gpts(new_r or {})
+            or _extract_gpts(old_r or {})
+            or _extract_scan_group(new_r or old_r or {})
+        )
         if gpts_key is None:
             gpts_key = "_ungrouped"
 
