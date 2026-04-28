@@ -664,13 +664,18 @@ def _parse_result_line(line: str) -> dict | None:
     line = line.strip()
     if not line:
         return None
-    # Success: "  {label:<80}  {time:8.3f}s[\tvram=X.XGB][\t ram=X.XGB][\tgpu=XX%][\tcpu=XXXX%]"
+    # Success: "  {label:<80}  {time:8.3f}s[\tvram=X.XGB][\t ram=X.XGB][\tgpu=XX%][\tcpu=XXXX%][\t(avg N×)]"
+    # The "(avg N×)" suffix is appended by print_result when n_repeats > 1 (e.g. --repeats 3).
+    # Without the final optional group the regex returned None for all multi-repeat subprocess
+    # results, silently dropping them from _collected_results.
     m = re.match(
         r"^(.+?)\s{2,}([\d.]+)s"
         r"(?:\s+vram=([ \d.]+)GB)?"
         r"(?:\s+ram=([ \d.]+)GB)?"
         r"(?:\s+gpu=\s*(\d+(?:\.\d+)?)%)?"
-        r"(?:\s+cpu=\s*(\d+(?:\.\d+)?)%)?$",
+        r"(?:\s+cpu=\s*(\d+(?:\.\d+)?)%)?"
+        r"(?:\s+\(avg\s+(\d+)\S\))?"
+        r"$",
         line,
     )
     if m:
@@ -683,6 +688,8 @@ def _parse_result_line(line: str) -> dict | None:
             r["mean_gpu_util"] = float(m.group(5))
         if m.group(6):
             r["mean_cpu_util"] = float(m.group(6))
+        if m.group(7):
+            r["n_repeats"] = int(m.group(7))
         return r
     # Error
     m = re.match(r"^(.+?)\s{2,}ERROR:\s*(.+)$", line)
@@ -930,25 +937,35 @@ def _run_scan_subprocess(
         env={**os.environ, "TQDM_DISABLE": "1"},
     )
 
+    prec_label = "f64" if precision == "float64" else "f32"
+    proj_label = f"crystal({projection[:3]})" if use_crystal else projection
+    _, _, scan_gpts = get_scan_configs(device, quick)[config_index]
+    label = f"chunk={chunk_size}, scan={scan_gpts}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
+
     if result.stdout:
         print(result.stdout, end="")
+        parsed_any = False
         for line in result.stdout.splitlines():
             r = _parse_result_line(line)
             if r is not None:
                 _collected_results.append(r)
-        # Partial run — subprocess printed something but still crashed.
-        if result.returncode != 0 and result.stderr:
-            for line in result.stderr.splitlines():
-                line = line.strip()
-                if "Error" in line or "error" in line:
-                    print(f"  stderr: {line}")
-                    break
+                parsed_any = True
+        if result.returncode != 0:
+            # Subprocess produced output but still crashed (e.g. a Python warning
+            # was printed before an OOM).  Emit an error entry so the result
+            # is not silently dropped from _collected_results.
+            if not parsed_any:
+                error_msg = _classify_subprocess_error(result.stderr, result.returncode)
+                _collected_results.append({"label": label, "error": error_msg})
+                print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
+            elif result.stderr:
+                for line in result.stderr.splitlines():
+                    line = line.strip()
+                    if "Error" in line or "error" in line:
+                        print(f"  stderr: {line}")
+                        break
     elif result.returncode != 0:
         # Process died before printing anything — classify the error from stderr.
-        prec_label = "f64" if precision == "float64" else "f32"
-        proj_label = f"crystal({projection[:3]})" if use_crystal else projection
-        _, _, scan_gpts = get_scan_configs(device, quick)[config_index]
-        label = f"chunk={chunk_size}, scan={scan_gpts}, batch={batch_size}, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode)
         _collected_results.append({"label": label, "error": error_msg})
         print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
@@ -1039,24 +1056,36 @@ def run_stress_scan_subprocess(
         env={**os.environ, "TQDM_DISABLE": "1"},
     )
 
+    prec_label = "f64" if precision == "float64" else "f32"
+    proj_label = f"crystal({projection[:3]})" if use_crystal else projection
+    label = f"chunk=auto, scan=(2, 2), batch={batch}, proj={proj_label}, prec={prec_label}"
+    g = _stress_gpts(stress_size, quick)
+
     if result.stdout:
         print(result.stdout, end="")
+        parsed_any = False
         for line in result.stdout.splitlines():
             r = _parse_result_line(line)
             if r is not None:
                 _collected_results.append(r)
-        if result.returncode != 0 and result.stderr:
-            for line in result.stderr.splitlines():
-                line = line.strip()
-                if "Error" in line or "error" in line:
-                    print(f"  stderr: {line}")
-                    break
+                parsed_any = True
+        if result.returncode != 0:
+            if not parsed_any:
+                error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
+                _collected_results.append({
+                    "label": label,
+                    "error": error_msg,
+                    "potential_gpts": list(g),
+                })
+                print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
+            elif result.stderr:
+                for line in result.stderr.splitlines():
+                    line = line.strip()
+                    if "Error" in line or "error" in line:
+                        print(f"  stderr: {line}")
+                        break
     elif result.returncode != 0:
-        prec_label = "f64" if precision == "float64" else "f32"
-        proj_label = f"crystal({projection[:3]})" if use_crystal else projection
-        label = f"chunk=auto, scan=(2, 2), batch={batch}, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
-        g = _stress_gpts(stress_size, quick)
         _collected_results.append({
             "label": label,
             "error": error_msg,
@@ -1152,22 +1181,30 @@ def run_stress_plane_subprocess(
         env={**os.environ, "TQDM_DISABLE": "1"},
     )
 
+    prec_label = "f64" if precision == "float64" else "f32"
+    proj_label = f"crystal({projection[:3]})" if use_crystal else projection
+    label = f"chunk=auto, proj={proj_label}, prec={prec_label}"
+
     if result.stdout:
         print(result.stdout, end="")
+        parsed_any = False
         for line in result.stdout.splitlines():
             r = _parse_result_line(line)
             if r is not None:
                 _collected_results.append(r)
-        if result.returncode != 0 and result.stderr:
-            for line in result.stderr.splitlines():
-                line = line.strip()
-                if "Error" in line or "error" in line:
-                    print(f"  stderr: {line}")
-                    break
+                parsed_any = True
+        if result.returncode != 0:
+            if not parsed_any:
+                error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
+                _collected_results.append({"label": label, "error": error_msg})
+                print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
+            elif result.stderr:
+                for line in result.stderr.splitlines():
+                    line = line.strip()
+                    if "Error" in line or "error" in line:
+                        print(f"  stderr: {line}")
+                        break
     elif result.returncode != 0:
-        prec_label = "f64" if precision == "float64" else "f32"
-        proj_label = f"crystal({projection[:3]})" if use_crystal else projection
-        label = f"chunk=auto, proj={proj_label}, prec={prec_label}"
         error_msg = _classify_subprocess_error(result.stderr, result.returncode, mem_hint)
         _collected_results.append({"label": label, "error": error_msg})
         print(f"  {label:<{_LABEL_WIDTH}s}  ERROR: {error_msg}")
