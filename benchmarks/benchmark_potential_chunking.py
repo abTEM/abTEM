@@ -516,7 +516,11 @@ def benchmark_scan(
     if to_zarr:
         cs_label += " (zarr)"
     prec_label = "f64" if precision == "float64" else "f32"
-    label = f"{cs_label}, scan={scan_gpts}, batch={batch_label}, proj={projection}, prec={prec_label}"
+    # Prepend gpts so that successful scan results carry their potential grid size
+    # through _parse_result_line (which only captures the label string, not a
+    # separate potential_gpts field).  compare_benchmarks._normalize_label strips
+    # this prefix so old labels (without gpts=) still match new ones.
+    label = f"gpts={potential.gpts}, {cs_label}, scan={scan_gpts}, batch={batch_label}, proj={projection}, prec={prec_label}"
 
     if prebuilt:
         try:
