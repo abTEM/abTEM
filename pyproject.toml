@@ -128,7 +128,8 @@ filterwarnings = [
     "ignore:ignoring keyword argument 'read_only':UserWarning",
     "ignore:Passing storage-related arguments:FutureWarning",
     "ignore:FNV hashing is not implemented in Numba:UserWarning",
-    "ignore:ensemble_mean=False returns the full frozen-phonon ensemble:UserWarning"
+    "ignore:ensemble_mean=False returns the full frozen-phonon ensemble:UserWarning",
+    "ignore:Grid size.*will likely result in GPU under-utilization:numba.core.errors.NumbaPerformanceWarning"
 ]
 
 [tool.numpydoc_validation]
