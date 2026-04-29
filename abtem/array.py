@@ -1917,7 +1917,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 align_arrays=False,
                 concatenate=True,
                 dtype=object,
-                meta=xp.array((), object),
+                meta=np.array((), object),
             )
         else:
             array = self.compute().array
