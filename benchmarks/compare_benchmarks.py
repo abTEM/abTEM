@@ -50,21 +50,41 @@ def load(path: str) -> dict:
     return data
 
 
+def _effective_label(r: dict) -> str:
+    """Return the label with a ``gpts=(N, M), `` prefix added when needed.
+
+    Subprocess-wrapper error entries store the potential grid size in a
+    separate ``potential_gpts`` field rather than in the label string
+    (the outer wrapper never sees the potential object).  Adding the prefix
+    here makes these entries normalise to the same key as old-format entries
+    that always included gpts in the label, without discarding gpts
+    information from entries that already have it.
+    """
+    label = r["label"]
+    pg = r.get("potential_gpts")
+    if pg is not None and not re.search(r'\bgpts=\(', label):
+        label = f"gpts=({pg[0]}, {pg[1]}), {label}"
+    return label
+
+
 def _normalize_label(label: str) -> str:
     """Return a canonical label suitable for cross-version matching.
 
     Strips version-specific parentheticals so that results from different
     abTEM versions can be paired:
 
-    * ``gpts=(N, M), ``    → `` ``             (new scan labels carry the
-      potential gpts as a prefix; old labels do not — strip it so both sides
-      normalize to the same key)
     * ``chunk=auto(NxM)``  → ``chunk=auto``   (new versions resolve the chunk
       count and size; old versions just say 'auto')
     * ``batch=auto(N)``    → ``batch=auto``   (auto-tuned batch size depends on
       available VRAM and therefore differs between versions)
+
+    The ``gpts=(N, M)`` prefix is intentionally *not* stripped here.  Stripping
+    it would cause entries from different gpts groups to collide (e.g.
+    ``gpts=(8192, 8192), slices=5, ...`` and ``gpts=(16384, 16384), slices=5,
+    ...`` would map to the same key and one would silently shadow the other).
+    Entries that lack a ``gpts=`` token but carry a ``potential_gpts`` field
+    are enriched by ``_effective_label`` before being normalised.
     """
-    label = re.sub(r'^gpts=\([^)]+\),\s*', '', label)
     label = re.sub(r'\bchunk=auto\(\d+x\d+\)', 'chunk=auto', label)
     label = re.sub(r'\bbatch=auto\(\d+\)', 'batch=auto', label)
     return label
@@ -248,18 +268,18 @@ def _build_pairs(old_results: list[dict], new_results: list[dict]) -> list[tuple
     """
     old_by_norm: dict[str, dict] = {}
     for r in old_results:
-        old_by_norm[_normalize_label(r["label"])] = r
+        old_by_norm[_normalize_label(_effective_label(r))] = r
 
     new_by_norm: dict[str, dict] = {}
     for r in new_results:
-        new_by_norm[_normalize_label(r["label"])] = r
+        new_by_norm[_normalize_label(_effective_label(r))] = r
 
     # Preserve first-encounter order: old results first, then any new-only.
     seen_norms: dict[str, None] = {}
     for r in old_results:
-        seen_norms[_normalize_label(r["label"])] = None
+        seen_norms[_normalize_label(_effective_label(r))] = None
     for r in new_results:
-        seen_norms[_normalize_label(r["label"])] = None
+        seen_norms[_normalize_label(_effective_label(r))] = None
 
     pairs: list[tuple] = []
     for norm in seen_norms:
