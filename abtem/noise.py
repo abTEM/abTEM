@@ -391,6 +391,11 @@ class ScanNoiseTransform(EnsembleTransform):
     def metadata(self) -> dict:
         return {"units": "", "label": "electron counts"}
 
+    def apply(
+        self, array_object: ArrayObject, max_batch: int | str = "auto"
+    ) -> ArrayObject:
+        return array_object.apply_transform(self)
+
     def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
         array = array_object._eager_array
         base_shape = array_object.base_shape

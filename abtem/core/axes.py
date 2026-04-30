@@ -425,6 +425,32 @@ class ParameterAxis(NonLinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class EnergyAxis(NonLinearAxis):
+    label: str = "Energy"
+    units: str = "eV"
+
+    def item_metadata(self, item, metadata=None):
+        # Use the lowercase "energy" key to match the metadata convention used
+        # everywhere else in the codebase (metadata["energy"]).  The inherited
+        # OrdinalAxis implementation would use self.label ("Energy") which would
+        # silently miss all lookups that check for "energy".
+        return {"energy": self.values[item]}
+
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
+        """Format title displaying energy in keV regardless of stored eV units."""
+        if formatting is None:
+            formatting = ".3g"
+        value_kev = self.values[0] / 1000.0
+        formatted = f"{value_kev:>{formatting}}"
+        if include_label:
+            return f"{self.label} = {formatted} keV"
+        else:
+            return f"{formatted} keV"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class PositionsAxis(OrdinalAxis):
     label: str = "x, y"
     units: str = "Å"
