@@ -435,12 +435,10 @@ class Bullseye(BaseAperture):
     sampling : two float, optional
         Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
         ignored.
-    edge_softness_px : float, optional
-        Edge softness in pixels. Default value is 0.0.
-    corner_radius_px : float, optional
-        Corner radius in pixels. Default value is 0.0
-    soft_edges : bool, optional
-        If True, the edges of the aperture are smooth. Default value is False.
+    edge_softness : float, optional
+        Edge softness in mrads. Default value is 0.0.
+    corner_radius : float, optional
+        Corner radius in mrads. Default value is 0.0
     """
 
     def __init__(
@@ -454,17 +452,16 @@ class Bullseye(BaseAperture):
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
-        edge_softness_px: float = 0.0,
-        corner_radius_px: float = 0.0,
-        soft_edges: bool = False,
+        edge_softness: float = 0.0,
+        corner_radius: float = 0.0,
     ):
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
         self._num_rings = num_rings
         self._ring_width = ring_width
-        self._edge_softness_px = edge_softness_px
-        self._corner_radius_px = corner_radius_px
-        self._soft_edges = soft_edges
+        self._edge_softness = edge_softness
+        self._corner_radius = corner_radius
+        self._soft_edges = self._edge_softness > 0 or self._corner_radius > 0
         super().__init__(
             energy=energy,
             semiangle_cutoff=semiangle_cutoff,
@@ -499,13 +496,13 @@ class Bullseye(BaseAperture):
         return self._ring_width
     @property
     def edge_softness_px(self) -> float:
-        """Edge softness in pixels"""
-        return self._edge_softness_px
+        """Edge softness [mrads]"""
+        return self._edge_softness
 
     @property
     def corner_radius_px(self) -> float:
-        """Corner radius in pixels"""
-        return self._corner_radius_px
+        """Corner radius [mrads]"""
+        return self._corner_radius
 
     @property
     def soft_edges(self) -> bool:
@@ -517,23 +514,28 @@ class Bullseye(BaseAperture):
     ) -> np.ndarray:
 
         def _smoothstep01(x):
+            """Smooth interpolation between 0 and 1"""
             x = np.clip(x, 0.0, 1.0)
             return x * x * (3.0 - 2.0 * x)
 
         def _ramp01(x):
+            """Ramp from 0 to 1. Uses smoothstep if soft_edges is enabled"""
             x = np.clip(x, 0.0, 1.0)
             return _smoothstep01(x) if self._soft_edges else x
 
         def _smooth_min(a, b, k):
+            """Minimum of a and b, smoothed over width k."""
             if k <= 0.0:
                 return np.minimum(a, b)
             h = np.clip(0.5 + 0.5 * (b - a) / k, 0.0, 1.0)
             return a * h + b * (1.0 - h) - k * h * (1.0 - h)
 
         def _smooth_max(a, b, k):
+            """Maximum of a and b, smoothed over width k."""
             return -_smooth_min(-a, -b, k)
 
         def _smooth_intersection(d1, d2, k):
+            """Intersection of two distance fields, smoothed over width k."""
             if k <= 0.0:
                 return np.maximum(d1, d2)
             h = np.clip(0.5 - 0.5 * (d2 - d1) / k, 0.0, 1.0)
@@ -555,8 +557,8 @@ class Bullseye(BaseAperture):
         dkx = float(np.abs(kx[1, 0] - kx[0, 0]))
         dky = float(np.abs(ky[0, 1] - ky[0, 0]))
         dk = min(dkx, dky)
-        edge_w = max(dk * float(self._edge_softness_px), 1e-30)
-        k_corner = float(self._corner_radius_px) * dk
+        edge_w = max(float(self._edge_softness) / 1e-3, 1e-30)
+        k_corner = float(self._corner_radius) / 1e-3
 
         aperture = np.zeros(self.gpts, dtype=float)
 
