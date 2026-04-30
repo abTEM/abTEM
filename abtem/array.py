@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import warnings
@@ -418,7 +419,24 @@ class ComputableList(list):
         if not compute:
             return delayed_write
 
-        with _compute_context(
+        # Use synchronous scheduler on GPU to avoid multiple dask tasks
+        # running in parallel, each loading potential chunks + wave arrays
+        # into VRAM simultaneously. We must use dask.config.set() rather
+        # than just passing scheduler= to dask.compute(), because the
+        # delayed graph contains inner array.compute() calls that would
+        # otherwise use dask's default threaded scheduler.
+        is_gpu = config.get("device") == "gpu" or any(
+            _is_gpu_array_object(obj) for obj in self
+        )
+        if is_gpu:
+            check_cupy_is_installed()
+
+        scheduler_ctx = (
+            dask.config.set(scheduler="synchronous") if is_gpu
+            else contextlib.nullcontext()
+        )
+
+        with scheduler_ctx, _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
             output = dask.compute(delayed_write, **kwargs)[0]
@@ -491,6 +509,17 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's computation involves GPU (CuPy) arrays.
+
+    Detects GPU even when the output array has numpy meta, e.g. when a detector
+    with to_cpu=True produces CPU-resident results from GPU wave computations.
+    ArrayObject.device checks _device first (set in apply_transform when the source
+    was GPU), so this correctly handles the to_cpu=True case.
+    """
+    return hasattr(obj, "device") and obj.device == "gpu"
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -499,7 +528,7 @@ def _compute(
     **kwargs,
 ) -> tuple[list[ArrayObjectType], tuple]:
     is_gpu = config.get("device") == "gpu" or any(
-        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
+        _is_gpu_array_object(obj) for obj in array_objects
     )
 
     if is_gpu:
@@ -832,6 +861,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        # _device may be set explicitly (e.g. for CPU-resident measurements that
+        # were produced by GPU computation) following the WavesBuilder convention.
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
@@ -1261,7 +1294,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if i not in squeezed
         ]
 
-        return self.__class__(**kwargs)
+        result = self.__class__(**kwargs)
+        if hasattr(self, "_device"):
+            result._device = self._device
+        return result
 
     def ensure_lazy(self, chunks: Chunks = "auto") -> Self:
         """Creates an equivalent lazy version of the array object.
@@ -1532,6 +1568,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self.base_shape))
+            elif max_batch == "auto" and self.device == "gpu":
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(
+                    self.base_shape, self.dtype, "gpu"
+                )
+                # Convert probes → total elements so validate_chunks
+                # receives an int and skips its own config-based "auto" path.
+                max_batch = int(n_probes * np.prod(self.base_shape))
 
             chunks = transform._default_ensemble_chunks + self._lazy_array.chunks
 
@@ -1619,6 +1664,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             output = cls.from_array_and_metadata(
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
+            # When the source was on GPU but the output is CPU-resident
+            # Record the computation device on the output so _compute()
+            # selects the synchronous scheduler for GPU work.  Check
+            # self.device (which honours _device on lazy arrays) rather
+            # than inspecting the dask-array module, which always returns
+            # numpy for a not-yet-computed lazy array.
+            if self.device == "gpu":
+                output._device = "gpu"
             outputs.append(output)
 
         if len(outputs) > 1:

@@ -35,7 +35,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
-from abtem.core.complex import complex_exponential
+from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGrid2DMixin
@@ -102,6 +102,9 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         exit_plane_index = 0
         exit_planes = self.exit_planes
 
+        if len(exit_planes) == 0:
+            return np.zeros(len(self), dtype=bool)
+
         if exit_planes[0] == -1:
             exit_plane_index += 1
 
@@ -133,6 +136,97 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     @abstractmethod
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Previously, ``build()`` always placed the entire slice dimension into a
+        single dask chunk — meaning the full ``(num_slices, gpts_y, gpts_x)``
+        array had to fit in memory (or VRAM) at once. There was no slice-level
+        chunking. This method introduces that missing middle ground: it eagerly
+        builds a group of contiguous slices that fits within a configurable
+        memory budget, yields it as a ``PotentialArray``, and the caller can
+        discard it after propagation before the next chunk is built. This
+        bounds peak memory and enables simulations of systems whose full
+        potential would not fit in memory.
+
+        On GPU this is especially important: dask uses a synchronous scheduler,
+        so the full potential chunk would be materialized at once in VRAM.
+        Chunking over slices keeps VRAM usage bounded while still feeding the
+        GPU enough data per chunk for efficient computation.
+
+        This default implementation collects slices from ``generate_slices()``
+        and stacks them. Subclasses may override for more efficient
+        implementations (e.g. ``_FieldBuilderFromAtoms`` uses
+        ``build(first_slice, last_slice)`` to avoid intermediate single-slice
+        allocations).
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget (``dask.chunk-size`` on CPU,
+            ``dask.chunk-size-gpu`` on GPU). Can also be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
+
+        Yields
+        ------
+        PotentialArray
+            A chunk of contiguous potential slices with correctly assigned
+            exit planes.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        xp = get_array_module(self.device)
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            arrays = []
+            slice_thicknesses = []
+            for slic in self.generate_slices(chunk_start, chunk_end):
+                arrays.append(slic.array)
+                slice_thicknesses.extend(slic.slice_thickness)
+
+            array = xp.concatenate(arrays, axis=0)
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            chunk = PotentialArray(
+                array,
+                slice_thickness=tuple(slice_thicknesses),
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
 
     @abstractmethod
     def build(
@@ -709,6 +803,72 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             else:
                 yield potential_array
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Overrides the base class to use ``build(first_slice, last_slice,
+        lazy=False)`` for each chunk range. This eagerly computes a contiguous
+        block of slices directly into a single allocation, avoiding the
+        overhead of building and stacking individual slices. Each chunk is
+        discarded by the caller after propagation, so only one chunk needs
+        to reside in memory (or VRAM) at a time.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            An eagerly computed chunk of contiguous potential slices.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            chunk = self.build(
+                first_slice=chunk_start, last_slice=chunk_end, lazy=False
+            )
+
+            # Remap exit planes to chunk-local indices (build() sets the
+            # full potential's exit_planes which are global indices).
+            chunk._exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            yield chunk
+
     @property
     def ensemble_axes_metadata(self):
         return self.frozen_phonons.ensemble_axes_metadata
@@ -987,6 +1147,81 @@ class FieldArray(BaseField, ArrayObject):
 
             yield slic
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        For a pre-built ``PotentialArray`` the data is already in memory
+        (or backed by a dask array whose single chunk spans all slices).
+        This method yields views into the existing array without any new
+        allocation or copy, so chunking only controls iteration grouping.
+
+        Note: if the array is dask-backed, the full potential is still
+        materialized as a single chunk when computed (dask never chunks
+        along the slice axis). To benefit from true memory-bounded
+        slice chunking, pass an unbuilt :class:`.Potential` to the
+        multislice algorithm instead.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            A view into the existing array covering a chunk of slices.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            s = (0,) * (len(self.array.shape) - 3) + (
+                slice(chunk_start, chunk_end),
+            )
+            chunk_array = self.array[s]
+
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            chunk = self.__class__(
+                chunk_array,
+                slice_thickness=self.slice_thickness[chunk_start:chunk_end],
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
+
     def __getitem__(self, items):
         if isinstance(items, (Number, slice)):
             items = (items,)
@@ -1163,9 +1398,9 @@ class PotentialArray(BasePotential, FieldArray):
 
     @staticmethod
     def _transmission_function(array, energy):
-        xp = get_array_module(array)
-        sigma = xp.array(energy2sigma(energy), dtype=get_dtype())
-        array = complex_exponential(sigma * array)
+        # complex_exponential_scaled fuses the sigma multiplication into the
+        # GPU sin/cos kernel, avoiding one slice-sized real temporary.
+        array = complex_exponential_scaled(array, energy2sigma(energy))
         return array
 
     @classmethod
@@ -1599,29 +1834,127 @@ class CrystalPotential(_PotentialBuilder):
         else:
             rng = np.random.default_rng(self.seeds[0])
 
+        if last_slice is None:
+            last_slice = len(self)
+
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
-        start = first_slice
-        stop = first_slice + 1
+        unit_slices = len(self.potential_unit)
+        global_idx = 0  # global slice counter across all z-repetitions
 
         for i in range(self.repetitions[2]):
+            # Always draw from the RNG to keep the frozen-phonon sequence
+            # consistent regardless of first_slice.
             potential = potentials[rng.integers(0, potentials.shape[0])]
+
+            if global_idx + unit_slices <= first_slice:
+                # This entire z-repetition is before the requested window;
+                # skip building its generator (unit is already built).
+                global_idx += unit_slices
+                continue
+
+            if global_idx >= last_slice:
+                # Past the requested window; nothing more to yield.
+                return
+
             generator = potential.generate_slices()
 
-            for j in range(len(self.potential_unit)):
-                slic = next(generator).tile(self.repetitions[:2])
+            for j in range(unit_slices):
+                slic_obj = next(generator)
 
-                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+                if global_idx >= first_slice:
+                    slic = slic_obj.tile(self.repetitions[:2])
 
-                slic._exit_planes = exit_planes
+                    exit_planes = tuple(
+                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
+                    )
+                    slic._exit_planes = exit_planes
 
-                start += 1
-                stop += 1
+                    if return_depth:
+                        yield cum_thickness[global_idx], slic
+                    else:
+                        yield slic
 
-                if return_depth:
-                    yield cum_thickness[stop - 1], slic
-                else:
-                    yield slic
+                global_idx += 1
 
-                if j == last_slice:
-                    break
+                if global_idx >= last_slice:
+                    return
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Unlike the base-class implementation, this override builds the unit
+        potential **once** (not once per chunk) and fills each output chunk
+        array in-place, slice by slice, using ``xp.tile``.  This avoids the
+        ~2× peak-memory spike that the base class incurs from accumulating
+        per-slice tiled arrays into a list before concatenating them.
+
+        The dtype of the output follows the unit potential's array dtype,
+        which is set by the abtem ``precision`` config key (float32 / float64).
+        """
+        from abtem.core.chunks import estimate_potential_chunk_size, generate_chunks
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(self.gpts, self.device)
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        xp = get_array_module(self.device)
+        exit_plane_after = self._exit_plane_after
+
+        # Build the unit potential once; the base class would re-build it on
+        # every chunk (one generate_slices() call per chunk).
+        if not isinstance(self.potential_unit, PotentialArray):
+            unit_built = self.potential_unit.build(lazy=False)
+        else:
+            unit_built = self.potential_unit
+
+        unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
+        if unit_arr.ndim == 3:
+            unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)
+
+        rng = np.random.default_rng(self.seeds[0] if self.seeds is not None else None)
+        unit_slices = len(self.potential_unit)
+        n_configs = unit_arr.shape[0]
+
+        # Pre-draw frozen-phonon config indices — one per z-repetition —
+        # to match the sequence that generate_slices() would produce.
+        config_indices = rng.integers(0, n_configs, size=self.repetitions[2])
+
+        unit_st = self.potential_unit.slice_thickness
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            n = chunk_end - chunk_start
+            out = None
+            slice_thicknesses = []
+
+            for k, global_idx in enumerate(range(chunk_start, chunk_end)):
+                rep_i, unit_j = divmod(global_idx, unit_slices)
+                slc = unit_arr[config_indices[rep_i], unit_j]   # (h, w)
+                tiled = xp.tile(slc, self.repetitions[:2])       # (full_h, full_w)
+
+                if out is None:
+                    out = xp.empty((n,) + tiled.shape, dtype=tiled.dtype)
+                out[k] = tiled
+                slice_thicknesses.append(unit_st[unit_j])
+
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+            chunk = PotentialArray(
+                out,
+                slice_thickness=tuple(slice_thicknesses),
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk

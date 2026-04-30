@@ -397,7 +397,7 @@ def conventional_multislice_step(
             energy=waves._valid_energy
         )
         transmission_function = antialias_aperture.bandlimit(
-            transmission_function, in_place=False
+            transmission_function, in_place=True
         )
 
     thickness = transmission_function.slice_thickness[0]
@@ -542,26 +542,53 @@ def multislice_and_detect(
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     return_backscattered: bool = False,
     pbar: bool = False,
+    potential_chunk_size: int | str = "auto",
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions
     through a given potential, detecting at each of the exit planes specified in the
     potential.
 
+    The potential is consumed in chunks of contiguous slices. For an unbuilt
+    :class:`.Potential`, each chunk is eagerly computed into memory, the wave
+    functions are propagated through those slices, and the chunk is discarded
+    before the next one is built. This keeps peak memory bounded — previously,
+    ``build()`` placed the entire slice dimension into a single dask chunk, so
+    the full potential had to fit in memory (or VRAM) at once.
+
+    On GPU, where dask uses a synchronous scheduler and the full dask chunk is
+    materialized at once, this chunking is critical for simulations whose
+    potential exceeds available VRAM.
+
+    When the potential is already a pre-built :class:`.PotentialArray` (eager or
+    dask-backed), the chunks are views into the existing array and the memory
+    savings only apply if an unbuilt :class:`.Potential` is passed instead.
+
     Parameters
     ----------
     waves : Waves
         A batch of wave functions as a :class:`.Waves` object.
     potential : BasePotential
-        A potential as :class:`.BasePotential` object.
+        A potential as :class:`.BasePotential` object. Pass an unbuilt
+        :class:`.Potential` to benefit from memory-bounded slice chunking.
+        A pre-built :class:`.PotentialArray` is also supported but its full
+        data is already in memory, so chunking only controls iteration
+        grouping.
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be
         converted to measurements after running the multislice algorithm.
-    algorithm: FourierMultislice or RealSpaceMultislice, optional
-        Algorithm used for multislice operator (default is FourierMultislice())
-    return_backscattered: bool, optional
+    algorithm : FourierMultislice or RealSpaceMultislice, optional
+        Algorithm used for multislice operator (default is FourierMultislice()).
+    return_backscattered : bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
-        backscattered components are also returned. Requires potential exit_planes
+        backscattered components are also returned. Requires potential exit_planes.
+    pbar : bool, optional
+        If True, display a progress bar.
+    potential_chunk_size : int or str, optional
+        Number of potential slices to eagerly build and hold in memory at once
+        during propagation. ``"auto"`` (default) selects based on the configured
+        memory budget (``dask.chunk-size`` / ``dask.chunk-size-gpu``). Can also
+        be set globally via the ``potential.slice-chunk-size`` configuration key.
 
     """
     waves = waves.ensure_real_space()
@@ -650,42 +677,48 @@ def multislice_and_detect(
 
         depth = 0.0
 
-        for potential_slice, next_slice in lookahead(
-            potential_configuration.generate_slices()
+        for potential_chunk in potential_configuration.generate_chunked_slices(
+            chunk_size=potential_chunk_size
         ):
-            if algorithm.expansion_scope == "full":
-                waves, backscatter_waves = multislice_step(
-                    waves, potential_slice, next_slice=next_slice
-                )
-            else:
-                waves = multislice_step(waves, potential_slice, next_slice=None)
-            tqdm_pbar.update_if_exists(int(n_waves))
+            for potential_slice, next_slice in lookahead(
+                potential_chunk.generate_slices()
+            ):
+                if algorithm.expansion_scope == "full":
+                    waves, backscatter_waves = multislice_step(
+                        waves, potential_slice, next_slice=next_slice
+                    )
+                else:
+                    waves = multislice_step(waves, potential_slice, next_slice=None)
+                tqdm_pbar.update_if_exists(int(n_waves))
 
-            depth += potential_slice.axes_metadata[0].values[0]
+                depth += potential_slice.axes_metadata[0].values[0]
 
-            _update_plasmon_axes(waves, depth)
+                _update_plasmon_axes(waves, depth)
 
-            if potential_slice.exit_planes:
-                measurement_index = _validate_potential_ensemble_indices(
-                    potential_index, exit_plane_index, potential
-                )
+                if potential_slice.exit_planes:
+                    measurement_index = _validate_potential_ensemble_indices(
+                        potential_index, exit_plane_index, potential
+                    )
 
-                if measurements is not None:
-                    if algorithm.expansion_scope == "full" and return_backscattered:
-                        _update_measurements(
-                            waves, detectors[:-1], measurements[:-1], measurement_index
-                        )
-                        _update_measurements(
-                            backscatter_waves,
-                            detectors[-1:],
-                            measurements[-1:],
-                            measurement_index,
-                        )
-                    else:
-                        _update_measurements(
-                            waves, detectors, measurements, measurement_index
-                        )
-                exit_plane_index += 1
+                    if measurements is not None:
+                        if algorithm.expansion_scope == "full" and return_backscattered:
+                            _update_measurements(
+                                waves,
+                                detectors[:-1],
+                                measurements[:-1],
+                                measurement_index,
+                            )
+                            _update_measurements(
+                                backscatter_waves,
+                                detectors[-1:],
+                                measurements[-1:],
+                                measurement_index,
+                            )
+                        else:
+                            _update_measurements(
+                                waves, detectors, measurements, measurement_index
+                            )
+                    exit_plane_index += 1
 
     # Handle final output if not using intermediate measurements
     if measurements is None:

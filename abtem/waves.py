@@ -419,6 +419,8 @@ class Waves(BaseWaves, ArrayObject):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
@@ -1083,9 +1085,14 @@ class Waves(BaseWaves, ArrayObject):
             converted to measurements after running the multislice algorithm.
             See `abtem.measurements.detect` for a list of implemented detectors. If
             not given, returns the wave functions themselves.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
-
 
         Returns
         -------
@@ -1193,7 +1200,21 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def apply_transform(
         self, transform, max_batch: int | str = "auto", lazy: bool = True
     ):
-        return self.build(lazy=lazy).apply_transform(transform, max_batch=max_batch)
+        # Resolve VRAM-aware batch size *before* building so that
+        # _build_validated receives the correct probe count and creates
+        # the right dask chunks.  If we let max_batch="auto" reach
+        # _build_validated it falls back to the dask.chunk-size-gpu config
+        # (512 MB default → batch≈2 at 4096²), ignoring free CUDA memory.
+        if max_batch == "auto" and self._device == "gpu":
+            from abtem.core.chunks import estimate_scan_batch_size
+
+            max_batch = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+
+        built = self.build(lazy=lazy, max_batch=max_batch)
+        # Keep _device so that ArrayObject.apply_transform can select the
+        # synchronous scheduler for GPU work and propagate device to outputs.
+        built._device = self._device
+        return built.apply_transform(transform, max_batch=max_batch)
 
     def check_can_build(self):
         """Check whether the wave functions can be built."""
@@ -1342,6 +1363,15 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         if lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self._valid_gpts))
+            elif max_batch == "auto" and self.device == "gpu":
+                # Query free CUDA memory to pick a probe batch that fits in
+                # VRAM.  The config-based fallback (dask.chunk-size-gpu,
+                # default 512 MB) gives only ~2 probes at 4096², which is
+                # far below the GPU-optimal batch size.
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+                max_batch = int(n_probes * np.prod(self._valid_gpts))
 
             chunks = self._default_ensemble_chunks + self._valid_gpts
 
@@ -1533,6 +1563,12 @@ class PlaneWave(WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
 

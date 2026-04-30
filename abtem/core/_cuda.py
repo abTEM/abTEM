@@ -54,41 +54,103 @@ def sum_run_length_encoded(array, result, separators):
         )
 
 
-@cuda.jit
-def _interpolate_radial_functions(
-    array,
-    positions,
-    disk_indices,
-    sampling,
-    radial_gpts,
-    radial_functions,
-    radial_derivatives,
-    dt,
-):
-    i, j = cuda.grid(2)
+_INTERPOLATE_RADIAL_KERNEL = r"""
+// Type-specialised round-to-nearest-int cast.  The f32 specialisation uses
+// __float2int_rn directly rather than going through double, saving a pair of
+// converts on every thread.
+template<typename T> __device__ __forceinline__ int rn_cast(T x);
+template<> __device__ __forceinline__ int rn_cast<float >(float  x) { return __float2int_rn(x);  }
+template<> __device__ __forceinline__ int rn_cast<double>(double x) { return __double2int_rn(x); }
 
-    if (i < positions.shape[0]) & (j < disk_indices.shape[0]):
-        k = round(positions[i, 0] / sampling[0]) + disk_indices[j, 0]
-        m = round(positions[i, 1] / sampling[1]) + disk_indices[j, 1]
+// Shared kernel body parameterised by floating-point type T.
+// Instantiated as float (f32) and double (f64) below.
+template<typename T>
+__device__ __forceinline__ void interpolate_radial_impl(
+    T* __restrict__ array,
+    const T* __restrict__ positions,   // (n_atoms, 2) row-major -- (x, y) per atom
+    const int* __restrict__ disk_indices,  // (n_disk, 2)  row-major
+    const T sampling_0,
+    const T sampling_1,
+    const T* __restrict__ radial_gpts, // (n_radial,)
+    const T* __restrict__ radial_funcs,// (n_atoms, n_radial) row-major
+    const T* __restrict__ radial_deriv,// (n_atoms, n_radial) row-major
+    const T dt,
+    const T r0,
+    const int n_radial,
+    const int n_disk,
+    const int n_atoms,
+    const int rows,
+    const int cols
+) {
+    // x-dim: disk index,  y-dim: atom index
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
 
-        if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
-            r_interp = math.sqrt(
-                (k * sampling[0] - positions[i, 0]) ** 2
-                + (m * sampling[1] - positions[i, 1]) ** 2
-            )
+    if (i >= n_atoms || j >= n_disk) return;
 
-            idx = int(math.log(r_interp / radial_gpts[0] + 1e-12) / dt)
+    T px = positions[i * 2];
+    T py = positions[i * 2 + 1];
 
-            if idx < 0:
-                cuda.atomic.add(array, (k, m), radial_functions[i, 0])
+    int k = rn_cast<T>(px / sampling_0) + disk_indices[j * 2];
+    int m = rn_cast<T>(py / sampling_1) + disk_indices[j * 2 + 1];
 
-            elif idx < radial_gpts.shape[0] - 1:
-                slope = radial_derivatives[i, idx]
-                cuda.atomic.add(
-                    array,
-                    (k, m),
-                    radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope,
-                )
+    if (k < 0 || k >= rows || m < 0 || m >= cols) return;
+
+    T dx = (T)k * sampling_0 - px;
+    T dy = (T)m * sampling_1 - py;
+    T r  = sqrt(dx * dx + dy * dy);
+
+    int idx = (int)floor(log(r / r0 + (T)1e-12) / dt);
+
+    T val;
+    int base = i * n_radial;
+    if (idx < 0) {
+        val = radial_funcs[base];
+    } else if (idx < n_radial - 1) {
+        T slope = radial_deriv[base + idx];
+        val = radial_funcs[base + idx] + (r - radial_gpts[idx]) * slope;
+    } else {
+        return;
+    }
+
+    atomicAdd(&array[k * cols + m], val);
+}
+
+extern "C" __global__ void interpolate_radial_f32(
+    float* array, const float* positions, const int* disk_indices,
+    float sampling_0, float sampling_1,
+    const float* radial_gpts, const float* radial_funcs, const float* radial_deriv,
+    float dt, float r0,
+    int n_radial, int n_disk, int n_atoms, int rows, int cols
+) {
+    interpolate_radial_impl<float>(
+        array, positions, disk_indices,
+        sampling_0, sampling_1, radial_gpts, radial_funcs, radial_deriv,
+        dt, r0, n_radial, n_disk, n_atoms, rows, cols
+    );
+}
+
+extern "C" __global__ void interpolate_radial_f64(
+    double* array, const double* positions, const int* disk_indices,
+    double sampling_0, double sampling_1,
+    const double* radial_gpts, const double* radial_funcs, const double* radial_deriv,
+    double dt, double r0,
+    int n_radial, int n_disk, int n_atoms, int rows, int cols
+) {
+    interpolate_radial_impl<double>(
+        array, positions, disk_indices,
+        sampling_0, sampling_1, radial_gpts, radial_funcs, radial_deriv,
+        dt, r0, n_radial, n_disk, n_atoms, rows, cols
+    );
+}
+"""
+
+_interpolate_radial_module = cp.RawModule(
+    code=_INTERPOLATE_RADIAL_KERNEL,
+    options=("--std=c++14",),
+)
+_interpolate_radial_f32 = _interpolate_radial_module.get_function("interpolate_radial_f32")
+_interpolate_radial_f64 = _interpolate_radial_module.get_function("interpolate_radial_f64")
 
 
 def interpolate_radial_functions(
@@ -103,22 +165,50 @@ def interpolate_radial_functions(
     if len(positions) == 0:
         return array
 
-    threadsperblock = (1, 256)
-    blockspergrid_x = int(math.ceil(positions.shape[0] / threadsperblock[0]))
-    blockspergrid_y = int(math.ceil(disk_indices.shape[0] / threadsperblock[1]))
-    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    n_disk = disk_indices.shape[0]
+    n_atoms = positions.shape[0]
+    n_radial = radial_gpts.shape[0]
+    rows, cols = array.shape
 
-    dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
+    dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (n_radial - 1)).item()
+    r0 = float(radial_gpts[0].item())
 
-    _interpolate_radial_functions[blockspergrid, threadsperblock](
-        array,
-        positions,
-        disk_indices,
-        sampling,
-        radial_gpts,
-        radial_functions,
-        radial_derivative,
-        dt,
+    # Dispatch to the float32 or float64 kernel based on the array dtype.
+    # The array dtype is set by the abtem 'precision' config key via get_dtype().
+    dtype = array.dtype
+    if dtype == cp.float64:
+        fp = cp.float64
+        kernel = _interpolate_radial_f64
+    else:
+        fp = cp.float32
+        kernel = _interpolate_radial_f32
+
+    # x-axis carries disk_indices (can be hundreds of millions → needs
+    # gridDim.x limit of 2^31-1); y-axis carries positions (atoms per slice,
+    # typically O(100) → well within gridDim.y limit of 65535).
+    block = (256, 1, 1)
+    grid = (math.ceil(n_disk / 256), n_atoms, 1)
+
+    # Ensure contiguous arrays with the target floating-point type.  The kernel
+    # reads positions with stride 2 ((x, y) per atom), so we pass the (n_atoms, 2)
+    # slice directly — no need to pad with a dummy z column.
+    # copy=False avoids an unnecessary GPU allocation when the array is already
+    # the right dtype (which is the common case for all arrays except radial_gpts,
+    # which the caller should pre-convert — see integrate_on_grid in integrals.py).
+    positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp, copy=False))
+    disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32, copy=False))
+    rg = cp.ascontiguousarray(radial_gpts.astype(fp, copy=False))
+    rf = cp.ascontiguousarray(radial_functions.astype(fp, copy=False))
+    rd = cp.ascontiguousarray(radial_derivative.astype(fp, copy=False))
+
+    kernel(
+        grid, block,
+        (array, positions_xy, disk_i32,
+         fp(sampling[0]), fp(sampling[1]),
+         rg, rf, rd,
+         fp(dt), fp(r0),
+         np.int32(n_radial), np.int32(n_disk), np.int32(n_atoms),
+         np.int32(rows), np.int32(cols)),
     )
 
 

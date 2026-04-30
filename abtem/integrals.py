@@ -24,6 +24,7 @@ from abtem.core.backend import (
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import (
     disk_meshgrid,
+    disk_meshgrid_iter,
     polar_spatial_frequencies,
     spatial_frequencies,
 )
@@ -223,14 +224,16 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         )  # noqa
 
     def get_gaussians(self, symbol, gpts, sampling):
-        if symbol in self._gaussians:
-            return self._gaussian[(symbol, gpts, sampling)]
+        key = (symbol, gpts, sampling)
+        if key in self._gaussians:
+            return self._gaussians[key]
 
         return gaussian_projected_scattering_factors(symbol, gpts, sampling)
 
     def get_corrections(self, symbol, gpts, sampling):
-        if symbol in self._corrections:
-            return self._corrections[(symbol, gpts, sampling)]
+        key = (symbol, gpts, sampling)
+        if key in self._corrections:
+            return self._corrections[key]
 
         return correction_projected_scattering_factors(symbol, gpts, sampling)
 
@@ -249,7 +252,7 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         for i in range(5):
             temp = xp.zeros_like(array, dtype=xp.complex64)
             superpose_deltas(positions, temp, weights=weights[i])
-            array += fft2(temp, overwrite_x=False) * gaussians[i].astype(xp.complex64)
+            array += fft2(temp, overwrite_x=True) * gaussians[i].astype(xp.complex64)
 
         return array
 
@@ -293,7 +296,14 @@ class GaussianProjectionIntegrals(FieldIntegrator):
                 positions, symbol, a, b, gpts, sampling, device
             )
 
-        return ifft2(array / sinc(gpts, sampling, device)).real
+        if not hasattr(self, "_sinc_cache"):
+            self._sinc_cache = {}
+
+        sinc_key = (gpts, sampling, device)
+        if sinc_key not in self._sinc_cache:
+            self._sinc_cache[sinc_key] = sinc(gpts, sampling, device)
+
+        return ifft2(array / self._sinc_cache[sinc_key]).real
 
 
 def sinc(
@@ -542,6 +552,8 @@ def interpolate_radial_functions(
                     )
 
 
+
+
 class ProjectionIntegralTable:
     """
     A ProjectionIntegrator calculating finite projections of radial potential
@@ -579,11 +591,32 @@ class ProjectionIntegralTable:
     def values(self) -> np.ndarray:
         return self._values
 
+    def _interp_at(self, z: np.ndarray) -> np.ndarray:
+        """Vectorised linear interpolation of the table along the limits axis.
+
+        Uses searchsorted + manual lerp instead of constructing a new
+        ``scipy.interpolate.interp1d`` object on every call, which is the
+        dominant per-slice overhead for large atom counts.
+        """
+        limits = self._limits
+        values = self._values
+        n = len(limits)
+
+        # Clamp indices so we can extrapolate linearly at the boundaries.
+        idx = np.searchsorted(limits, z, side="right") - 1
+        idx = np.clip(idx, 0, n - 2)
+
+        # Fractional position between limits[idx] and limits[idx+1].
+        dz = limits[idx + 1] - limits[idx]
+        t = (z - limits[idx]) / dz
+
+        # values shape: (n_limits, n_radial) → index with (n_atoms,) → (n_atoms, n_radial)
+        v0 = values[idx]       # (n_atoms, n_radial)
+        v1 = values[idx + 1]   # (n_atoms, n_radial)
+        return v0 + t[:, None] * (v1 - v0)
+
     def integrate(self, a: float | np.ndarray, b: float | np.ndarray) -> np.ndarray:
-        f = interp1d(
-            self.limits, self.values, axis=0, kind="linear", fill_value="extrapolate"
-        )
-        return f(b) - f(a)
+        return self._interp_at(b) - self._interp_at(a)
 
 
 def optimize_cutoff(func: Callable, tolerance: float, a: float, b: float) -> float:
@@ -815,9 +848,8 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             shifted_a = a - positions[:, 2]
             shifted_b = b - positions[:, 2]
 
-            disk_indices = xp.asarray(
-                disk_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
-            )
+            disk_radius = int(np.ceil(table.radial_gpts[-1] / np.min(sampling)))
+
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
 
             positions = xp.asarray(positions, dtype=get_dtype(complex=False))
@@ -833,16 +865,32 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 temp = array
 
             if xp is cp:
-                interpolate_radial_functions_cuda(
-                    array=temp,
-                    positions=positions,
-                    disk_indices=disk_indices,
-                    sampling=sampling,
-                    radial_gpts=xp.asarray(table.radial_gpts),
-                    radial_functions=radial_potential,
-                    radial_derivative=radial_potential_derivative,
+                # Transfer radial_gpts directly in the compute dtype so the
+                # float64-to-float32 (or float64-to-float64) conversion happens
+                # once here rather than being repeated inside
+                # interpolate_radial_functions_cuda for every disk chunk.
+                radial_gpts_dev = xp.asarray(
+                    table.radial_gpts, dtype=get_dtype(complex=False)
                 )
+                # Process disk indices in chunks to avoid allocating the
+                # full array on the GPU.  For very fine sampling the disk
+                # can contain hundreds of millions of pixels (>5 GB) which
+                # would exceed device memory.  The CUDA kernel accumulates
+                # via atomic adds, so multiple calls produce the same result.
+                for disk_chunk_cpu in disk_meshgrid_iter(disk_radius):
+                    disk_chunk = cp.asarray(disk_chunk_cpu)
+                    interpolate_radial_functions_cuda(
+                        array=temp,
+                        positions=positions,
+                        disk_indices=disk_chunk,
+                        sampling=sampling,
+                        radial_gpts=radial_gpts_dev,
+                        radial_functions=radial_potential,
+                        radial_derivative=radial_potential_derivative,
+                    )
+                    del disk_chunk
             else:
+                disk_indices = disk_meshgrid(disk_radius)
                 interpolate_radial_functions(
                     array=temp,
                     positions=positions,

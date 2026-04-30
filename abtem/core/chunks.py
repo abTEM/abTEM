@@ -409,3 +409,216 @@ def generate_chunks(
 
         yield start, end
         start = end
+
+
+def estimate_potential_chunk_size(
+    gpts: tuple[int, int],
+    device: str = "cpu",
+    dtype: np.dtype = None,
+) -> int:
+    """
+    Estimate the number of potential slices that fit in the memory budget.
+
+    ``build()`` places the entire slice dimension into a single dask chunk, so
+    the full potential must fit in memory at once. This function calculates how
+    many slices can be held simultaneously when the potential is instead built
+    in smaller chunks via ``generate_chunked_slices()``.
+
+    On GPU the per-slice cost accounts for CuPy memory pool fragmentation —
+    the pool may hold large contiguous blocks for live arrays (waves, probes)
+    that prevent new allocations even when total free bytes suffice.  The
+    effective per-slice cost under fragmentation is empirically ~5× the raw
+    slice size for scan workloads at 4096² grids.
+
+    On CPU there is no pool fragmentation and system RAM is typically
+    abundant.  The default is therefore to place the entire potential in
+    a single chunk (no chunking), matching pre-chunking behaviour.  Set
+    ``potential.slice-chunk-size`` in the configuration to a positive
+    integer to enable CPU chunking when memory is genuinely limited.
+
+    On GPU the budget uses the CUDA-reported free memory without calling
+    ``free_all_blocks()`` first. Dead pool blocks represent recent memory
+    pressure from build/propagation temporaries; leaving them gives a
+    conservative estimate that self-adapts as the pool fills up over
+    successive scan batches. Falls back to ``dask.chunk-size-gpu`` when
+    CuPy is unavailable.
+
+    Parameters
+    ----------
+    gpts : tuple of int
+        The number of grid points (y, x).
+    device : str
+        The device ('cpu' or 'gpu').
+    dtype : np.dtype, optional
+        The dtype of the potential array. If None, uses float32.
+
+    Returns
+    -------
+    int
+        The estimated number of slices that fit in memory.
+    """
+    from abtem.core.utils import get_dtype
+
+    if dtype is None:
+        dtype = np.dtype(get_dtype(complex=False))
+
+    chunk_size_key = "potential.slice-chunk-size"
+    chunk_size_setting = config.get(chunk_size_key, "auto")
+
+    if chunk_size_setting != "auto":
+        return int(chunk_size_setting)
+
+    slice_bytes = gpts[0] * gpts[1] * dtype.itemsize
+
+    if device == "gpu":
+        try:
+            import cupy as cp
+
+            pool = cp.get_default_memory_pool()
+
+            # Use CUDA-reported free memory without calling
+            # free_all_blocks() first. Dead pool blocks represent recent
+            # memory pressure and keep the estimate conservative, which
+            # is the desired behaviour as the pool fills over successive
+            # scan batches.
+            free_mem, total_mem = cp.cuda.Device().mem_info
+
+            # Cross-check against pool live usage. This guards the rare
+            # case where dead blocks were released by someone else (e.g.
+            # cuFFT plan cache eviction), making free_mem higher than the
+            # live-data picture suggests.
+            pool_used = pool.used_bytes()
+            effective_free = min(free_mem, total_mem - pool_used)
+
+            # Per-slice cost: output array (1×) + transmission function
+            # (2×) + build temporaries (FFTs, Gaussian integrals) +
+            # propagation FFT workspace. 5× is less conservative than the
+            # original 8× now that the synchronous scheduler prevents
+            # concurrent batch execution from multiplying peak VRAM.
+            #
+            # Budget: 35 % of effective-free VRAM at computation time.
+            # At this point the probe batch is already resident, so
+            # effective_free is already reduced by the probe allocation.
+            # Together with the 40 % claimed by estimate_scan_batch_size
+            # at graph-construction time, the joint budget is
+            # 40 % + 35 % × (1 − probe_fraction) ≈ 73 %, leaving 27 %
+            # headroom.  (estimate_scan_batch_size uses effective_free too,
+            # so both estimates operate on the same VRAM picture.)
+            effective_per_slice = slice_bytes * 5
+            budget_bytes = int(effective_free * 0.35)
+        except (ImportError, Exception):
+            effective_per_slice = slice_bytes * 5
+            budget_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
+    else:
+        # On CPU, system RAM is typically abundant and there is no
+        # memory-pool fragmentation.  The default is therefore to place
+        # the entire potential in a single chunk (no chunking), matching
+        # the pre-chunking behaviour.  The potential.slice-chunk-size
+        # config key (checked above) allows an explicit override when
+        # memory is genuinely limited.
+        return 4096
+
+    chunk_size = max(1, int(budget_bytes / effective_per_slice))
+
+    return min(chunk_size, 4096)
+
+
+def _nearest_power_of_two(n: int) -> int:
+    """Round n to the nearest power of two.
+
+    Prefers the *upper* power when it fits within 25 % of the raw estimate
+    (i.e. when ``ceil_pot <= n * 1.25``).  This lets the auto-sizing snap
+    to GPU-friendly batch sizes (8, 16, 32, 64 …) without meaningfully
+    exceeding the VRAM budget, since the raw estimate already uses only
+    50 % of free VRAM as headroom.
+
+    Examples
+    --------
+    59 → 64  (int(59 * 1.25) = 73;  64 ≤ 73,  use upper)
+    14 → 16  (int(14 * 1.25) = 17;  16 ≤ 17,  use upper)
+    20 → 16  (int(20 * 1.25) = 25;  32 > 25,  use lower)
+    """
+    if n <= 1:
+        return 1
+    floor_pot = 1 << (n.bit_length() - 1)   # largest power of two ≤ n
+    ceil_pot = floor_pot << 1                # smallest power of two ≥ n
+    if n == floor_pot:
+        return n                             # already a power of two
+    if ceil_pot <= int(n * 1.25):
+        return ceil_pot
+    return floor_pot
+
+
+def estimate_scan_batch_size(
+    gpts: tuple[int, int],
+    dtype,
+    device: str,
+) -> int:
+    """
+    Estimate the maximum number of probe wavefunctions per scan batch.
+
+    For GPU, queries free CUDA memory at graph-construction time and
+    allocates up to half of it for probe wavefunctions. This is
+    intentionally generous because ``estimate_potential_chunk_size`` is
+    called at *computation* time (inside ``generate_chunked_slices``) when
+    the probe batch is already resident in VRAM; it therefore sees the
+    reduced free memory and sizes the potential chunk to fit in what
+    remains. The two estimates are thus naturally coordinated without
+    requiring explicit cross-referencing.
+
+    The raw estimate is rounded to the nearest power of two (preferring
+    the upper power when within 25 % headroom) so that batch sizes snap
+    to GPU-friendly values such as 8, 16, 32, 64.
+
+    For CPU, falls back to the ``dask.chunk-size`` configuration key.
+
+    Parameters
+    ----------
+    gpts : tuple of int
+        Spatial grid size ``(ny, nx)`` of each probe wavefunction.
+    dtype : dtype-like
+        Wavefunction dtype (typically ``complex64``).
+    device : str
+        ``"gpu"`` or ``"cpu"``.
+
+    Returns
+    -------
+    int
+        Maximum number of probe wavefunctions per batch (≥ 1).
+    """
+    per_probe_bytes = int(np.prod(gpts)) * np.dtype(dtype).itemsize
+
+    if device == "gpu":
+        try:
+            import cupy as cp
+
+            pool = cp.get_default_memory_pool()
+            free_mem, total_mem = cp.cuda.Device().mem_info
+            pool_used = pool.used_bytes()
+            # Use the same effective-free formula as estimate_potential_chunk_size
+            # so both estimates operate on a consistent VRAM picture.  Dead pool
+            # blocks (cached but not live) are included in free_mem by CUDA, but
+            # total_mem - pool_used excludes them; taking the min is conservative.
+            effective_free = min(free_mem, total_mem - pool_used)
+
+            # Allocate up to 50 % of effective VRAM for probe-batch overhead.
+            # A 6× overhead factor accounts for transient copies during
+            # transmission-function multiply, FFT workspaces, and cuFFT plan
+            # buffers.  Empirically: 4096² uses ~756 MB/probe (5.6× raw
+            # wavefunction), 2048² uses ~147 MB/probe (4.4×).
+            #
+            # estimate_potential_chunk_size runs at *computation* time, when
+            # the probe batch is already resident; it sees the reduced free
+            # memory and sizes the potential chunk to fit in what remains.
+            # Both functions now use the same pool-aware effective_free so
+            # the two estimates operate on a consistent VRAM picture.
+            probe_budget = int(effective_free * 0.50)
+            per_probe_effective = max(1, int(per_probe_bytes * 6))
+            n_probes = max(1, probe_budget // per_probe_effective)
+            return _nearest_power_of_two(n_probes)
+        except (ImportError, Exception):
+            chunk_bytes = parse_bytes(config.get("dask.chunk-size-gpu", "512 MB"))
+    else:
+        chunk_bytes = parse_bytes(config.get("dask.chunk-size", "128 MB"))
+
+    return max(1, chunk_bytes // max(1, per_probe_bytes))
