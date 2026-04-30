@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import abstractmethod
 from copy import copy
 from functools import partial
@@ -18,6 +19,7 @@ from abtem.array import stack as stack_array_object
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
+    FrozenPhononsAxis,
     OrdinalAxis,
     RealSpaceAxis,
     ReciprocalSpaceAxis,
@@ -294,8 +296,8 @@ def reduce_ensemble(
 ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
     """
     Reduce an ensemble of wave functions or measurements by squeezing or averaging
-    ensemble axes tagged for reduction with the "_squeeze" or "_average" attribute
-    of the axis metadata.
+    ensemble axes tagged for reduction with the "_squeeze" or "_ensemble_mean"
+    attribute of the axis metadata.
 
     Parameters
     ----------
@@ -327,6 +329,15 @@ def reduce_ensemble(
     if isinstance(output, BaseMeasurements):
         reduced_output = output.reduce_ensemble()
     else:
+        if any(
+            isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+            for ax in output.ensemble_axes_metadata
+        ):
+            warnings.warn(
+                "ensemble_mean=False returns the full frozen-phonon ensemble as "
+                "individual wave functions. Use detectors to obtain averaged "
+                "measurements."
+            )
         reduced_output = output
 
     return reduced_output
