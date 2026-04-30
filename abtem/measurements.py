@@ -13,7 +13,6 @@ from typing import (
     TYPE_CHECKING,
     Callable,
     Dict,
-    Hashable,
     Optional,
     Self,
     Sequence,
@@ -372,10 +371,32 @@ class BaseMeasurements(ArrayObject, EqualityMixin, CopyMixin, metaclass=ABCMeta)
         """Metadata describing the measurement."""
         return self._metadata
 
-    def _get_from_metadata(self, key: Hashable):
-        if key not in self.metadata.keys():
-            raise RuntimeError(f"{key} not in measurement metadata.")
-        return self.metadata[key]
+    def _get_energy(self) -> float:
+        """Return the electron energy [eV].
+
+        Resolution order:
+        1. ``metadata["energy"]`` — always present for single-energy
+           measurements and for indexed members of an energy ensemble
+           (populated by :meth:`EnergyAxis.item_metadata` during indexing).
+        2. First value of an ``EnergyAxis`` in ``ensemble_axes_metadata`` —
+           reached only for a full (un-indexed) energy-ensemble measurement.
+           This is an imprecise convenience fallback; callers that need the
+           exact per-member energy should index the ensemble first.
+
+        Raises
+        ------
+        RuntimeError
+            If no energy can be found in metadata or ensemble axes metadata.
+        """
+        from abtem.core.axes import EnergyAxis
+
+        energy = self.metadata.get("energy")
+        if energy is not None:
+            return energy
+        for axis in self.ensemble_axes_metadata:
+            if isinstance(axis, EnergyAxis):
+                return float(axis.values[0])
+        raise RuntimeError("energy not in measurement metadata.")
 
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
@@ -2217,7 +2238,7 @@ class ReciprocalSpaceLineProfiles(_BaseMeasurement1D):
     @property
     def angular_extent(self):
         """Extent of line profiles given as scattering angels [mrad]."""
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         return self.extent * wavelength * 1e3
 
     # def _plot_x_label(self, units=None):
@@ -2693,7 +2714,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
 
         if energy is None:
-            energy = self._get_from_metadata("energy")
+            energy = self._get_energy()
 
         if g_max is None:
             g_max = max(self.max_frequency)
@@ -2795,7 +2816,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """
         Angular sampling of diffraction patterns in `x` and `y` [mrad].
         """
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         return (
             self.sampling[0] * wavelength * 1e3,
             self.sampling[1] * wavelength * 1e3,
@@ -2840,7 +2861,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         """Lowest and highest scattering angle in `x` and `y` [mrad]."""
 
         limits = self.limits
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         limits[0] = (
             limits[0][0] * wavelength * 1e3,
             limits[0][1] * wavelength * 1e3,
@@ -3629,7 +3650,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 width=width,
             )
 
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
 
         return ReciprocalSpaceLineProfiles(
             array,
@@ -4076,7 +4097,7 @@ class PolarMeasurements(BaseMeasurements):
 
         new_array[..., regions < 0] = np.nan
 
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         sampling = (
             angular_sampling[0] / (wavelength * 1e3),
             angular_sampling[1] / (wavelength * 1e3),
@@ -4470,7 +4491,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
         Scattering angles of the diffraction spots.
         """
-        wavelength = energy2wavelength(self._get_from_metadata("energy"))
+        wavelength = energy2wavelength(self._get_energy())
         return self.positions * wavelength * 1e3
 
     @property
@@ -4644,7 +4665,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         """
 
         if max_angle is not None and k_max is None:
-            wavelength = energy2wavelength(self._get_from_metadata("energy"))
+            wavelength = energy2wavelength(self._get_energy())
             k_max = max_angle / wavelength / 1e3
 
         elif not k_max or max_angle:

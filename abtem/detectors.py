@@ -43,6 +43,28 @@ else:
     ArrayObjectType = TypeVar("ArrayObjectType", bound="ArrayObject")
 
 
+def _energy_from_waves(waves) -> Optional[float]:
+    """Return a scalar electron energy [eV] from *waves*.
+
+    Resolution order mirrors ``Waves._valid_energy``:
+    1. ``waves.energy`` — set for ordinary single-energy waves.
+    2. ``waves.metadata["energy"]`` — populated by ``EnergyAxis.item_metadata``
+       when *waves* was produced by indexing an energy-ensemble.
+    3. First value of an ``EnergyAxis`` in ``ensemble_axes_metadata`` — used as
+       a fallback when the full multi-member ensemble has not been indexed yet.
+    """
+    from abtem.core.axes import EnergyAxis
+
+    energy = waves.energy
+    if energy is None:
+        energy = waves.metadata.get("energy")
+    if energy is None:
+        for axis in waves.ensemble_axes_metadata:
+            if isinstance(axis, EnergyAxis):
+                return float(axis.values[0])
+    return energy
+
+
 def validate_detectors(
     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     waves: Optional[BaseWaves] = None,
@@ -427,7 +449,7 @@ class _AbstractRadialDetector(BaseDetector):
                 )
             segmented_regions = self.get_detector_regions(waves)
             diffraction_patterns = segmented_regions.to_diffraction_patterns(waves.gpts)
-            energy = waves.energy
+            energy = _energy_from_waves(waves)
         elif energy is None:
             raise ValueError("provide the waves or the energy of waves")
         else:
@@ -738,7 +760,7 @@ class AnnularDetector(_AbstractRadialDetector):
 
         array = self._get_detector_region_array(waves, fftshift=fftshift)
         metadata = {
-            "energy": waves.energy,
+            "energy": _energy_from_waves(waves),
             "label": "detector efficiency",
             "units": "%",
         }

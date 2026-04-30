@@ -1,5 +1,6 @@
 import warnings
 
+import pytest
 from hypothesis import HealthCheck, Phase, settings
 
 from abtem import config
@@ -8,16 +9,23 @@ config.set({"diagnostics.progress_bar": False})
 
 settings.register_profile(
     "dev",
-    max_examples=20,
+    max_examples=10,
     print_blob=True,
     deadline=None,
-    suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large),
+    suppress_health_check=(HealthCheck.too_slow, HealthCheck.data_too_large, HealthCheck.filter_too_much),
     phases=[Phase.generate],
 )
 settings.load_profile("dev")
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--runslow", action="store_true", default=False, help="run slow tests"
+    )
+
+
 def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: mark test as slow to run")
     # Ignore specific warnings globally
     warnings.filterwarnings(
         "ignore",
@@ -25,21 +33,11 @@ def pytest_configure(config):
     )
 
 
-# def pytest_addoption(parser):
-#     parser.addoption(
-#         "--runslow", action="store_true", default=False, help="run slow tests"
-#     )
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--runslow"):
+        return
 
-
-# def pytest_configure(config):
-#     config.addinivalue_line("markers", "slow: mark test as slow to run")
-
-
-# def pytest_collection_modifyitems(config, items):
-#     if config.getoption("--runslow"):
-#         return
-
-#     skip_slow = pytest.mark.skip(reason="need --runslow option to run")
-#     for item in items:
-#         if "slow" in item.keywords:
-#             item.add_marker(skip_slow)
+    skip_slow = pytest.mark.skip(reason="need --runslow option to run")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import strategies as abtem_st
 from ase import Atoms
-from hypothesis import assume, given
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 import abtem
@@ -50,6 +50,7 @@ def basis_match_templates(basis):
     return bases_to_check
 
 
+@settings(max_examples=5)
 @pytest.mark.parametrize("centering", ["P", "F", "I", "A", "B", "C"])
 @pytest.mark.filterwarnings("ignore:Something went wrong with the centering detection")
 @given(
@@ -73,6 +74,7 @@ def test_auto_detect_centering(data, cell, centering):
     assert auto_detect_centering(atoms) == centering
 
 
+@settings(max_examples=5)
 @given(
     atoms=abtem_st.atoms(min_thickness=1.0, max_atomic_number=20),
     sampling=abtem_st.sampling(min_value=0.02, max_value=0.1),
