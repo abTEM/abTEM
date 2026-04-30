@@ -263,48 +263,6 @@ def _apply_displacement_field(
     return warped.reshape(image.shape)
 
 
-# def apply_scan_noise(
-#     measurement: np.ndarray,
-#     dwell_time: float,
-#     flyback_time: float,
-#     max_frequency: float,
-#     rms_power: float,
-#     num_components: int = 200,
-# ):
-#     """
-#     Add scan noise to a measurement.
-
-#     Parameters
-#     ----------
-#     measurement: Measurement object or 2d array
-#         The measurement to add noise to.
-#     dwell_time: float
-#         Dwell time on a single pixel in s.
-#     flyback_time: float
-#         Flyback time for the scanning probe at the end of each scan line in s.
-#     max_frequency: float
-#         Maximum noise frequency in 1 / s.
-#     rms_power: float
-#         Root-mean-square power of the distortion in unit of percent.
-#     num_components: int, optional
-#         Number of frequency components. More components will be more 'white' but will
-#         take longer.
-
-#     Returns
-#     -------
-#     measurement: Measurement object
-#         The noisy measurement.
-#     """
-
-#     time = _pixel_times(dwell_time, flyback_time, array.T.shape)
-#     displacement_x, displacement_y = _make_displacement_field(
-#         time, max_frequency, num_components, rms_power
-#     )
-
-#     array = _apply_displacement_field(array.T, displacement_x, displacement_y)
-#     return array.T
-
-
 class ScanNoiseTransform(EnsembleTransform):
     def __init__(
         self,

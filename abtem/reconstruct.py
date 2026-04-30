@@ -881,42 +881,6 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
 
         return objects, probes, position
 
-    """
-    @staticmethod
-    def _position_correction(objects: np.ndarray,
-                             probes: np.ndarray,
-                             position:np.ndarray,
-                             exit_wave: np.ndarray,
-                             modified_exit_wave: np.ndarray,
-                             diffraction_pattern:np.ndarray,
-                             sobel: Callable,
-                             position_step_size: float = 1.0,
-                             xp=np,
-                             **kwargs):
-
-        object_dx                  = sobel(objects,axis=0,mode='wrap')
-        object_dy                  = sobel(objects,axis=1,mode='wrap')
-
-        object_indices             = _wrapped_indices_2D_window(position,probes.shape,objects.shape)
-        d_exit_wave_fft_dx         = xp.fft.fft2(object_dx[object_indices]*probes)
-        d_exit_wave_fft_dy         = xp.fft.fft2(object_dy[object_indices]*probes)
-
-        exit_wave_fft              = xp.fft.fft2(exit_wave)
-        estimated_intensity        = xp.abs(exit_wave_fft)**2
-        intensity                  = diffraction_pattern**2
-        difference_intensity       = (intensity - estimated_intensity).ravel()
-
-        exit_wave_fft_conj         = xp.conj(exit_wave_fft)
-
-        partial_intensity_dx       = 2*xp.real(d_exit_wave_fft_dx*exit_wave_fft_conj).ravel()
-        partial_intensity_dy       = 2*xp.real(d_exit_wave_fft_dy*exit_wave_fft_conj).ravel()
-
-        coefficients_matrix        = xp.column_stack((partial_intensity_dx,partial_intensity_dy))
-        displacements              = xp.linalg.lstsq(coefficients_matrix,difference_intensity,rcond=None)[0]
-
-        return position - position_step_size*displacements
-    """
-
     @staticmethod
     def _position_correction(
         objects: np.ndarray,
