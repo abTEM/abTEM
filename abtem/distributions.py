@@ -385,6 +385,185 @@ def gaussian(
     return MultidimensionalDistribution(distributions=distributions)
 
 
+def lorentzian(
+    half_width: float | tuple[float, ...],
+    num_samples: int | tuple[int, ...],
+    dimension: int = 1,
+    center: float | tuple[float, ...] = 0.0,
+    ensemble_mean: bool | tuple[bool, ...] = True,
+    sampling_limit: float | tuple[float, ...] = 10.0,
+    normalize: str = "intensity",
+) -> MultidimensionalDistribution:
+    """
+    Return a distribution with values weighted according to a (multidimensional)
+    Lorentzian (Cauchy) distribution. The values are evenly spaced within a given
+    truncation of the distribution. As an example, this distribution may be used for
+    simulating focal spread due to an energy-loss spectrum with Lorentzian tails.
+
+    Parameters
+    ----------
+    half_width : float or tuple of float
+        The half-width at half-maximum (HWHM) of the distribution. The half-widths
+        may be given for each axis as a tuple, or as a single number, in which case
+        it is equal for all axes.
+    num_samples : int or tuple of int
+        Number of evenly spaced samples. The number of samples may be given for each
+        axis as a tuple, or as a single number, in which case it is equal for all axes.
+    dimension : int, optional
+        Number of dimensions of the distribution.
+    center : float or tuple of float
+        The center of the distribution (default is 0.0). The center may be given for
+        each axis as a tuple, or as a single number, in which case it is equal for
+        all axes.
+    ensemble_mean : bool or tuple of bool, optional
+        If True, the mean of the ensemble of measurements defined by the distribution
+        is calculated, otherwise the full ensemble is kept. Default is True.
+    sampling_limit : float or tuple of float, optional
+        Truncate the distribution at this many half-widths (default is 10.0). The
+        Lorentzian has heavier tails than the Gaussian, so a larger truncation is
+        recommended.
+    normalize : str, optional
+        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+    """
+    center = number_to_tuple(center, dimension)
+    half_width = number_to_tuple(half_width, dimension)
+    ensemble_mean = number_to_tuple(ensemble_mean, dimension)
+    sampling_limit = number_to_tuple(sampling_limit, dimension)
+    num_samples = number_to_tuple(num_samples, dimension)
+
+    distributions: list[BaseDistribution] = []
+    for i in range(dimension):
+        values = np.linspace(
+            -half_width[i] * sampling_limit[i] + center[i],
+            half_width[i] * sampling_limit[i] + center[i],
+            num_samples[i],
+        )
+
+        weights = 1.0 / (1.0 + ((values - center[i]) / half_width[i]) ** 2)
+
+        if normalize == "intensity":
+            weights /= np.sqrt((weights**2).sum())
+        elif normalize == "amplitude":
+            weights /= weights.sum()
+        else:
+            raise RuntimeError(f"Unknown normalization method: {normalize}")
+
+        distributions.append(
+            DistributionFromValues(
+                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
+            )
+        )
+
+    return MultidimensionalDistribution(distributions=distributions)
+
+
+def voigt(
+    gaussian_sigma: float | tuple[float, ...],
+    lorentzian_gamma: float | tuple[float, ...],
+    num_samples: int | tuple[int, ...],
+    dimension: int = 1,
+    center: float | tuple[float, ...] = 0.0,
+    ensemble_mean: bool | tuple[bool, ...] = True,
+    sampling_limit: float | tuple[float, ...] = 5.0,
+    normalize: str = "intensity",
+) -> MultidimensionalDistribution:
+    """
+    Return a distribution with values weighted according to a (multidimensional)
+    Voigt distribution, which is the convolution of a Gaussian and a Lorentzian.
+    The values are evenly spaced within a given truncation of the distribution.
+    As an example, this distribution may be used for simulating focal spread due
+    to an energy-loss spectrum with both Gaussian and Lorentzian contributions.
+
+    Parameters
+    ----------
+    gaussian_sigma : float or tuple of float
+        The standard deviation (σ) of the Gaussian component. The standard deviations
+        may be given for each axis as a tuple, or as a single number, in which case
+        it is equal for all axes.
+    lorentzian_gamma : float or tuple of float
+        The half-width at half-maximum (HWHM, γ) of the Lorentzian component. The
+        half-widths may be given for each axis as a tuple, or as a single number,
+        in which case it is equal for all axes.
+    num_samples : int or tuple of int
+        Number of evenly spaced samples. The number of samples may be given for each
+        axis as a tuple, or as a single number, in which case it is equal for all axes.
+    dimension : int, optional
+        Number of dimensions of the distribution.
+    center : float or tuple of float
+        The center of the distribution (default is 0.0). The center may be given for
+        each axis as a tuple, or as a single number, in which case it is equal for
+        all axes.
+    ensemble_mean : bool or tuple of bool, optional
+        If True, the mean of the ensemble of measurements defined by the distribution
+        is calculated, otherwise the full ensemble is kept. Default is True.
+    sampling_limit : float or tuple of float, optional
+        Truncate the distribution at this many Voigt half-widths (default is 5.0).
+        The Voigt HWHM is estimated using the Thompson et al. (1987) approximation.
+    normalize : str, optional
+        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+    """
+    from scipy.special import wofz
+
+    center = number_to_tuple(center, dimension)
+    gaussian_sigma = number_to_tuple(gaussian_sigma, dimension)
+    lorentzian_gamma = number_to_tuple(lorentzian_gamma, dimension)
+    ensemble_mean = number_to_tuple(ensemble_mean, dimension)
+    sampling_limit = number_to_tuple(sampling_limit, dimension)
+    num_samples = number_to_tuple(num_samples, dimension)
+
+    distributions: list[BaseDistribution] = []
+    for i in range(dimension):
+        sigma = gaussian_sigma[i]
+        gamma = lorentzian_gamma[i]
+
+        if sigma == 0.0 and gamma == 0.0:
+            raise ValueError(
+                "At least one of gaussian_sigma or lorentzian_gamma must be non-zero."
+            )
+
+        # Voigt HWHM estimate via Thompson et al. (1987) for the sampling range
+        fG = 2.0 * sigma * np.sqrt(2.0 * np.log(2.0))  # Gaussian FWHM
+        fL = 2.0 * gamma  # Lorentzian FWHM
+        f5 = (
+            fG**5
+            + 2.69269 * fG**4 * fL
+            + 2.42843 * fG**3 * fL**2
+            + 4.47163 * fG**2 * fL**3
+            + 0.07842 * fG * fL**4
+            + fL**5
+        )
+        voigt_hwhm = f5 ** (1.0 / 5.0) / 2.0
+
+        values = np.linspace(
+            -voigt_hwhm * sampling_limit[i] + center[i],
+            voigt_hwhm * sampling_limit[i] + center[i],
+            num_samples[i],
+        )
+
+        if sigma == 0.0:
+            weights = 1.0 / (1.0 + ((values - center[i]) / gamma) ** 2)
+        elif gamma == 0.0:
+            weights = np.exp(-0.5 * (values - center[i]) ** 2 / sigma**2)
+        else:
+            z = ((values - center[i]) + 1j * gamma) / (sigma * np.sqrt(2.0))
+            weights = np.real(wofz(z))
+
+        if normalize == "intensity":
+            weights /= np.sqrt((weights**2).sum())
+        elif normalize == "amplitude":
+            weights /= weights.sum()
+        else:
+            raise RuntimeError(f"Unknown normalization method: {normalize}")
+
+        distributions.append(
+            DistributionFromValues(
+                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
+            )
+        )
+
+    return MultidimensionalDistribution(distributions=distributions)
+
+
 @overload
 def validate_distribution(
     distribution: BaseDistribution | tuple | list | np.ndarray,
