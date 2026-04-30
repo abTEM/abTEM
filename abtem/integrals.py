@@ -850,28 +850,38 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
 
             disk_radius = int(np.ceil(table.radial_gpts[-1] / np.min(sampling)))
 
-            radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
+            fp_dtype = get_dtype(complex=False)
 
-            positions = xp.asarray(positions, dtype=get_dtype(complex=False))
+            # Transfer the integral table and radial grid to the compute dtype
+            # (float32 or float64 according to the precision config) so that all
+            # subsequent GPU operations stay in the configured precision.
+            # Without the explicit dtype, table.integrate() returns numpy float64
+            # and xp.asarray() would preserve that, creating a full float64 GPU
+            # allocation even when precision='float32'.
+            radial_potential = xp.asarray(
+                table.integrate(shifted_a, shifted_b), dtype=fp_dtype
+            )
+            radial_gpts_device = xp.asarray(table.radial_gpts, dtype=fp_dtype)
 
+            positions = xp.asarray(positions, dtype=fp_dtype)
+
+            # Compute derivative entirely in the compute dtype.  Using
+            # table.radial_gpts (float64 numpy) as the denominator would upcast
+            # the division to float64 and then silently downcast back when
+            # assigned into the float32 derivative array.
             radial_potential_derivative = xp.zeros_like(radial_potential)
             radial_potential_derivative[:, :-1] = (
-                xp.diff(radial_potential, axis=1) / xp.diff(table.radial_gpts)[None]
+                xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_device)[None]
             )
 
             if len(self._parametrization.sigmas):
-                temp = xp.zeros(gpts, dtype=get_dtype(complex=False))
+                temp = xp.zeros(gpts, dtype=fp_dtype)
             else:
                 temp = array
 
             if xp is cp:
-                # Transfer radial_gpts directly in the compute dtype so the
-                # float64-to-float32 (or float64-to-float64) conversion happens
-                # once here rather than being repeated inside
-                # interpolate_radial_functions_cuda for every disk chunk.
-                radial_gpts_dev = xp.asarray(
-                    table.radial_gpts, dtype=get_dtype(complex=False)
-                )
+                # radial_gpts_device already has the correct dtype (computed
+                # above); reuse it directly instead of re-converting.
                 # Process disk indices in chunks to avoid allocating the
                 # full array on the GPU.  For very fine sampling the disk
                 # can contain hundreds of millions of pixels (>5 GB) which
@@ -884,7 +894,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                         positions=positions,
                         disk_indices=disk_chunk,
                         sampling=sampling,
-                        radial_gpts=radial_gpts_dev,
+                        radial_gpts=radial_gpts_device,
                         radial_functions=radial_potential,
                         radial_derivative=radial_potential_derivative,
                     )
