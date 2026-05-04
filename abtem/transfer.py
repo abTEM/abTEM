@@ -557,8 +557,8 @@ class Bullseye(BaseAperture):
         dkx = float(np.abs(kx[1, 0] - kx[0, 0]))
         dky = float(np.abs(ky[0, 1] - ky[0, 0]))
         dk = min(dkx, dky)
-        edge_w = max(float(self._edge_softness) / 1e-3, 1e-30)
-        k_corner = float(self._corner_radius) / 1e-3
+        edge_w = max(float(self._edge_softness) / 1e3, 1e-30)
+        k_corner = float(self._corner_radius) / 1e3
 
         aperture = np.zeros(self.gpts, dtype=float)
 
