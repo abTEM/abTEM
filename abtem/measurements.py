@@ -1106,8 +1106,10 @@ class _BaseMeasurement2D(BaseMeasurements):
         Parameters
         ----------
         sigma : float or two float
-            Standard deviation for the Gaussian kernel in the `x` and `y`-direction. If
-            given as a single number, the standard deviation is equal for both axes.
+            Standard deviation for the Gaussian kernel in the `x` and `y`-direction
+            given in physical units (Å for real-space images, 1/Å for diffraction
+            patterns). If given as a single number, the standard deviation is equal
+            for both axes.
 
         boundary : {'periodic', 'reflect', 'constant'}
             The boundary parameter determines how the images are extended beyond their
@@ -1132,6 +1134,16 @@ class _BaseMeasurement2D(BaseMeasurements):
         -------
         filtered_images : Images
             The filtered image(s).
+
+        Notes
+        -----
+        The Gaussian kernel is parameterized by its standard deviation σ
+        (``sigma``). The corresponding full-width at half-maximum is
+        FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+
+        The Lorentzian and Voigtian filters use the half-width at half-maximum
+        (HWHM) γ as their width parameter: for the same FWHM, γ = FWHM / 2
+        whereas σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
         """
         xp = get_array_module(self.array)
         gaussian_filter = get_ndimage_module(self.array).gaussian_filter
@@ -1205,6 +1217,25 @@ class _BaseMeasurement2D(BaseMeasurements):
         -------
         filtered : same type as input
             The filtered measurement(s).
+
+        Notes
+        -----
+        The Lorentzian kernel is parameterized by its half-width at half-maximum
+        (HWHM) γ (``half_width``). The corresponding full-width at half-maximum
+        is FWHM_L = 2γ.
+
+        Note that :meth:`gaussian_filter` uses the standard deviation σ as its
+        width parameter. For the same FWHM one needs γ = FWHM / 2 whereas
+        σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
+
+        The Lorentzian source-size model is described in [1]_.
+
+        References
+        ----------
+        .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence
+           function in scanning transmission electron microscopy and spectroscopy",
+           *Ultramicroscopy* **146**, 6–16 (2014).
+           https://doi.org/10.1016/j.ultramic.2014.04.008
         """
         xp = get_array_module(self.array)
 
@@ -1287,6 +1318,28 @@ class _BaseMeasurement2D(BaseMeasurements):
         -------
         filtered : same type as input
             The filtered measurement(s).
+
+        Notes
+        -----
+        The Voigt kernel has two independent width parameters:
+
+        * ``gaussian_sigma`` (σ): standard deviation of the Gaussian component,
+          FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+        * ``lorentzian_gamma`` (γ): half-width at half-maximum (HWHM) of the
+          Lorentzian component, FWHM_L = 2γ.
+
+        Because the two components use different parameterizations, σ and γ are
+        *not* directly comparable: for the same FWHM, γ = FWHM / 2 whereas
+        σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
+
+        The Voigt source-size model is described in [1]_.
+
+        References
+        ----------
+        .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence
+           function in scanning transmission electron microscopy and spectroscopy",
+           *Ultramicroscopy* **146**, 6–16 (2014).
+           https://doi.org/10.1016/j.ultramic.2014.04.008
         """
         xp = get_array_module(self.array)
 
@@ -3401,6 +3454,21 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         filtered_diffraction_patterns : DiffractionPatterns
             The filtered diffraction pattern(s).
+
+        Notes
+        -----
+        The Lorentzian kernel is parameterized by its HWHM γ (``half_width``),
+        with FWHM_L = 2γ. This differs from :meth:`gaussian_source_size`,
+        which uses the standard deviation σ (FWHM_G ≈ 2.3548·σ).
+
+        The Lorentzian source-size model is described in [1]_.
+
+        References
+        ----------
+        .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence
+           function in scanning transmission electron microscopy and spectroscopy",
+           *Ultramicroscopy* **146**, 6–16 (2014).
+           https://doi.org/10.1016/j.ultramic.2014.04.008
         """
         return _lorentzian_source_size(self, half_width, truncate)
 
@@ -3434,6 +3502,26 @@ class DiffractionPatterns(_BaseMeasurement2D):
         -------
         filtered_diffraction_patterns : DiffractionPatterns
             The filtered diffraction pattern(s).
+
+        Notes
+        -----
+        The Voigt profile combines two width parameters:
+
+        * ``gaussian_sigma`` (σ): standard deviation of the Gaussian component,
+          FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+        * ``lorentzian_gamma`` (γ): HWHM of the Lorentzian component,
+          FWHM_L = 2γ.
+
+        For the same FWHM, γ = FWHM / 2 but σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
+
+        The Voigt source-size model is described in [1]_.
+
+        References
+        ----------
+        .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence
+           function in scanning transmission electron microscopy and spectroscopy",
+           *Ultramicroscopy* **146**, 6–16 (2014).
+           https://doi.org/10.1016/j.ultramic.2014.04.008
         """
         return _voigtian_source_size(self, gaussian_sigma, lorentzian_gamma, truncate)
 
@@ -4439,6 +4527,21 @@ class PolarMeasurements(BaseMeasurements):
         -------
         filtered_measurements : PolarMeasurements
             The filtered measurement(s).
+
+        Notes
+        -----
+        The Lorentzian kernel is parameterized by its HWHM γ (``half_width``),
+        with FWHM_L = 2γ. This differs from :meth:`gaussian_source_size`,
+        which uses the standard deviation σ (FWHM_G ≈ 2.3548·σ).
+
+        The Lorentzian source-size model is described in [1]_.
+
+        References
+        ----------
+        .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence
+           function in scanning transmission electron microscopy and spectroscopy",
+           *Ultramicroscopy* **146**, 6–16 (2014).
+           https://doi.org/10.1016/j.ultramic.2014.04.008
         """
         return _lorentzian_source_size(self, half_width, truncate)
 
@@ -4470,6 +4573,26 @@ class PolarMeasurements(BaseMeasurements):
         -------
         filtered_measurements : PolarMeasurements
             The filtered measurement(s).
+
+        Notes
+        -----
+        The Voigt profile combines two width parameters:
+
+        * ``gaussian_sigma`` (σ): standard deviation of the Gaussian component,
+          FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+        * ``lorentzian_gamma`` (γ): HWHM of the Lorentzian component,
+          FWHM_L = 2γ.
+
+        For the same FWHM, γ = FWHM / 2 but σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
+
+        The Voigt source-size model is described in [1]_.
+
+        References
+        ----------
+        .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence
+           function in scanning transmission electron microscopy and spectroscopy",
+           *Ultramicroscopy* **146**, 6–16 (2014).
+           https://doi.org/10.1016/j.ultramic.2014.04.008
         """
         return _voigtian_source_size(self, gaussian_sigma, lorentzian_gamma, truncate)
 
