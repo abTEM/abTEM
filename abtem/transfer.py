@@ -560,7 +560,7 @@ class Bullseye(BaseAperture):
         edge_w = max(float(self._edge_softness) / 1e3, 1e-30)
         k_corner = float(self._corner_radius) / 1e3
 
-        aperture = np.zeros(self.gpts, dtype=float)
+        aperture = xp.zeros(self.gpts, dtype=float)
 
         for a0 in range(self.num_rings):
             k_inner = a0 * (ds + d0)
