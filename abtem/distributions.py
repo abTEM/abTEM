@@ -352,6 +352,16 @@ def gaussian(
         Truncate the distribution at this many standard deviations (default is 3.0).
     normalize : str, optional
         Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+
+    Notes
+    -----
+    The Gaussian distribution is parameterized by its standard deviation σ
+    (``standard_deviation``). The corresponding full-width at half-maximum is
+    FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+
+    Note that the Lorentzian and Voigt distributions use the half-width at
+    half-maximum (HWHM) γ as their width parameter, so for the same FWHM one
+    needs γ = FWHM / 2 but σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
     """
     center = number_to_tuple(center, dimension)
     standard_deviation = number_to_tuple(standard_deviation, dimension)
@@ -424,6 +434,25 @@ def lorentzian(
         recommended.
     normalize : str, optional
         Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+
+    Notes
+    -----
+    The Lorentzian distribution is parameterized by its half-width at half-maximum
+    (HWHM) γ (``half_width``). The corresponding full-width at half-maximum is
+    FWHM_L = 2γ.
+
+    Note that the Gaussian distribution uses the standard deviation σ as its width
+    parameter. For the same FWHM one needs γ = FWHM / 2 but
+    σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
+
+    The Lorentzian source-size model is described in [1]_.
+
+    References
+    ----------
+    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
+       in scanning transmission electron microscopy and spectroscopy",
+       *Ultramicroscopy* **146**, 6–16 (2014).
+       https://doi.org/10.1016/j.ultramic.2014.04.008
     """
     center = number_to_tuple(center, dimension)
     half_width = number_to_tuple(half_width, dimension)
@@ -501,6 +530,33 @@ def voigt(
         The Voigt HWHM is estimated using the Thompson et al. (1987) approximation.
     normalize : str, optional
         Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+
+    Notes
+    -----
+    The Voigt profile is the convolution of a Gaussian and a Lorentzian, with two
+    independent width parameters:
+
+    * ``gaussian_sigma`` (σ): standard deviation of the Gaussian component;
+      FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+    * ``lorentzian_gamma`` (γ): half-width at half-maximum (HWHM) of the
+      Lorentzian component; FWHM_L = 2γ.
+
+    Because the two components use different parameterizations, σ and γ are
+    *not* directly comparable: for the same FWHM one needs γ = FWHM / 2 but
+    σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
+
+    The profile is computed exactly via the Faddeeva function
+    (``scipy.special.wofz``). The degenerate limits σ → 0 (pure Lorentzian)
+    and γ → 0 (pure Gaussian) are handled analytically.
+
+    The Voigt source-size model is described in [1]_.
+
+    References
+    ----------
+    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
+       in scanning transmission electron microscopy and spectroscopy",
+       *Ultramicroscopy* **146**, 6–16 (2014).
+       https://doi.org/10.1016/j.ultramic.2014.04.008
     """
     from scipy.special import wofz
 
