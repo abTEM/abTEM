@@ -284,14 +284,43 @@ def test_voigtian_filter_pure_lorentzian_limit():
     assert np.allclose(lor.array, voigt.array, atol=1e-5)
 
 
+def test_pseudo_voigtian_filter_changes_image():
+    """Pseudo-Voigtian filter with non-trivial parameters should change the image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
+    assert not np.allclose(filtered.array, images.array)
+
+
+def test_pseudo_voigtian_filter_pure_gaussian_limit():
+    """pseudo_voigtian_filter with eta=0 must equal gaussian_filter."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    sigma = 0.4
+    gauss = images.gaussian_filter(sigma)
+    pv = images.pseudo_voigtian_filter(sigma, 1.0, eta=0.0)
+    assert np.allclose(gauss.array, pv.array, atol=1e-5)
+
+
+def test_pseudo_voigtian_filter_pure_lorentzian_limit():
+    """pseudo_voigtian_filter with eta=1 must equal lorentzian_filter."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
+    images = wave.build((0, 0), lazy=False).intensity()
+    hw = 0.4
+    lor = images.lorentzian_filter(hw)
+    pv = images.pseudo_voigtian_filter(1.0, hw, eta=1.0)
+    assert np.allclose(lor.array, pv.array, atol=1e-5)
+
+
 def test_filter_boundary_modes():
-    """All three filter methods accept all three boundary modes without error."""
+    """All four filter methods accept all three boundary modes without error."""
     wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
     images = wave.build((0, 0), lazy=False).intensity()
     for boundary in ("periodic", "reflect", "constant"):
         images.gaussian_filter(0.3, boundary=boundary).array
         images.lorentzian_filter(0.3, boundary=boundary).array
         images.voigtian_filter(0.3, 0.3, boundary=boundary).array
+        images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5, boundary=boundary).array
 
 
 def test_lorentzian_filter_lazy():
@@ -307,6 +336,14 @@ def test_voigtian_filter_lazy():
     wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
     images = wave.build((0, 0), lazy=True).intensity()
     filtered = images.voigtian_filter(0.3, 0.3)
+    assert np.isfinite(filtered.array.compute()).all()
+
+
+def test_pseudo_voigtian_filter_lazy():
+    """Pseudo-Voigtian filter works on a lazy (dask-backed) image."""
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=32)
+    images = wave.build((0, 0), lazy=True).intensity()
+    filtered = images.pseudo_voigtian_filter(0.3, 0.3, eta=0.5)
     assert np.isfinite(filtered.array.compute()).all()
 
 
