@@ -595,6 +595,10 @@ class AnnularDetector(_AbstractRadialDetector):
 
     @property
     def radial_sampling(self) -> float:
+        if self._outer is None:
+            raise RuntimeError(
+                "radial_sampling is not defined when outer angle is None"
+            )
         return self._outer - self._inner
 
     @property

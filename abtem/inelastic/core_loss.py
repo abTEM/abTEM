@@ -59,6 +59,8 @@ azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
 
 
 def config_str_to_config_tuples(config_str):
+    """Parse an electron configuration string (e.g. "1s2 2s2 2p6") into a list of
+    (n, l, occupancy) tuples."""
     config_tuples = []
     for subshell_string in config_str.split(" "):
         config_tuples.append(
@@ -72,6 +74,8 @@ def config_str_to_config_tuples(config_str):
 
 
 def config_tuples_to_config_str(config_tuples):
+    """Convert a list of (n, l, occupancy) tuples back to an electron configuration
+    string (e.g. "1s2 2s2 2p6")."""
     config_str = []
     for n, ell, occ in config_tuples:
         config_str.append(str(n) + azimuthal_letter[ell] + str(occ))
@@ -79,6 +83,8 @@ def config_tuples_to_config_str(config_tuples):
 
 
 def remove_electron_from_config_str(config_str, n, ell):
+    """Remove one electron from the (n, l) subshell in the given configuration string
+    and return the updated configuration string."""
     config_tuples = []
     for shell in config_str_to_config_tuples(config_str):
         if shell[:2] == (n, ell):
@@ -89,6 +95,8 @@ def remove_electron_from_config_str(config_str, n, ell):
 
 
 def check_valid_quantum_number(Z, n, ell):
+    """Validate that the quantum numbers (n, l) correspond to an occupied subshell
+    for element with atomic number Z. Raises RuntimeError if invalid."""
     symbol = chemical_symbols[Z]
     config_tuple = config_str_to_config_tuples(electron_configurations[symbol])
 

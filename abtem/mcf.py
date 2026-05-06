@@ -177,7 +177,10 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         E = self._evaluate_flat_cropped_mcf(waves)
 
         if max(self.eigenvectors) + 1 >= E.shape[0]:
-            raise RuntimeError()
+            raise RuntimeError(
+                f"Requested eigenvector index {max(self.eigenvectors)} exceeds "
+                f"available dimensions ({E.shape[0]})"
+            )
 
         values, vectors = eigsh(E, k=max(self.eigenvectors) + 1)
         order = np.argsort(-values)

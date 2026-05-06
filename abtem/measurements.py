@@ -878,48 +878,6 @@ class MeasurementsEnsemble(BaseMeasurements):
 
         return visualization
 
-    # def show(
-    #     self,
-    #     ax: Axes = None,
-    #     common_scale: bool = True,
-    #     explode: bool | Sequence[int] = None,
-    #     overlay: bool | Sequence[int] = None,
-    #     figsize: tuple[int, int] = None,
-    #     title: str = None,
-    #     units: str = None,
-    #     legend: bool = False,
-    #     interact: bool = False,
-    #     display: bool = True,
-    #     **kwargs,
-    # ):
-    #     # if not interact:
-    #     #     self.compute()
-    #
-    #     visualization = VisualizationLines(
-    #         array=self.array,
-    #         coordinate_axes=self.ensemble_axes_metadata[-1:],
-    #         scale_axis=self._scale_axis_from_metadata(),
-    #         ensemble_axes=self.ensemble_axes_metadata[:-1],
-    #         ax=ax,
-    #         common_scale=common_scale,
-    #         explode=explode,
-    #         overlay=overlay,
-    #         figsize=figsize,
-    #         interact=interact,
-    #         title=title,
-    #         **kwargs,
-    #     )
-    #
-    #     if not display and not interact:
-    #         plt.close()
-    #
-    #     if interact and display:
-    #         from IPython.display import display as ipython_display
-    #
-    #         ipython_display(visualization.layout_widgets())
-    #
-    #     return visualization
-
 
 class _BaseMeasurement2D(BaseMeasurements):
     _base_dims = 2

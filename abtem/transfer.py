@@ -801,7 +801,11 @@ class RadialPhasePlate(BaseAperture):
         alpha_normed[alpha > max_alpha] = max_alpha
         alpha_normed[alpha < max_alpha] = alpha[alpha < max_alpha]
         alpha_normed[alpha_normed < min_alpha] = min_alpha
-        alpha_normed = (alpha_normed - alpha_normed.min()) / np.ptp(alpha_normed)
+        ptp = alpha_normed.max() - alpha_normed.min()
+        if ptp == 0:
+            alpha_normed = xp.zeros_like(alpha_normed)
+        else:
+            alpha_normed = (alpha_normed - alpha_normed.min()) / ptp
 
         phase_shift = xp.sin(alpha_normed * np.pi * (self.num_flips + 1)) < 0.0
         phase_shift = xp.exp(1.0j * self.phase_shift * phase_shift)
