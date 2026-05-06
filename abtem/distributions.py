@@ -486,7 +486,7 @@ def lorentzian(
     return MultidimensionalDistribution(distributions=distributions)
 
 
-def voigt(
+def voigtian(
     gaussian_sigma: float | tuple[float, ...],
     lorentzian_gamma: float | tuple[float, ...],
     num_samples: int | tuple[int, ...],
@@ -498,7 +498,7 @@ def voigt(
 ) -> MultidimensionalDistribution:
     """
     Return a distribution with values weighted according to a (multidimensional)
-    Voigt distribution, which is the convolution of a Gaussian and a Lorentzian.
+    Voigtian distribution, which is the convolution of a Gaussian and a Lorentzian.
     The values are evenly spaced within a given truncation of the distribution.
     As an example, this distribution may be used for simulating focal spread due
     to an energy-loss spectrum with both Gaussian and Lorentzian contributions.
@@ -549,14 +549,9 @@ def voigt(
     (``scipy.special.wofz``). The degenerate limits σ → 0 (pure Lorentzian)
     and γ → 0 (pure Gaussian) are handled analytically.
 
-    The Voigt source-size model is described in [1]_.
-
-    References
-    ----------
-    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
-       in scanning transmission electron microscopy and spectroscopy",
-       *Ultramicroscopy* **146**, 6–16 (2014).
-       https://doi.org/10.1016/j.ultramic.2014.04.008
+    Note that Nguyen et al. (2014) proposed a pseudo-Voigt (weighted sum of
+    Gaussian and Lorentzian) rather than the true convolution implemented here;
+    see :func:`pseudo_voigtian` for that model.
     """
     from scipy.special import wofz
 
@@ -603,6 +598,140 @@ def voigt(
         else:
             z = ((values - center[i]) + 1j * gamma) / (sigma * np.sqrt(2.0))
             weights = np.real(wofz(z))
+
+        if normalize == "intensity":
+            weights /= np.sqrt((weights**2).sum())
+        elif normalize == "amplitude":
+            weights /= weights.sum()
+        else:
+            raise RuntimeError(f"Unknown normalization method: {normalize}")
+
+        distributions.append(
+            DistributionFromValues(
+                values=values, weights=weights, ensemble_mean=ensemble_mean[i]
+            )
+        )
+
+    return MultidimensionalDistribution(distributions=distributions)
+
+
+def pseudo_voigtian(
+    gaussian_sigma: float | tuple[float, ...],
+    lorentzian_gamma: float | tuple[float, ...],
+    eta: float | tuple[float, ...],
+    num_samples: int | tuple[int, ...],
+    dimension: int = 1,
+    center: float | tuple[float, ...] = 0.0,
+    ensemble_mean: bool | tuple[bool, ...] = True,
+    sampling_limit: float | tuple[float, ...] = 10.0,
+    normalize: str = "intensity",
+) -> MultidimensionalDistribution:
+    """
+    Return a distribution with values weighted according to a (multidimensional)
+    pseudo-Voigtian distribution, which is a weighted linear sum of a Gaussian and
+    a Lorentzian (not their convolution). The values are evenly spaced within a
+    given truncation of the distribution.
+
+    The pseudo-Voigt model was proposed by Nguyen et al. (2014) to describe the
+    spatial coherence function in STEM. See :func:`voigtian` for the true
+    convolution (exact Voigt profile).
+
+    Parameters
+    ----------
+    gaussian_sigma : float or tuple of float
+        The standard deviation (σ) of the Gaussian component. May be given for
+        each axis as a tuple, or as a single number equal for all axes.
+    lorentzian_gamma : float or tuple of float
+        The half-width at half-maximum (HWHM, γ) of the Lorentzian component.
+        May be given for each axis as a tuple, or as a single number equal for
+        all axes.
+    eta : float or tuple of float
+        The Lorentzian mixing fraction η ∈ [0, 1]. η = 0 gives a pure Gaussian;
+        η = 1 gives a pure Lorentzian. May be given for each axis as a tuple,
+        or as a single number equal for all axes.
+    num_samples : int or tuple of int
+        Number of evenly spaced samples. May be given for each axis as a tuple,
+        or as a single number equal for all axes.
+    dimension : int, optional
+        Number of dimensions of the distribution.
+    center : float or tuple of float
+        The center of the distribution (default is 0.0). May be given for each
+        axis as a tuple, or as a single number equal for all axes.
+    ensemble_mean : bool or tuple of bool, optional
+        If True, the mean of the ensemble of measurements defined by the
+        distribution is calculated, otherwise the full ensemble is kept.
+        Default is True.
+    sampling_limit : float or tuple of float, optional
+        Truncate the distribution at this many widths (default is 10.0). The
+        effective width is max(σ, γ), so the range is sampling_limit·max(σ, γ)
+        on each side of the center.
+    normalize : str, optional
+        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
+
+    Notes
+    -----
+    The pseudo-Voigt profile is
+
+        PV(x) = (1 - η) · G(x; σ) + η · L(x; γ)
+
+    where G and L are un-normalized Gaussian and Lorentzian profiles evaluated
+    on the same grid, and the result is normalized before use.
+
+    Width parameterization:
+
+    * ``gaussian_sigma`` (σ): standard deviation; FWHM_G = 2√(2 ln 2)·σ ≈ 2.3548·σ.
+    * ``lorentzian_gamma`` (γ): HWHM; FWHM_L = 2γ.
+
+    For the same FWHM, γ = FWHM / 2 whereas σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
+
+    References
+    ----------
+    .. [1] D.T. Nguyen, S.D. Findlay, J. Etheridge, "The spatial coherence function
+       in scanning transmission electron microscopy and spectroscopy",
+       *Ultramicroscopy* **146**, 6–16 (2014).
+       https://doi.org/10.1016/j.ultramic.2014.04.008
+    """
+    center = number_to_tuple(center, dimension)
+    gaussian_sigma = number_to_tuple(gaussian_sigma, dimension)
+    lorentzian_gamma = number_to_tuple(lorentzian_gamma, dimension)
+    eta = number_to_tuple(eta, dimension)
+    ensemble_mean = number_to_tuple(ensemble_mean, dimension)
+    sampling_limit = number_to_tuple(sampling_limit, dimension)
+    num_samples = number_to_tuple(num_samples, dimension)
+
+    distributions: list[BaseDistribution] = []
+    for i in range(dimension):
+        sigma = gaussian_sigma[i]
+        gamma = lorentzian_gamma[i]
+        eta_i = eta[i]
+
+        hw = max(sigma, gamma)
+        if hw == 0.0:
+            raise ValueError(
+                "At least one of gaussian_sigma or lorentzian_gamma must be non-zero."
+            )
+
+        values = np.linspace(
+            -hw * sampling_limit[i] + center[i],
+            hw * sampling_limit[i] + center[i],
+            num_samples[i],
+        )
+
+        x = values - center[i]
+
+        if sigma == 0.0:
+            g_weights = np.zeros(num_samples[i])
+            g_weights[num_samples[i] // 2] = 1.0
+        else:
+            g_weights = np.exp(-0.5 * x**2 / sigma**2)
+
+        if gamma == 0.0:
+            l_weights = np.zeros(num_samples[i])
+            l_weights[num_samples[i] // 2] = 1.0
+        else:
+            l_weights = 1.0 / (1.0 + (x / gamma) ** 2)
+
+        weights = (1.0 - eta_i) * g_weights + eta_i * l_weights
 
         if normalize == "intensity":
             weights /= np.sqrt((weights**2).sum())
