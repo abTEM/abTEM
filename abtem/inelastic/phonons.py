@@ -264,7 +264,9 @@ def validate_seeds(
 
 from abtem.atoms import (
     AtomProperties,
+    B_to_sigma,
     atom_property_dict_to_atom_property_array,
+    sigma_to_B,
     validate_per_atom_property,
     validate_sigmas,
 )

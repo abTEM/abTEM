@@ -1228,3 +1228,49 @@ def validate_sigmas(
             raise RuntimeError("Anisotropic displacements must be given as three values.")
 
     return validated_sigmas, anisotropic
+
+
+_8PI2 = 8 * np.pi**2
+
+
+def sigma_to_B(
+    sigma: float | np.ndarray,
+) -> float | np.ndarray:
+    """Convert displacement standard deviation to crystallographic B-factor.
+
+    The B-factor (also called the Debye-Waller factor or temperature factor) is
+    related to the r.m.s. displacement sigma by B = 8π²σ².
+
+    Parameters
+    ----------
+    sigma : float or ndarray
+        Displacement standard deviation [Å]. Accepts scalars, (3,) arrays for
+        anisotropic displacements (Bx, By, Bz), or any broadcastable shape.
+
+    Returns
+    -------
+    float or ndarray
+        B-factor [Å²].
+    """
+    return _8PI2 * np.asarray(sigma) ** 2
+
+
+def B_to_sigma(
+    B: float | np.ndarray,
+) -> float | np.ndarray:
+    """Convert crystallographic B-factor to displacement standard deviation.
+
+    The r.m.s. displacement sigma is related to the B-factor by σ = sqrt(B / (8π²)).
+
+    Parameters
+    ----------
+    B : float or ndarray
+        B-factor [Å²]. Accepts scalars, (3,) arrays for anisotropic displacements,
+        or any broadcastable shape.
+
+    Returns
+    -------
+    float or ndarray
+        Displacement standard deviation [Å].
+    """
+    return np.sqrt(np.asarray(B) / _8PI2)
