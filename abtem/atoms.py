@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from typing import SupportsFloat
+from numbers import Number
+from typing import Any, Dict, Sequence, SupportsFloat, TypeGuard, Union
 
 import numpy as np
-from ase import Atoms
+from ase import Atoms, data
 from ase.build.tools import cut, rotation_matrix
 from ase.cell import Cell
+from ase.data import chemical_symbols
 from scipy.cluster.hierarchy import fcluster, linkage  # type: ignore
 from scipy.spatial.distance import pdist  # type: ignore
 
-from abtem.core.utils import is_scalar, label_to_index
+from abtem.core.utils import get_dtype, is_scalar, label_to_index
 
 axis_mapping = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
 
@@ -1075,3 +1077,200 @@ def pad_atoms(
 
     atoms = atoms_in_cell(atoms, margins)
     return atoms
+
+
+# ---------------------------------------------------------------------------
+# Per-atom property validation (also used by the Bloch wave DWF calculation)
+# ---------------------------------------------------------------------------
+
+AtomProperties = Union[
+    float,
+    np.ndarray,
+    dict[str, float],
+    dict[str, tuple[float, ...]],
+    dict[str, np.ndarray],
+    Sequence[float],
+]
+
+
+def _ensure_all_values_are_tuples(
+    props: dict[Any, Any],
+) -> TypeGuard[Dict[str, tuple[float | int, ...]]]:
+    return all(isinstance(value, tuple) for value in props.values())
+
+
+def _all_keys_are_ints(props: dict[Any, Any]) -> TypeGuard[dict[int, Any]]:
+    return all(isinstance(key, int) for key in props.keys())
+
+
+def atom_property_dict_to_atom_property_array(
+    atoms: Atoms, props: dict[str, np.ndarray]
+) -> np.ndarray:
+    dtype = get_dtype(complex=False)
+    n = next(iter(props.values())).shape
+    array = np.zeros((len(atoms.numbers),) + n, dtype=dtype)
+    for unique in np.unique(atoms.numbers):
+        array[atoms.numbers == unique] = np.array(
+            props[chemical_symbols[unique]], dtype=dtype
+        )
+    return array
+
+
+def validate_per_atom_property(
+    atoms: Atoms,
+    props: AtomProperties,
+    return_array: bool = False,
+) -> np.ndarray | dict[str, np.ndarray]:
+    """Validate and normalise a per-atom scalar or vector property.
+
+    Parameters
+    ----------
+    atoms : Atoms
+    props : float, dict, or array-like
+        A single value for all atoms, a dict keyed by symbol or atomic number,
+        or a sequence with one entry per atom.
+    return_array : bool
+        If True, always return a flat ndarray rather than a dict.
+    """
+    atomic_numbers = np.unique(atoms.numbers)
+    unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
+
+    validated_props: np.ndarray | dict[str, np.ndarray]
+    dtype = get_dtype(complex=False)
+
+    if isinstance(props, Number):
+        validated_props = {
+            symbol: np.array(props, dtype=dtype) for symbol in unique_symbols
+        }
+    elif isinstance(props, dict):
+        if _all_keys_are_ints(props):
+            validated_props = {
+                chemical_symbols[key]: np.array(value) for key, value in props.items()
+            }
+        elif not all(isinstance(key, str) for key in props.keys()):
+            raise RuntimeError(
+                "Keys in the properties dictionary must be either all "
+                "atomic numbers or all chemical symbols."
+            )
+
+        if not set(unique_symbols).issubset(set(props.keys())):
+            raise RuntimeError(
+                "Property must be provided for all atomic species."
+                f" symbols: {unique_symbols}, keys: {props.keys()}"
+            )
+
+        if _ensure_all_values_are_tuples(props):
+            first_attr = next(iter(props.values()))
+            if not all(len(attr) == len(first_attr) for attr in props.values()):
+                raise RuntimeError("All values must have the same length.")
+
+        validated_props = {
+            symbol: np.array(value, dtype=dtype) for symbol, value in props.items()
+        }
+    elif isinstance(props, (list, tuple, np.ndarray)):
+        validated_props = np.array(props, dtype=dtype)
+        if len(props) != len(atoms):
+            raise RuntimeError("Property must be provided for all atoms.")
+    else:
+        raise ValueError("Invalid type for `props`.")
+
+    if return_array and isinstance(validated_props, dict):
+        return atom_property_dict_to_atom_property_array(atoms, validated_props)
+
+    return validated_props
+
+
+def validate_sigmas(
+    atoms: Atoms, sigmas: AtomProperties, return_array: bool = False
+) -> tuple[np.ndarray | dict[str, np.ndarray], bool]:
+    """Validate displacement standard deviations and detect anisotropy.
+
+    Parameters
+    ----------
+    atoms : Atoms
+    sigmas : AtomProperties
+        Isotropic: a single float, per-element dict of floats, or length-N array.
+        Anisotropic: a 3-tuple of floats (identical for all atoms), a per-element
+        dict of 3-tuples/arrays, or an (N, 3) array.
+    return_array : bool
+        If True, always return a flat ndarray rather than a dict.
+
+    Returns
+    -------
+    validated_sigmas : ndarray or dict
+    anisotropic : bool
+    """
+    # A plain 3-tuple of scalars means the same anisotropic sigma for every atom.
+    # Promote it to a per-element dict so the general validator handles it correctly.
+    if (
+        isinstance(sigmas, tuple)
+        and len(sigmas) == 3
+        and all(isinstance(v, (int, float, np.floating)) for v in sigmas)
+    ):
+        unique_symbols = [chemical_symbols[n] for n in np.unique(atoms.numbers)]
+        sigmas = {symbol: sigmas for symbol in unique_symbols}
+
+    validated_sigmas = validate_per_atom_property(atoms, sigmas, return_array=return_array)
+
+    if isinstance(validated_sigmas, dict):
+        sigmas_array = next(iter(validated_sigmas.values()))
+        anisotropic = np.asarray(sigmas_array).shape == (3,)
+    else:
+        if (
+            validated_sigmas.shape
+            and len(validated_sigmas.shape) == 2
+            and validated_sigmas.shape[-1] == 3
+        ):
+            anisotropic = True
+        elif len(validated_sigmas.shape) < 2:
+            anisotropic = False
+        else:
+            raise RuntimeError("Anisotropic displacements must be given as three values.")
+
+    return validated_sigmas, anisotropic
+
+
+_8PI2 = 8 * np.pi**2
+
+
+def sigma_to_B(
+    sigma: float | np.ndarray,
+) -> float | np.ndarray:
+    """Convert displacement standard deviation to crystallographic B-factor.
+
+    The B-factor (also called the Debye-Waller factor or temperature factor) is
+    related to the r.m.s. displacement sigma by B = 8π²σ².
+
+    Parameters
+    ----------
+    sigma : float or ndarray
+        Displacement standard deviation [Å]. Accepts scalars, (3,) arrays for
+        anisotropic displacements (Bx, By, Bz), or any broadcastable shape.
+
+    Returns
+    -------
+    float or ndarray
+        B-factor [Å²].
+    """
+    return _8PI2 * np.asarray(sigma) ** 2
+
+
+def B_to_sigma(
+    B: float | np.ndarray,
+) -> float | np.ndarray:
+    """Convert crystallographic B-factor to displacement standard deviation.
+
+    The r.m.s. displacement sigma is related to the B-factor by σ = sqrt(B / (8π²)).
+
+    Parameters
+    ----------
+    B : float or ndarray
+        B-factor [Å²]. Accepts scalars, (3,) arrays for anisotropic displacements,
+        or any broadcastable shape.
+
+    Returns
+    -------
+    float or ndarray
+        Displacement standard deviation [Å].
+    """
+    return np.sqrt(np.asarray(B) / _8PI2)
