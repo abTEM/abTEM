@@ -495,12 +495,12 @@ class Bullseye(BaseAperture):
         """Width of rings [mrad]."""
         return self._ring_width
     @property
-    def edge_softness_px(self) -> float:
+    def edge_softness(self) -> float:
         """Edge softness [mrads]"""
         return self._edge_softness
 
     @property
-    def corner_radius_px(self) -> float:
+    def corner_radius(self) -> float:
         """Corner radius [mrads]"""
         return self._corner_radius
 
