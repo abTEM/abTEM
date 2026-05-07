@@ -821,8 +821,9 @@ class TemporalEnvelope(BaseTransferFunction):
     Parameters
     ----------
     focal_spread: float or 1D array or BaseDistribution
-        The standard deviation of the focal spread due to chromatic aberration and lens
-        current instability [Å].
+        The 1/e width of the focal spread distribution due to chromatic aberration and
+        lens current instability [Å]. Note: this uses the 1/e width convention (as in
+        Kirkland), not the standard deviation; to convert, use focal_spread = sqrt(2)*sigma.
         Alternatively, a distribution of values may be provided.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
@@ -856,7 +857,7 @@ class TemporalEnvelope(BaseTransferFunction):
 
     @property
     def focal_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the focal spread [Å]."""
+        """The 1/e width of the focal spread distribution [Å]."""
         return self._focal_spread
 
     @focal_spread.setter
@@ -1486,8 +1487,10 @@ class CTF(_HasAberrations, BaseAperture):
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     focal_spread: float, optional
-        The standard deviation of the focal spread due to chromatic aberration and lens
-        current instability [Å] (default is 0).
+        The 1/e width of the focal spread distribution due to chromatic aberration and
+        lens current instability [Å] (default is 0). Note: this uses the 1/e width
+        convention (as in Kirkland), not the standard deviation; to convert, use
+        focal_spread = sqrt(2)*sigma.
     angular_spread: float, optional
         The standard deviation of the angular deviations due to source size [Å]
         (default is 0).
@@ -1649,7 +1652,7 @@ class CTF(_HasAberrations, BaseAperture):
 
     @property
     def focal_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the focal spread [Å]."""
+        """The 1/e width of the focal spread distribution [Å]."""
         return self._focal_spread
 
     @focal_spread.setter
