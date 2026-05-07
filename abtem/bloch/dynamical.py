@@ -51,7 +51,7 @@ from abtem.core.fft import fft_interpolate
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
-from abtem.inelastic.phonons import (
+from abtem.atoms import (
     AtomProperties,
     validate_per_atom_property,
     validate_sigmas,
@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 
 
 def calculate_scattering_factors(
-    g: np.ndarray,
+    g_vec: np.ndarray,
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
@@ -82,8 +82,10 @@ def calculate_scattering_factors(
 
     Parameters
     ----------
-    g : np.ndarray
-        The scattering vector lengths [1/Å].
+    g_vec : np.ndarray
+        Scattering vectors [1/Å]. Either Cartesian vectors with shape (N_g, 3), or
+        plain magnitudes with shape (N_g,). Anisotropic Debye-Waller factors require
+        shape (N_g, 3); passing magnitudes with anisotropic sigmas raises an error.
     atoms : Atoms
         Atoms object.
     g_max : float
@@ -93,12 +95,13 @@ def calculate_scattering_factors(
         Parametrization for the scattering factors.
     thermal_sigma : dict
         Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
+        For anisotropic displacements, provide three values per atom or element (σx, σy, σz).
     cutoff : {'taper', 'hard'}
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard'
         is a hard cutoff.
     """
 
-    validated_thermal_sigma, _ = validate_sigmas(
+    validated_thermal_sigma, anisotropic = validate_sigmas(
         atoms, thermal_sigma, return_array=True
     )
     validated_occupancy = validate_per_atom_property(
@@ -110,21 +113,43 @@ def calculate_scattering_factors(
 
     parametrization = validate_parametrization(parametrization)
 
+    if g_vec.ndim == 1:
+        if anisotropic:
+            raise ValueError(
+                "Anisotropic Debye-Waller factors require Cartesian g-vectors "
+                "with shape (N_g, 3), not plain magnitudes."
+            )
+        g = g_vec
+        g_vec_3d = None
+    else:
+        g = np.linalg.norm(g_vec, axis=1)
+        g_vec_3d = g_vec
+
     Z_unique = np.unique(atoms.numbers)
 
     scattering_factors = {Z: parametrization.scattering_factor(Z) for Z in Z_unique}
 
     f_e = np.zeros((len(atoms), len(g)), dtype=get_dtype(complex=True))
 
+    two_pi_sq = (2 * np.pi) ** 2
+
     for i in range(len(atoms)):
         Z = atoms.numbers[i]
         s = validated_thermal_sigma[i]
         o = validated_occupancy[i]
 
-        if s != 0.0:
-            DWF = np.exp(-0.5 * s**2 * g**2 * (2 * np.pi) ** 2)
+        if anisotropic:
+            # s has shape (3,); g_vec_3d has shape (N_g, 3)
+            # DWF = exp(-0.5 * (2π)² * Σ_α σ_α² gα²)
+            if np.any(s != 0.0):
+                DWF = np.exp(-0.5 * two_pi_sq * (g_vec_3d**2 @ s**2))
+            else:
+                DWF = 1.0
         else:
-            DWF = 1.0
+            if s != 0.0:
+                DWF = np.exp(-0.5 * s**2 * g**2 * two_pi_sq)
+            else:
+                DWF = 1.0
 
         f_e[i] = scattering_factors[Z](g**2) * DWF * o
 
@@ -182,10 +207,8 @@ def calculate_structure_factors(
     new_cell = atoms.cell.copy().complete()
     positions = np.linalg.solve(new_cell.T, atoms.positions.T).T
 
-    g = np.linalg.norm(calculate_g_vec(hkl, atoms.cell), axis=1)
-
     f_e = calculate_scattering_factors(
-        g=g,
+        g_vec=calculate_g_vec(hkl, atoms.cell),
         atoms=atoms,
         g_max=g_max,
         parametrization=parametrization,
@@ -471,7 +494,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
     def calculate_scattering_factors(self) -> np.ndarray:
         """Calculate the scattering factors for each atomic species in the structure."""
         return calculate_scattering_factors(
-            g=self.g_vec_length,
+            g_vec=self.g_vec,
             atoms=self.atoms,
             parametrization=self._parametrization,
             g_max=self.g_max,
