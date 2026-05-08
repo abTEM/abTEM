@@ -488,7 +488,7 @@ class ImageArtist(Artist2D):
             origin=origin,
             cmap=cmap,
             extent=extent,
-            interpolation=kwargs.pop("interpolation", "antialiased"),
+            interpolation=kwargs.pop("interpolation", "none"),
             **kwargs,
         )
         norm = _get_norm(vmin, vmax, power, logscale)
@@ -985,7 +985,7 @@ class DomainColoringArtist(Artist2D):
         self._phase_axes_image = ax.imshow(
             np.angle(measurement.array).T,
             origin="lower",
-            interpolation=kwargs.pop("interpolation", "antialiased"),
+            interpolation=kwargs.pop("interpolation", "none"),
             alpha=alpha.T,
             vmin=-np.pi,
             vmax=np.pi,
@@ -996,7 +996,7 @@ class DomainColoringArtist(Artist2D):
         self._amplitude_axes_image = ax.imshow(
             abs_array.T,
             origin="lower",
-            interpolation=kwargs.pop("interpolation", "antialiased"),
+            interpolation=kwargs.pop("interpolation", "none"),
             cmap="gray",
             zorder=-1,
             extent=extent,

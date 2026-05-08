@@ -211,6 +211,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         kwargs :
             Additional keyword arguments for the show method of :class:`.Images`.
         """
+        kwargs.setdefault("interpolation", "antialiased")
         if project:
             return self.project().show(**kwargs)
         else:
