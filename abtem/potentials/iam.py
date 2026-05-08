@@ -211,6 +211,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         kwargs :
             Additional keyword arguments for the show method of :class:`.Images`.
         """
+        kwargs.setdefault("interpolation", "antialiased")
         if project:
             return self.project().show(**kwargs)
         else:
@@ -587,6 +588,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
             atoms.wrap(eps=0.0)
+            # wrap(eps=0.0) uses strict modulo: z positions that are tiny-negative
+            # (floating-point artifact from ASE surface builders) become z ≈ cell_z
+            # instead of z = 0.  The SliceIndexedAtoms bin edges are nudged down by
+            # 1e-12 to fix cumsum drift, so any atom in (cell_z-1e-12, cell_z) falls
+            # outside all bins and is silently dropped.  Snap those back to 0.
+            cell_z = atoms.cell[2, 2]
+            atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
