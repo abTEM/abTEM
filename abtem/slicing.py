@@ -40,6 +40,139 @@ def crystal_slice_thicknesses(atoms: Atoms, tolerance: float = 0.2) -> np.ndarra
     return slice_thickness
 
 
+def commensurate_slice_thickness(
+    atoms: Atoms,
+    target_thickness: float = 1.0,
+    tolerance: float = 0.2,
+) -> tuple[float, ...]:
+    """
+    Find slice thicknesses commensurate with the crystal planes, closest to a target
+    thickness.
+
+    Unique z-positions (within `tolerance`) define candidate slice boundaries between 0
+    and the cell height.  Adjacent plane-level slices are merged so that each resulting
+    slice thickness is as close as possible to `target_thickness` while keeping
+    boundaries aligned with atomic planes.
+
+    Parameters
+    ----------
+    atoms : Atoms
+        The atoms to be sliced. Must have an orthogonal cell.
+    target_thickness : float
+        Target slice thickness [Å].
+    tolerance : float
+        Tolerance for identifying distinct crystal planes [Å].
+
+    Returns
+    -------
+    tuple of float
+        Commensurate slice thicknesses.
+    """
+    cell_z = float(atoms.cell[2, 2])
+    z = atoms.positions[:, 2] % cell_z
+
+    unique_z = np.unique(np.round(z / tolerance).astype(int)) * tolerance
+    unique_z = unique_z[(unique_z > tolerance / 2) & (unique_z < cell_z - tolerance / 2)]
+
+    boundaries = np.sort(np.concatenate(([0.0], unique_z, [cell_z])))
+    plane_thicknesses = np.diff(boundaries)
+
+    merged = []
+    acc = 0.0
+    for t in plane_thicknesses:
+        if acc > 0 and acc + t > target_thickness and acc >= target_thickness * 0.5:
+            merged.append(acc)
+            acc = t
+        else:
+            acc += t
+    if acc > 0:
+        merged.append(acc)
+
+    result = tuple(float(t) for t in merged)
+    assert np.isclose(sum(result), cell_z)
+    return result
+
+
+def commensurate_gpts(
+    extent: tuple[float, float],
+    positions: np.ndarray,
+    target_sampling: float = 0.05,
+    tolerance: float = 1e-3,
+) -> tuple[int, int]:
+    """
+    Find grid points such that the sampling grid is commensurate with the atom
+    positions in x and y, closest to a target sampling.
+
+    For each axis the function identifies the unique atom planes and computes the
+    GCD of the spacings between them.  This gives the primitive lattice spacing
+    and therefore the required grid period p (= number of grid points per unit
+    cell of the primitive lattice).  The result is invariant under rigid
+    translations of the structure: a crystal that has been centered or otherwise
+    shifted within the cell always yields the same p as the unshifted version.
+
+    Parameters
+    ----------
+    extent : tuple of float
+        Grid extent in x and y [Å].
+    positions : np.ndarray
+        Atom positions with shape (N, 3) or (N, 2).
+    target_sampling : float
+        Target grid sampling [Å].
+    tolerance : float
+        Tolerance for identifying distinct atom planes [Å].
+
+    Returns
+    -------
+    tuple of int
+        Number of grid points in x and y.
+    """
+    gpts = []
+    for i in range(2):
+        L = extent[i]
+        n_target = int(np.ceil(L / target_sampling))
+
+        x = positions[:, i] % L
+        # Snap values at x ≈ L back to 0: floating-point modulo can leave atoms
+        # from cell-transform at L−ε rather than 0, creating a spurious near-zero
+        # spacing that breaks the GCD calculation.
+        x[x > L - tolerance] = 0.0
+        x = np.sort(x)
+
+        # De-duplicate: keep one representative per distinct atom plane
+        unique_mask = np.concatenate([[True], np.diff(x) > tolerance])
+        unique_x = x[unique_mask]
+
+        if len(unique_x) <= 1:
+            gpts.append(n_target)
+            continue
+
+        # Spacings between consecutive unique planes, including the wrap-around gap
+        spacings = np.concatenate([np.diff(unique_x), [L + unique_x[0] - unique_x[-1]]])
+
+        min_spacing = float(np.min(spacings))
+        if min_spacing < tolerance:
+            gpts.append(n_target)
+            continue
+
+        # Check that every spacing is approximately an integer multiple of the
+        # minimum spacing (i.e. the minimum is the primitive spacing).
+        ratios = spacings / min_spacing
+        k = np.round(ratios).astype(int)
+        if np.any(np.abs(ratios - k) > 0.05) or np.any(k < 1):
+            # No clear commensurability — fall back to the raw target
+            gpts.append(n_target)
+            continue
+
+        # Primitive spacing refined as L / (total number of primitive periods).
+        # Using L / sum(k) is more accurate than min_spacing alone because it
+        # averages out any floating-point scatter in the individual spacings.
+        n_periods = int(np.sum(k))
+        n_multiple = max(round(n_target / n_periods), 1) * n_periods
+        gpts.append(n_multiple)
+
+    return tuple(gpts)
+
+
 def is_number(value: Any) -> TypeGuard[int | float | np.ndarray]:
     """
     Check if the value is a number, including a NumPy array with a single element,
