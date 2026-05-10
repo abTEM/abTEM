@@ -56,6 +56,8 @@ from abtem.slicing import (
     SlicedAtoms,
     SliceIndexedAtoms,
     _validate_slice_thickness,
+    commensurate_gpts,
+    commensurate_slice_thickness,
     slice_limits,
 )
 
@@ -595,6 +597,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # outside all bins and is silently dropped.  Snap those back to 0.
             cell_z = atoms.cell[2, 2]
             atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+            # Same issue for x and y: orthogonalize_cell can produce -0.0 or tiny-
+            # negative values from matrix multiplication.  wrap(eps=0.0) maps -ε to
+            # L-ε rather than 0, placing the atom's FFT peak at the wrong position.
+            for ax in (0, 1):
+                L = atoms.cell[ax, ax]
+                atoms.positions[atoms.positions[:, ax] > L - 1e-10, ax] = 0.0
+                atoms.positions[np.abs(atoms.positions[:, ax]) < 1e-10, ax] = 0.0
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
@@ -795,16 +804,19 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         Number of grid points in `x` and `y` describing each slice of the potential.
         Provide either "sampling" (spacing between consecutive grid points) or "gpts"
         (total number of grid points).
-    sampling : one or two float, optional
+    sampling : one or two float or 'auto', optional
         Sampling of the potential in `x` and `y` [Å].
-        Provide either "sampling" or "gpts".
-    slice_thickness : float or sequence of float, optional
+        Provide either "sampling" or "gpts". If 'auto', the grid points are chosen
+        to be commensurate with the atom positions (closest to a default of 0.05 Å).
+    slice_thickness : float or sequence of float or 'auto', optional
         Thickness of the potential slices in the propagation direction in [Å]
         (default is 1 Å).
         If given as a float, the number of slices is calculated by dividing the slice
         thickness into the `z`-height of supercell. The slice thickness may be given as
         a sequence of values for each slice, in which case an error will be thrown if
         the sum of slice thicknesses is not equal to the height of the atoms.
+        If 'auto', slice boundaries are aligned with the crystal planes, with slices
+        merged to stay close to a default of 1.0 Å.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential
         for each element. Two of the most accurate parametrizations are available
@@ -859,8 +871,8 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         self,
         atoms: Atoms | BaseFrozenPhonons,
         gpts: int | tuple[int, int] | None = None,
-        sampling: float | tuple[float, float] | None = None,
-        slice_thickness: float | tuple[float, ...] = 1,
+        sampling: float | tuple[float, float] | str | None = None,
+        slice_thickness: float | tuple[float, ...] | str = 1,
         parametrization: str | Parametrization = "lobato",
         projection: str = "infinite",
         exit_planes: int | tuple[int, ...] | None = None,
@@ -873,6 +885,68 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         integrator: FieldIntegrator | None = None,
         device: str | None = None,
     ):
+        frozen_phonons = _validate_frozen_phonons(atoms)
+        atoms_obj = frozen_phonons.atoms
+
+        if sampling == "auto":
+            if gpts is not None:
+                raise ValueError(
+                    "Cannot specify both gpts and sampling='auto'"
+                )
+            cell = np.array(atoms_obj.cell)
+            if not atoms_obj.pbc[:2].all():
+                # Non-periodic in xy (e.g. a nanoparticle): atom positions are not
+                # translationally repeated, so commensurability has no meaning and
+                # the period-search algorithm may produce spurious results for
+                # arbitrary rotations.  Just use the target sampling directly.
+                if box is not None:
+                    extent = box[:2]
+                else:
+                    extent = (float(cell[0, 0]), float(cell[1, 1]))
+                gpts = tuple(int(np.ceil(extent[i] / 0.05)) for i in range(2))
+            elif _require_cell_transform(cell, box=box, plane=plane, origin=origin):
+                if not isinstance(plane, str):
+                    raise NotImplementedError
+                axes = plane_to_axes(plane)
+                cell_2d = cell[:, list(axes)]
+                auto_box = tuple(best_orthogonal_cell(cell_2d))
+                extent = auto_box[:2]
+                # Transform atoms to orthogonal cell so positions match the extent
+                _auto_atoms = orthogonalize_cell(
+                    atoms_obj,
+                    box=auto_box,
+                    plane=plane,
+                    origin=origin,
+                    return_transform=False,
+                    allow_transform=True,
+                )
+                gpts = commensurate_gpts(
+                    extent, _auto_atoms.positions, target_sampling=0.05
+                )
+            else:
+                if box is not None:
+                    extent = box[:2]
+                    _auto_atoms = atoms_obj
+                else:
+                    extent = (float(cell[0, 0]), float(cell[1, 1]))
+                    _auto_atoms = atoms_obj
+                gpts = commensurate_gpts(
+                    extent, _auto_atoms.positions, target_sampling=0.05
+                )
+            sampling = None
+
+        if slice_thickness == "auto":
+            if atoms_obj.pbc[2]:
+                # Periodic in z: align slice boundaries with crystal planes.
+                slice_thickness = commensurate_slice_thickness(
+                    atoms_obj, target_thickness=1.0
+                )
+            else:
+                # Non-periodic in z (e.g. a nanoparticle or slab in vacuum):
+                # crystal-plane commensurability is not applicable; use a uniform
+                # target thickness and let _validate_slice_thickness divide evenly.
+                slice_thickness = 1.0
+
         if integrator is None:
             if projection == "finite":
                 integrator = QuadratureProjectionIntegrals(
