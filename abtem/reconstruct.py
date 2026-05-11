@@ -53,6 +53,7 @@ class ProgressBar:
     def __init__(self, **kwargs):
         from tqdm.auto import tqdm
 
+        kwargs.setdefault("delay", 0.5)
         self._tqdm = tqdm(**kwargs)
 
     @property
