@@ -81,7 +81,7 @@ class NoiseTransform(EnsembleTransform):
 
     @property
     def metadata(self) -> dict:
-        return {"units": "", "label": "electron counts"}
+        return {"units": "electrons", "label": "Counts"}
 
     def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
         array = array_object._eager_array
@@ -347,7 +347,7 @@ class ScanNoiseTransform(EnsembleTransform):
 
     @property
     def metadata(self) -> dict:
-        return {"units": "", "label": "electron counts"}
+        return {"units": "electrons", "label": "Counts"}
 
     def _calculate_new_array(self, array_object: ArrayObject) -> np.ndarray:
         array = array_object._eager_array
