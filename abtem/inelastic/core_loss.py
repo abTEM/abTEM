@@ -1065,7 +1065,7 @@ def linear_scaling_transition_multislice(
         S2_multislice = S2
 
     images = np.zeros(len(positions), dtype=np.float32)
-    for i in tqdm(range(len(potential))):
+    for i in tqdm(range(len(potential)), delay=0.5):
         if stream:
             S1 = S1.streaming_multislice(
                 potential, chunks=chunks, start=max(i - 1, 0), stop=i

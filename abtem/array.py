@@ -454,7 +454,7 @@ def _get_progress_bar(
 
     if progress_bar:
         if progress_bar == "tqdm":
-            progress_bar_obj = TqdmCallback(desc="tasks")
+            progress_bar_obj = TqdmCallback(desc="tasks", delay=0.5)
         else:
             progress_bar_obj = ProgressBar()
     else:
