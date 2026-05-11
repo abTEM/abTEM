@@ -397,9 +397,9 @@ class Artist2D(Artist):
         raise NotImplementedError
         # for i, ax in enumerate(np.array(self.axes).ravel()):
         #     if panel == "first" and i == 0:
-        #         area_indicator._add_to_visualization(ax, **kwargs)
+        #         area_indicator._add_to_plot(ax, **kwargs)
         #     elif panel == "all":
-        #         area_indicator._add_to_visualization(ax, **kwargs)
+        #         area_indicator._add_to_plot(ax, **kwargs)
 
 
 def default_cbar_scalar_formatter():

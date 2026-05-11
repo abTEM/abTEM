@@ -1023,7 +1023,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         )
 
     def show(self, **kwargs):
-        self.to_images().show(**kwargs)
+        return self.to_images().show(**kwargs)
 
 
 def linear_scaling_transition_multislice(
