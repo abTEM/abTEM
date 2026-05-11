@@ -24,20 +24,34 @@ from abtem.potentials.iam import CrystalPotential, Potential
     gpts=abtem_st.gpts(),
     slice_thickness=st.floats(min_value=1, max_value=2.0),
 )
+@pytest.mark.parametrize("projection", ["finite", "infinite"])
+@pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
+def test_build_parametrizations(atoms, gpts, slice_thickness, parametrization, projection):
+    potential = Potential(
+        atoms,
+        gpts=gpts,
+        slice_thickness=slice_thickness,
+        parametrization=parametrization,
+        projection=projection,
+    )
+    potential.build(lazy=False).compute()
+
+
+@given(
+    atoms=abtem_st.atoms(max_atomic_number=14),
+    gpts=abtem_st.gpts(),
+    slice_thickness=st.floats(min_value=1, max_value=2.0),
+)
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
-@pytest.mark.parametrize("parametrization", ["kirkland", "lobato"])
-@pytest.mark.parametrize("projection", ["finite", "infinite"])
-def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, projection):
+def test_build_device_lazy(atoms, gpts, slice_thickness, lazy, device):
     potential = Potential(
         atoms,
         gpts=gpts,
         device=device,
         slice_thickness=slice_thickness,
-        parametrization=parametrization,
-        projection=projection,
     )
-    potential_array = potential.build(lazy=lazy).compute()
+    potential.build(lazy=lazy).compute()
 
 
 @given(

@@ -8,13 +8,6 @@ from utils import assert_array_matches_device, gpu
 from abtem import GridScan, WavesDetector
 from abtem.core.backend import cp
 
-from hypothesis import HealthCheck, settings
-
-settings.register_profile(
-    "my_profile", suppress_health_check=[HealthCheck.filter_too_much]
-)
-settings.load_profile("my_profile")
-
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", [gpu, "cpu"])
@@ -131,6 +124,7 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
     assert s_matrix_measurement == probe_measurement
 
 
+@pytest.mark.slow
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
 @pytest.mark.parametrize(
@@ -153,7 +147,6 @@ def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
         abtem_st.annular_detector,
     ],
 )
-# @settings(verbosity=Verbosity.verbose, phases=[Phase.generate])
 def test_prism_scan(
     data, interpolation, detector, downsample, lazy, frozen_phonons, device
 ):
@@ -252,73 +245,3 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
 
     # assert prism_measurement.shape == probe_measurement.shape
     # assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
-
-
-# @given(atoms=abtem_st.atoms(min_side_length=5, max_side_length=10),
-#        gpts=abtem_st.gpts(min_value=32, max_value=64),
-#        planewave_cutoff=st.floats(10, 15),
-#        interpolation=st.integers(min_value=1, max_value=4),
-#        energy=st.floats(100e3, 200e3),
-#        data=st.data())
-# @pytest.mark.parametrize('lazy', [True])
-# @pytest.mark.parametrize('device', ['cpu'])
-# def test_prism_interpolation(data, atoms, gpts, planewave_cutoff, energy, lazy, device, interpolation):
-#     detectors = data.draw(abtem_st.detectors(max_detectors=1))
-#
-#     potential = Potential(atoms, gpts=gpts, device=device).build(lazy=lazy)
-#     # scan = GridScan(start=(0, 0), end=potential.extent)
-#     #
-#     # probe = Probe(semiangle_cutoff=planewave_cutoff, energy=energy, device=device)
-#     # probe.grid.match(potential)
-#
-#     # tiled_potential = potential.tile((interpolation,) * 2)
-#     s_matrix = SMatrix(potential=potential, interpolation=interpolation, planewave_cutoff=planewave_cutoff,
-#                        energy=energy, device=device, downsample=False)
-#
-#     # diffraction_pattern = probe.build(lazy=False).diffraction_patterns()
-#     prism_diffraction_pattern = s_matrix.build(stop=0, lazy=False).reduce().diffraction_patterns()
-#
-#     # xp = get_array_module(device)
-#     # assume(xp.abs(diffraction_pattern.array - prism_diffraction_pattern.array).max() < 1e-6)
-#     # assume_valid_probe_and_detectors(probe, detectors)
-#     #
-#     # measurement = probe.scan(potential, scan=scan, detectors=detectors, lazy=lazy)
-#     # prism_measurement = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy)
-#     #
-#     # assert np.allclose(measurement.array, prism_measurement.array, atol=1e-6)
-#
-# #
-#
-
-#
-#
-#
-# @given(atoms=abtem_st.atoms(min_side_length=5, max_side_length=10),
-#        gpts=abtem_st.gpts(min_value=32, max_value=64),
-#        planewave_cutoff=st.floats(5, 15),
-#        energy=st.floats(100e3, 200e3),
-#        interpolation=st.integers(min_value=2, max_value=4),
-#        distribute_scan=st.tuples(st.integers(min_value=1, max_value=3), st.integers(min_value=1, max_value=3)),
-#        data=st.data())
-# @pytest.mark.parametrize('lazy', [True])
-# @pytest.mark.parametrize('device', ['cpu', gpu])
-# @pytest.mark.parametrize('store_on_host', [False, True])
-# def test_distribute_scan(data, atoms, gpts, planewave_cutoff, energy, lazy, distribute_scan, interpolation,
-#                          device, store_on_host):
-#     detectors = data.draw(abtem_st.detectors(allow_detect_every=lazy, max_detectors=1))
-#
-#     s_matrix = SMatrix(potential=atoms, gpts=gpts, interpolation=interpolation, planewave_cutoff=planewave_cutoff,
-#                        energy=energy, device=device, store_on_host=True)
-#
-#     probe = s_matrix.build(stop=0, lazy=True).comparable_probe()
-#
-#     assert isinstance(s_matrix.build().compute().array, np.ndarray)
-#
-#     assume_valid_probe_and_detectors(probe, detectors)
-#
-#     scan = GridScan()
-#     measurements = s_matrix.scan(scan=scan, detectors=detectors, distribute_scan=distribute_scan, lazy=lazy,
-#                                  downsample=False)
-#     measurements.compute()
-#
-#     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan)

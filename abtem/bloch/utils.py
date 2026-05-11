@@ -226,7 +226,7 @@ def fast_filter_excitation_errors(
     wavelength: float,
     sg_max: float,
 ) -> None:
-    g_length_2 = (g**2).sum(axis=-1)
+    g_length_2 = g[:, 0] ** 2 + g[:, 1] ** 2 + g[:, 2] ** 2
 
     b = 0.5 * wavelength * g_length_2
     for i in range(len(orientation_matrices)):
