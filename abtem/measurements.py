@@ -1836,7 +1836,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         return LineScan(start=start, end=end, sampling=sampling)
 
-    def _add_to_visualization(self, *args, **kwargs):
+    def _add_to_plot(self, *args, **kwargs):
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
                 "The metadata does not contain the keys 'start' and 'end'"
@@ -1845,7 +1845,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         if "width" in self.metadata:
             kwargs["width"] = self.metadata["width"]
 
-        self._line_scan().add_to_axes(*args, **kwargs)
+        self._line_scan().add_to_plot(*args, **kwargs)
 
     @staticmethod
     def _calculate_widths(array, sampling, height):
