@@ -211,6 +211,7 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         kwargs :
             Additional keyword arguments for the show method of :class:`.Images`.
         """
+        kwargs.setdefault("interpolation", "antialiased")
         if project:
             return self.project().show(**kwargs)
         else:
@@ -587,6 +588,13 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if self.periodic:
             atoms = self.frozen_phonons.randomize(atoms)
             atoms.wrap(eps=0.0)
+            # wrap(eps=0.0) uses strict modulo: z positions that are tiny-negative
+            # (floating-point artifact from ASE surface builders) become z ≈ cell_z
+            # instead of z = 0.  The SliceIndexedAtoms bin edges are nudged down by
+            # 1e-12 to fix cumsum drift, so any atom in (cell_z-1e-12, cell_z) falls
+            # outside all bins and is silently dropped.  Snap those back to 0.
+            cell_z = atoms.cell[2, 2]
+            atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
@@ -1350,6 +1358,9 @@ class CrystalPotential(_PotentialBuilder):
     seeds: int or sequence of int
         Seed for the random number generator (RNG), or one seed for each RNG in the
         frozen phonon ensemble.
+    ensemble_mean : bool, optional
+        If True (default), the mean over the frozen-phonon ensemble is calculated.
+        If False, the individual configurations are returned.
     """
 
     def __init__(
@@ -1359,6 +1370,7 @@ class CrystalPotential(_PotentialBuilder):
         num_frozen_phonons: int | None = None,
         exit_planes: int | None = None,
         seeds: int | tuple[int, ...] | None = None,
+        ensemble_mean: bool = True,
     ):
         if num_frozen_phonons is None and seeds is None:
             self._seeds = None
@@ -1416,6 +1428,11 @@ class CrystalPotential(_PotentialBuilder):
 
         self._potential_unit = potential_unit
         self._repetitions = repetitions
+        self._ensemble_mean = ensemble_mean
+
+    @property
+    def ensemble_mean(self) -> bool:
+        return self._ensemble_mean
 
     @property
     def ensemble_shape(self) -> tuple[int, ...]:
@@ -1481,7 +1498,7 @@ class CrystalPotential(_PotentialBuilder):
         if self.seeds is None:
             return []
         else:
-            return [FrozenPhononsAxis(_ensemble_mean=True)]
+            return [FrozenPhononsAxis(_ensemble_mean=self._ensemble_mean)]
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):

@@ -203,8 +203,8 @@ class Accelerator(EqualityMixin, CopyMixin):
         )
         if (
             (self.energy is not None)
-            & (other_energy is not None)
-            & (self.energy != other_energy)
+            and (other_energy is not None)
+            and (self.energy != other_energy)
         ):
             raise RuntimeError("Inconsistent energies")
 

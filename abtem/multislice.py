@@ -276,7 +276,11 @@ def allocate_measurement(
     shape = detector._out_shape(waves)[0]
     #
     if extra_ensemble_axes_shape is not None:
-        assert len(extra_ensemble_axes_shape) == len(extra_ensemble_axes_shape)
+        if len(extra_ensemble_axes_shape) != len(extra_ensemble_axes_metadata):
+            raise ValueError(
+                f"extra_ensemble_axes_shape length ({len(extra_ensemble_axes_shape)}) "
+                f"!= extra_ensemble_axes_metadata length ({len(extra_ensemble_axes_metadata)})"
+            )
         shape = extra_ensemble_axes_shape + shape
         axes_metadata = extra_ensemble_axes_metadata + axes_metadata
 

@@ -481,6 +481,10 @@ class Bullseye(BaseAperture):
     sampling : two float, optional
         Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be
         ignored.
+    edge_softness : float, optional
+        Edge softness in mrads. Default value is 0.0.
+    corner_radius : float, optional
+        Corner radius in mrads. Default value is 0.0
     """
 
     def __init__(
@@ -494,11 +498,16 @@ class Bullseye(BaseAperture):
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
+        edge_softness: float = 0.0,
+        corner_radius: float = 0.0,
     ):
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
         self._num_rings = num_rings
         self._ring_width = ring_width
+        self._edge_softness = edge_softness
+        self._corner_radius = corner_radius
+        self._soft_edges = self._edge_softness > 0 or self._corner_radius > 0
         super().__init__(
             energy=energy,
             semiangle_cutoff=semiangle_cutoff,
@@ -506,11 +515,11 @@ class Bullseye(BaseAperture):
             gpts=gpts,
             sampling=sampling,
         )
-
+    
     @property
     def soft(self) -> bool:
-        """True if the aperture has a soft edge."""
-        return False
+        """True if the aperture has a soft edge"""
+        return self._soft_edges
 
     @property
     def num_spokes(self) -> int:
@@ -531,37 +540,130 @@ class Bullseye(BaseAperture):
     def ring_width(self) -> float:
         """Width of rings [mrad]."""
         return self._ring_width
+    @property
+    def edge_softness(self) -> float:
+        """Edge softness [mrads]"""
+        return self._edge_softness
+
+    @property
+    def corner_radius(self) -> float:
+        """Corner radius [mrads]"""
+        return self._corner_radius
+
+    @property
+    def soft_edges(self) -> bool:
+        """True if using soft edges"""
+        return self._soft_edges
 
     def _evaluate_from_angular_grid(
         self, alpha: np.ndarray, phi: np.ndarray
     ) -> np.ndarray:
+
+        def _smoothstep01(x):
+            """Smooth interpolation between 0 and 1"""
+            x = np.clip(x, 0.0, 1.0)
+            return x * x * (3.0 - 2.0 * x)
+
+        def _ramp01(x):
+            """Ramp from 0 to 1. Uses smoothstep if soft_edges is enabled"""
+            x = np.clip(x, 0.0, 1.0)
+            return _smoothstep01(x) if self._soft_edges else x
+
+        def _smooth_min(a, b, k):
+            """Minimum of a and b, smoothed over width k."""
+            if k <= 0.0:
+                return np.minimum(a, b)
+            h = np.clip(0.5 + 0.5 * (b - a) / k, 0.0, 1.0)
+            return a * h + b * (1.0 - h) - k * h * (1.0 - h)
+
+        def _smooth_max(a, b, k):
+            """Maximum of a and b, smoothed over width k."""
+            return -_smooth_min(-a, -b, k)
+
+        def _smooth_intersection(d1, d2, k):
+            """Intersection of two distance fields, smoothed over width k."""
+            if k <= 0.0:
+                return np.maximum(d1, d2)
+            h = np.clip(0.5 - 0.5 * (d2 - d1) / k, 0.0, 1.0)
+            return (d2 * (1.0 - h) + d1 * h) + k * h * (1.0 - h)
+
         xp = get_array_module(alpha)
         alpha = xp.array(alpha)
 
-        semiangle_cutoff = self.semiangle_cutoff
-        assert isinstance(semiangle_cutoff, SupportsFloat)
+        semiangle_cutoff = self.semiangle_cutoff / 1e3
 
-        semiangle_cutoff = semiangle_cutoff / 1e3
+        ds = semiangle_cutoff * self.ring_width / (self.ring_width + self.num_rings - 1)
+        d0 = ds * (1.0 - self.ring_width) / self.ring_width   
+        da = ds * self.spoke_width
 
-        array = alpha < semiangle_cutoff
+        kx = alpha * xp.cos(phi)
+        ky = alpha * xp.sin(phi)     
+        k1 = xp.sqrt(kx**2 + ky**2)
 
-        # add crossbars
-        array = array * (
-            ((phi + np.pi * self.spoke_width / (180 * 2)) * self.num_spokes)
-            % (2 * np.pi)
-            > (np.pi * self.spoke_width / 180 * self.num_spokes)
-        )
+        dkx = float(np.abs(kx[1, 0] - kx[0, 0]))
+        dky = float(np.abs(ky[0, 1] - ky[0, 0]))
+        dk = min(dkx, dky)
+        edge_w = max(float(self._edge_softness) / 1e3, 1e-30)
+        k_corner = float(self._corner_radius) / 1e3
 
-        # add ring bars
-        end_edges = np.linspace(
-            semiangle_cutoff / self.num_rings, semiangle_cutoff, self.num_rings
-        )
-        start_edges = end_edges - self.ring_width / 1e3
+        aperture = xp.zeros(self.gpts, dtype=float)
 
-        for start_edge, end_edge in zip(start_edges, end_edges):
-            array[(alpha > start_edge) * (alpha < end_edge)] = 0.0
+        for a0 in range(self.num_rings):
+            k_inner = a0 * (ds + d0)
+            k_outer = k_inner + ds
 
-        return array
+            if k_corner <= 0.0:
+                aper = _ramp01((k_outer - k1) / edge_w)
+                if k_inner > 0.0:
+                    aper *= _ramp01((k1 - k_inner) / edge_w)
+
+                if a0 > 0:
+                    for a1 in range(self._spoke_num):
+                        t_deg = a1 * 360.0 / self._spoke_num
+                        if np.mod(a0, 2) == 1:
+                            t_deg += 360.0 / self._spoke_num / 2.0
+
+                        t = np.deg2rad(t_deg)
+                        ct = np.cos(t)
+                        st = np.sin(t)
+
+                        u = kx * ct + ky * st
+                        v = ky * ct - kx * st
+
+                        sub = v > 0.0
+                        mask = _ramp01((np.abs(u) - da / 2.0) / edge_w)
+                        aper[sub] *= mask[sub]
+
+                aperture += aper
+                continue
+
+            if k_inner > 0.0:
+                d_keep = np.maximum(k_inner - k1, k1 - k_outer)
+            else:
+                d_keep = k1 - k_outer
+
+            if a0 > 0:
+                for a1 in range(self._spoke_num):
+                    t_deg = a1 * 360.0 / self._spoke_num
+                    if np.mod(a0, 2) == 1:
+                        t_deg += 360.0 / self._spoke_num / 2.0
+
+                    t = np.deg2rad(t_deg)
+                    ct = np.cos(t)
+                    st = np.sin(t)
+
+                    u = kx * ct + ky * st
+                    v = ky * ct - kx * st
+
+                    d_strip = np.abs(u) - da / 2.0
+                    d_half = -v
+                    d_block = _smooth_intersection(d_strip, d_half, k_corner)
+                    d_keep = _smooth_max(d_keep, -d_block, k_corner)
+
+            aper = _ramp01((-d_keep) / edge_w)
+            aperture += aper
+        aperture = xp.clip(aperture, 0, 1)
+        return aperture
 
 
 class Vortex(BaseAperture):
@@ -847,7 +949,11 @@ class RadialPhasePlate(BaseAperture):
         alpha_normed[alpha > max_alpha] = max_alpha
         alpha_normed[alpha < max_alpha] = alpha[alpha < max_alpha]
         alpha_normed[alpha_normed < min_alpha] = min_alpha
-        alpha_normed = (alpha_normed - alpha_normed.min()) / np.ptp(alpha_normed)
+        ptp = alpha_normed.max() - alpha_normed.min()
+        if ptp == 0:
+            alpha_normed = xp.zeros_like(alpha_normed)
+        else:
+            alpha_normed = (alpha_normed - alpha_normed.min()) / ptp
 
         phase_shift = xp.sin(alpha_normed * np.pi * (self.num_flips + 1)) < 0.0
         phase_shift = xp.exp(1.0j * self.phase_shift * phase_shift)
@@ -863,8 +969,9 @@ class TemporalEnvelope(BaseTransferFunction):
     Parameters
     ----------
     focal_spread: float or 1D array or BaseDistribution
-        The standard deviation of the focal spread due to chromatic aberration and lens
-        current instability [Å].
+        The 1/e width of the focal spread distribution due to chromatic aberration and
+        lens current instability [Å]. Note: this uses the 1/e width convention (as in
+        Kirkland), not the standard deviation; to convert, use focal_spread = sqrt(2)*sigma.
         Alternatively, a distribution of values may be provided.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
@@ -897,7 +1004,7 @@ class TemporalEnvelope(BaseTransferFunction):
 
     @property
     def focal_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the focal spread [Å]."""
+        """The 1/e width of the focal spread distribution [Å]."""
         return self._focal_spread
 
     @focal_spread.setter
@@ -1527,8 +1634,10 @@ class CTF(_HasAberrations, BaseAperture):
     soft : bool, optional
         If True, the edge of the aperture is softened (default is True).
     focal_spread: float, optional
-        The standard deviation of the focal spread due to chromatic aberration and lens
-        current instability [Å] (default is 0).
+        The 1/e width of the focal spread distribution due to chromatic aberration and
+        lens current instability [Å] (default is 0). Note: this uses the 1/e width
+        convention (as in Kirkland), not the standard deviation; to convert, use
+        focal_spread = sqrt(2)*sigma.
     angular_spread: float, optional
         The standard deviation of the angular deviations due to source size [Å]
         (default is 0).
@@ -1691,7 +1800,7 @@ class CTF(_HasAberrations, BaseAperture):
 
     @property
     def focal_spread(self) -> float | BaseDistribution:
-        """The standard deviation of the focal spread [Å]."""
+        """The 1/e width of the focal spread distribution [Å]."""
         return self._focal_spread
 
     @focal_spread.setter

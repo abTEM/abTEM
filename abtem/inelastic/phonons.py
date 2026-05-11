@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from functools import partial
-from numbers import Number
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Dict,
     Optional,
     Sequence,
-    TypeGuard,
     Union,
 )
 
@@ -21,7 +18,6 @@ import dask.array as da
 import numpy as np
 from ase import Atoms, data
 from ase.cell import Cell
-from ase.data import chemical_symbols
 from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
@@ -29,7 +25,7 @@ from dask.delayed import Delayed
 from abtem.core.axes import AxisMetadata, FrozenPhononsAxis, UnknownAxis
 from abtem.core.chunks import Chunks, chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
-from abtem.core.utils import CopyMixin, EqualityMixin, get_dtype, itemset
+from abtem.core.utils import CopyMixin, EqualityMixin, itemset
 
 if TYPE_CHECKING:
     pass
@@ -52,7 +48,7 @@ def _safe_read_atoms(calculator, clean: bool = True) -> Atoms:
 
     if clean:
         atoms.constraints = None
-        atoms.calc = True
+        atoms.calc = None
 
     return atoms
 
@@ -266,161 +262,14 @@ def validate_seeds(
     return seeds
 
 
-def ensure_all_values_are_tuples(
-    props: dict[Any, Any],
-) -> TypeGuard[Dict[str, tuple[float | int, ...]]]:
-    return all(isinstance(value, tuple) for value in props.values())
-
-
-def all_keys_are_ints(props: dict[Any, Any]) -> TypeGuard[dict[int, Any]]:
-    return all(isinstance(key, int) for key in props.keys())
-
-
-AtomProperties = Union[
-    float,
-    np.ndarray,
-    dict[str, float],
-    dict[str, tuple[float, ...]],
-    dict[str, np.ndarray],
-    Sequence[float],
-]
-
-
-def validate_per_atom_property(
-    atoms: Atoms,
-    props: AtomProperties,
-    return_array: bool = False,
-) -> np.ndarray | dict[str, np.ndarray]:
-    atomic_numbers = np.unique(atoms.numbers)
-    unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
-
-    validated_props: np.ndarray | dict[str, np.ndarray]
-    dtype = get_dtype(complex=False)
-
-    if isinstance(props, Number):
-        validated_props = {
-            symbol: np.array(props, dtype=dtype) for symbol in unique_symbols
-        }
-
-    elif isinstance(props, dict):
-        if all_keys_are_ints(props):
-            validated_props = {
-                chemical_symbols[key]: np.array(value) for key, value in props.items()
-            }
-        elif not all(isinstance(key, str) for key in props.keys()):
-            raise RuntimeError(
-                "Keys in the properties dictionary must be either all "
-                "atomic numbers or all chemical symbols."
-            )
-
-        if not set(unique_symbols).issubset(set(props.keys())):
-            raise RuntimeError(
-                "Property must be provided for all atomic species."
-                f" symbols: {unique_symbols}, keys: {props.keys()}"
-            )
-
-        if ensure_all_values_are_tuples(props):
-            first_attr = next(iter(props.values()))
-
-            if not all(len(attr) == len(first_attr) for attr in props.values()):
-                raise RuntimeError("All values must have the same length.")
-
-        validated_props = {
-            symbol: np.array(value, dtype=dtype) for symbol, value in props.items()
-        }
-
-    elif isinstance(props, (list, tuple, np.ndarray)):
-        validated_props = np.array(props, dtype=dtype)
-        if len(props) != len(atoms):
-            raise RuntimeError("Property must be provided for all atoms.")
-    else:
-        raise ValueError("Invalid type for `props`.")
-
-    if return_array and isinstance(validated_props, dict):
-        return atom_property_dict_to_atom_property_array(atoms, validated_props)
-
-    return validated_props
-
-
-def validate_sigmas(
-    atoms: Atoms, sigmas: AtomProperties, return_array: bool = False
-) -> tuple[np.ndarray | dict[str, np.ndarray], bool]:
-    """
-    Validate the standard deviations of displacement for atoms in an atomic structure.
-
-    Parameters
-    ----------
-    atoms : Atoms
-        The atomic structure which standard deviations of displacement are to be
-        validated.
-    sigmas : float, dict[str, float] or Sequence[float]
-        It can be either:
-
-        - a single float value specifying the standard deviation for all atoms,
-        - a dictionary mapping each atom's symbol or atomic number to a corresponding
-          standard deviation,
-        - a sequence of float values providing the standard deviation for each atom
-          individually.
-
-        For anisotropic displacements, either three values for each atom or for each
-        element must be provided.
-
-    Returns
-    -------
-    sigmas : dict[str, float] or np.ndarray
-        The validated standard deviations
-    anisotropic : bool
-        A boolean value indicating whether the displacements are anisotropic.
-
-    Raises
-    ------
-    ValueError
-        If the type of `sigmas` is not float, dict, or list.
-    RuntimeError
-        If the length of `sigmas` does not match the length of `atoms`, or
-        three values for each atom or each element are not given for anisotropic
-        displacements.
-    """
-
-    validated_sigmas = validate_per_atom_property(
-        atoms, sigmas, return_array=return_array
-    )
-
-    if isinstance(validated_sigmas, dict):
-        sigmas_array = next(iter(validated_sigmas.values()))
-        anisotropic = np.asarray(sigmas_array).shape == (3,)
-    else:
-        sigmas_array = validated_sigmas
-        if (
-            sigmas_array.shape
-            and len(sigmas_array.shape) == 2
-            and sigmas_array.shape[-1] == 3
-        ):
-            anisotropic = True
-        elif len(sigmas_array.shape) < 2:
-            anisotropic = False
-        else:
-            raise RuntimeError(
-                "Anisotropic displacements must be given as three values."
-            )
-
-    return validated_sigmas, anisotropic
-
-
-def atom_property_dict_to_atom_property_array(
-    atoms: Atoms, props: dict[str, np.ndarray]
-) -> np.ndarray:
-    dtype = get_dtype(complex=False)
-
-    n = next(iter(props.values())).shape
-    array = np.zeros((len(atoms.numbers),) + n, dtype=dtype)
-
-    for unique in np.unique(atoms.numbers):
-        array[atoms.numbers == unique] = np.array(
-            props[chemical_symbols[unique]], dtype=dtype
-        )
-
-    return array
+from abtem.atoms import (
+    AtomProperties,
+    B_to_sigma,
+    atom_property_dict_to_atom_property_array,
+    sigma_to_B,
+    validate_per_atom_property,
+    validate_sigmas,
+)
 
 
 class FrozenPhonons(BaseFrozenPhonons):
