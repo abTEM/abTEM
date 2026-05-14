@@ -430,12 +430,13 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        charge: float = 0.0,
     ):
         xp = get_array_module(device)
         kx, ky = spatial_frequencies(gpts, sampling, xp=np)
 
         k2 = kx[:, None] ** 2 + ky[None] ** 2
-        f = self.parametrization.projected_scattering_factor(symbol)(k2)
+        f = self.parametrization.projected_scattering_factor(symbol, charge)(k2)
         f = xp.asarray(f, dtype=get_dtype(complex=False))
 
         if symbol in self.parametrization.sigmas.keys():
@@ -447,14 +448,15 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         return f
 
-    def get_scattering_factor(self, symbol, gpts, sampling, device):
+    def get_scattering_factor(self, symbol, gpts, sampling, device, charge=0.0):
+        key = (symbol, charge)
         try:
-            scattering_factor = self.scattering_factors[symbol]
+            scattering_factor = self.scattering_factors[key]
         except KeyError:
             scattering_factor = self._calculate_scattering_factor(
-                symbol, gpts, sampling, device
+                symbol, gpts, sampling, device, charge
             )
-            self._scattering_factors[symbol] = scattering_factor
+            self._scattering_factors[key] = scattering_factor
 
         return scattering_factor
 
@@ -477,29 +479,33 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
+        charges = atoms.get_charges() if atoms.calc is not None else atoms.get_initial_charges()
         for number in np.unique(atoms.numbers):
-            scattering_factor = self.get_scattering_factor(
-                chemical_symbols[number], gpts, sampling, device
-            )
+            number_mask = atoms.numbers == number
+            for charge in np.unique(charges[number_mask]):
+                mask = number_mask & (charges == charge)
+                scattering_factor = self.get_scattering_factor(
+                    chemical_symbols[number], gpts, sampling, device, float(charge)
+                )
 
-            positions = atoms.positions[atoms.numbers == number]
+                positions = atoms.positions[mask]
 
-            positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
+                positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
 
-            temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
+                temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
 
-            temp_array = superpose_deltas(positions, temp_array).astype(
-                get_dtype(complex=True)
-            )
+                temp_array = superpose_deltas(positions, temp_array).astype(
+                    get_dtype(complex=True)
+                )
 
-            temp_array = fft2(temp_array, overwrite_x=True)
+                temp_array = fft2(temp_array, overwrite_x=True)
 
-            temp_array *= scattering_factor / sinc(gpts, sampling, device)
+                temp_array *= scattering_factor / sinc(gpts, sampling, device)
 
-            # if not fourier_space:
-            temp_array = ifft2(temp_array, overwrite_x=True).real
+                # if not fourier_space:
+                temp_array = ifft2(temp_array, overwrite_x=True).real
 
-            array += temp_array
+                array += temp_array
 
         return array
 

@@ -25,7 +25,7 @@ def _get_data_path():
     return os.path.join(this_file, "data")
 
 
-def validate_sigmas(sigmas: float | dict) -> dict:
+def validate_sigmas(sigmas: float | dict | None) -> dict:
     if sigmas is None:
         sigmas = {}
     elif isinstance(sigmas, Number):
@@ -68,7 +68,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     )
 
     def __init__(
-        self, parameters: dict[str, np.ndarray] | str, sigmas: dict[str, float] = None
+        self, parameters: dict[str, np.ndarray] | str, sigmas: dict[str, float] | None = None
     ):
         self._parameters = validate_parameters(parameters)
         self._sigmas = validate_sigmas(sigmas)
@@ -117,7 +117,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         pass
 
-    def potential(self, symbol: str, charge: float = 0.0) -> callable:
+    def potential(self, symbol: str, charge: float = 0.0) -> Callable:
         """
         Radial electrostatic potential for given chemical symbol and charge.
 
@@ -175,7 +175,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         """
         return self.get_function("projected_potential", symbol, charge)
 
-    def projected_scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
+    def projected_scattering_factor(self, symbol: str, charge: float = 0.0) -> Callable:
         """
         Analytical infinite projection of radial scattering factor for given chemical
         symbol and charge.
@@ -195,7 +195,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         """
         return self.get_function("projected_scattering_factor", symbol, charge)
 
-    def charge(self, symbol: str, charge: float = 0.0) -> callable:
+    def charge(self, symbol: str, charge: float = 0.0) -> Callable:
         """
         Radial charge distribution for given chemical symbol and charge.
 
@@ -214,7 +214,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         """
         return self.get_function("charge", symbol, charge)
 
-    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0) -> callable:
+    def x_ray_scattering_factor(self, symbol: str, charge: float = 0.0) -> Callable:
         """
         X-ray scattering factor for given chemical symbol and charge.
 
@@ -231,7 +231,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         """
         return self.get_function("x_ray_scattering_factor", symbol, charge)
 
-    def finite_projected_potential(self, symbol: str, charge: float = 0.0) -> callable:
+    def finite_projected_potential(self, symbol: str, charge: float = 0.0) -> Callable:
         """
         X-ray scattering factor for given chemical symbol and charge.
 
@@ -250,7 +250,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
     def finite_projected_scattering_factor(
         self, symbol: str, charge: float = 0.0
-    ) -> callable:
+    ) -> Callable:
         """
         Analytical infinite projection of radial scattering factor for given chemical
         symbol and charge.
@@ -270,9 +270,11 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         """
         return self.get_function("finite_projected_scattering_factor", symbol, charge)
 
-    def get_function(self, name: str, symbol: str, charge: float = 0.0) -> callable:
+    def get_function(
+        self, name: str, symbol: str, charge: float = 0.0, screening: float = 0.0
+    ) -> Callable:
         """
-        Returns the line profiles for a parameterized function for one or more element.
+        Returns a callable for a parameterized function for one element.
 
         Parameters
         ----------
@@ -282,12 +284,12 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
             Chemical symbol of element.
         charge : float
             Charge of element. Given as elementary charges.
+        screening : float
+            Screening wavevector κ [1/Å] for the ionic Coulomb correction
+            ΔZ·M/(κ²+q²). Only used by PengParametrization for charged species.
         """
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
-
-        if charge > 0.0:
-            raise NotImplementedError
 
         if charge == 0.0:
             charge_symbol = ""
@@ -314,6 +316,8 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         cutoff: float,
         sampling: float = 0.001,
         name: str = "potential",
+        charge: float = 0.0,
+        screening: float = 0.0,
     ) -> RealSpaceLineProfiles | ReciprocalSpaceLineProfiles:
         """
         Returns the line profiles for a parameterized function for one or more element.
@@ -330,6 +334,10 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
             and units of reciprocal Ångstrom for scattering factors. Default is 0.001.
         name : str
             Name of the line profile to return.
+        charge : float, optional
+            Charge of the element in elementary units. Default is 0.0.
+        screening : float, optional
+            Screening wavevector κ [1/Å] for the ionic Coulomb correction. Default is 0.0.
         """
 
         if not isinstance(symbol, str):
@@ -340,12 +348,14 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
                         cutoff=cutoff,
                         sampling=sampling,
                         name=name,
+                        charge=charge,
+                        screening=screening,
                     )
                     for s in symbol
                 ]
             )
 
-        func = self.get_function(name, symbol)
+        func = self.get_function(name, symbol, charge, screening)
 
         ensemble_axes_metadata = [
             OrdinalAxis(label="", values=(symbol,), _default_type="overlay")
@@ -583,10 +593,88 @@ class PengParametrization(Parametrization):
         "finite_projected_scattering_factor": peng.finite_projected_scattering_factor,
     }
 
+    # Mott formula constant (m₀e²/8π²ε₀ℏ²) in units of Å, from Peng 1999 eq. (3).
+    # Converts ionic charge ΔZ to an additive 1/s² contribution to f_el(s).
+    _mott_constant = 0.02393366
+
     def __init__(
-        self, parameters: str | dict = "peng_high.json", sigmas: dict[str, float] = None
+        self,
+        parameters: str | dict = "peng_high.json",
+        sigmas: dict[str, float] | None = None,
+        screening: float = 0.0,
     ):
         super().__init__(parameters=parameters, sigmas=sigmas)
+        self._screening = screening
+
+    # k²-domain functions that need the ΔZ / s² Coulomb correction for ionic species.
+    # projected_scattering_factor: scaled_parameters divides a_i by kappa → include kappa.
+    # scattering_factor:           scaled_parameters keeps raw a_i         → no kappa.
+    _ionic_k2_names = frozenset({"scattering_factor", "projected_scattering_factor"})
+
+    @property
+    def screening(self) -> float:
+        """Screening wavevector κ [1/Å] for the ionic Coulomb correction ΔZ·M/(κ²+q²)."""
+        return self._screening
+
+    @screening.setter
+    def screening(self, value: float):
+        self._screening = value
+
+    def get_function(
+        self,
+        name: str,
+        symbol: str,
+        charge: float = 0.0,
+        screening: float | None = None,
+    ) -> Callable:
+        """
+        Returns a callable for a parameterized function for one element.
+
+        Parameters
+        ----------
+        name : str
+            Name of the function to return.
+        symbol : str
+            Chemical symbol of element.
+        charge : float
+            Charge of element. Given as elementary charges.
+        screening : float or None
+            Screening wavevector κ [1/Å] for the ionic Coulomb correction
+            ΔZ·M/(κ²+q²). Overrides the instance-level screening when provided;
+            falls back to self.screening otherwise.
+        """
+        if screening is None:
+            screening = self._screening
+
+        if charge == 0.0 or name not in self._ionic_k2_names:
+            return super().get_function(name, symbol, charge)
+
+        # Use super() for validation (raises RuntimeError if symbol+charge not in JSON).
+        super().get_function(name, symbol, charge)
+
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+        charge_symbol = "+" * int(abs(charge)) if charge > 0.0 else "-" * int(abs(charge))
+        parameters = np.array(
+            self.scaled_parameters(symbol + charge_symbol, name),
+            dtype=get_dtype(complex=False),
+        )
+        # ΔZ / s² correction from Peng 1999 eq. (3); abTEM uses k = 2s, so 1/s² = 4/k².
+        # projected_scattering_factor parameters have a_i / kappa, so the Coulomb
+        # coefficient must match; scattering_factor keeps raw a_i, so no kappa here.
+        base_coeff = charge * 4.0 * self._mott_constant
+        coulomb_coeff = base_coeff / kappa if name == "projected_scattering_factor" else base_coeff
+        return lambda k2: peng.ionic_scattering_factor_k2(k2, parameters, coulomb_coeff, screening)
+
+    def scattering_factor(
+        self, symbol: str, charge: float = 0.0, screening: float | None = None
+    ) -> Callable:
+        return self.get_function("scattering_factor", symbol, charge, screening)
+
+    def projected_scattering_factor(
+        self, symbol: str, charge: float = 0.0, screening: float | None = None
+    ) -> Callable:
+        return self.get_function("projected_scattering_factor", symbol, charge, screening)
 
     def scaled_parameters(self, symbol: str, name: str) -> np.ndarray:
         scattering_factor = np.array(self.parameters[symbol])
