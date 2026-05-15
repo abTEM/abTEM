@@ -271,7 +271,14 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         return self.get_function("finite_projected_scattering_factor", symbol, charge)
 
     def get_function(
-        self, name: str, symbol: str, charge: float = 0.0
+        self,
+        name: str,
+        symbol: str,
+        charge: float = 0.0,
+        regularization: str | None = None,
+        kappa: float | None = None,
+        R: float | None = None,
+        L_cell: float | None = None,
     ) -> Callable:
         """
         Returns a callable for a parameterized function for one element.
@@ -284,7 +291,17 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
             Chemical symbol of element.
         charge : float
             Charge of element. Given as elementary charges.
+        regularization : str or None
+            Coulomb regularization scheme. Only used by ``PengParametrization``
+            for charged species; ignored by all other parametrizations.
+        kappa : float or None
+            Yukawa screening wavevector [1/Å]. Only used by ``PengParametrization``.
+        R : float or None
+            Rozzi spherical cutoff radius [Å]. Only used by ``PengParametrization``.
+        L_cell : float or None
+            Cell length [Å] for deriving kappa or R. Only used by ``PengParametrization``.
         """
+        del regularization, kappa, R, L_cell
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
 
@@ -314,6 +331,10 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         sampling: float = 0.001,
         name: str = "potential",
         charge: float = 0.0,
+        regularization: str | None = None,
+        kappa: float | None = None,
+        R: float | None = None,
+        L_cell: float | None = None,
     ) -> RealSpaceLineProfiles | ReciprocalSpaceLineProfiles:
         """
         Returns the line profiles for a parameterized function for one or more element.
@@ -332,6 +353,19 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
             Name of the line profile to return.
         charge : float, optional
             Charge of the element in elementary units. Default is 0.0.
+        regularization : str or None, optional
+            Coulomb regularization scheme for the ionic correction
+            (``"none"``, ``"yukawa"``, ``"rozzi_spherical"``). Only used by
+            ``PengParametrization`` for charged species.
+        kappa : float or None, optional
+            Yukawa screening wavevector κ [1/Å]. Used when
+            ``regularization="yukawa"``; derived from ``L_cell`` if not given.
+        R : float or None, optional
+            Spherical truncation radius [Å]. Used when
+            ``regularization="rozzi_spherical"``; derived from ``L_cell`` if not given.
+        L_cell : float or None, optional
+            Simulation cell length [Å]. Convenience parameter: derives
+            ``kappa = 2π/L_cell`` or ``R = L_cell/2`` when not supplied explicitly.
         """
 
         if not isinstance(symbol, str):
@@ -343,12 +377,16 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
                         sampling=sampling,
                         name=name,
                         charge=charge,
+                        regularization=regularization,
+                        kappa=kappa,
+                        R=R,
+                        L_cell=L_cell,
                     )
                     for s in symbol
                 ]
             )
 
-        func = self.get_function(name, symbol, charge)
+        func = self.get_function(name, symbol, charge, regularization, kappa, R, L_cell)
 
         ensemble_axes_metadata = [
             OrdinalAxis(label="", values=(symbol,), _default_type="overlay")
@@ -600,6 +638,7 @@ class PengParametrization(Parametrization):
         L_cell: float | None = None,
     ):
         super().__init__(parameters=parameters, sigmas=sigmas)
+        self._parameters.update(validate_parameters("peng_ionic.json"))
         self._regularization = regularization
         self._kappa = kappa
         self._R = R
