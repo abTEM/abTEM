@@ -271,7 +271,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         return self.get_function("finite_projected_scattering_factor", symbol, charge)
 
     def get_function(
-        self, name: str, symbol: str, charge: float = 0.0, screening: float = 0.0
+        self, name: str, symbol: str, charge: float = 0.0
     ) -> Callable:
         """
         Returns a callable for a parameterized function for one element.
@@ -284,9 +284,6 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
             Chemical symbol of element.
         charge : float
             Charge of element. Given as elementary charges.
-        screening : float
-            Screening wavevector κ [1/Å] for the ionic Coulomb correction
-            ΔZ·M/(κ²+q²). Only used by PengParametrization for charged species.
         """
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
@@ -355,7 +352,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
                 ]
             )
 
-        func = self.get_function(name, symbol, charge, screening)
+        func = self.get_function(name, symbol, charge)
 
         ensemble_axes_metadata = [
             OrdinalAxis(label="", values=(symbol,), _default_type="overlay")
@@ -602,9 +599,20 @@ class PengParametrization(Parametrization):
         parameters: str | dict = "peng_high.json",
         sigmas: dict[str, float] | None = None,
         screening: float = 0.0,
+        regularization: str = "none",
+        kappa: float | None = None,
+        R: float | None = None,
+        L_cell: float | None = None,
     ):
         super().__init__(parameters=parameters, sigmas=sigmas)
-        self._screening = screening
+        # Backward compat: non-zero screening maps to yukawa regularization.
+        if screening != 0.0 and regularization == "none" and kappa is None:
+            regularization = "yukawa"
+            kappa = screening
+        self._regularization = regularization
+        self._kappa = kappa
+        self._R = R
+        self._L_cell = L_cell
 
     # k²-domain functions that need the ΔZ / s² Coulomb correction for ionic species.
     # projected_scattering_factor: scaled_parameters divides a_i by kappa → include kappa.
@@ -612,20 +620,63 @@ class PengParametrization(Parametrization):
     _ionic_k2_names = frozenset({"scattering_factor", "projected_scattering_factor"})
 
     @property
+    def regularization(self) -> str:
+        """Coulomb regularization scheme for the ionic correction."""
+        return self._regularization
+
+    @regularization.setter
+    def regularization(self, value: str):
+        self._regularization = value
+
+    @property
+    def kappa(self) -> float | None:
+        """Yukawa screening wavevector κ [1/Å] (used when regularization='yukawa')."""
+        return self._kappa
+
+    @kappa.setter
+    def kappa(self, value: float | None):
+        self._kappa = value
+
+    @property
+    def R(self) -> float | None:
+        """Spherical cutoff radius [Å] (used when regularization='rozzi_spherical')."""
+        return self._R
+
+    @R.setter
+    def R(self, value: float | None):
+        self._R = value
+
+    @property
+    def L_cell(self) -> float | None:
+        """Cell length [Å] used to derive kappa or R automatically."""
+        return self._L_cell
+
+    @L_cell.setter
+    def L_cell(self, value: float | None):
+        self._L_cell = value
+
+    @property
     def screening(self) -> float:
-        """Screening wavevector κ [1/Å] for the ionic Coulomb correction ΔZ·M/(κ²+q²)."""
-        return self._screening
+        """Backward-compat alias: Yukawa κ when regularization='yukawa', else 0.0."""
+        if self._regularization == "yukawa" and self._kappa is not None:
+            return self._kappa
+        return 0.0
 
     @screening.setter
     def screening(self, value: float):
-        self._screening = value
+        """Backward-compat alias: sets regularization='yukawa' and kappa=value."""
+        self._regularization = "yukawa"
+        self._kappa = value
 
     def get_function(
         self,
         name: str,
         symbol: str,
         charge: float = 0.0,
-        screening: float | None = None,
+        regularization: str | None = None,
+        kappa: float | None = None,
+        R: float | None = None,
+        L_cell: float | None = None,
     ) -> Callable:
         """
         Returns a callable for a parameterized function for one element.
@@ -638,13 +689,27 @@ class PengParametrization(Parametrization):
             Chemical symbol of element.
         charge : float
             Charge of element. Given as elementary charges.
-        screening : float or None
-            Screening wavevector κ [1/Å] for the ionic Coulomb correction
-            ΔZ·M/(κ²+q²). Overrides the instance-level screening when provided;
-            falls back to self.screening otherwise.
+        regularization : str or None
+            Regularization scheme for the ionic Coulomb term. Falls back to
+            the instance-level ``self.regularization`` when None.
+        kappa : float or None
+            Yukawa screening wavevector [1/Å]. Falls back to ``self.kappa``.
+        R : float or None
+            Rozzi spherical cutoff radius [Å]. Falls back to ``self.R``.
+        L_cell : float or None
+            Cell length [Å] for deriving kappa/R. Falls back to ``self.L_cell``.
         """
-        if screening is None:
-            screening = self._screening
+        import abtem.core.constants as _const
+        _kappa_abtem = _const.kappa
+
+        if regularization is None:
+            regularization = self._regularization
+        if kappa is None:
+            kappa = self._kappa
+        if R is None:
+            R = self._R
+        if L_cell is None:
+            L_cell = self._L_cell
 
         if charge == 0.0 or name not in self._ionic_k2_names:
             return super().get_function(name, symbol, charge)
@@ -659,22 +724,42 @@ class PengParametrization(Parametrization):
             self.scaled_parameters(symbol + charge_symbol, name),
             dtype=get_dtype(complex=False),
         )
-        # ΔZ / s² correction from Peng 1999 eq. (3); abTEM uses k = 2s, so 1/s² = 4/k².
-        # projected_scattering_factor parameters have a_i / kappa, so the Coulomb
-        # coefficient must match; scattering_factor keeps raw a_i, so no kappa here.
-        base_coeff = charge * 4.0 * self._mott_constant
-        coulomb_coeff = base_coeff / kappa if name == "projected_scattering_factor" else base_coeff
-        return lambda k2: peng.ionic_scattering_factor_k2(k2, parameters, coulomb_coeff, screening)
+        # projected_scattering_factor has a_i divided by kappa_abtem in scaled_parameters;
+        # the Mott coefficient must match. scattering_factor keeps raw a_i → no kappa_abtem.
+        mott_coeff = (
+            4.0 * self._mott_constant / _kappa_abtem
+            if name == "projected_scattering_factor"
+            else 4.0 * self._mott_constant
+        )
+        return lambda k2: peng.ionic_scattering_factor_k2(
+            k2, parameters, mott_coeff, charge, regularization, kappa, R, L_cell
+        )
 
     def scattering_factor(
-        self, symbol: str, charge: float = 0.0, screening: float | None = None
+        self,
+        symbol: str,
+        charge: float = 0.0,
+        regularization: str | None = None,
+        kappa: float | None = None,
+        R: float | None = None,
+        L_cell: float | None = None,
     ) -> Callable:
-        return self.get_function("scattering_factor", symbol, charge, screening)
+        return self.get_function(
+            "scattering_factor", symbol, charge, regularization, kappa, R, L_cell
+        )
 
     def projected_scattering_factor(
-        self, symbol: str, charge: float = 0.0, screening: float | None = None
+        self,
+        symbol: str,
+        charge: float = 0.0,
+        regularization: str | None = None,
+        kappa: float | None = None,
+        R: float | None = None,
+        L_cell: float | None = None,
     ) -> Callable:
-        return self.get_function("projected_scattering_factor", symbol, charge, screening)
+        return self.get_function(
+            "projected_scattering_factor", symbol, charge, regularization, kappa, R, L_cell
+        )
 
     def scaled_parameters(self, symbol: str, name: str) -> np.ndarray:
         scattering_factor = np.array(self.parameters[symbol])
