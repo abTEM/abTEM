@@ -314,7 +314,6 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
         sampling: float = 0.001,
         name: str = "potential",
         charge: float = 0.0,
-        screening: float = 0.0,
     ) -> RealSpaceLineProfiles | ReciprocalSpaceLineProfiles:
         """
         Returns the line profiles for a parameterized function for one or more element.
@@ -333,8 +332,6 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
             Name of the line profile to return.
         charge : float, optional
             Charge of the element in elementary units. Default is 0.0.
-        screening : float, optional
-            Screening wavevector κ [1/Å] for the ionic Coulomb correction. Default is 0.0.
         """
 
         if not isinstance(symbol, str):
@@ -346,7 +343,6 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
                         sampling=sampling,
                         name=name,
                         charge=charge,
-                        screening=screening,
                     )
                     for s in symbol
                 ]
@@ -598,17 +594,12 @@ class PengParametrization(Parametrization):
         self,
         parameters: str | dict = "peng_high.json",
         sigmas: dict[str, float] | None = None,
-        screening: float = 0.0,
         regularization: str = "none",
         kappa: float | None = None,
         R: float | None = None,
         L_cell: float | None = None,
     ):
         super().__init__(parameters=parameters, sigmas=sigmas)
-        # Backward compat: non-zero screening maps to yukawa regularization.
-        if screening != 0.0 and regularization == "none" and kappa is None:
-            regularization = "yukawa"
-            kappa = screening
         self._regularization = regularization
         self._kappa = kappa
         self._R = R
@@ -654,19 +645,6 @@ class PengParametrization(Parametrization):
     @L_cell.setter
     def L_cell(self, value: float | None):
         self._L_cell = value
-
-    @property
-    def screening(self) -> float:
-        """Backward-compat alias: Yukawa κ when regularization='yukawa', else 0.0."""
-        if self._regularization == "yukawa" and self._kappa is not None:
-            return self._kappa
-        return 0.0
-
-    @screening.setter
-    def screening(self, value: float):
-        """Backward-compat alias: sets regularization='yukawa' and kappa=value."""
-        self._regularization = "yukawa"
-        self._kappa = value
 
     def get_function(
         self,
