@@ -111,9 +111,9 @@ class NoiseTransform(EnsembleTransform):
         poisson_rng = xp.random.RandomState(seed=randomized_seed)
 
         array = xp.clip(array, a_min=0.0, a_max=None)
-        array = poisson_rng.poisson(array_cpu).astype(get_dtype())
+        array = poisson_rng.poisson(array).astype(get_dtype())
 
-        return xp.asarray(array_cpu)
+        return array
 
     def apply(
         self, array_object: ArrayObject, max_batch: int | str = "auto"
