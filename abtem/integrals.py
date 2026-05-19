@@ -246,13 +246,15 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         weights = gaussian_projection_weights(symbol, shifted_a, shifted_b)
 
         xp = get_array_module(device)
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
+        fp_dtype = get_dtype(complex=False)
+        cx_dtype = get_dtype(complex=True)
+        positions = (positions[:, :2] / sampling).astype(fp_dtype)
 
-        array = xp.zeros(gpts, dtype=xp.complex64)
+        array = xp.zeros(gpts, dtype=cx_dtype)
         for i in range(5):
-            temp = xp.zeros_like(array, dtype=xp.complex64)
+            temp = xp.zeros_like(array, dtype=cx_dtype)
             superpose_deltas(positions, temp, weights=weights[i])
-            array += fft2(temp, overwrite_x=True) * gaussians[i].astype(xp.complex64)
+            array += fft2(temp, overwrite_x=True) * gaussians[i].astype(cx_dtype)
 
         return array
 
@@ -260,11 +262,13 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         corrections = self.get_corrections(symbol, gpts, sampling)
 
         xp = get_array_module(device)
+        fp_dtype = get_dtype(complex=False)
+        cx_dtype = get_dtype(complex=True)
 
         positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
+        positions = (positions[:, :2] / sampling).astype(fp_dtype)
 
-        array = xp.zeros(gpts, dtype=xp.complex64)
+        array = xp.zeros(gpts, dtype=cx_dtype)
 
         superpose_deltas(positions, array)
 
@@ -906,7 +910,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     positions=positions,
                     disk_indices=disk_indices,
                     sampling=sampling,
-                    radial_gpts=table.radial_gpts,
+                    radial_gpts=np.asarray(table.radial_gpts, dtype=fp_dtype),
                     radial_functions=radial_potential,
                     radial_derivative=radial_potential_derivative,
                 )
