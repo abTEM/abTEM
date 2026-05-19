@@ -56,7 +56,7 @@ def projected_potential(r, p):
 
 @jit(nopython=True, nogil=True)
 def projected_scattering_factor(k2, p):
-    pi = np.array(np.pi, dtype=np.float32)
+    pi = np.pi
     f = (
         4 * np.pi * p[0, 0] / (4 * pi**2 * k2 + p[1, 0] ** 2)
         + np.sqrt(np.pi / p[3, 0])

@@ -192,8 +192,10 @@ def _laplace_stencil_array(accuracy):
 
 
 def _laplace_operator_stencil(
-    accuracy, prefactor, mode: str = "wrap", dtype=np.complex64, device: str = "cpu"
+    accuracy, prefactor, mode: str = "wrap", dtype=None, device: str = "cpu"
 ):
+    if dtype is None:
+        dtype = get_dtype(complex=True)
     c = finite_difference_coefficients(2, accuracy)
     c = c * prefactor
     c = c.astype(dtype)
