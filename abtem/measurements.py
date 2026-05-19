@@ -3047,12 +3047,16 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
         )[..., np.concatenate(indices)]
 
+        # Use the configured floating-point precision, not a hardcoded float32.
+        # _AbstractRadialDetector._out_dtype returns get_dtype(complex=False), so
+        # the result dtype must match to avoid a silent precision downgrade.
+        fp_dtype = array.dtype
         result = xp.zeros(
             (
                 array.shape[0],
                 len(indices),
             ),
-            dtype=xp.float32,
+            dtype=fp_dtype,
         )
 
         if xp is cp:
