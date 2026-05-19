@@ -10,6 +10,7 @@ from numba import cuda, njit  # type: ignore
 from abtem.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma, energy2wavelength
+from abtem.core.utils import get_dtype
 
 if TYPE_CHECKING:
     from abtem.potentials.iam import PotentialArray
@@ -325,7 +326,8 @@ class LaplaceOperator:
         wavelength, sampling = key
         prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
-            self._accuracy, prefactor, mode="wrap", device=device
+            self._accuracy, prefactor, mode="wrap",
+            dtype=get_dtype(complex=True), device=device
         )
 
     def get_stencil(self, waves: Waves, device: str = "cpu") -> Callable:

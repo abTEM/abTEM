@@ -2,30 +2,6 @@ import math
 
 import cupy as cp  # type: ignore
 import numpy as np
-from numba import cuda  # type: ignore
-
-
-@cuda.jit
-def _batch_crop_2d(new_array, array, corners):
-    x, y, z = cuda.grid(3)
-    if (x < new_array.shape[0]) & (y < new_array.shape[1]) & (z < new_array.shape[2]):
-        new_array[x, y, z] = array[x, corners[x, 0] + y, corners[x, 1] + z]
-
-
-def batch_crop_2d(
-    array: cp.ndarray, corners: cp.ndarray, new_shape: tuple[int, int]
-) -> cp.ndarray:
-    threads_per_block = (1, 32, 32)
-
-    blocks_per_grid_x = int(np.ceil(corners.shape[0] / threads_per_block[0]))
-    blocks_per_grid_y = int(np.ceil(new_shape[0] / threads_per_block[1]))
-    blocks_per_grid_z = int(np.ceil(new_shape[1] / threads_per_block[2]))
-
-    blockspergrid = (blocks_per_grid_x, blocks_per_grid_y, blocks_per_grid_z)
-    result = cp.zeros((len(array),) + new_shape, dtype=array.dtype)
-
-    _batch_crop_2d[blockspergrid, threads_per_block](result, array, corners)
-    return result
 
 
 _SUM_RLE_KERNEL = r"""
