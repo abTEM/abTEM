@@ -1,9 +1,8 @@
 import math
-import warnings
 
 import cupy as cp  # type: ignore
 import numpy as np
-from numba import NumbaPerformanceWarning, cuda  # type: ignore
+from numba import cuda  # type: ignore
 
 
 @cuda.jit
@@ -29,29 +28,109 @@ def batch_crop_2d(
     return result
 
 
-@cuda.jit()
-def _sum_run_length_encoded(array, result, separators):
-    x = cuda.grid(1)
-    if x < result.shape[1]:
-        for i in range(result.shape[0]):
-            for j in range(separators[x], separators[x + 1]):
-                result[i, x] += array[i, j]
+_SUM_RLE_KERNEL = r"""
+// Segmented reduction: for each bin x, sum array[i, separators[x] : separators[x+1]]
+// into result[i, x] for every batch element i.
+//
+// Grid: 1-D, one thread per bin (x-axis).  Thread guard ensures safety when
+// n_bins is not a multiple of blockDim.x.
+//
+// Template parameter T is the floating-point type (float or double).
+// Both array and result must have the same type T.
+template<typename T>
+__device__ __forceinline__ void sum_rle_impl(
+    T* __restrict__ result,
+    const T* __restrict__ array,
+    const long long* __restrict__ separators,
+    const int n_bins,
+    const int n_batch,
+    const long long n_selected   // second dimension of array (total selected pixels)
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= n_bins) return;
+
+    const long long start = separators[x];
+    const long long stop  = separators[x + 1];
+
+    for (int i = 0; i < n_batch; i++) {
+        T s = (T)0;
+        const T* row = array + (long long)i * n_selected;
+        for (long long j = start; j < stop; j++) {
+            s += row[j];
+        }
+        result[(long long)i * n_bins + x] = s;
+    }
+}
+
+extern "C" __global__ void sum_rle_f32(
+    float* result, const float* array, const long long* separators,
+    int n_bins, int n_batch, long long n_selected
+) {
+    sum_rle_impl<float>(result, array, separators, n_bins, n_batch, n_selected);
+}
+
+extern "C" __global__ void sum_rle_f64(
+    double* result, const double* array, const long long* separators,
+    int n_bins, int n_batch, long long n_selected
+) {
+    sum_rle_impl<double>(result, array, separators, n_bins, n_batch, n_selected);
+}
+"""
+
+_sum_rle_module = cp.RawModule(
+    code=_SUM_RLE_KERNEL,
+    options=("--std=c++14",),
+)
+_sum_rle_f32 = _sum_rle_module.get_function("sum_rle_f32")
+_sum_rle_f64 = _sum_rle_module.get_function("sum_rle_f64")
 
 
 def sum_run_length_encoded(array, result, separators):
-    assert len(array) == len(result)
-    assert len(result.shape) == 2
-    assert result.shape[1] == len(separators) - 1
+    """Sum run-length-encoded data into bins using a CuPy RawKernel.
 
-    threadsperblock = (1024,)
-    blockspergrid = int(np.ceil(result.shape[1] / threadsperblock[0]))
-    blockspergrid = (blockspergrid,)
+    Parameters
+    ----------
+    array : cp.ndarray, shape (n_batch, n_selected), dtype float32 or float64
+        The reindexed diffraction-pattern data (selected pixels only, in bin order).
+    result : cp.ndarray, shape (n_batch, n_bins), same dtype as *array*
+        Output array (must be pre-zeroed).
+    separators : cp.ndarray, shape (n_bins + 1,), dtype int64
+        Cumulative bin boundary offsets into the second axis of *array*.
+    """
+    assert array.ndim == 2
+    assert result.ndim == 2
+    assert result.shape[0] == array.shape[0]
+    assert result.shape[1] == separators.shape[0] - 1
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=NumbaPerformanceWarning)
-        _sum_run_length_encoded[blockspergrid, threadsperblock](
-            array, result, separators
-        )
+    n_batch, n_selected = array.shape
+    n_bins = result.shape[1]
+
+    if n_bins == 0:
+        return
+
+    dtype = array.dtype
+    if dtype == cp.float64:
+        kernel = _sum_rle_f64
+    else:
+        kernel = _sum_rle_f32
+
+    array_c = cp.ascontiguousarray(array)
+    result_c = cp.ascontiguousarray(result)
+    sep_c = cp.ascontiguousarray(separators.astype(cp.int64, copy=False))
+
+    threads = 256
+    grid = (math.ceil(n_bins / threads), 1, 1)
+    block = (threads, 1, 1)
+
+    kernel(
+        grid, block,
+        (result_c, array_c, sep_c,
+         np.int32(n_bins), np.int32(n_batch), np.int64(n_selected)),
+    )
+
+    # Copy back if ascontiguousarray made a fresh copy
+    if result_c is not result:
+        cp.copyto(result, result_c)
 
 
 _INTERPOLATE_RADIAL_KERNEL = r"""
