@@ -1,94 +1,211 @@
 import math
-import warnings
 
 import cupy as cp  # type: ignore
 import numpy as np
-from numba import NumbaPerformanceWarning, cuda  # type: ignore
 
 
-@cuda.jit
-def _batch_crop_2d(new_array, array, corners):
-    x, y, z = cuda.grid(3)
-    if (x < new_array.shape[0]) & (y < new_array.shape[1]) & (z < new_array.shape[2]):
-        new_array[x, y, z] = array[x, corners[x, 0] + y, corners[x, 1] + z]
+_SUM_RLE_KERNEL = r"""
+// Segmented reduction: for each bin x, sum array[i, separators[x] : separators[x+1]]
+// into result[i, x] for every batch element i.
+//
+// Grid: 1-D, one thread per bin (x-axis).  Thread guard ensures safety when
+// n_bins is not a multiple of blockDim.x.
+//
+// Template parameter T is the floating-point type (float or double).
+// Both array and result must have the same type T.
+template<typename T>
+__device__ __forceinline__ void sum_rle_impl(
+    T* __restrict__ result,
+    const T* __restrict__ array,
+    const long long* __restrict__ separators,
+    const int n_bins,
+    const int n_batch,
+    const long long n_selected   // second dimension of array (total selected pixels)
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (x >= n_bins) return;
 
+    const long long start = separators[x];
+    const long long stop  = separators[x + 1];
 
-def batch_crop_2d(
-    array: cp.ndarray, corners: cp.ndarray, new_shape: tuple[int, int]
-) -> cp.ndarray:
-    threads_per_block = (1, 32, 32)
+    for (int i = 0; i < n_batch; i++) {
+        T s = (T)0;
+        const T* row = array + (long long)i * n_selected;
+        for (long long j = start; j < stop; j++) {
+            s += row[j];
+        }
+        result[(long long)i * n_bins + x] = s;
+    }
+}
 
-    blocks_per_grid_x = int(np.ceil(corners.shape[0] / threads_per_block[0]))
-    blocks_per_grid_y = int(np.ceil(new_shape[0] / threads_per_block[1]))
-    blocks_per_grid_z = int(np.ceil(new_shape[1] / threads_per_block[2]))
+extern "C" __global__ void sum_rle_f32(
+    float* result, const float* array, const long long* separators,
+    int n_bins, int n_batch, long long n_selected
+) {
+    sum_rle_impl<float>(result, array, separators, n_bins, n_batch, n_selected);
+}
 
-    blockspergrid = (blocks_per_grid_x, blocks_per_grid_y, blocks_per_grid_z)
-    result = cp.zeros((len(array),) + new_shape, dtype=array.dtype)
+extern "C" __global__ void sum_rle_f64(
+    double* result, const double* array, const long long* separators,
+    int n_bins, int n_batch, long long n_selected
+) {
+    sum_rle_impl<double>(result, array, separators, n_bins, n_batch, n_selected);
+}
+"""
 
-    _batch_crop_2d[blockspergrid, threads_per_block](result, array, corners)
-    return result
-
-
-@cuda.jit()
-def _sum_run_length_encoded(array, result, separators):
-    x = cuda.grid(1)
-    if x < result.shape[1]:
-        for i in range(result.shape[0]):
-            for j in range(separators[x], separators[x + 1]):
-                result[i, x] += array[i, j]
+_sum_rle_module = cp.RawModule(
+    code=_SUM_RLE_KERNEL,
+    options=("--std=c++14",),
+)
+_sum_rle_f32 = _sum_rle_module.get_function("sum_rle_f32")
+_sum_rle_f64 = _sum_rle_module.get_function("sum_rle_f64")
 
 
 def sum_run_length_encoded(array, result, separators):
-    assert len(array) == len(result)
-    assert len(result.shape) == 2
-    assert result.shape[1] == len(separators) - 1
+    """Sum run-length-encoded data into bins using a CuPy RawKernel.
 
-    threadsperblock = (1024,)
-    blockspergrid = int(np.ceil(result.shape[1] / threadsperblock[0]))
-    blockspergrid = (blockspergrid,)
+    Parameters
+    ----------
+    array : cp.ndarray, shape (n_batch, n_selected), dtype float32 or float64
+        The reindexed diffraction-pattern data (selected pixels only, in bin order).
+    result : cp.ndarray, shape (n_batch, n_bins), same dtype as *array*
+        Output array (must be pre-zeroed).
+    separators : cp.ndarray, shape (n_bins + 1,), dtype int64
+        Cumulative bin boundary offsets into the second axis of *array*.
+    """
+    assert array.ndim == 2
+    assert result.ndim == 2
+    assert result.shape[0] == array.shape[0]
+    assert result.shape[1] == separators.shape[0] - 1
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=NumbaPerformanceWarning)
-        _sum_run_length_encoded[blockspergrid, threadsperblock](
-            array, result, separators
-        )
+    n_batch, n_selected = array.shape
+    n_bins = result.shape[1]
+
+    if n_bins == 0:
+        return
+
+    dtype = array.dtype
+    if dtype == cp.float64:
+        kernel = _sum_rle_f64
+    else:
+        kernel = _sum_rle_f32
+
+    array_c = cp.ascontiguousarray(array)
+    result_c = cp.ascontiguousarray(result)
+    sep_c = cp.ascontiguousarray(separators.astype(cp.int64, copy=False))
+
+    threads = 256
+    grid = (math.ceil(n_bins / threads), 1, 1)
+    block = (threads, 1, 1)
+
+    kernel(
+        grid, block,
+        (result_c, array_c, sep_c,
+         np.int32(n_bins), np.int32(n_batch), np.int64(n_selected)),
+    )
+
+    # Copy back if ascontiguousarray made a fresh copy
+    if result_c is not result:
+        cp.copyto(result, result_c)
 
 
-@cuda.jit
-def _interpolate_radial_functions(
-    array,
-    positions,
-    disk_indices,
-    sampling,
-    radial_gpts,
-    radial_functions,
-    radial_derivatives,
-    dt,
-):
-    i, j = cuda.grid(2)
+_INTERPOLATE_RADIAL_KERNEL = r"""
+// Type-specialised round-to-nearest-int cast.  The f32 specialisation uses
+// __float2int_rn directly rather than going through double, saving a pair of
+// converts on every thread.
+template<typename T> __device__ __forceinline__ int rn_cast(T x);
+template<> __device__ __forceinline__ int rn_cast<float >(float  x) { return __float2int_rn(x);  }
+template<> __device__ __forceinline__ int rn_cast<double>(double x) { return __double2int_rn(x); }
 
-    if (i < positions.shape[0]) & (j < disk_indices.shape[0]):
-        k = round(positions[i, 0] / sampling[0]) + disk_indices[j, 0]
-        m = round(positions[i, 1] / sampling[1]) + disk_indices[j, 1]
+// Shared kernel body parameterised by floating-point type T.
+// Instantiated as float (f32) and double (f64) below.
+template<typename T>
+__device__ __forceinline__ void interpolate_radial_impl(
+    T* __restrict__ array,
+    const T* __restrict__ positions,   // (n_atoms, 2) row-major -- (x, y) per atom
+    const int* __restrict__ disk_indices,  // (n_disk, 2)  row-major
+    const T sampling_0,
+    const T sampling_1,
+    const T* __restrict__ radial_gpts, // (n_radial,)
+    const T* __restrict__ radial_funcs,// (n_atoms, n_radial) row-major
+    const T* __restrict__ radial_deriv,// (n_atoms, n_radial) row-major
+    const T dt,
+    const T r0,
+    const int n_radial,
+    const int n_disk,
+    const int n_atoms,
+    const int rows,
+    const int cols
+) {
+    // x-dim: disk index,  y-dim: atom index
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
 
-        if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
-            r_interp = math.sqrt(
-                (k * sampling[0] - positions[i, 0]) ** 2
-                + (m * sampling[1] - positions[i, 1]) ** 2
-            )
+    if (i >= n_atoms || j >= n_disk) return;
 
-            idx = int(math.log(r_interp / radial_gpts[0] + 1e-12) / dt)
+    T px = positions[i * 2];
+    T py = positions[i * 2 + 1];
 
-            if idx < 0:
-                cuda.atomic.add(array, (k, m), radial_functions[i, 0])
+    int k = rn_cast<T>(px / sampling_0) + disk_indices[j * 2];
+    int m = rn_cast<T>(py / sampling_1) + disk_indices[j * 2 + 1];
 
-            elif idx < radial_gpts.shape[0] - 1:
-                slope = radial_derivatives[i, idx]
-                cuda.atomic.add(
-                    array,
-                    (k, m),
-                    radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope,
-                )
+    if (k < 0 || k >= rows || m < 0 || m >= cols) return;
+
+    T dx = (T)k * sampling_0 - px;
+    T dy = (T)m * sampling_1 - py;
+    T r  = sqrt(dx * dx + dy * dy);
+
+    int idx = (int)floor(log(r / r0 + (T)1e-12) / dt);
+
+    T val;
+    int base = i * n_radial;
+    if (idx < 0) {
+        val = radial_funcs[base];
+    } else if (idx < n_radial - 1) {
+        T slope = radial_deriv[base + idx];
+        val = radial_funcs[base + idx] + (r - radial_gpts[idx]) * slope;
+    } else {
+        return;
+    }
+
+    atomicAdd(&array[k * cols + m], val);
+}
+
+extern "C" __global__ void interpolate_radial_f32(
+    float* array, const float* positions, const int* disk_indices,
+    float sampling_0, float sampling_1,
+    const float* radial_gpts, const float* radial_funcs, const float* radial_deriv,
+    float dt, float r0,
+    int n_radial, int n_disk, int n_atoms, int rows, int cols
+) {
+    interpolate_radial_impl<float>(
+        array, positions, disk_indices,
+        sampling_0, sampling_1, radial_gpts, radial_funcs, radial_deriv,
+        dt, r0, n_radial, n_disk, n_atoms, rows, cols
+    );
+}
+
+extern "C" __global__ void interpolate_radial_f64(
+    double* array, const double* positions, const int* disk_indices,
+    double sampling_0, double sampling_1,
+    const double* radial_gpts, const double* radial_funcs, const double* radial_deriv,
+    double dt, double r0,
+    int n_radial, int n_disk, int n_atoms, int rows, int cols
+) {
+    interpolate_radial_impl<double>(
+        array, positions, disk_indices,
+        sampling_0, sampling_1, radial_gpts, radial_funcs, radial_deriv,
+        dt, r0, n_radial, n_disk, n_atoms, rows, cols
+    );
+}
+"""
+
+_interpolate_radial_module = cp.RawModule(
+    code=_INTERPOLATE_RADIAL_KERNEL,
+    options=("--std=c++14",),
+)
+_interpolate_radial_f32 = _interpolate_radial_module.get_function("interpolate_radial_f32")
+_interpolate_radial_f64 = _interpolate_radial_module.get_function("interpolate_radial_f64")
 
 
 def interpolate_radial_functions(
@@ -103,22 +220,50 @@ def interpolate_radial_functions(
     if len(positions) == 0:
         return array
 
-    threadsperblock = (1, 256)
-    blockspergrid_x = int(math.ceil(positions.shape[0] / threadsperblock[0]))
-    blockspergrid_y = int(math.ceil(disk_indices.shape[0] / threadsperblock[1]))
-    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    n_disk = disk_indices.shape[0]
+    n_atoms = positions.shape[0]
+    n_radial = radial_gpts.shape[0]
+    rows, cols = array.shape
 
-    dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
+    dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (n_radial - 1)).item()
+    r0 = float(radial_gpts[0].item())
 
-    _interpolate_radial_functions[blockspergrid, threadsperblock](
-        array,
-        positions,
-        disk_indices,
-        sampling,
-        radial_gpts,
-        radial_functions,
-        radial_derivative,
-        dt,
+    # Dispatch to the float32 or float64 kernel based on the array dtype.
+    # The array dtype is set by the abtem 'precision' config key via get_dtype().
+    dtype = array.dtype
+    if dtype == cp.float64:
+        fp = cp.float64
+        kernel = _interpolate_radial_f64
+    else:
+        fp = cp.float32
+        kernel = _interpolate_radial_f32
+
+    # x-axis carries disk_indices (can be hundreds of millions → needs
+    # gridDim.x limit of 2^31-1); y-axis carries positions (atoms per slice,
+    # typically O(100) → well within gridDim.y limit of 65535).
+    block = (256, 1, 1)
+    grid = (math.ceil(n_disk / 256), n_atoms, 1)
+
+    # Ensure contiguous arrays with the target floating-point type.  The kernel
+    # reads positions with stride 2 ((x, y) per atom), so we pass the (n_atoms, 2)
+    # slice directly — no need to pad with a dummy z column.
+    # copy=False avoids an unnecessary GPU allocation when the array is already
+    # the right dtype (which is the common case for all arrays except radial_gpts,
+    # which the caller should pre-convert — see integrate_on_grid in integrals.py).
+    positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp, copy=False))
+    disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32, copy=False))
+    rg = cp.ascontiguousarray(radial_gpts.astype(fp, copy=False))
+    rf = cp.ascontiguousarray(radial_functions.astype(fp, copy=False))
+    rd = cp.ascontiguousarray(radial_derivative.astype(fp, copy=False))
+
+    kernel(
+        grid, block,
+        (array, positions_xy, disk_i32,
+         fp(sampling[0]), fp(sampling[1]),
+         rg, rf, rd,
+         fp(dt), fp(r0),
+         np.int32(n_radial), np.int32(n_disk), np.int32(n_atoms),
+         np.int32(rows), np.int32(cols)),
     )
 
 

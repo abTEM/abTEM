@@ -1120,7 +1120,7 @@ class _BaseMeasurement2D(BaseMeasurements):
                 mode=mode,
                 cval=cval,
                 depth=depth,
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = gaussian_filter(self.array, sigma=sigma, mode=mode, cval=cval)
@@ -1442,7 +1442,7 @@ class Images(_BaseMeasurement2D):
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = _integrate_gradient_2d(self.array, sampling=self.sampling)
@@ -1733,7 +1733,7 @@ class Images(_BaseMeasurement2D):
                 chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
             )
             array = array.map_blocks(
-                self._diffractograms, meta=xp.array((), dtype=xp.float32)
+                self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
             )
         else:
             array = self._diffractograms(self.array)
@@ -1959,7 +1959,7 @@ class _BaseMeasurement1D(BaseMeasurements):
                 endpoint=endpoint,
                 order=order,
                 chunks=self.array.chunks[:-1] + (gpts,),
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._interpolate(self.array, gpts, endpoint, order)
@@ -2280,7 +2280,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
             sigma=padded_sigma,
             mode="wrap",
             depth=depth,
-            meta=xp.array((), dtype=xp.float32),
+            meta=xp.array((), dtype=get_dtype(complex=False)),
         )
     else:
         array = gaussian_filter(measurements.array, sigma=padded_sigma, mode="wrap")
@@ -2904,7 +2904,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 new_sampling=sampling,
                 new_gpts=gpts,
                 chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                dtype=np.float32,
+                dtype=get_dtype(complex=False),
             )
         else:
             array = self._batch_interpolate_bilinear(
@@ -3047,12 +3047,16 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
         )[..., np.concatenate(indices)]
 
+        # Use the configured floating-point precision, not a hardcoded float32.
+        # _AbstractRadialDetector._out_dtype returns get_dtype(complex=False), so
+        # the result dtype must match to avoid a silent precision downgrade.
+        fp_dtype = array.dtype
         result = xp.zeros(
             (
                 array.shape[0],
                 len(indices),
             ),
-            dtype=xp.float32,
+            dtype=fp_dtype,
         )
 
         if xp is cp:
@@ -3135,7 +3139,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                     len(self.shape) - 2,
                     len(self.shape) - 1,
                 ),
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._radial_binning(
@@ -3273,7 +3277,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 offset=offset,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             integrated_intensity = self._integrate_fourier_space(
@@ -3354,7 +3358,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
             )
             array = self.array.map_blocks(
-                self._com, x=x, y=y, drop_axis=base_axes, dtype=np.complex64
+                self._com, x=x, y=y, drop_axis=base_axes, dtype=get_dtype(complex=True)
             )
         else:
             array = self._com(self.array, x=x, y=y)
@@ -3405,7 +3409,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 inner=inner,
                 outer=outer,
                 angular_coordinates=self.angular_coordinates,
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._bandlimit(self.array, inner, outer, self.angular_coordinates)
@@ -3575,7 +3579,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (n,),
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._azimuthal_average(
@@ -4095,7 +4099,7 @@ class PolarMeasurements(BaseMeasurements):
 
         xp = get_array_module(self.array)
 
-        array = xp.zeros_like(xp.array(differential_1.array), dtype=xp.complex64)
+        array = xp.zeros_like(xp.array(differential_1.array), dtype=get_dtype(complex=True))
 
         array.real = differential_1.array
         array.imag = differential_2.array
