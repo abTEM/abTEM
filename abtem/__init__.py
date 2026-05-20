@@ -27,7 +27,7 @@ from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.transfer import CTF, Aperture, SpatialEnvelope, TemporalEnvelope
-from abtem.visualize.visualizations import show_atoms
+from abtem.visualize.visualizations import show_atoms, show_atoms3d
 from abtem.waves import PlaneWave, Probe, Waves
 
 __all__ = [
@@ -67,6 +67,7 @@ __all__ = [
     "TemporalEnvelope",
     "SpatialEnvelope",
     "show_atoms",
+    "show_atoms3d",
     "Waves",
     "Probe",
     "PlaneWave",
