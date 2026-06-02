@@ -167,7 +167,17 @@ class BaseScan(ReciprocalSpaceMultiplication):
         if len(positions) == 0:
             return xp.ones(waves.gpts, dtype=get_dtype(complex=False))
 
-        positions = xp.asarray(positions) / xp.asarray(waves.sampling)
+        cell = waves.grid.cell
+        if cell is None:
+            positions = xp.asarray(positions) / xp.asarray(waves.sampling)
+        else:
+            # skewed grid: a Cartesian scan position maps to fractional grid coordinates
+            # via inv(cell) (the same mapping as atom placement), so the Fourier-shift
+            # phase exp(-2 pi i k . r) lands the probe at the right physical position.
+            inverse_cell = xp.asarray(np.linalg.inv(np.asarray(cell, dtype=float)))
+            positions = (xp.asarray(positions) @ inverse_cell) * xp.asarray(
+                waves._valid_gpts
+            )
         positions = positions.astype(get_dtype(complex=False))
 
         kernel = fft_shift_kernel(positions, shape=waves._valid_gpts)

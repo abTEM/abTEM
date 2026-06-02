@@ -1637,6 +1637,7 @@ class Probe(WavesBuilder):
         aberrations: Optional[Aberrations | dict] = None,
         scan_positions: Optional[BaseScan] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
         **kwargs,
     ):
         self._accelerator = Accelerator(energy=energy)
@@ -1664,7 +1665,7 @@ class Probe(WavesBuilder):
             aberrations = Aberrations(energy=energy, **aberrations, **kwargs)
 
         aberrations._accelerator = self._accelerator
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, cell=cell)
 
         self._aperture = aperture
         self._aberrations = aberrations
@@ -1773,6 +1774,7 @@ class Probe(WavesBuilder):
             metadata=waves_builder.metadata,
             reciprocal_space=True,
             ensemble_axes_metadata=waves_builder.scan_positions.ensemble_axes_metadata,
+            cell=waves_builder.cell,
         )
 
         waves = waves_builder.aperture.apply(waves)

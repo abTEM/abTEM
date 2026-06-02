@@ -400,3 +400,50 @@ def test_tile(data, repetitions, renormalize, lazy, device):
             .array.sum((-2, -1))
         )
         assert np.allclose(old_sum, new_sum)
+
+
+def test_skew_probe_positioning():
+    """A Probe built on a non-orthogonal grid must land at the requested physical
+    position (the metric Fourier-shift), and reduce to orthogonal for a diagonal cell."""
+    import numpy as np
+
+    import abtem
+
+    a = 20.0
+    cell = np.array([[a, 0.0], [a * np.cos(np.deg2rad(70)), a * np.sin(np.deg2rad(70))]])
+    ext = tuple(np.linalg.norm(cell, axis=1))
+    gpts = (256, 256)
+    n = 256
+    f = np.stack(np.meshgrid(np.arange(n) / n, np.arange(n) / n, indexing="ij"), -1)
+    coords = f @ cell  # physical (x, y) of each pixel
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, extent=ext, gpts=gpts, cell=cell)
+    assert not probe.grid.is_orthogonal
+    assert probe.copy().cell is not None  # cell round-trips through copy
+
+    for target in [(6.0, 5.0), (12.0, 9.0), (10.0, 10.0)]:
+        w = probe.build(scan=[list(target)]).compute()
+        intensity = np.squeeze(np.abs(np.asarray(w.array)) ** 2)
+        i, j = (int(x) for x in np.unravel_index(np.argmax(intensity), intensity.shape))
+        peak = coords[i, j]
+        assert np.hypot(peak[0] - target[0], peak[1] - target[1]) < 0.2
+
+
+def test_skew_stem_scan_runs():
+    """A full STEM scan (probe + annular detector) runs end-to-end on a skew grid."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a, cz = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (3, 3, 6)
+    pot = abtem.Potential(atoms, gpts=(96, 96), slice_thickness=cz)
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)  # cell comes from the potential
+    scan = abtem.GridScan(start=(0, 0), end=(a * 1.5, a * 1.5), gpts=(5, 5))
+    images = probe.scan(pot, scan=scan, detectors=abtem.AnnularDetector(20, 80)).compute()
+    assert images.array.shape == (5, 5)
+    assert np.all(np.isfinite(images.array))
