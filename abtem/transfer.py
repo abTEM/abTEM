@@ -20,7 +20,7 @@ from abtem.core.energy import (
     reciprocal_space_sampling_to_angular_sampling,
 )
 from abtem.core.fft import fft_crop
-from abtem.core.grid import Grid, HasGrid2DMixin, polar_spatial_frequencies
+from abtem.core.grid import Grid, HasGrid2DMixin
 from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.distributions import (
     BaseDistribution,
@@ -68,10 +68,10 @@ class BaseTransferFunction(
 
     def _angular_grid(self, device: str) -> tuple[np.ndarray, np.ndarray]:
         xp = get_array_module(device)
-        alpha, phi = polar_spatial_frequencies(
-            self._valid_gpts, self._valid_sampling, xp=xp
-        )
-        alpha *= self.wavelength
+        # use the reciprocal metric so the angular grid is physical on a skewed cell
+        # (reduces exactly to polar_spatial_frequencies for an orthogonal grid)
+        alpha, phi = self.grid.polar_spatial_frequencies(xp=xp)
+        alpha = alpha * self.wavelength
         return alpha, phi
 
     def _evaluate_kernel(self, waves: Optional[BaseWaves] = None) -> np.ndarray:
