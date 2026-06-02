@@ -41,6 +41,19 @@ if TYPE_CHECKING:
     from abtem.parametrizations import Parametrization
 
 
+def _require_orthogonal_cell(cell: Optional[np.ndarray]) -> None:
+    """Raise if a non-orthogonal cell is passed to an integrator that does not yet
+    support skewed grids."""
+    if cell is None:
+        return
+    cell = np.asarray(cell, dtype=float)
+    if abs(cell[0, 1]) > 1e-12 or abs(cell[1, 0]) > 1e-12:
+        raise NotImplementedError(
+            "this projection integrator does not yet support non-orthogonal grids; "
+            "use the (default) ScatteringFactorProjectionIntegrals"
+        )
+
+
 class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """Base class for projection integrator object used for calculating projection
     integrals of radial potentials.
@@ -71,11 +84,15 @@ class FieldIntegrator(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Integrate radial potential between two limits at the given 2D positions on a
         grid. The integration limits are only used when the integration method is
         finite.
+
+        ``cell`` is an optional 2x2 real-space cell (rows are the in-plane lattice
+        vectors) for a non-orthogonal grid; ``None`` (default) means an orthogonal grid.
 
         Parameters
         ----------
@@ -278,7 +295,9 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         sampling: tuple[float, float],
         device: str = "cpu",
         fourier_space: bool = False,
+        cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
+        _require_orthogonal_cell(cell)
         xp = get_array_module(device)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=True))
@@ -297,7 +316,10 @@ class GaussianProjectionIntegrals(FieldIntegrator):
 
 
 def sinc(
-    gpts: tuple[int, int], sampling: tuple[float, float], device: str = "cpu"
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    device: str = "cpu",
+    cell: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Returns an array representing a 2D sinc function centered at [0, 0]. The result is
@@ -321,8 +343,16 @@ def sinc(
     """
     xp = get_array_module(device)
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp)
+    # the interpolation rolloff lives in fractional index space (kx*dx = h1/N1) and is
+    # therefore independent of the cell shape; only the pixel area dk2 changes for a
+    # skewed cell.
     k = xp.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2)
-    dk2 = sampling[0] * sampling[1]
+    if cell is None:
+        dk2 = sampling[0] * sampling[1]
+    else:
+        dk2 = abs(float(np.linalg.det(np.asarray(cell, dtype=float)))) / (
+            gpts[0] * gpts[1]
+        )
     k[0, 0] = 1
     sinc = xp.sin(k) / k * dk2
     sinc[0, 0] = dk2
@@ -430,11 +460,19 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ):
         xp = get_array_module(device)
-        kx, ky = spatial_frequencies(gpts, sampling, xp=np)
 
-        k2 = kx[:, None] ** 2 + ky[None] ** 2
+        if cell is None:
+            kx, ky = spatial_frequencies(gpts, sampling, xp=np)
+            k2 = kx[:, None] ** 2 + ky[None] ** 2
+        else:
+            # non-orthogonal cell: |g|^2 from the reciprocal metric
+            from abtem.core.grid import Grid
+
+            k2 = Grid(gpts=gpts, sampling=sampling, cell=cell).k_squared(xp=np)
+
         f = self.parametrization.projected_scattering_factor(symbol)(k2)
         f = xp.asarray(f, dtype=get_dtype(complex=False))
 
@@ -447,12 +485,12 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
         return f
 
-    def get_scattering_factor(self, symbol, gpts, sampling, device):
+    def get_scattering_factor(self, symbol, gpts, sampling, device, cell=None):
         try:
             scattering_factor = self.scattering_factors[symbol]
         except KeyError:
             scattering_factor = self._calculate_scattering_factor(
-                symbol, gpts, sampling, device
+                symbol, gpts, sampling, device, cell=cell
             )
             self._scattering_factors[symbol] = scattering_factor
 
@@ -471,20 +509,28 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ):
         xp = get_array_module(device)
         if len(atoms) == 0:
             return xp.zeros(gpts, dtype=get_dtype(complex=False))
 
+        inverse_cell = None if cell is None else np.linalg.inv(np.asarray(cell, float))
+
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
             scattering_factor = self.get_scattering_factor(
-                chemical_symbols[number], gpts, sampling, device
+                chemical_symbols[number], gpts, sampling, device, cell=cell
             )
 
             positions = atoms.positions[atoms.numbers == number]
 
-            positions = (positions[:, :2] / sampling).astype(get_dtype(complex=False))
+            if inverse_cell is None:
+                positions = positions[:, :2] / sampling
+            else:
+                # skewed grid: place atoms in fractional grid coordinates
+                positions = (positions[:, :2] @ inverse_cell) * np.array(gpts)
+            positions = positions.astype(get_dtype(complex=False))
 
             temp_array = xp.zeros(gpts, dtype=get_dtype(complex=False))
 
@@ -494,7 +540,7 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
 
             temp_array = fft2(temp_array, overwrite_x=True)
 
-            temp_array *= scattering_factor / sinc(gpts, sampling, device)
+            temp_array *= scattering_factor / sinc(gpts, sampling, device, cell=cell)
 
             # if not fourier_space:
             temp_array = ifft2(temp_array, overwrite_x=True).real
@@ -803,7 +849,9 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         gpts: tuple[int, int],
         sampling: tuple[float, float],
         device: str = "cpu",
+        cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
+        _require_orthogonal_cell(cell)
         xp = get_array_module(device)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
