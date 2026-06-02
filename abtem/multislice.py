@@ -21,7 +21,7 @@ from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
-from abtem.core.grid import spatial_frequencies
+from abtem.core.grid import Grid, spatial_frequencies
 from abtem.core.utils import expand_dims_to_broadcast
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator
@@ -45,8 +45,7 @@ if TYPE_CHECKING:
 
 def _fresnel_propagator_array(
     thickness: float,
-    gpts: tuple[int, int],
-    sampling: tuple[float, float],
+    grid: Grid,
     energy: float,
     device: str,
     order: int = 1,
@@ -61,7 +60,20 @@ def _fresnel_propagator_array(
 
     xp = get_array_module(device)
     wavelength = energy2wavelength(energy)
-    kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+
+    if not grid.is_orthogonal:
+        # Non-orthogonal (skewed) grid: the free-space propagator is still diagonal in
+        # the Fourier basis, but |g|^2 must use the reciprocal metric of the cell.
+        if order == 2:
+            raise NotImplementedError(
+                "the order-2 Fourier propagator is not implemented for non-orthogonal "
+                "grids; use order=1 or the realspace multislice"
+            )
+        k2 = grid.k_squared(xp)
+        return complex_exponential(-k2 * np.pi * thickness * wavelength)
+
+    # Orthogonal grid: keep the separable form (bit-identical to the previous code).
+    kx, ky = spatial_frequencies(grid._valid_gpts, grid._valid_sampling, xp=xp)
     kx, ky = kx[:, None], ky[None]
 
     f = complex_exponential(
@@ -145,6 +157,7 @@ class FresnelPropagator:
             waves.base_tilt,
             waves._valid_energy,
             waves.device,
+            getattr(waves.grid, "_cell", None),  # skew cell (hashable tuple or None)
         )
 
         tilt_axes_metadata = _get_tilt_axes(waves)
@@ -163,8 +176,7 @@ class FresnelPropagator:
     def _calculate_array(waves: Waves, thickness: float, order: int = 1) -> np.ndarray:
         array = _fresnel_propagator_array(
             thickness=thickness,
-            gpts=waves._valid_gpts,
-            sampling=waves._valid_sampling,
+            grid=waves.grid,
             energy=waves._valid_energy,
             device=waves.device,
             order=order,
@@ -174,6 +186,7 @@ class FresnelPropagator:
             waves._valid_gpts,
             waves._valid_sampling,
             get_array_module(waves.device),
+            cell=waves.grid.cell,
         )
 
         if waves.base_tilt != (0.0, 0.0):
