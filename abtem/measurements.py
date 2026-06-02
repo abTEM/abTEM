@@ -220,6 +220,20 @@ def _scan_extent(measurement):
     return extent
 
 
+def _metric_polar_angles(gpts, cell, wavelength, xp=np):
+    """Per-pixel physical scattering angle ``(alpha [mrad], phi [rad])`` of a skewed
+    diffraction-pattern grid, from the reciprocal metric of the real-space ``cell``."""
+    from abtem.core.grid import Grid
+
+    cell = np.asarray(cell, dtype=float)
+    extent = np.linalg.norm(cell, axis=1)
+    sampling = (float(extent[0] / gpts[0]), float(extent[1] / gpts[1]))
+    k, phi = Grid(gpts=gpts, sampling=sampling, cell=cell).polar_spatial_frequencies(
+        xp=xp
+    )
+    return k * wavelength * 1e3, phi
+
+
 def _annular_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -228,12 +242,18 @@ def _annular_detector_mask(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     xp: ModuleType = np,
+    cell=None,
+    wavelength: Optional[float] = None,
 ) -> np.ndarray | list[np.ndarray]:
-    kx, ky = spatial_frequencies(
-        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
-    )
-
-    k2 = kx[:, None] ** 2 + ky[None] ** 2
+    if cell is not None:
+        # physical scattering angle from the reciprocal metric (skewed grid)
+        alpha, _ = _metric_polar_angles(gpts, cell, wavelength, xp)
+        k2 = alpha**2
+    else:
+        kx, ky = spatial_frequencies(
+            gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+        )
+        k2 = kx[:, None] ** 2 + ky[None] ** 2
 
     bins = (k2 >= inner**2) & (k2 < outer**2)
 
@@ -265,10 +285,16 @@ def _polar_detector_bins(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     return_indices: bool = False,
+    cell=None,
+    wavelength: Optional[float] = None,
 ) -> np.ndarray | list[np.ndarray]:
-    alpha, phi = polar_spatial_frequencies(
-        gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
-    )
+    if cell is not None:
+        # physical (alpha, phi) from the reciprocal metric (skewed grid)
+        alpha, phi = _metric_polar_angles(gpts, cell, wavelength, np)
+    else:
+        alpha, phi = polar_spatial_frequencies(
+            gpts, sampling=(1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1])
+        )
     phi = (phi - rotation) % (2 * np.pi)
 
     radial_bins = -np.ones(gpts, dtype=int)
@@ -2564,6 +2590,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         centering,
         energy,
         radius,
+        grid_cell=None,
     ):
         from abtem.bloch.indexing import index_diffraction_spots
         from abtem.bloch.utils import filter_reciprocal_space_vectors
@@ -2586,6 +2613,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
             energy=energy,
             radius=radius,
             orientation_matrices=orientation_matrices,
+            grid_cell=grid_cell,
         )
 
         array_all = np.zeros(array.shape[:-1] + (mask_all.sum(),), dtype=array.dtype)
@@ -2704,6 +2732,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centering=centering,
                 energy=energy,
                 radius=radius,
+                grid_cell=self.metadata.get("cell", None),
                 drop_axis=len(self.array.shape) - 1,
                 chunks=self.array.chunks[:-2] + (mask.sum(),),
                 meta=np.array((), dtype=self.dtype),
@@ -2721,6 +2750,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 centering=centering,
                 energy=energy,
                 radius=radius,
+                grid_cell=self.metadata.get("cell", None),
             )
 
         reciprocal_lattice_vectors = np.matmul(
@@ -2762,10 +2792,18 @@ class DiffractionPatterns(_BaseMeasurement2D):
     @property
     def max_angles(self) -> tuple[float, float]:
         """Maximum scattering angle in `x` and `y` [mrad]."""
-        return (
+        per_axis = (
             self.shape[-2] // 2 * self.angular_sampling[0],
             self.shape[-1] // 2 * self.angular_sampling[1],
         )
+        if self.metadata.get("cell", None) is not None:
+            # On a skewed grid the largest isotropic (radial) detector angle is the
+            # inscribed circle of the reciprocal parallelogram. By the reciprocal
+            # metric this equals min(per_axis) (the sin(gamma)/|b| factors cancel to
+            # shape//2 * sampling), so report it isotropically for both axes.
+            inscribed = min(per_axis)
+            return inscribed, inscribed
+        return per_axis
 
     @property
     def max_frequency(self):
@@ -3018,6 +3056,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
         fftshift,
         rotation,
         offset,
+        cell=None,
+        wavelength=None,
     ):
         xp = get_array_module(array)
 
@@ -3032,6 +3072,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             rotation=rotation,
             offset=offset,
             return_indices=True,
+            cell=cell,
+            wavelength=wavelength,
         )
 
         separators = xp.concatenate(
@@ -3114,6 +3156,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
         self._check_integration_limits(inner, outer)
         xp = get_array_module(self.array)
 
+        cell = self.metadata.get("cell", None)
+        wavelength = (
+            energy2wavelength(self._get_from_metadata("energy"))
+            if cell is not None
+            else None
+        )
+
         if self.is_lazy:
             array = self.array.map_blocks(
                 self._radial_binning,
@@ -3125,6 +3174,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 chunks=self.array.chunks[:-2]
                 + (
@@ -3148,6 +3199,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 rotation=rotation,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
             )
 
         radial_sampling = (outer - inner) / nbins_radial
@@ -3161,6 +3214,89 @@ class DiffractionPatterns(_BaseMeasurement2D):
             azimuthal_offset=rotation,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
             metadata=self.metadata,
+        )
+
+    def to_cartesian(
+        self,
+        gpts: Optional[tuple[int, int]] = None,
+        sampling: Optional[tuple[float, float]] = None,
+    ) -> "DiffractionPatterns":
+        """
+        Resample a non-orthogonal (skewed) diffraction pattern onto a regular Cartesian
+        ``(kx, ky)`` grid, so that it is laid out correctly in physical reciprocal space
+        (e.g. for ``.show()`` or saving). Diffraction patterns from an orthogonal grid
+        are returned unchanged.
+
+        Parameters
+        ----------
+        gpts : two int, optional
+            Shape of the output grid. Defaults to the input shape.
+        sampling : two float, optional
+            Reciprocal-space sampling of the output grid [1 / Å]. Defaults to the input
+            sampling.
+
+        Returns
+        -------
+        diffraction_patterns : DiffractionPatterns
+            The resampled (orthogonal) diffraction pattern(s), centred (``fftshift=True``).
+        """
+        from abtem.core.grid import Grid
+
+        cell = self.metadata.get("cell", None)
+        if cell is None:
+            return self
+
+        cell = np.asarray(cell, dtype=float)
+        gpts_src = tuple(int(n) for n in self.shape[-2:])
+        extent = np.linalg.norm(cell, axis=1)
+        real_sampling = (extent[0] / gpts_src[0], extent[1] / gpts_src[1])
+
+        # The Bragg spots are sharp (often single pixels) sitting on the oblique grid
+        # g = h1 b1 + h2 b2. Pull-interpolation onto a Cartesian grid would smear them
+        # along the (oblique) lattice directions, so instead we *forward-scatter*: each
+        # source pixel deposits its intensity into the nearest Cartesian pixel at its
+        # physical position. Each spot therefore lands on a single output pixel.
+        gx, gy = Grid(gpts=gpts_src, sampling=real_sampling, cell=cell).k_components()
+        gx, gy = np.asarray(gx), np.asarray(gy)
+
+        reciprocal = np.linalg.inv(cell).T  # rows b1, b2
+        if sampling is None:
+            sampling = (
+                float(np.linalg.norm(reciprocal[0])),
+                float(np.linalg.norm(reciprocal[1])),
+            )
+        if gpts is None:
+            gpts = gpts_src
+        gpts = (int(gpts[0]), int(gpts[1]))
+
+        array = self.array
+        if self.is_lazy:
+            array = array.compute()
+        # rasterise on the host (forward-scatter uses numpy scatter); ``.get()`` brings a
+        # cupy array to numpy, and is a no-op fallback for numpy arrays.
+        array = np.asarray(getattr(array, "get", lambda: array)())
+        if self.fftshift:
+            array = np.fft.ifftshift(array, axes=(-2, -1))  # match k_components (fft order)
+
+        # target (Cartesian, centred) pixel index for every source pixel
+        ti = np.rint(gx / sampling[0]).astype(np.int64) + gpts[0] // 2
+        tj = np.rint(gy / sampling[1]).astype(np.int64) + gpts[1] // 2
+        valid = (ti >= 0) & (ti < gpts[0]) & (tj >= 0) & (tj < gpts[1])
+        ti_v, tj_v = ti[valid], tj[valid]
+
+        flat = array.reshape((-1,) + gpts_src)
+        out = np.zeros((flat.shape[0],) + gpts, dtype=array.dtype)
+        for i in range(flat.shape[0]):
+            np.add.at(out[i], (ti_v, tj_v), flat[i][valid])
+        out = out.reshape(self.shape[:-2] + gpts)
+
+        metadata = {k: v for k, v in self.metadata.items() if k != "cell"}
+        return DiffractionPatterns(
+            out,
+            sampling=sampling,
+            fftshift=True,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
         )
 
     def radial_binning(
@@ -3197,7 +3333,9 @@ class DiffractionPatterns(_BaseMeasurement2D):
         return self.polar_binning(nbins_radial, 1, inner, outer)
 
     @staticmethod
-    def _integrate_fourier_space(array, sampling, inner, outer, fftshift, offset):
+    def _integrate_fourier_space(
+        array, sampling, inner, outer, fftshift, offset, cell=None, wavelength=None
+    ):
         xp = get_array_module(array)
 
         bins = _annular_detector_mask(
@@ -3208,6 +3346,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             fftshift=fftshift,
             offset=offset,
             xp=xp,
+            cell=cell,
+            wavelength=wavelength,
         )
 
         return xp.sum(array * bins, axis=(-2, -1))
@@ -3264,6 +3404,13 @@ class DiffractionPatterns(_BaseMeasurement2D):
 
         xp = get_array_module(self.array)
 
+        cell = self.metadata.get("cell", None)
+        wavelength = (
+            energy2wavelength(self._get_from_metadata("energy"))
+            if cell is not None
+            else None
+        )
+
         if self.is_lazy:
             integrated_intensity = self.array.map_blocks(
                 self._integrate_fourier_space,
@@ -3272,6 +3419,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                 meta=xp.array((), dtype=xp.float32),
             )
@@ -3283,6 +3432,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 outer=outer,
                 fftshift=self.fftshift,
                 offset=offset,
+                cell=cell,
+                wavelength=wavelength,
             )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
