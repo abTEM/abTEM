@@ -222,3 +222,140 @@ def test_crystal_potential_with_frozen_phonons(
 #
 #     potential1 = potential1.build(lazy=False)
 #     potential2 = potential2.build(lazy=False)
+
+
+def test_skew_potential_reduces_to_orthogonal():
+    """A non_orthogonal=True potential on an orthogonal crystal must match the
+    standard orthogonal potential."""
+    import numpy as np
+    from ase import Atoms
+
+    atoms = Atoms(
+        "C2", cell=(4.0, 5.0, 6.0), pbc=True,
+        positions=[(1.0, 1.0, 3.0), (3.0, 4.0, 3.0)],
+    )
+    ortho = Potential(atoms, gpts=(80, 100), slice_thickness=6.0).build(lazy=False).compute()
+    skew = Potential(
+        atoms, gpts=(80, 100), slice_thickness=6.0, non_orthogonal=True
+    ).build(lazy=False).compute()
+    assert skew.grid.is_orthogonal  # a diagonal cell is still orthogonal
+    assert np.allclose(ortho.array, skew.array, atol=1e-4)
+
+
+def test_skew_potential_non_orthogonal_cell():
+    """A genuinely non-orthogonal (hexagonal) cell builds a skewed-grid potential."""
+    import numpy as np
+    from ase import Atoms
+
+    a, c = 2.46, 4.0
+    b = a / (2 * np.sqrt(3))
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, c]]
+    )
+    atoms = Atoms("C2", cell=cell, pbc=True, positions=[(0, 0, c / 2), (a / 2, b, c / 2)])
+
+    pot = Potential(atoms, gpts=(60, 60), slice_thickness=c, non_orthogonal=True)
+    assert not pot.grid.is_orthogonal
+    assert pot.cell is not None
+    parr = pot.build(lazy=False).compute()
+    assert parr.array.shape == (1, 60, 60)
+    assert np.all(np.isfinite(parr.array))
+
+
+def test_non_orthogonal_requires_z_separable():
+    """A fully triclinic cell (z not perpendicular to xy) is rejected."""
+    import numpy as np
+    from ase import Atoms
+
+    cell = np.array([[4.0, 0, 0], [1.0, 4.0, 0], [0.5, 0.0, 6.0]])  # z-x coupling
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)])
+    with pytest.raises(NotImplementedError):
+        Potential(atoms, gpts=(40, 40), slice_thickness=6.0, non_orthogonal=True)
+
+
+def test_potential_auto_detects_non_orthogonal():
+    """A non-orthogonal (z-separable) cell builds a skew potential with no flag."""
+    import numpy as np
+    from ase import Atoms
+
+    a, c = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, c]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)])
+
+    auto = Potential(atoms, gpts=(60, 60), slice_thickness=c)
+    assert not auto.grid.is_orthogonal  # auto-detected
+    # explicit opt-out restores the legacy orthogonalising behaviour
+    forced_ortho = Potential(atoms, gpts=(60, 60), slice_thickness=c, non_orthogonal=False)
+    assert forced_ortho.grid.is_orthogonal
+
+    # an orthogonal cell is never switched to skew
+    ortho_atoms = Atoms("C", cell=(4, 5, 6), pbc=True, positions=[(0, 0, 0)])
+    assert Potential(ortho_atoms, gpts=(40, 40), slice_thickness=6).grid.is_orthogonal
+
+
+def test_waves_cell_survives_metadata_roundtrip():
+    """The non-orthogonal cell is stored in metadata and survives reconstruction."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a, c = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, c]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (1, 1, 3)
+    pot = abtem.Potential(atoms, gpts=(60, 60), slice_thickness=c)
+    exit_waves = abtem.PlaneWave(energy=100e3).multislice(pot).compute()
+
+    assert exit_waves.cell is not None
+    assert "cell" in exit_waves.metadata
+    rebuilt = abtem.Waves.from_array_and_metadata(
+        exit_waves.array,
+        exit_waves.ensemble_axes_metadata + exit_waves.base_axes_metadata,
+        exit_waves.metadata,
+    )
+    assert rebuilt.cell is not None
+    assert np.allclose(rebuilt.cell, exit_waves.cell)
+
+
+def test_skew_supercell_potential_is_periodic():
+    """A skew supercell must keep all atoms (no boundary atom dropped by wrap) and the
+    projected potential must be primitive-periodic."""
+    import numpy as np
+    from ase import Atoms
+
+    a, cz, rep = 3.0, 2.0, 6
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (rep, rep, 1)
+    pot = Potential(atoms, gpts=(240, 240), slice_thickness=cz)
+
+    assert len(pot.get_sliced_atoms().atoms) == rep * rep  # no atom dropped
+    V = np.asarray(pot.build(lazy=False).compute().array[0])
+    n = 240 // rep  # one primitive period in pixels
+    assert np.allclose(V, np.roll(V, n, axis=0), atol=1e-6 * np.abs(V).max())
+    assert np.allclose(V, np.roll(V, n, axis=1), atol=1e-6 * np.abs(V).max())
+
+
+def test_frozen_phonons_skew():
+    """Frozen phonons work on a non-orthogonal cell and the configurations differ."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a, cz = 3.0, 2.0
+    cell = np.array(
+        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
+    )
+    atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (3, 3, 4)
+    fp = abtem.FrozenPhonons(atoms, num_configs=3, sigmas=0.1, seed=0)
+    pot = abtem.Potential(fp, gpts=(96, 96), slice_thickness=cz)
+    assert not pot.grid.is_orthogonal
+    V = np.asarray(pot.build(lazy=False).compute().array)
+    assert V.shape[0] == 3 and np.all(np.isfinite(V))
+    assert not np.allclose(V[0], V[1])  # thermal disorder breaks periodicity

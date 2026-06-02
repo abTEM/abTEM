@@ -21,6 +21,7 @@ from abtem.atoms import (
     best_orthogonal_cell,
     cut_cell,
     is_cell_orthogonal,
+    is_cell_z_separable,
     orthogonalize_cell,
     pad_atoms,
     plane_to_axes,
@@ -308,21 +309,65 @@ class _FieldBuilder(BaseField):
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         periodic: bool = True,
         device: Optional[str] = None,
+        non_orthogonal: Optional[bool] = None,
     ):
         self._array_object = array_object
-        if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
-            if not isinstance(plane, str):
-                raise NotImplementedError
-            axes = plane_to_axes(plane)
-            cell = np.array(cell)[:, list(axes)]
-            box = tuple(best_orthogonal_cell(cell))
 
-        elif box is None:
-            box = tuple(np.diag(cell))
+        cell_array = np.array(cell, dtype=float)
+        # Resolve whether to build a skewed (non-orthogonal) in-plane grid. The z-axis
+        # must be perpendicular to the xy-plane so slicing along the beam stays valid.
+        #   None  -> auto: skew iff the cell is non-orthogonal but z-separable, plane is
+        #            "xy" and no explicit box was requested (otherwise orthogonalise).
+        #   True  -> force skew (raise if not z-separable / plane != "xy").
+        #   False -> force the orthogonalising path (legacy behaviour).
+        if non_orthogonal is None:
+            use_skew = (
+                not is_cell_orthogonal(cell_array)
+                and is_cell_z_separable(cell_array)
+                and isinstance(plane, str)
+                and plane == "xy"
+                and box is None
+            )
+        elif non_orthogonal:
+            if not is_cell_z_separable(cell_array):
+                raise NotImplementedError(
+                    "non_orthogonal potentials require the z-axis perpendicular to the "
+                    "xy-plane (monoclinic-along-beam)"
+                )
+            if not (isinstance(plane, str) and plane == "xy"):
+                raise NotImplementedError(
+                    "non_orthogonal potentials currently support only plane='xy'"
+                )
+            use_skew = True
+        else:
+            use_skew = False
+        self._non_orthogonal = use_skew
 
-        self._grid = Grid(
-            extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True
-        )
+        if use_skew:
+            cell_2d = cell_array[:2, :2]
+            extent = tuple(np.linalg.norm(cell_2d, axis=1))
+            box = (extent[0], extent[1], float(cell_array[2, 2]))
+            self._grid = Grid(
+                extent=extent,
+                gpts=gpts,
+                sampling=sampling,
+                lock_extent=True,
+                cell=cell_2d,
+            )
+        else:
+            if _require_cell_transform(cell, box=box, plane=plane, origin=origin):
+                if not isinstance(plane, str):
+                    raise NotImplementedError
+                axes = plane_to_axes(plane)
+                cell = np.array(cell)[:, list(axes)]
+                box = tuple(best_orthogonal_cell(cell))
+
+            elif box is None:
+                box = tuple(np.diag(cell))
+
+            self._grid = Grid(
+                extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True
+            )
         self._device = validate_device(device)
 
         self._box = box
@@ -373,6 +418,11 @@ class _FieldBuilder(BaseField):
         """The origin relative to the provided atoms mapped to the origin of the
         potential."""
         return self._origin
+
+    @property
+    def non_orthogonal(self) -> bool:
+        """Whether the potential is built on a non-orthogonal (skewed) in-plane grid."""
+        return self._non_orthogonal
 
     def __getitem__(self, item) -> PotentialArray:
         return self.build(lazy=False)[item]
@@ -495,6 +545,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         periodic: bool = True,
         integrator=None,
         device: Optional[str] = None,
+        non_orthogonal: Optional[bool] = None,
     ):
         self._frozen_phonons = _validate_frozen_phonons(atoms)
         self._integrator = integrator
@@ -513,6 +564,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             origin=origin,
             box=box,
             periodic=periodic,
+            non_orthogonal=non_orthogonal,
         )
 
     @property
@@ -550,6 +602,11 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             Transformed atoms.
         """
         atoms = self.frozen_phonons.atoms
+
+        if getattr(self, "_non_orthogonal", False):
+            # keep the non-orthogonal cell; the grid carries the skewed metric
+            return atoms
+
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
 
@@ -595,6 +652,20 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
             # outside all bins and is silently dropped.  Snap those back to 0.
             cell_z = atoms.cell[2, 2]
             atoms.positions[atoms.positions[:, 2] > cell_z - 1e-10, 2] = 0.0
+
+            if getattr(self, "_non_orthogonal", False):
+                # The same wrap(eps=0.0) issue affects the in-plane axes of a skewed
+                # cell: an atom at fractional 0 can evaluate to a tiny negative
+                # coordinate (floating point in the non-orthogonal inv(cell)) and wrap
+                # to ~1, where it falls outside the grid and is dropped -- breaking the
+                # primitive periodicity. Snap those boundary atoms back to 0.
+                scaled = atoms.get_scaled_positions(wrap=False)
+                snap = scaled > 1.0 - 1e-6
+                snap[:, 2] = False  # z handled above
+                if snap.any():
+                    atoms.positions = atoms.positions - snap.astype(float) @ np.asarray(
+                        atoms.cell
+                    )
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
@@ -687,6 +758,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                     gpts=self.gpts,
                     sampling=self.sampling,
                     device=self.device,
+                    cell=self.cell,
                 )
 
                 if array is not None:
@@ -851,6 +923,14 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
     device : str, optional
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is
         determined by the user configuration file.
+    non_orthogonal : bool, optional
+        Whether to build the potential on a non-orthogonal (skewed) in-plane grid rather
+        than orthogonalising the cell into a supercell. The `z`-axis must be
+        perpendicular to the `xy`-plane (monoclinic-along-beam). If ``None`` (default)
+        this is detected automatically from the cell: a non-orthogonal but z-separable
+        cell (with ``plane='xy'`` and no explicit ``box``) builds a skewed grid, while an
+        orthogonal cell is unaffected. Pass ``False`` to force the legacy orthogonalising
+        behaviour, or ``True`` to require a skewed grid.
     """
 
     _exclude_from_copy = ("parametrization", "projection")
@@ -872,6 +952,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
         periodic: bool = True,
         integrator: FieldIntegrator | None = None,
         device: str | None = None,
+        non_orthogonal: bool | None = None,
     ):
         if integrator is None:
             if projection == "finite":
@@ -898,6 +979,7 @@ class Potential(_FieldBuilderFromAtoms, BasePotential):
             box=box,
             periodic=periodic,
             integrator=integrator,
+            non_orthogonal=non_orthogonal,
         )
 
 

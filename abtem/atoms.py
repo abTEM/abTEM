@@ -161,6 +161,35 @@ def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
     return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
 
 
+def is_cell_z_separable(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12) -> bool:
+    """
+    Check whether the `z`-axis is decoupled from the `xy`-plane, i.e. the third
+    lattice vector is along `z` and the first two lie in the `xy`-plane. This is the
+    requirement for slicing along the beam direction; the in-plane cell may still be
+    non-orthogonal (a skewed grid).
+
+    Parameters
+    ----------
+    cell : ase.Atoms, ase.cell.Cell or np.ndarray
+        The cell to check.
+    tol : float
+        Components below this value are considered zero.
+
+    Returns
+    -------
+    z_separable : bool
+        True if the `z`-axis is perpendicular to the `xy`-plane.
+    """
+    if hasattr(cell, "cell"):
+        cell = cell.cell
+
+    cell = np.array(cell)
+    assert isinstance(cell, np.ndarray)
+
+    z_coupling = np.abs([cell[0, 2], cell[1, 2], cell[2, 0], cell[2, 1]])
+    return not np.any(z_coupling > tol)
+
+
 def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     """
     Check whether the cell of given atoms can be converted to a structure usable by
