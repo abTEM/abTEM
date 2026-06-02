@@ -411,12 +411,17 @@ class Waves(BaseWaves, ArrayObject):
         reciprocal_space: bool = False,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         if sampling is not None and extent is not None:
             extent = None
 
         self._grid = Grid(
-            extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
+            extent=extent,
+            gpts=array.shape[-2:],
+            sampling=sampling,
+            lock_gpts=True,
+            cell=cell,
         )
         self._accelerator = Accelerator(energy=energy)
         self._reciprocal_space = reciprocal_space
@@ -450,6 +455,10 @@ class Waves(BaseWaves, ArrayObject):
     def metadata(self) -> dict:
         self._metadata["energy"] = self.energy
         self._metadata["reciprocal_space"] = self.reciprocal_space
+        cell = self.grid.cell
+        if cell is not None:
+            # store the non-orthogonal cell so it survives array/metadata round-trips
+            self._metadata["cell"] = tuple(map(tuple, cell.tolist()))
         return self._metadata
 
     @classmethod
@@ -484,6 +493,7 @@ class Waves(BaseWaves, ArrayObject):
 
         energy = metadata["energy"]
         reciprocal_space = metadata.get("reciprocal_space", False)
+        cell = metadata.get("cell", None)
 
         x_axis, y_axis = axes_metadata[-2], axes_metadata[-1]
 
@@ -499,6 +509,7 @@ class Waves(BaseWaves, ArrayObject):
             reciprocal_space=reciprocal_space,
             ensemble_axes_metadata=axes_metadata[:-2],
             metadata=metadata,
+            cell=None if cell is None else np.array(cell, dtype=float),
         )
 
     def convolve(
@@ -1386,6 +1397,7 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
             reciprocal_space=False,
             metadata=self.metadata,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
+            cell=self.cell,
         )
 
         waves = reduce_ensemble(waves)
@@ -1428,8 +1440,9 @@ class PlaneWave(WavesBuilder):
         normalize: bool = False,
         tilt: tuple[float, float] = (0.0, 0.0),
         device: Optional[str] = None,
+        cell: Optional[np.ndarray] = None,
     ):
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, cell=cell)
         self._accelerator = Accelerator(energy=energy)
 
         self._normalize = normalize
@@ -1483,6 +1496,7 @@ class PlaneWave(WavesBuilder):
             extent=waves_builder.extent,
             metadata=waves_builder.metadata,
             reciprocal_space=False,
+            cell=waves_builder.cell,
         )
 
         waves = waves_builder.tilt.apply(waves)
