@@ -7,7 +7,7 @@ import strategies as abtem_st
 from hypothesis import assume, given
 from utils import ensure_is_tuple
 
-from abtem.core.grid import Grid, GridUndefinedError
+from abtem.core.grid import Grid, GridUndefinedError, spatial_frequencies
 
 
 def grid_data(allow_none=False, allow_overdefined=True):
@@ -117,3 +117,86 @@ def test_sampling_change(grid_data, new_sampling):
         assert np.allclose(grid.sampling, adjusted_sampling)
 
     check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+
+
+def _hex_cell(a, angle_deg=60.0):
+    th = np.deg2rad(angle_deg)
+    return np.array([[a, 0.0], [a * np.cos(th), a * np.sin(th)]])
+
+
+def test_grid_orthogonal_by_default():
+    grid = Grid(extent=(20.0, 30.0), gpts=(64, 96))
+    assert grid.cell is None
+    assert grid.is_orthogonal
+
+
+def test_k_squared_orthogonal_matches_spatial_frequencies():
+    # the orthogonal path must be identical to the existing spatial_frequencies code
+    grid = Grid(extent=(38.4, 51.2), gpts=(192, 256))
+    kx, ky = spatial_frequencies(grid.gpts, grid.sampling)
+    ref = kx[:, None] ** 2 + ky[None] ** 2
+    assert np.array_equal(grid.k_squared(), ref)
+
+
+def test_skew_grid_metric_and_components():
+    a = 30.0
+    cell = _hex_cell(a)
+    grid = Grid(extent=tuple(np.linalg.norm(cell, axis=1)), gpts=(128, 128), cell=cell)
+
+    assert not grid.is_orthogonal
+
+    # reciprocal metric is symmetric with a non-zero cross term for a skew cell
+    M = grid.reciprocal_metric
+    assert np.allclose(M, M.T)
+    assert abs(M[0, 1]) > 1e-9
+
+    # |g|^2 from the metric equals gx^2 + gy^2 from the components
+    gx, gy = grid.k_components()
+    assert np.allclose(grid.k_squared(), gx**2 + gy**2, atol=1e-5)
+
+
+def test_skew_grid_reduces_to_orthogonal_for_diagonal_cell():
+    extent = (24.0, 32.0)
+    gpts = (96, 128)
+    ortho = Grid(extent=extent, gpts=gpts)
+    diag = Grid(extent=extent, gpts=gpts, cell=np.diag(extent))
+    assert np.allclose(diag.k_squared(), ortho.k_squared())
+
+
+def test_cell_validation():
+    # inconsistent row lengths vs extent are rejected
+    with pytest.raises(ValueError):
+        Grid(extent=(10.0, 10.0), gpts=(8, 8), cell=np.array([[20.0, 0.0], [0.0, 10.0]]))
+    # wrong shape is rejected
+    with pytest.raises(ValueError):
+        Grid(extent=(10.0, 10.0), gpts=(8, 8), cell=np.eye(3))
+    # a non-2D grid with a cell is rejected
+    with pytest.raises(ValueError):
+        Grid(extent=(10.0,) * 3, gpts=(8,) * 3, dimensions=3, cell=np.eye(2))
+
+
+def test_polar_spatial_frequencies():
+    from abtem.core.grid import polar_spatial_frequencies
+
+    # orthogonal: bit-exact vs the module function
+    ortho = Grid(extent=(20.0, 25.0), gpts=(64, 80))
+    k, phi = ortho.polar_spatial_frequencies()
+    k0, phi0 = polar_spatial_frequencies(ortho.gpts, ortho.sampling)
+    assert np.array_equal(k, k0) and np.array_equal(phi, phi0)
+
+    # skew: physical (k, phi) consistent with the metric components
+    cell = _hex_cell(20.0, angle_deg=70.0)
+    skew = Grid(extent=tuple(np.linalg.norm(cell, axis=1)), gpts=(80, 80), cell=cell)
+    k, phi = skew.polar_spatial_frequencies()
+    gx, gy = skew.k_components()
+    assert np.allclose(k**2, skew.k_squared())
+    assert np.allclose(phi, np.arctan2(gy, gx))
+
+
+def test_skew_grid_copy_and_equality():
+    cell = _hex_cell(25.0)
+    grid = Grid(extent=tuple(np.linalg.norm(cell, axis=1)), gpts=(64, 64), cell=cell)
+    assert grid.copy() == grid
+    assert np.allclose(grid.copy().cell, grid.cell)
+    ortho = Grid(extent=grid.extent, gpts=grid.gpts)
+    assert not (grid == ortho)
