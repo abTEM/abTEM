@@ -150,6 +150,78 @@ def test_detect(data, detector, lazy, device):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
+def test_radial_sensitivity(lazy):
+    """A radially varying detector sensitivity weights the diffraction pattern by
+    ``w(alpha)`` before integration. Verify against a manually computed ground truth and
+    that uniform sensitivity reproduces the unweighted detector."""
+    from abtem.detectors import RadialSensitivity
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, extent=20, gpts=256)
+    waves = probe.build(lazy=lazy)
+
+    def value(measurement):
+        if measurement.is_lazy:
+            measurement = measurement.compute()
+        return np.asarray(measurement.array)
+
+    plain = value(abtem.AnnularDetector(inner=0, outer=20).detect(waves))
+    unit = value(
+        abtem.AnnularDetector(
+            inner=0, outer=20, sensitivity=lambda a: np.ones_like(a)
+        ).detect(waves)
+    )
+    assert np.allclose(plain, unit)
+
+    linear = value(
+        abtem.AnnularDetector(
+            inner=0, outer=20, sensitivity=lambda a: a / 20.0
+        ).detect(waves)
+    )
+    # Down-weighting with w(alpha) <= 1 must reduce the signal.
+    assert linear < plain
+
+    # Manual ground truth from the raw diffraction pattern.
+    dp = value(
+        probe.build(lazy=False).diffraction_patterns(
+            max_angle="full", parity="same", fftshift=False
+        )
+    )
+    sampling = probe.build(lazy=False).angular_sampling
+    freqs = [np.fft.fftfreq(256, 1 / (s * 256)) for s in sampling]
+    kx, ky = np.meshgrid(*freqs, indexing="ij")
+    alpha = np.sqrt(kx**2 + ky**2)
+    mask = alpha < 20
+    manual = (dp * mask * (alpha / 20.0)).sum()
+    assert np.isclose(manual, linear, rtol=1e-4)
+
+    # The (angles, values) lookup form matches the equivalent callable.
+    lookup = value(
+        abtem.AnnularDetector(
+            inner=0, outer=20, sensitivity=([0, 10, 20], [0.0, 0.5, 1.0])
+        ).detect(waves)
+    )
+    assert np.isclose(lookup, linear, rtol=1e-4)
+
+    # The FlexibleAnnularDetector weights per-pixel before binning, so integrating its
+    # polar bins reproduces the sensitivity-weighted annular detector.
+    flexible = abtem.FlexibleAnnularDetector(
+        step_size=0.5, inner=0, outer=40, sensitivity=lambda a: a / 20.0
+    ).detect(waves)
+    flexible_img = value(flexible.integrate_radial(0, 20))
+    assert np.isclose(flexible_img, linear, rtol=2e-2)
+
+    # The sensitivity survives a copy (and thus ensemble partitioning).
+    detector = abtem.AnnularDetector(
+        inner=0, outer=20, sensitivity=([0, 10, 20], [0.0, 0.5, 1.0])
+    )
+    assert detector.copy().sensitivity == detector.sensitivity
+
+    # A non-increasing measured curve is rejected.
+    with pytest.raises(ValueError):
+        RadialSensitivity(([0, 50, 40], [1.0, 2.0, 3.0]))
+
+
+@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize(
     "extent,gpts",
     [

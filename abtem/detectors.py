@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Type, TypeVar
 import numpy as np
 
 from abtem.core.axes import AxisMetadata, LinearAxis, RealSpaceAxis, ReciprocalSpaceAxis
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.chunks import Chunks
 from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array
@@ -27,6 +27,7 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     _diffraction_pattern_resampling_gpts,
     _polar_detector_bins,
+    _radial_weight_map,
     _scan_axes,
     _scan_shape,
     _scanned_measurement_type,
@@ -89,6 +90,144 @@ def _gpts_and_sampling_from_obj(obj):
         reciprocal_space_sampling = obj.reciprocal_space_sampling
         energy = _energy_from_waves(obj)
     return gpts, angular_sampling, reciprocal_space_sampling, energy
+
+
+class RadialSensitivity:
+    """
+    A radially varying detector sensitivity (gain) as a function of the radial
+    scattering angle.
+
+    This describes how the recorded signal of an annular detector is weighted as a
+    function of scattering angle, replacing the idealized assumption of a detector that
+    is uniformly sensitive between its inner and outer integration limits. Real annular
+    detectors typically have a non-uniform angular response, e.g. a gradual roll-off
+    towards the edges or a measured gain curve.
+
+    The sensitivity may be specified in two ways:
+
+    1. As a callable mapping the radial scattering angle [mrad] to a sensitivity weight.
+       The callable must accept and return array-like input (it is evaluated on a grid of
+       angles), e.g. ``lambda alpha: alpha / 100.0``.
+    2. As a tuple ``(angles, values)`` of one-dimensional array-likes giving a measured
+       sensitivity curve. The angles [mrad] must be strictly increasing. The values are
+       linearly interpolated onto the detector grid; angles outside the measured range
+       are clamped to the first and last value.
+
+    Parameters
+    ----------
+    sensitivity : callable or tuple of array-like
+        The radial sensitivity, given either as a callable ``w(alpha)`` or as a tuple
+        ``(angles, values)`` describing a measured sensitivity curve. If an existing
+        ``RadialSensitivity`` is given, it is returned unchanged by
+        :func:`validate_radial_sensitivity`.
+
+    Examples
+    --------
+    >>> # Linearly increasing sensitivity towards higher angles.
+    >>> sens = RadialSensitivity(lambda alpha: alpha / 80.0)
+    >>> # A measured response curve.
+    >>> sens = RadialSensitivity(([0, 40, 80, 120], [0.0, 1.0, 0.9, 0.2]))
+    """
+
+    def __init__(
+        self,
+        sensitivity: Callable | tuple[Any, Any],
+    ):
+        if callable(sensitivity):
+            self._func: Optional[Callable] = sensitivity
+            self._angles: Optional[np.ndarray] = None
+            self._values: Optional[np.ndarray] = None
+        else:
+            try:
+                angles, values = sensitivity
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "'sensitivity' must be a callable or a tuple (angles, values)"
+                )
+
+            angles = np.asarray(angles, dtype=float)
+            values = np.asarray(values, dtype=float)
+
+            if angles.ndim != 1 or angles.shape != values.shape:
+                raise ValueError(
+                    "'angles' and 'values' must be one-dimensional arrays of equal length"
+                )
+
+            if angles.size < 2:
+                raise ValueError("'angles' must contain at least two points")
+
+            if np.any(np.diff(angles) <= 0):
+                raise ValueError("'angles' must be strictly increasing")
+
+            self._func = None
+            self._angles = angles
+            self._values = values
+
+    @property
+    def angles(self) -> Optional[np.ndarray]:
+        """The angles of the measured sensitivity curve [mrad], or None if callable."""
+        return self._angles
+
+    @property
+    def values(self) -> Optional[np.ndarray]:
+        """The values of the measured sensitivity curve, or None if callable."""
+        return self._values
+
+    @property
+    def func(self) -> Optional[Callable]:
+        """The sensitivity callable, or None if a measured curve was given."""
+        return self._func
+
+    def __call__(self, alpha):
+        """
+        Evaluate the sensitivity at the given radial scattering angles.
+
+        Parameters
+        ----------
+        alpha : array-like
+            Radial scattering angles [mrad].
+
+        Returns
+        -------
+        weights : array-like
+            The sensitivity weights, with the same shape as ``alpha``.
+        """
+        if self._func is not None:
+            return self._func(alpha)
+
+        xp = get_array_module(alpha)
+        weights = np.interp(asnumpy(alpha), self._angles, self._values)
+        return xp.asarray(weights)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, RadialSensitivity):
+            return False
+        if self._func is not None or other._func is not None:
+            return self._func is other._func
+        return bool(
+            np.array_equal(self._angles, other._angles)
+            and np.array_equal(self._values, other._values)
+        )
+
+
+def validate_radial_sensitivity(
+    sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]],
+) -> Optional[RadialSensitivity]:
+    """
+    Normalize a radial sensitivity specification to a ``RadialSensitivity`` or None.
+
+    Parameters
+    ----------
+    sensitivity : RadialSensitivity, callable, tuple of array-like or None
+        The radial sensitivity specification. If None, None is returned.
+
+    Returns
+    -------
+    sensitivity : RadialSensitivity or None
+    """
+    if sensitivity is None or isinstance(sensitivity, RadialSensitivity):
+        return sensitivity
+    return RadialSensitivity(sensitivity)
 
 
 def validate_detectors(
@@ -237,6 +376,7 @@ class _AbstractRadialDetector(BaseDetector):
         outer: Optional[float] = None,
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
@@ -244,7 +384,13 @@ class _AbstractRadialDetector(BaseDetector):
         self._outer = outer
         self._rotation = rotation
         self._offset = offset
+        self._sensitivity = validate_radial_sensitivity(sensitivity)
         super().__init__(to_cpu=to_cpu, url=url)
+
+    @property
+    def sensitivity(self) -> Optional[RadialSensitivity]:
+        """The radially varying detector sensitivity, or None if uniform."""
+        return self._sensitivity
 
     @property
     def inner(self) -> float:
@@ -359,6 +505,7 @@ class _AbstractRadialDetector(BaseDetector):
             outer=outer,
             rotation=self._rotation,
             offset=self._offset,
+            sensitivity=self._sensitivity,
         )
 
         if self.to_cpu:
@@ -561,6 +708,13 @@ class AnnularDetector(_AbstractRadialDetector):
         Outer integration limit [mrad].
     offset: two float, optional
         Center offset of the annular integration region [mrad].
+    sensitivity : RadialSensitivity, callable or tuple of array-like, optional
+        A radially varying detector sensitivity. If given, the diffraction patterns are
+        weighted by this factor as a function of the radial scattering angle [mrad]
+        before integration, simulating a detector that is not uniformly sensitive within
+        its integration limits. May be given as a :class:`RadialSensitivity`, a callable
+        ``w(alpha)``, or a tuple ``(angles, values)`` describing a measured sensitivity
+        curve. By default the detector is uniformly sensitive.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective devices.
@@ -577,6 +731,7 @@ class AnnularDetector(_AbstractRadialDetector):
         inner: float = 0.0,
         outer: Optional[float] = None,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
@@ -589,6 +744,7 @@ class AnnularDetector(_AbstractRadialDetector):
             outer=outer,
             rotation=0.0,  # Rotation is meaningless for standard annular detector
             offset=offset,
+            sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
         )
@@ -707,7 +863,7 @@ class AnnularDetector(_AbstractRadialDetector):
         )
         offset = self.offset if self.offset is not None else (0.0, 0.0)
         measurement = diffraction_patterns.integrate_radial(
-            inner=self.inner, outer=outer, offset=offset,
+            inner=self.inner, outer=outer, offset=offset, sensitivity=self.sensitivity
         )
 
         if self.to_cpu and hasattr(measurement, "to_cpu"):
@@ -754,7 +910,18 @@ class AnnularDetector(_AbstractRadialDetector):
             return_indices=False,
         )
         assert isinstance(array, np.ndarray)
-        return array >= 0
+        region = array >= 0
+
+        if self.sensitivity is not None:
+            weights = _radial_weight_map(
+                gpts=region.shape,
+                sampling=waves.angular_sampling,
+                sensitivity=self.sensitivity,
+                fftshift=fftshift,
+            )
+            return region * weights
+
+        return region
 
     def get_detector_region(self, waves, fftshift: bool = True):
         """
@@ -1516,6 +1683,14 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         Inner integration limit of the bins [mrad].
     outer : float, optional
         Outer integration limit of the bins [mrad].
+    sensitivity : RadialSensitivity, callable or tuple of array-like, optional
+        A radially varying detector sensitivity. If given, the diffraction patterns are
+        weighted by this factor as a function of the radial scattering angle [mrad]
+        before binning, simulating a detector that is not uniformly sensitive across the
+        bins. May be given as a :class:`RadialSensitivity`, a callable ``w(alpha)``, or a
+        tuple ``(angles, values)`` describing a measured sensitivity curve. By default
+        the bins are uniformly sensitive. Note that integrating the resulting polar
+        measurement reproduces the signal of a sensitivity-weighted annular detector.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective
@@ -1532,6 +1707,7 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
         step_size: float = 1.0,
         inner: float = 0.0,
         outer: Optional[float] = None,
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = True,
         url: Optional[str] = None,
     ):
@@ -1541,6 +1717,7 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
             outer=outer,
             rotation=0.0,
             offset=(0.0, 0.0),
+            sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
         )
@@ -1595,6 +1772,12 @@ class SegmentedDetector(_AbstractRadialDetector):
         Rotation of the bins around the origin [mrad].
     offset : two float
         Offset of the bins from the origin in `x` and `y` [mrad].
+    sensitivity : RadialSensitivity, callable or tuple of array-like, optional
+        A radially varying detector sensitivity. If given, the diffraction patterns are
+        weighted by this factor as a function of the radial scattering angle [mrad]
+        before binning. May be given as a :class:`RadialSensitivity`, a callable
+        ``w(alpha)``, or a tuple ``(angles, values)`` describing a measured sensitivity
+        curve. By default the bins are uniformly sensitive.
     to_cpu : bool, optional
         If True, copy the measurement data from the calculation device to CPU memory
         after applying the detector, otherwise the data stays on the respective devices.
@@ -1614,6 +1797,7 @@ class SegmentedDetector(_AbstractRadialDetector):
         outer: float,
         rotation: float = 0.0,
         offset: tuple[float, float] = (0.0, 0.0),
+        sensitivity: Optional[RadialSensitivity | Callable | tuple[Any, Any]] = None,
         to_cpu: bool = False,
         url: Optional[str] = None,
     ):
@@ -1624,6 +1808,7 @@ class SegmentedDetector(_AbstractRadialDetector):
             outer=outer,
             rotation=rotation,
             offset=offset,
+            sensitivity=sensitivity,
             to_cpu=to_cpu,
             url=url,
         )
