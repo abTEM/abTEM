@@ -1675,6 +1675,12 @@ class BlochWaves:
         else:
             array = calculate_wave_functions(values, g_vec, extent, gpts, thicknesses)
 
+            if thicknesses.ndim == 0:
+                # a scalar thickness has no ensemble (thickness) axis; drop the spurious
+                # leading size-1 axis so the array matches the empty axis metadata (the
+                # lazy path already returns a 2D array in this case).
+                array = array[0]
+
         ensemble_axes_metadata: list[AxisMetadata] = []
 
         if isinstance(thicknesses, np.ndarray) and thicknesses.ndim > 0:
