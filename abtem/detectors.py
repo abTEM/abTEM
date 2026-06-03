@@ -569,6 +569,76 @@ class _AbstractRadialDetector(BaseDetector):
 
         return polar_measurements
 
+    def _get_detector_region_array(
+        self, waves, fftshift: bool = True
+    ) -> np.ndarray:
+        inner, outer = self.angular_limits(waves)
+        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
+
+        array = _polar_detector_bins(
+            gpts=gpts,
+            sampling=angular_sampling,
+            inner=inner,
+            outer=outer,
+            nbins_radial=1,
+            nbins_azimuthal=1,
+            fftshift=fftshift,
+            rotation=self._rotation,
+            offset=self._offset,
+            return_indices=False,
+        )
+        assert isinstance(array, np.ndarray)
+        region = array >= 0
+
+        if self.sensitivity is not None:
+            weights = _radial_weight_map(
+                gpts=region.shape,
+                sampling=angular_sampling,
+                sensitivity=self.sensitivity,
+                fftshift=fftshift,
+            )
+            return region * weights
+
+        return region
+
+    def get_detector_region(
+        self, waves, fftshift: bool = True
+    ) -> DiffractionPatterns:
+        """
+        Get the detector region as a diffraction pattern.
+
+        The region covers the full annulus between the inner and outer integration
+        limits. If the detector has a radial sensitivity, the region is the
+        sensitivity-weighted detector efficiency as a function of scattering angle;
+        otherwise it is a binary mask. The azimuthal segmentation of segmented detectors
+        is not represented here; use :meth:`get_detector_regions` or :meth:`show` for the
+        individual bins.
+
+        Parameters
+        ----------
+        waves : BaseWaves or DiffractionPatterns
+            The waves or diffraction patterns used to derive grid calibration.
+        fftshift : bool, optional
+            If True, the zero-frequency of the detector region is shifted to the center
+            of the array, otherwise the center is at (0, 0).
+
+        Returns
+        -------
+        detector_region : DiffractionPatterns
+        """
+
+        array = self._get_detector_region_array(waves, fftshift=fftshift)
+        _, _, reciprocal_space_sampling, energy = _gpts_and_sampling_from_obj(waves)
+        metadata = {
+            "energy": energy,
+            "label": "detector efficiency",
+            "units": "%",
+        }
+        diffraction_patterns = DiffractionPatterns(
+            array, metadata=metadata, sampling=reciprocal_space_sampling
+        )
+        return diffraction_patterns
+
     def show(
         self,
         waves: Optional[BaseWaves] = None,
@@ -890,66 +960,6 @@ class AnnularDetector(_AbstractRadialDetector):
             measurements, (RealSpaceLineProfiles, Images, MeasurementsEnsemble)
         )
         return measurements
-
-    def _get_detector_region_array(
-        self, waves, fftshift: bool = True
-    ) -> np.ndarray:
-        inner, outer = self.angular_limits(waves)
-        gpts, angular_sampling, _, _ = _gpts_and_sampling_from_obj(waves)
-
-        array = _polar_detector_bins(
-            gpts=gpts,
-            sampling=angular_sampling,
-            inner=inner,
-            outer=outer,
-            nbins_radial=1,
-            nbins_azimuthal=1,
-            fftshift=fftshift,
-            rotation=0.0,
-            offset=self.offset,
-            return_indices=False,
-        )
-        assert isinstance(array, np.ndarray)
-        region = array >= 0
-
-        if self.sensitivity is not None:
-            weights = _radial_weight_map(
-                gpts=region.shape,
-                sampling=waves.angular_sampling,
-                sensitivity=self.sensitivity,
-                fftshift=fftshift,
-            )
-            return region * weights
-
-        return region
-
-    def get_detector_region(self, waves, fftshift: bool = True):
-        """
-        Get the annular detector region as a diffraction pattern.
-
-        Parameters
-        ----------
-        waves : BaseWaves or DiffractionPatterns
-            The waves or diffraction patterns used to derive grid calibration.
-        fftshift : bool, optional
-            If True, the zero-frequency of the detector region is shifted to the
-            centre of the array, otherwise the centre is at (0, 0).
-
-        Returns
-        -------
-        detector_region : DiffractionPatterns
-        """
-        array = self._get_detector_region_array(waves, fftshift=fftshift)
-        _, _, reciprocal_space_sampling, energy = _gpts_and_sampling_from_obj(waves)
-        metadata = {
-            "energy": energy,
-            "label": "detector efficiency",
-            "units": "%",
-        }
-        diffraction_patterns = DiffractionPatterns(
-            array, metadata=metadata, sampling=reciprocal_space_sampling
-        )
-        return diffraction_patterns
 
 
 def _slit_detector_mask(

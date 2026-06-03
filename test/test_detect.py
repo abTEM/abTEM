@@ -216,6 +216,22 @@ def test_radial_sensitivity(lazy):
     )
     assert detector.copy().sensitivity == detector.sensitivity
 
+    # get_detector_region reflects the sensitivity and is available on all radial
+    # detectors (it is defined on the shared base class).
+    reference = probe.build(lazy=False)
+    for radial_detector in (
+        abtem.AnnularDetector,
+        abtem.FlexibleAnnularDetector,
+    ):
+        binary = radial_detector(inner=0, outer=40).get_detector_region(reference)
+        weighted = radial_detector(
+            inner=0, outer=40, sensitivity=lambda a: a / 40.0
+        ).get_detector_region(reference)
+        assert set(np.unique(binary.array)) <= {0.0, 1.0}
+        assert weighted.array.max() <= 1.0 + 1e-6
+        # Weighting only reduces the in-region values, so the total drops.
+        assert weighted.array.sum() < binary.array.sum()
+
     # A non-increasing measured curve is rejected.
     with pytest.raises(ValueError):
         RadialSensitivity(([0, 50, 40], [1.0, 2.0, 3.0]))
