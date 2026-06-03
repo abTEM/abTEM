@@ -205,7 +205,7 @@ def test_radial_sensitivity(lazy):
     # The FlexibleAnnularDetector weights per-pixel before binning, so integrating its
     # polar bins reproduces the sensitivity-weighted annular detector.
     flexible = abtem.FlexibleAnnularDetector(
-        step_size=0.5, inner=0, outer=40, sensitivity=lambda a: a / 20.0
+        step_size=0.5, inner=0, outer=20, sensitivity=lambda a: a / 20.0
     ).detect(waves)
     flexible_img = value(flexible.integrate_radial(0, 20))
     assert np.isclose(flexible_img, linear, rtol=2e-2)
@@ -216,25 +216,109 @@ def test_radial_sensitivity(lazy):
     )
     assert detector.copy().sensitivity == detector.sensitivity
 
-    # get_detector_region reflects the sensitivity and is available on all radial
-    # detectors (it is defined on the shared base class).
+    # AnnularDetector.get_detector_region is the singular efficiency map [%]: a binary
+    # 0/100 mask without a sensitivity, a sensitivity-weighted map with one.
     reference = probe.build(lazy=False)
-    for radial_detector in (
-        abtem.AnnularDetector,
-        abtem.FlexibleAnnularDetector,
-    ):
-        binary = radial_detector(inner=0, outer=40).get_detector_region(reference)
-        weighted = radial_detector(
-            inner=0, outer=40, sensitivity=lambda a: a / 40.0
+    binary = abtem.AnnularDetector(inner=0, outer=40).get_detector_region(reference)
+    assert set(np.unique(binary.array)) <= {0.0, 100.0}
+    assert binary.metadata["label"] == "Detector efficiency"
+    assert binary.metadata["units"] == "%"
+    weighted = abtem.AnnularDetector(
+        inner=0, outer=40, sensitivity=lambda a: a / 40.0
+    ).get_detector_region(reference)
+    assert weighted.array.max() <= 100.0 + 1e-4
+    assert weighted.array.sum() < binary.array.sum()
+
+    # FlexibleAnnularDetector exposes the plural get_detector_regions; with a sensitivity
+    # the polar bins hold the efficiency [%] at each radial bin center, reflecting the
+    # sensitivity profile (here linearly increasing from 0 to 100 %).
+    flex = abtem.FlexibleAnnularDetector(
+        step_size=1.0, inner=0, outer=40, sensitivity=lambda a: a / 40.0
+    )
+    regions = flex.get_detector_regions(reference)
+    assert regions.metadata["label"] == "Detector efficiency"
+    assert regions.metadata["units"] == "%"
+    centers = 0 + (np.arange(regions.shape[-2]) + 0.5) * 1.0
+    assert np.allclose(regions.array[:, 0], centers / 40.0 * 100.0)
+    # The plain (unweighted) regions are integer labels with the original metadata.
+    plain_regions = abtem.FlexibleAnnularDetector(
+        step_size=1.0, inner=0, outer=40
+    ).get_detector_regions(reference)
+    assert plain_regions.metadata["label"] == "detector regions"
+
+    # The plural get_detector_regions is not available on the single-region annular
+    # detector; it guides the user to the singular get_detector_region.
+    with pytest.raises(NotImplementedError, match="get_detector_region"):
+        abtem.AnnularDetector(inner=0, outer=40).get_detector_regions(reference)
+
+    # Conversely, the singular get_detector_region is not available on multi-region
+    # detectors; it guides the user to the plural get_detector_regions.
+    with pytest.raises(NotImplementedError, match="get_detector_regions"):
+        abtem.FlexibleAnnularDetector(inner=0, outer=40).get_detector_region(reference)
+    with pytest.raises(NotImplementedError, match="get_detector_regions"):
+        abtem.SegmentedDetector(
+            nbins_radial=2, nbins_azimuthal=4, inner=0, outer=40
         ).get_detector_region(reference)
-        assert set(np.unique(binary.array)) <= {0.0, 1.0}
-        assert weighted.array.max() <= 1.0 + 1e-6
-        # Weighting only reduces the in-region values, so the total drops.
-        assert weighted.array.sum() < binary.array.sum()
+
+    # A measured (angles, values) curve whose angles fall outside [inner, outer] is
+    # rejected with a descriptive error.
+    with pytest.raises(ValueError, match="outside the detector integration range"):
+        abtem.AnnularDetector(
+            inner=20, outer=60, sensitivity=([0, 30, 80], [0.0, 1.0, 0.5])
+        ).detect(reference)
+
+    # A callable producing negative weights over the range is rejected.
+    with pytest.raises(ValueError, match="negative weights"):
+        abtem.AnnularDetector(
+            inner=0, outer=40, sensitivity=lambda a: a - 20.0
+        ).detect(reference)
+
+    # Sensitivities greater than 1 are unphysical and rejected, both as a measured
+    # curve (at construction) and as a callable (when the range is known).
+    with pytest.raises(ValueError, match=r"within \[0, 1\]"):
+        RadialSensitivity(([0, 10, 20], [0.0, 0.5, 1.5]))
+    with pytest.raises(ValueError, match="greater than 1"):
+        abtem.AnnularDetector(
+            inner=0, outer=100, sensitivity=lambda a: a / 50.0
+        ).detect(reference)
 
     # A non-increasing measured curve is rejected.
-    with pytest.raises(ValueError):
-        RadialSensitivity(([0, 50, 40], [1.0, 2.0, 3.0]))
+    with pytest.raises(ValueError, match="strictly increasing"):
+        RadialSensitivity(([0, 50, 40], [1.0, 0.5, 0.2]))
+
+    # show() of an annular detector with a sensitivity renders a continuous efficiency
+    # gradient (many distinct values), not a single flat region color.
+    eff = abtem.AnnularDetector(
+        inner=40, outer=100, sensitivity=lambda a: a / 100.0
+    ).get_detector_region(reference)
+    inside = eff.array[eff.array > 0]
+    assert np.unique(np.round(inside, 2)).size > 50
+    assert inside.max() <= 100.0 + 1e-4
+
+
+def test_detector_show_crops_to_outer_angle():
+    """show() crops the view to a small margin above the outer angle instead of the full
+    (often much larger) sampling-limited angle, for a tighter default visualization."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    # The waves are sampled to a much higher angle than the detector's outer limit.
+    probe = abtem.Probe(sampling=0.05, extent=20, energy=80e3, semiangle_cutoff=20)
+    assert min(probe.build(lazy=False).cutoff_angles) > 200
+
+    for detector in (
+        abtem.AnnularDetector(inner=40, outer=100),
+        abtem.AnnularDetector(inner=40, outer=100, sensitivity=lambda a: a / 100.0),
+        abtem.FlexibleAnnularDetector(step_size=5, inner=40, outer=100),
+        abtem.SegmentedDetector(nbins_radial=2, nbins_azimuthal=4, inner=40, outer=100),
+    ):
+        detector.show(probe)
+        xlim = plt.gcf().axes[0].get_xlim()
+        # Cropped to ~outer * 1.2 = 120 mrad, well below the ~278 mrad sampling limit.
+        assert max(abs(x) for x in xlim) < 160
+        plt.close("all")
 
 
 @pytest.mark.parametrize("lazy", [False, True])
