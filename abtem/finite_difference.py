@@ -298,6 +298,123 @@ def _laplace_operator_stencil(
         return _laplace_stencil
 
 
+def _metric_laplace_operator_stencil(
+    accuracy,
+    metric,
+    mode: str = "wrap",
+    dtype=np.complex64,
+    device: str = "cpu",
+):
+    """Finite-difference transverse Laplacian on a non-orthogonal grid.
+
+    On a skewed grid the physical Laplacian is
+        d2/dx2 + d2/dy2 = g11 d2/di2 + 2 g12 d2/didj + g22 d2/dj2,
+    where g = (J^T J)^-1 is the contravariant metric of the sampling vectors
+    J = [a1 | a2] (columns). The separable terms reuse the second-derivative stencil;
+    the cross term is the outer product of the first-derivative stencils. Reduces to the
+    orthogonal Laplacian when g12 = 0.
+    """
+    g11, g12, g22 = float(metric[0, 0]), float(metric[0, 1]), float(metric[1, 1])
+
+    c2 = finite_difference_coefficients(2, accuracy).astype(dtype)
+    c2 = np.roll(c2, -(len(c2) // 2))
+    n2 = len(c2) // 2
+
+    d1 = _calculate_finite_difference_coefficient(1, accuracy).astype(dtype)
+    d1 = np.roll(d1, -(len(d1) // 2))
+    n1 = len(d1) // 2
+
+    npad = max(n1, n2)
+    padding = npad + 1
+
+    from numba import prange  # type: ignore
+
+    g11d = dtype(g11)
+    g22d = dtype(g22)
+    g12d = dtype(2.0 * g12)
+
+    @njit(parallel=True, fastmath=True)
+    def _metric_stencil_cpu_batch(a):
+        M, H, W = a.shape
+        out = a.copy()
+        out[:] = 0
+        for m in prange(M):
+            for i in range(npad, H - npad):
+                for j in range(npad, W - npad):
+                    cumul = dtype(0.0)
+                    for k in range(-n2, n2 + 1):
+                        cumul += g11d * c2[k] * a[m, i + k, j]
+                        cumul += g22d * c2[k] * a[m, i, j + k]
+                    if g12d != 0.0:
+                        cross = dtype(0.0)
+                        for k in range(-n1, n1 + 1):
+                            for l in range(-n1, n1 + 1):
+                                cross += d1[k] * d1[l] * a[m, i + k, j + l]
+                        cumul += g12d * cross
+                    out[m, i, j] = cumul
+        return out
+
+    @cuda.jit
+    def _metric_stencil_gpu_batch(a, out):
+        m, i, j = cuda.grid(3)
+        M, H, W = a.shape
+        if m < M and npad <= i < H - npad and npad <= j < W - npad:
+            cumul = dtype(0.0)
+            for k in range(-n2, n2 + 1):
+                cumul += g11d * c2[k] * a[m, i + k, j]
+                cumul += g22d * c2[k] * a[m, i, j + k]
+            cross = dtype(0.0)
+            for k in range(-n1, n1 + 1):
+                for l in range(-n1, n1 + 1):
+                    cross += d1[k] * d1[l] * a[m, i + k, j + l]
+            out[m, i, j] = cumul + g12d * cross
+
+    def _metric_stencil_gpu(a):
+        xp = get_array_module(a)
+        out = xp.zeros_like(a)
+        threadsperblock = (4, 8, 8)
+        bpg = tuple(
+            math.ceil(s / t) for s, t in zip(a.shape, threadsperblock)
+        )
+        _metric_stencil_gpu_batch[bpg, threadsperblock](a, out)
+        return out
+
+    def _metric_stencil(a):
+        original_shape = a.shape
+        if a.ndim == 2:
+            a = a.reshape(1, *a.shape)
+        elif a.ndim > 3:
+            a = a.reshape(-1, *a.shape[-2:])
+        elif a.ndim != 3:
+            raise ValueError(f"Array must have at least 2 dimensions, got {a.ndim}")
+
+        if device == "cpu":
+            result = _metric_stencil_cpu_batch(a)
+        elif device == "gpu":
+            result = _metric_stencil_gpu(a)
+        else:
+            raise ValueError(f"Unsupported device: {device}")
+
+        return result.reshape(original_shape)
+
+    def _apply_boundary(func):
+        def func_wrapper(a):
+            xp = get_array_module(a)
+            pad_width = [(0, 0)] * (a.ndim - 2) + [(padding,) * 2, (padding,) * 2]
+            slicing = tuple(
+                [slice(None)] * (a.ndim - 2)
+                + [slice(padding, -padding), slice(padding, -padding)]
+            )
+            a = xp.pad(a, pad_width=pad_width, mode="wrap")
+            return func(a)[slicing]
+
+        return func_wrapper
+
+    if mode != "none":
+        return _apply_boundary(_metric_stencil)
+    return _metric_stencil
+
+
 def _laplace_operator_func_slow(accuracy, prefactor):
     stencil = _laplace_stencil_array(accuracy) * prefactor
 
@@ -322,10 +439,18 @@ class LaplaceOperator:
         self._stencil = None
 
     def _get_new_stencil(self, key, device: str = "cpu"):
-        wavelength, sampling = key
-        prefactor = 1 / np.prod(np.array(sampling, dtype=float))
-        return _laplace_operator_stencil(
-            self._accuracy, prefactor, mode="wrap", device=device
+        wavelength, sampling, cell, gpts = key
+        if cell is None:
+            prefactor = 1 / np.prod(np.array(sampling, dtype=float))
+            return _laplace_operator_stencil(
+                self._accuracy, prefactor, mode="wrap", device=device
+            )
+        # non-orthogonal grid: contravariant metric of the sampling vectors a_i = A_i / N_i
+        cell = np.array(cell, dtype=float)
+        sampling_vectors = np.stack([cell[0] / gpts[0], cell[1] / gpts[1]], axis=1)
+        metric = np.linalg.inv(sampling_vectors.T @ sampling_vectors)
+        return _metric_laplace_operator_stencil(
+            self._accuracy, metric, mode="wrap", device=device
         )
 
     def get_stencil(self, waves: Waves, device: str = "cpu") -> Callable:
@@ -348,6 +473,8 @@ class LaplaceOperator:
         key = (
             waves.wavelength,
             waves.sampling,
+            getattr(waves.grid, "_cell", None),
+            waves.gpts,
         )
 
         if key == self._key:
