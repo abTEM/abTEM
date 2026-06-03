@@ -1753,12 +1753,20 @@ class Probe(WavesBuilder):
     @property
     def metadata(self) -> dict:
         """Metadata describing the probe wave functions."""
-        return {
+        metadata = {
             **self._metadata,
             "energy": self.energy,
             **self.aperture.metadata,
             **self._tilt.metadata,
         }
+        cell = self.grid.cell
+        if cell is not None:
+            # the grid cell takes precedence so a non-orthogonal cell stays consistent
+            # with the grid (and overrides any stale cell carried in the metadata)
+            metadata["cell"] = tuple(map(tuple, cell.tolist()))
+        else:
+            metadata.pop("cell", None)
+        return metadata
 
     @staticmethod
     def _calculate_array(waves_builder) -> np.ndarray:

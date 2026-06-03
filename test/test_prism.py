@@ -254,6 +254,97 @@ def test_prism_scan_match_probe_scan(data, detector, lazy, device):
     # assert prism_measurement.to_cpu() == probe_measurement.to_cpu()
 
 
+def _hexagonal_carbon(reps, a=3.0, cz=2.0, angle=60.0):
+    import ase
+
+    cell = np.array(
+        [
+            [a, 0, 0],
+            [a * np.cos(np.deg2rad(angle)), a * np.sin(np.deg2rad(angle)), 0],
+            [0, 0, cz],
+        ]
+    )
+    return ase.Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * reps
+
+
+@pytest.mark.parametrize("lazy", [True, False], ids=["lazy", "eager"])
+def test_prism_non_orthogonal_matches_probe(lazy):
+    """On a non-orthogonal (hexagonal) cell, PRISM with interpolation=1 reconstructs the
+    probe exit wave (the S-matrix reduction at a position equals a probe multislice at
+    that position). This exercises the reciprocal mapping of the plane-wave basis, the
+    metric Fresnel propagation of every plane wave, and the reduction phases -- a wrong
+    (orthogonal) choice in any of these breaks the equivalence."""
+    import abtem
+
+    pot = abtem.Potential(
+        _hexagonal_carbon((3, 3, 6)), gpts=(160, 160), slice_thickness=1.0
+    )
+    assert not pot.grid.is_orthogonal
+
+    px, py = 4.1, 3.3
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20.0)
+    probe.grid.match(pot)
+    ref = (
+        probe.multislice(pot, scan=abtem.CustomScan([(px, py)]))
+        .compute()
+        .array.reshape((-1, 160, 160))[0]
+    )
+
+    s_matrix = abtem.SMatrix(
+        potential=pot,
+        energy=100e3,
+        semiangle_cutoff=20.0,
+        interpolation=1,
+        downsample=False,
+    )
+    assert not s_matrix.grid.is_orthogonal
+
+    w = (
+        s_matrix.build(lazy=lazy)
+        .reduce(scan=abtem.CustomScan([(px, py)]), detectors=WavesDetector())
+        .compute()
+        .array.reshape((-1, 160, 160))[0]
+    )
+
+    # remove the global phase, then compare the exit waves directly
+    overlap = np.vdot(np.asarray(w).ravel(), np.asarray(ref).ravel())
+    w = np.asarray(w) * np.conj(overlap / np.abs(overlap))
+    rel = np.max(np.abs(w - np.asarray(ref))) / np.max(np.abs(np.asarray(ref)))
+    assert rel < 1e-5
+
+
+def test_prism_non_orthogonal_matches_multislice_haadf():
+    """A skew PRISM HAADF scan matches the multislice HAADF scan (the ground truth)."""
+    import abtem
+
+    pot = abtem.Potential(
+        _hexagonal_carbon((4, 4, 8)), gpts=(208, 208), slice_thickness=1.0
+    )
+    assert not pot.grid.is_orthogonal
+
+    scan = abtem.CustomScan([(2.0, 1.5), (4.1, 3.3), (6.0, 5.5), (3.0, 7.0)])
+    detector = abtem.AnnularDetector(inner=30, outer=100)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20.0)
+    probe.grid.match(pot)
+    ground_truth = np.asarray(
+        probe.scan(pot, scan=scan, detectors=detector).compute().array
+    )
+
+    prism = np.asarray(
+        abtem.SMatrix(
+            potential=pot, energy=100e3, semiangle_cutoff=20.0, interpolation=1
+        )
+        .scan(scan=scan, detectors=detector)
+        .compute()
+        .array
+    )
+
+    rel = np.max(np.abs(prism - ground_truth)) / np.max(np.abs(ground_truth))
+    assert rel < 1e-4
+
+
 # @given(atoms=abtem_st.atoms(min_side_length=5, max_side_length=10),
 #        gpts=abtem_st.gpts(min_value=32, max_value=64),
 #        planewave_cutoff=st.floats(10, 15),
