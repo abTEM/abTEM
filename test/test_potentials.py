@@ -343,6 +343,93 @@ def test_tilted_c_axis_matches_orthogonal_supercell():
     assert rel < 1e-5
 
 
+def test_finite_projection_supports_skew_grid():
+    """``projection='finite'`` integrates the radial potential per atom on a
+    metric-aware (Cartesian) pixel grid for non-orthogonal cells. Two checks:
+    (i) the build succeeds and conserves atoms (the in-plane-integrated potential
+    matches the infinite-projection result up to the projection-method difference,
+    same level as on an orthogonal grid); (ii) hexagonal symmetry: the structure
+    factors of symmetry-equivalent reflections agree to numerical precision."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    a = 2.46  # graphene-like in-plane spacing
+    hexcell = [
+        [a, 0, 0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+        [0, 0, 3.35],
+    ]
+    atoms = Atoms(
+        "C2", cell=hexcell, pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+
+    fin = np.asarray(
+        abtem.Potential(atoms, gpts=(80, 80), slice_thickness=3.35,
+                        projection="finite").build(lazy=False).compute().array
+    )[0]
+    inf = np.asarray(
+        abtem.Potential(atoms, gpts=(80, 80), slice_thickness=3.35,
+                        projection="infinite").build(lazy=False).compute().array
+    )[0]
+
+    assert np.all(np.isfinite(fin))
+
+    # atom conservation: the integrated potential agrees with the infinite-projection
+    # result (which uses the analytic structure factor) -- to the same ~1e-3 level seen
+    # on an orthogonal grid (the residual is the projection-method difference, not skew)
+    sv = np.stack([np.array(hexcell)[0, :2] / 80, np.array(hexcell)[1, :2] / 80])
+    pix_area = abs(np.linalg.det(sv))
+    assert abs(fin.sum() - inf.sum()) / inf.sum() < 5e-3
+
+    # hexagonal symmetry of the structure factor: F(1, 0) == F(0, 1) == F(-1, -1)
+    F = np.fft.fft2(fin)
+    f10 = np.abs(F[1, 0])
+    f01 = np.abs(F[0, 1])
+    f_11 = np.abs(F[-1, -1])
+    # hexagonal symmetry holds to float32 rounding (~1e-7); float64 would give ~1e-15
+    assert abs(f10 - f01) / f10 < 1e-5
+    assert abs(f10 - f_11) / f10 < 1e-5
+
+
+def test_finite_projection_tilted_c_axis():
+    """``projection='finite'`` on a crystal with a tilted c-axis runs end-to-end and
+    matches an orthogonalised supercell of the same crystal."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    L, cz = 4.0, 4.0
+    basis = [(0.1, 0.15, 0.05), (0.6, 0.55, 0.45)]
+    # c tilted in x by L/2 (26.6 deg); wraps to an orthogonal cell after 2 layers
+    prim = Atoms(
+        "SiO", cell=[[L, 0, 0], [0, L, 0], [L / 2, 0, cz]], pbc=True,
+        scaled_positions=basis,
+    )
+    tilted = prim * (1, 1, 2)
+    w_tilted = abtem.PlaneWave(energy=100e3).multislice(
+        abtem.Potential(tilted, gpts=(128, 128), slice_thickness=0.25,
+                        projection="finite")
+    ).compute().array
+
+    ortho = prim * (1, 1, 2)
+    ortho.set_cell([[L, 0, 0], [0, L, 0], [0, 0, 2 * cz]])
+    ortho.wrap()
+    w_ortho = abtem.PlaneWave(energy=100e3).multislice(
+        abtem.Potential(ortho, gpts=(128, 128), slice_thickness=0.25,
+                        projection="finite")
+    ).compute().array
+
+    rel = np.max(np.abs(np.asarray(w_tilted) - np.asarray(w_ortho))) / np.max(
+        np.abs(np.asarray(w_ortho))
+    )
+    # the two paths build the same potential up to float32 rounding
+    assert rel < 1e-5
+
+
 def test_waves_cell_survives_metadata_roundtrip():
     """The non-orthogonal cell is stored in metadata and survives reconstruction."""
     import numpy as np

@@ -588,6 +588,64 @@ def interpolate_radial_functions(
                     )
 
 
+@jit(nopython=True, nogil=True)
+def interpolate_radial_functions_skew(
+    array: np.ndarray,
+    positions: np.ndarray,
+    disk_indices: np.ndarray,
+    sampling_vectors: np.ndarray,
+    inv_jacobian: np.ndarray,
+    radial_gpts: np.ndarray,
+    radial_functions: np.ndarray,
+    radial_derivative: np.ndarray,
+):
+    """Skew-grid version of :func:`interpolate_radial_functions`.
+
+    Pixel ``(k, m)`` sits at Cartesian ``r = k * a1 + m * a2`` where ``a1, a2`` are the
+    two real-space sampling vectors (rows of ``sampling_vectors``). ``inv_jacobian`` is
+    the inverse of ``[[a1; a2]].T`` (precomputed) and maps a Cartesian position to its
+    fractional pixel coordinates. ``disk_indices`` are pixel-index offsets covering a
+    rectangle in (k, m) space that contains the cutoff disk in Cartesian space; the
+    radial-out-of-range branches below silently skip pixels outside the disk.
+    """
+    n = radial_gpts.shape[0]
+    dt = np.log(radial_gpts[-1] / radial_gpts[0]) / (n - 1)
+
+    a1x = sampling_vectors[0, 0]
+    a1y = sampling_vectors[0, 1]
+    a2x = sampling_vectors[1, 0]
+    a2y = sampling_vectors[1, 1]
+
+    for i in range(positions.shape[0]):
+        xi = positions[i, 0]
+        yi = positions[i, 1]
+
+        # map Cartesian -> fractional pixel coords, then round to the nearest pixel
+        fk = inv_jacobian[0, 0] * xi + inv_jacobian[0, 1] * yi
+        fm = inv_jacobian[1, 0] * xi + inv_jacobian[1, 1] * yi
+        px = int(round(fk))
+        py = int(round(fm))
+
+        for j in range(disk_indices.shape[0]):
+            k = px + disk_indices[j, 0]
+            m = py + disk_indices[j, 1]
+
+            if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
+                rx = k * a1x + m * a2x - xi
+                ry = k * a1y + m * a2y - yi
+                r_interp = np.sqrt(rx * rx + ry * ry)
+
+                idx = int(np.floor(np.log(r_interp / radial_gpts[0] + 1e-12) / dt))
+
+                if idx < 0:
+                    array[k, m] += radial_functions[i, 0]
+                elif idx < n - 1:
+                    slope = radial_derivative[i, idx]
+                    array[k, m] += (
+                        radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope
+                    )
+
+
 class ProjectionIntegralTable:
     """
     A ProjectionIntegrator calculating finite projections of radial potential
@@ -851,8 +909,28 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         device: str = "cpu",
         cell: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        _require_orthogonal_cell(cell)
+        # Detect a skewed in-plane grid. When the cell is None or orthogonal the original
+        # rectangular-grid kernel is used unchanged (bit-identical). Otherwise the radial
+        # potential is stamped via a metric-aware pixel <-> Cartesian map.
+        if cell is None:
+            skew = False
+        else:
+            cell_arr = np.asarray(cell, dtype=float)
+            skew = abs(cell_arr[0, 1]) > 1e-12 or abs(cell_arr[1, 0]) > 1e-12
+
         xp = get_array_module(device)
+
+        if skew:
+            if xp is cp:
+                raise NotImplementedError(
+                    "finite projection on a non-orthogonal grid is not yet supported on "
+                    "the GPU; use device='cpu' or projection='infinite'"
+                )
+            sampling_vectors = np.stack(
+                [cell_arr[0] / gpts[0], cell_arr[1] / gpts[1]]
+            )
+            # inv_jacobian maps a Cartesian (x, y) to fractional pixel coords (k, m)
+            inv_jacobian = np.linalg.inv(sampling_vectors.T)
 
         array = xp.zeros(gpts, dtype=get_dtype(complex=False))
         for number in np.unique(atoms.numbers):
@@ -863,9 +941,18 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             shifted_a = a - positions[:, 2]
             shifted_b = b - positions[:, 2]
 
-            disk_indices = xp.asarray(
-                disk_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
-            )
+            if skew:
+                # the cutoff disk in Cartesian space maps to an ellipse in pixel space;
+                # use a square mesh whose operator-norm bound (||inv_J||_op * R) safely
+                # contains the ellipse (the radial-out-of-range branch silently skips
+                # any pixels that turn out to be outside the actual Cartesian disk).
+                op_norm = float(np.linalg.norm(inv_jacobian, ord=2))
+                disk_radius_pixels = int(np.ceil(table.radial_gpts[-1] * op_norm))
+                disk_indices = xp.asarray(disk_meshgrid(disk_radius_pixels))
+            else:
+                disk_indices = xp.asarray(
+                    disk_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
+                )
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
 
             positions = xp.asarray(positions, dtype=get_dtype(complex=False))
@@ -880,7 +967,18 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             else:
                 temp = array
 
-            if xp is cp:
+            if skew:
+                interpolate_radial_functions_skew(
+                    array=temp,
+                    positions=positions,
+                    disk_indices=disk_indices,
+                    sampling_vectors=sampling_vectors,
+                    inv_jacobian=inv_jacobian,
+                    radial_gpts=table.radial_gpts,
+                    radial_functions=radial_potential,
+                    radial_derivative=radial_potential_derivative,
+                )
+            elif xp is cp:
                 interpolate_radial_functions_cuda(
                     array=temp,
                     positions=positions,

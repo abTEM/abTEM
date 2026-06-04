@@ -677,6 +677,31 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                         atoms.cell
                     )
 
+                # When the c-axis is tilted (has in-plane components) the 3D `wrap()`
+                # leaves atoms inside the supercell parallelepiped, but their (x, y)
+                # Cartesian coordinates can extend beyond the in-plane (a, b) box of the
+                # multislice grid -- so they would fall outside the grid and be silently
+                # skipped. Wrap each atom's (x, y) independently into the in-plane (a, b)
+                # parallelogram at its current z (the physically equivalent in-plane
+                # periodic image; the atoms are then in the same "z-separable" reference
+                # frame that the rest of the slicing/integration machinery assumes).
+                in_plane = np.asarray(atoms.cell[:2, :2], dtype=float)
+                c_tilted = (
+                    abs(atoms.cell[2, 0]) > 1e-12 or abs(atoms.cell[2, 1]) > 1e-12
+                )
+                if c_tilted:
+                    inv = np.linalg.inv(in_plane.T)
+                    uv = atoms.positions[:, :2] @ inv.T  # fractional (a, b) coords
+                    uv = uv - np.floor(uv)
+                    atoms.positions[:, :2] = uv @ in_plane
+                    # After the in-plane wrap the atoms are positioned as if c were
+                    # vertical; reflect that in the cell so downstream scaled-coordinate
+                    # checks (e.g. atoms_in_cell in pad_atoms) use the right reference.
+                    new_cell = np.array(atoms.cell, dtype=float)
+                    new_cell[2, 0] = 0.0
+                    new_cell[2, 1] = 0.0
+                    atoms.set_cell(new_cell, scale_atoms=False)
+
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
         elif self.integrator.periodic:
