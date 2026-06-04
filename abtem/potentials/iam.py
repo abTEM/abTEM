@@ -20,8 +20,8 @@ from abtem.array import ArrayObject, validate_lazy
 from abtem.atoms import (
     best_orthogonal_cell,
     cut_cell,
+    is_cell_ab_in_plane,
     is_cell_orthogonal,
-    is_cell_z_separable,
     orthogonalize_cell,
     pad_atoms,
     plane_to_axes,
@@ -314,25 +314,29 @@ class _FieldBuilder(BaseField):
         self._array_object = array_object
 
         cell_array = np.array(cell, dtype=float)
-        # Resolve whether to build a skewed (non-orthogonal) in-plane grid. The z-axis
-        # must be perpendicular to the xy-plane so slicing along the beam stays valid.
-        #   None  -> auto: skew iff the cell is non-orthogonal but z-separable, plane is
-        #            "xy" and no explicit box was requested (otherwise orthogonalise).
-        #   True  -> force skew (raise if not z-separable / plane != "xy").
+        # Resolve whether to build directly on the crystal's in-plane (a, b) grid instead
+        # of orthogonalising. This requires a and b to lie in the xy-plane so slicing
+        # along the beam stays valid; the in-plane cell may be non-orthogonal (a skewed
+        # grid) and/or the c-axis may be tilted out of z (the atoms then simply drift
+        # laterally with depth, captured by their true coordinates -- no shear or tilted
+        # propagator needed).
+        #   None  -> auto: use it iff the cell is non-orthogonal but a, b are in-plane,
+        #            plane is "xy" and no explicit box was requested.
+        #   True  -> force it (raise if a, b not in-plane / plane != "xy").
         #   False -> force the orthogonalising path (legacy behaviour).
         if non_orthogonal is None:
             use_skew = (
                 not is_cell_orthogonal(cell_array)
-                and is_cell_z_separable(cell_array)
+                and is_cell_ab_in_plane(cell_array)
                 and isinstance(plane, str)
                 and plane == "xy"
                 and box is None
             )
         elif non_orthogonal:
-            if not is_cell_z_separable(cell_array):
+            if not is_cell_ab_in_plane(cell_array):
                 raise NotImplementedError(
-                    "non_orthogonal potentials require the z-axis perpendicular to the "
-                    "xy-plane (monoclinic-along-beam)"
+                    "non_orthogonal potentials require the a- and b-axes in the "
+                    "xy-plane (the c-axis may be tilted out of z)"
                 )
             if not (isinstance(plane, str) and plane == "xy"):
                 raise NotImplementedError(
@@ -347,12 +351,18 @@ class _FieldBuilder(BaseField):
             cell_2d = cell_array[:2, :2]
             extent = tuple(np.linalg.norm(cell_2d, axis=1))
             box = (extent[0], extent[1], float(cell_array[2, 2]))
+            # Only carry a skewed in-plane metric when a and b are genuinely
+            # non-orthogonal; a tilted c-axis with an orthogonal (a, b) keeps a plain
+            # orthogonal grid (no spurious cell in the metadata / detectors).
+            in_plane_orthogonal = abs(float(cell_2d[0] @ cell_2d[1])) <= 1e-9 * (
+                extent[0] * extent[1]
+            )
             self._grid = Grid(
                 extent=extent,
                 gpts=gpts,
                 sampling=sampling,
                 lock_extent=True,
-                cell=cell_2d,
+                cell=None if in_plane_orthogonal else cell_2d,
             )
         else:
             if _require_cell_transform(cell, box=box, plane=plane, origin=origin):

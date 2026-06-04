@@ -262,15 +262,24 @@ def test_skew_potential_non_orthogonal_cell():
     assert np.all(np.isfinite(parr.array))
 
 
-def test_non_orthogonal_requires_z_separable():
-    """A fully triclinic cell (z not perpendicular to xy) is rejected."""
+def test_non_orthogonal_requires_ab_in_plane():
+    """A tilted c-axis (with a, b in the xy-plane) is supported; an a- or b-axis with a
+    z-component is rejected."""
     import numpy as np
     from ase import Atoms
 
-    cell = np.array([[4.0, 0, 0], [1.0, 4.0, 0], [0.5, 0.0, 6.0]])  # z-x coupling
+    # a, b in-plane (b skewed), c tilted out of z -> supported (full triclinic)
+    cell = np.array([[4.0, 0, 0], [1.0, 4.0, 0], [0.5, 0.0, 6.0]])
     atoms = Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)])
+    pot = Potential(atoms, gpts=(40, 40), slice_thickness=6.0, non_orthogonal=True)
+    assert not pot.grid.is_orthogonal
+    assert np.all(np.isfinite(pot.build(lazy=False).compute().array))
+
+    # a-axis has a z-component -> not sliceable along the beam -> rejected
+    bad = np.array([[4.0, 0, 0.5], [0.0, 4.0, 0], [0.0, 0.0, 6.0]])
+    atoms_bad = Atoms("C", cell=bad, pbc=True, positions=[(0, 0, 0)])
     with pytest.raises(NotImplementedError):
-        Potential(atoms, gpts=(40, 40), slice_thickness=6.0, non_orthogonal=True)
+        Potential(atoms_bad, gpts=(40, 40), slice_thickness=6.0, non_orthogonal=True)
 
 
 def test_potential_auto_detects_non_orthogonal():
@@ -293,6 +302,45 @@ def test_potential_auto_detects_non_orthogonal():
     # an orthogonal cell is never switched to skew
     ortho_atoms = Atoms("C", cell=(4, 5, 6), pbc=True, positions=[(0, 0, 0)])
     assert Potential(ortho_atoms, gpts=(40, 40), slice_thickness=6).grid.is_orthogonal
+
+
+def test_tilted_c_axis_matches_orthogonal_supercell():
+    """A crystal with a tilted c-axis (a, b orthogonal in-plane) is handled by placing
+    the atoms at their true positions and propagating straight -- no tilt ramp -- so it
+    reproduces the orthogonalised supercell of the same crystal exactly (this is ordinary
+    multislice on the true atomic positions, hence exact at any tilt angle)."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+
+    L, cz = 4.0, 4.0
+    basis = [(0.1, 0.15, 0.05), (0.6, 0.55, 0.45)]
+    # c tilted in x by L/2 (a 26.6 deg tilt); wraps to an orthogonal cell after 2 layers
+    prim = Atoms(
+        "SiO", cell=[[L, 0, 0], [0, L, 0], [L / 2, 0, cz]], pbc=True,
+        scaled_positions=basis,
+    )
+
+    tilted = prim * (1, 1, 2)
+    pot_tilted = abtem.Potential(tilted, gpts=(128, 128), slice_thickness=0.5)
+    assert pot_tilted.grid.is_orthogonal  # a, b orthogonal -> plain orthogonal grid
+    assert pot_tilted.cell is None  # no spurious skew cell carried in the metadata
+    w_tilted = abtem.PlaneWave(energy=100e3).multislice(pot_tilted).compute().array
+
+    ortho = prim * (1, 1, 2)
+    ortho.set_cell([[L, 0, 0], [0, L, 0], [0, 0, 2 * cz]])
+    ortho.wrap()
+    w_ortho = abtem.PlaneWave(energy=100e3).multislice(
+        abtem.Potential(ortho, gpts=(128, 128), slice_thickness=0.5)
+    ).compute().array
+
+    rel = np.max(np.abs(np.asarray(w_tilted) - np.asarray(w_ortho))) / np.max(
+        np.abs(np.asarray(w_ortho))
+    )
+    # identical up to float32 rounding (the two paths build the same potential); in
+    # float64 this drops to ~1e-15
+    assert rel < 1e-5
 
 
 def test_waves_cell_survives_metadata_roundtrip():

@@ -190,6 +190,40 @@ def is_cell_z_separable(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12) -> 
     return not np.any(z_coupling > tol)
 
 
+def is_cell_ab_in_plane(cell: Atoms | Cell | np.ndarray, tol: float = 1e-9) -> bool:
+    """
+    Check whether the first two lattice vectors (`a`, `b`) lie in the `xy`-plane, i.e.
+    their `z`-components vanish. The third lattice vector (`c`) may be tilted out of the
+    `z`-axis.
+
+    This is the requirement for slicing along the beam (`z`): every slice perpendicular
+    to `z` has a well-defined in-plane (`a`, `b`) periodicity, while a tilted `c` only
+    shifts the atomic positions laterally with depth -- which is captured automatically
+    by placing the atoms at their true coordinates (no orthogonalisation needed). It is
+    a strict relaxation of :func:`is_cell_z_separable`, which additionally requires `c`
+    to be along `z`.
+
+    Parameters
+    ----------
+    cell : ase.Atoms, ase.cell.Cell or np.ndarray
+        The cell to check.
+    tol : float
+        Components below this value are considered zero.
+
+    Returns
+    -------
+    ab_in_plane : bool
+        True if `a` and `b` lie in the `xy`-plane.
+    """
+    if hasattr(cell, "cell"):
+        cell = cell.cell
+
+    cell = np.array(cell)
+    assert isinstance(cell, np.ndarray)
+
+    return bool(abs(cell[0, 2]) <= tol and abs(cell[1, 2]) <= tol)
+
+
 def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     """
     Check whether the cell of given atoms can be converted to a structure usable by

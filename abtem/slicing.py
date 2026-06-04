@@ -9,7 +9,7 @@ from typing import Any, Iterable, Optional, Sequence, TypeGuard, cast
 import numpy as np
 from ase import Atoms
 
-from abtem.atoms import is_cell_orthogonal, is_cell_z_separable
+from abtem.atoms import is_cell_ab_in_plane, is_cell_orthogonal
 from abtem.core.utils import EqualityMixin, label_to_index
 
 
@@ -169,10 +169,10 @@ class BaseSlicedAtoms(EqualityMixin):
     """
 
     def __init__(self, atoms: Atoms, slice_thickness: float | Sequence[float] | str):
-        if not is_cell_z_separable(atoms):
+        if not is_cell_ab_in_plane(atoms):
             raise RuntimeError(
-                "atoms must have a z-axis perpendicular to the xy-plane (the in-plane "
-                "cell may be non-orthogonal)"
+                "atoms must have the a- and b-axes in the xy-plane (the in-plane cell "
+                "may be non-orthogonal and the c-axis may be tilted out of z)"
             )
 
         self._atoms = atoms
