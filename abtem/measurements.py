@@ -1153,8 +1153,15 @@ class _BaseMeasurement2D(BaseMeasurements):
         """
         Apply a 2D Lorentzian (Cauchy) filter to measurements.
 
-        The filter is applied separately along each axis (separable convolution),
-        which is consistent with how :meth:`gaussian_filter` works.
+        The filter convolves the image with the **true** 2-D Lorentzian profile
+
+            L(x, y) = 1 / (1 + (x/γ_x)² + (y/γ_y)²)
+
+        which is **not** separable into a product of 1-D Lorentzians (unlike a
+        Gaussian). A separable implementation would produce a cross-shaped
+        impulse response — several times brighter along the x and y axes than
+        along the diagonal at the same radius — which manifests as visible
+        halos/lines around sharp features.
 
         Parameters
         ----------
@@ -1162,7 +1169,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             Half-width at half-maximum (HWHM) of the Lorentzian kernel in the ``x``
             and ``y``-direction given in physical units (Å for real-space images,
             1/Å for diffraction patterns). If given as a single number, the
-            half-width is equal for both axes.
+            half-width is equal for both axes (isotropic kernel); otherwise the
+            kernel is elliptical.
         truncate : float, optional
             Truncate the kernel at this many half-widths (default is 10.0). The
             Lorentzian has heavier tails than the Gaussian, so a larger truncation
@@ -1203,30 +1211,36 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         hw_pixels = tuple(hw / d for hw, d in zip(half_width, self.sampling))
 
-        n_ensemble = len(self.shape) - 2
-        kernels = [None] * n_ensemble + [
-            _lorentzian_kernel_1d(hw, truncate) for hw in hw_pixels
-        ]
+        # Two spatial axes are the trailing dims; build a true 2-D kernel.
+        axes = (self.array.ndim - 2, self.array.ndim - 1)
+        kernel_2d = _lorentzian_kernel_2d(hw_pixels, truncate)
 
         if self.is_lazy:
-            radii = [len(k) // 2 if k is not None else 0 for k in kernels]
-            depth = tuple(min(r, n) for r, n in zip(radii, self.shape))
+            depth = [0] * self.array.ndim
+            depth[axes[0]] = min(kernel_2d.shape[0] // 2, self.shape[axes[0]])
+            depth[axes[1]] = min(kernel_2d.shape[1] // 2, self.shape[axes[1]])
 
             array = da.map_overlap(
-                functools.partial(_apply_convolve1d, kernels=kernels, mode=mode, cval=cval),
+                functools.partial(
+                    _apply_convolve_2d_on_axes,
+                    kernel_2d=kernel_2d,
+                    axes=axes,
+                    mode=mode,
+                    cval=cval,
+                ),
                 self.array,
-                depth=depth,
+                depth=tuple(depth),
                 boundary=boundary,
                 meta=xp.array((), dtype=xp.float32),
             )
         else:
-            ndimage = get_ndimage_module(self.array)
-            array = self.array
-            for axis, kernel in enumerate(kernels):
-                if kernel is not None:
-                    array = ndimage.convolve1d(
-                        array, xp.asarray(kernel), axis=axis, mode=mode, cval=cval
-                    )
+            # Use FFT-based convolution: cost is independent of kernel size,
+            # which matters because the heavy-tailed Lorentzian kernel can
+            # easily be comparable in size to the image itself.
+            array = _apply_convolve_2d_on_axes(
+                np.asarray(self.array), kernel_2d, axes=axes, mode=mode, cval=cval
+            )
+            array = xp.asarray(array)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -1236,16 +1250,19 @@ class _BaseMeasurement2D(BaseMeasurements):
         self,
         gaussian_sigma: float | tuple[float, float],
         lorentzian_gamma: float | tuple[float, float],
-        truncate: float = 5.0,
+        truncate: float = 10.0,
         boundary: str = "periodic",
         cval: float = 0.0,
     ):
         """
-        Apply a 2D Voigt filter to measurements.
+        Apply a 2D Voigtian filter to measurements.
 
         The Voigt profile is the convolution of a Gaussian and a Lorentzian.
-        The filter is applied separately along each axis (separable convolution),
-        which is consistent with how :meth:`gaussian_filter` works.
+        Exploiting the associativity of convolution, the filter is implemented
+        as :meth:`gaussian_filter` followed by :meth:`lorentzian_filter`, which
+        uses the true 2-D (non-separable) Lorentzian kernel and therefore
+        avoids the cross-shaped artefacts a naively separable Voigt filter
+        would produce.
 
         Parameters
         ----------
@@ -1257,8 +1274,9 @@ class _BaseMeasurement2D(BaseMeasurements):
             Half-width at half-maximum (HWHM, γ) of the Lorentzian component in
             physical units. If given as a single number it is equal for both axes.
         truncate : float, optional
-            Truncate the kernel at this many Voigt half-widths (default is 5.0).
-            The Voigt HWHM is estimated via the Thompson et al. (1987) approximation.
+            Truncate the Lorentzian component at this many half-widths
+            (default is 10.0). The Gaussian component uses the SciPy default
+            (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
             How the image is extended beyond its boundary (default is 'periodic').
         cval : float, optional
@@ -1282,54 +1300,11 @@ class _BaseMeasurement2D(BaseMeasurements):
         *not* directly comparable: for the same FWHM, γ = FWHM / 2 whereas
         σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
         """
-        xp = get_array_module(self.array)
-
-        if boundary == "periodic":
-            mode = "wrap"
-        elif boundary in ("reflect", "constant"):
-            mode = boundary
-        else:
-            raise ValueError(
-                f"boundary must be 'periodic', 'reflect', or 'constant', got {boundary!r}"
-            )
-
-        if np.isscalar(gaussian_sigma):
-            gaussian_sigma = (gaussian_sigma,) * 2
-        if np.isscalar(lorentzian_gamma):
-            lorentzian_gamma = (lorentzian_gamma,) * 2
-
-        sigma_pixels = tuple(s / d for s, d in zip(gaussian_sigma, self.sampling))
-        gamma_pixels = tuple(g / d for g, d in zip(lorentzian_gamma, self.sampling))
-
-        n_ensemble = len(self.shape) - 2
-        kernels = [None] * n_ensemble + [
-            _voigt_kernel_1d(s, g, truncate)
-            for s, g in zip(sigma_pixels, gamma_pixels)
-        ]
-
-        if self.is_lazy:
-            radii = [len(k) // 2 if k is not None else 0 for k in kernels]
-            depth = tuple(min(r, n) for r, n in zip(radii, self.shape))
-
-            array = da.map_overlap(
-                functools.partial(_apply_convolve1d, kernels=kernels, mode=mode, cval=cval),
-                self.array,
-                depth=depth,
-                boundary=boundary,
-                meta=xp.array((), dtype=xp.float32),
-            )
-        else:
-            ndimage = get_ndimage_module(self.array)
-            array = self.array
-            for axis, kernel in enumerate(kernels):
-                if kernel is not None:
-                    array = ndimage.convolve1d(
-                        array, xp.asarray(kernel), axis=axis, mode=mode, cval=cval
-                    )
-
-        kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
-        return self.__class__(**kwargs)
+        return self.gaussian_filter(
+            gaussian_sigma, boundary=boundary, cval=cval
+        ).lorentzian_filter(
+            lorentzian_gamma, truncate=truncate, boundary=boundary, cval=cval
+        )
 
     def pseudo_voigtian_filter(
         self,
@@ -1345,8 +1320,11 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         The pseudo-Voigt profile is a weighted linear sum of a Gaussian and a
         Lorentzian — PV = (1-η)·G + η·L — as proposed by Nguyen et al. (2014).
-        The filter is applied separately along each axis (separable convolution),
-        consistent with how :meth:`gaussian_filter` works.
+        Exploiting the linearity of convolution, the filter is implemented as
+        the linear combination of :meth:`gaussian_filter` and
+        :meth:`lorentzian_filter`, which uses the true 2-D (non-separable)
+        Lorentzian kernel and therefore avoids the cross-shaped artefacts a
+        naively separable filter would produce.
 
         Parameters
         ----------
@@ -1362,8 +1340,8 @@ class _BaseMeasurement2D(BaseMeasurements):
             (equivalent to :meth:`gaussian_filter`); η = 1 gives a pure
             Lorentzian (equivalent to :meth:`lorentzian_filter`).
         truncate : float, optional
-            Truncate the kernel at this many effective half-widths (default 10.0).
-            The effective half-width is max(σ, γ).
+            Truncate the Lorentzian component at this many half-widths
+            (default 10.0). The Gaussian component uses the SciPy default (4·σ).
         boundary : {'periodic', 'reflect', 'constant'}
             How the image is extended beyond its boundary (default is 'periodic').
         cval : float, optional
@@ -1383,53 +1361,19 @@ class _BaseMeasurement2D(BaseMeasurements):
 
         For the same FWHM, γ = FWHM / 2 whereas σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548.
         """
-        xp = get_array_module(self.array)
-
-        if boundary == "periodic":
-            mode = "wrap"
-        elif boundary in ("reflect", "constant"):
-            mode = boundary
-        else:
-            raise ValueError(
-                f"boundary must be 'periodic', 'reflect', or 'constant', got {boundary!r}"
+        if eta == 0.0:
+            return self.gaussian_filter(gaussian_sigma, boundary=boundary, cval=cval)
+        if eta == 1.0:
+            return self.lorentzian_filter(
+                lorentzian_gamma, truncate=truncate, boundary=boundary, cval=cval
             )
 
-        if np.isscalar(gaussian_sigma):
-            gaussian_sigma = (gaussian_sigma,) * 2
-        if np.isscalar(lorentzian_gamma):
-            lorentzian_gamma = (lorentzian_gamma,) * 2
-
-        sigma_pixels = tuple(s / d for s, d in zip(gaussian_sigma, self.sampling))
-        gamma_pixels = tuple(g / d for g, d in zip(lorentzian_gamma, self.sampling))
-
-        n_ensemble = len(self.shape) - 2
-        kernels = [None] * n_ensemble + [
-            _pseudo_voigt_kernel_1d(s, g, eta, truncate)
-            for s, g in zip(sigma_pixels, gamma_pixels)
-        ]
-
-        if self.is_lazy:
-            radii = [len(k) // 2 if k is not None else 0 for k in kernels]
-            depth = tuple(min(r, n) for r, n in zip(radii, self.shape))
-
-            array = da.map_overlap(
-                functools.partial(_apply_convolve1d, kernels=kernels, mode=mode, cval=cval),
-                self.array,
-                depth=depth,
-                boundary=boundary,
-                meta=xp.array((), dtype=xp.float32),
-            )
-        else:
-            ndimage = get_ndimage_module(self.array)
-            array = self.array
-            for axis, kernel in enumerate(kernels):
-                if kernel is not None:
-                    array = ndimage.convolve1d(
-                        array, xp.asarray(kernel), axis=axis, mode=mode, cval=cval
-                    )
-
+        g = self.gaussian_filter(gaussian_sigma, boundary=boundary, cval=cval)
+        l = self.lorentzian_filter(
+            lorentzian_gamma, truncate=truncate, boundary=boundary, cval=cval
+        )
         kwargs = self._copy_kwargs(exclude=("array",))
-        kwargs["array"] = array
+        kwargs["array"] = (1.0 - eta) * g.array + eta * l.array
         return self.__class__(**kwargs)
 
     def interpolate_line_at_position(
@@ -2558,128 +2502,101 @@ def _fourier_space_bilinear_nodes_and_weight(
 _LORENTZIAN_SAFE_HW = 1.0 / np.sqrt(np.finfo(np.float64).max)  # ≈ 7.5e-155
 
 
-def _lorentzian_kernel_1d(half_width_pixels: float, truncate: float = 10.0) -> np.ndarray:
-    """Build a normalized 1-D Lorentzian (Cauchy) convolution kernel in pixel units.
-
-    When ``half_width_pixels`` is zero or so small that the filter is effectively a
-    unit impulse (kernel narrower than the arithmetic precision allows), a delta
-    kernel is returned — consistent with ``gaussian_filter`` at sigma=0.
-    """
-    if half_width_pixels < _LORENTZIAN_SAFE_HW:
-        return np.array([1.0], dtype=np.float32)
-    radius = int(np.ceil(truncate * half_width_pixels))
-    x = np.arange(-radius, radius + 1, dtype=np.float64)
-    kernel = 1.0 / (1.0 + (x / half_width_pixels) ** 2)
-    return (kernel / kernel.sum()).astype(np.float32)
-
-
-def _voigt_kernel_1d(
-    sigma_pixels: float,
-    gamma_pixels: float,
-    truncate: float = 5.0,
-) -> np.ndarray:
-    """Build a normalized 1-D Voigt convolution kernel in pixel units.
-
-    Uses the exact Voigt profile (Faddeeva function) when both components are
-    non-zero, falls back to pure Gaussian / Lorentzian for degenerate cases, and
-    returns a unit impulse when both are zero (leaving the data unchanged).
-    """
-    from scipy.special import wofz
-
-    # Clamp values below the safe threshold to zero to avoid overflow
-    if sigma_pixels < _LORENTZIAN_SAFE_HW:
-        sigma_pixels = 0.0
-    if gamma_pixels < _LORENTZIAN_SAFE_HW:
-        gamma_pixels = 0.0
-
-    if sigma_pixels == 0.0 and gamma_pixels == 0.0:
-        return np.array([1.0], dtype=np.float32)
-
-    fG = 2.0 * sigma_pixels * np.sqrt(2.0 * np.log(2.0))
-    fL = 2.0 * gamma_pixels
-    if sigma_pixels == 0.0:
-        voigt_hwhm = gamma_pixels
-    elif gamma_pixels == 0.0:
-        voigt_hwhm = fG / 2.0
-    else:
-        f5 = (
-            fG**5
-            + 2.69269 * fG**4 * fL
-            + 2.42843 * fG**3 * fL**2
-            + 4.47163 * fG**2 * fL**3
-            + 0.07842 * fG * fL**4
-            + fL**5
-        )
-        voigt_hwhm = f5 ** (1.0 / 5.0) / 2.0
-
-    radius = int(np.ceil(truncate * voigt_hwhm))
-    x = np.arange(-radius, radius + 1, dtype=np.float64)
-
-    if sigma_pixels == 0.0:
-        kernel = 1.0 / (1.0 + (x / gamma_pixels) ** 2)
-    elif gamma_pixels == 0.0:
-        kernel = np.exp(-0.5 * x**2 / sigma_pixels**2)
-    else:
-        z = (x + 1j * gamma_pixels) / (sigma_pixels * np.sqrt(2.0))
-        kernel = np.real(wofz(z))
-
-    return (kernel / kernel.sum()).astype(np.float32)
-
-
-def _pseudo_voigt_kernel_1d(
-    sigma_pixels: float,
-    gamma_pixels: float,
-    eta: float,
+def _lorentzian_kernel_2d(
+    hw_pixels: tuple[float, float],
     truncate: float = 10.0,
 ) -> np.ndarray:
-    """Build a normalized 1-D pseudo-Voigt convolution kernel in pixel units.
+    """Build a normalized 2-D Lorentzian (Cauchy) convolution kernel in pixel units.
 
-    The kernel is the weighted sum (1-eta)*G + eta*L evaluated on a shared grid,
-    where G is a Gaussian and L is a Lorentzian. Returns a delta kernel when both
-    sigma_pixels and gamma_pixels are effectively zero.
+    The kernel is the **true** 2-D Lorentzian profile
+
+        L(x, y) = 1 / (1 + (x/γ_x)² + (y/γ_y)²)
+
+    which is **not** separable into a product of 1-D Lorentzians. Filtering with
+    a separable Lorentzian (outer product of two 1-D kernels) produces a
+    non-rotationally-symmetric impulse response that is several times brighter
+    along the axes than along the diagonal at the same radius, manifesting as
+    cross-shaped halos around sharp features. This 2-D kernel avoids that
+    artefact (it is elliptical when γ_x ≠ γ_y, isotropic when γ_x = γ_y).
+
+    Parameters
+    ----------
+    hw_pixels : tuple of two float
+        Half-width at half-maximum along each axis (axis 0, axis 1) in pixel
+        units. An axis with HWHM below ``_LORENTZIAN_SAFE_HW`` is treated as
+        zero and contributes a delta along that axis.
+    truncate : float
+        Truncate the kernel at this many half-widths along each axis.
     """
-    if sigma_pixels < _LORENTZIAN_SAFE_HW:
-        sigma_pixels = 0.0
-    if gamma_pixels < _LORENTZIAN_SAFE_HW:
-        gamma_pixels = 0.0
+    hw0, hw1 = hw_pixels
 
-    hw = max(sigma_pixels, gamma_pixels)
-    if hw == 0.0:
-        return np.array([1.0], dtype=np.float32)
+    zero0 = hw0 < _LORENTZIAN_SAFE_HW
+    zero1 = hw1 < _LORENTZIAN_SAFE_HW
 
-    radius = int(np.ceil(truncate * hw))
-    x = np.arange(-radius, radius + 1, dtype=np.float64)
+    if zero0 and zero1:
+        return np.array([[1.0]], dtype=np.float32)
 
-    if sigma_pixels > 0.0:
-        g = np.exp(-0.5 * (x / sigma_pixels) ** 2)
-    else:
-        g = np.zeros(len(x))
-        g[radius] = 1.0  # delta at center
+    radius0 = 0 if zero0 else int(np.ceil(truncate * hw0))
+    radius1 = 0 if zero1 else int(np.ceil(truncate * hw1))
+    y = np.arange(-radius0, radius0 + 1, dtype=np.float64)[:, None]
+    x = np.arange(-radius1, radius1 + 1, dtype=np.float64)[None, :]
 
-    if gamma_pixels > 0.0:
-        l = 1.0 / (1.0 + (x / gamma_pixels) ** 2)
-    else:
-        l = np.zeros(len(x))
-        l[radius] = 1.0  # delta at center
-
-    kernel = (1.0 - eta) * g + eta * l
+    denom = np.broadcast_to(np.ones(()), (y.shape[0], x.shape[1])).copy()
+    if not zero0:
+        denom = denom + (y / hw0) ** 2
+    if not zero1:
+        denom = denom + (x / hw1) ** 2
+    kernel = 1.0 / denom
     return (kernel / kernel.sum()).astype(np.float32)
 
 
-def _apply_convolve1d(array, kernels, mode, cval=0.0):
-    """Apply 1-D convolutions along each axis using ``scipy.ndimage.convolve1d``.
+def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
+    """Apply a 2-D convolution on a specified pair of axes of an n-D array.
 
-    Used as the callable passed to ``dask.array.map_overlap`` so that it
-    always runs on CPU (NumPy) chunks.  ``kernels`` is a list aligned with
-    ``array.ndim``; ``None`` entries skip the corresponding axis.
+    Uses FFT-based convolution (``scipy.signal.fftconvolve``) so the cost is
+    O(N log N) per spatial slice — independent of kernel size. The heavy tails
+    of the Lorentzian and Voigtian kernels can make them comparable in size to
+    the image itself, which would be prohibitively slow with direct
+    convolution. The image is first padded according to ``mode`` so that the
+    valid-mode convolution returns the same shape as the input.
+
+    The kernel is broadcast to ``array.ndim`` with size-1 dimensions on all
+    axes other than ``axes``. Suitable for ``dask.array.map_overlap``.
     """
-    import scipy.ndimage
+    import scipy.signal
 
-    for axis, kernel in enumerate(kernels):
-        if kernel is not None:
-            array = scipy.ndimage.convolve1d(
-                array, kernel, axis=axis, mode=mode, cval=cval
-            )
+    kh, kw = kernel_2d.shape
+
+    # Delta kernel → no-op shortcut.
+    if kh == 1 and kw == 1:
+        return (array * float(kernel_2d[0, 0])).astype(array.dtype, copy=False)
+
+    # Kernels from _lorentzian_kernel_2d always have odd sizes; `valid`-mode
+    # convolution on a (kh//2, kw//2)-padded array then returns the original
+    # shape exactly.
+    ph = kh // 2
+    pw = kw // 2
+
+    pad_widths = [(0, 0)] * array.ndim
+    pad_widths[axes[0]] = (ph, ph)
+    pad_widths[axes[1]] = (pw, pw)
+
+    if mode == "wrap":
+        padded = np.pad(array, pad_widths, mode="wrap")
+    elif mode == "reflect":
+        padded = np.pad(array, pad_widths, mode="reflect")
+    elif mode == "constant":
+        padded = np.pad(array, pad_widths, mode="constant", constant_values=cval)
+    else:
+        raise ValueError(f"Unknown convolution mode: {mode!r}")
+
+    shape = [1] * array.ndim
+    shape[axes[0]] = kh
+    shape[axes[1]] = kw
+    kernel_nd = kernel_2d.reshape(shape)
+
+    result = scipy.signal.fftconvolve(padded, kernel_nd, mode="valid", axes=axes)
+    return result.astype(array.dtype, copy=False)
     return array
 
 
@@ -2688,7 +2605,15 @@ def _lorentzian_source_size(
     half_width: float | tuple[float, float],
     truncate: float = 10.0,
 ):
-    if len(_scan_axes(measurements)) < 2:
+    """Apply a true 2-D Lorentzian convolution across the two scan axes.
+
+    Mirrors :func:`_gaussian_source_size` but uses the non-separable 2-D
+    Lorentzian kernel from :func:`_lorentzian_kernel_2d`, avoiding the
+    cross-shaped artefacts that a separable 1-D × 1-D Lorentzian would
+    produce around sharp features.
+    """
+    scan_axes = _scan_axes(measurements)
+    if len(scan_axes) < 2:
         raise RuntimeError(
             "Lorentzian source size not implemented for diffraction patterns with less"
             " than two scan axes."
@@ -2699,41 +2624,36 @@ def _lorentzian_source_size(
 
     xp = get_array_module(measurements.array)
 
-    ensemble_axes = tuple(range(len(measurements.ensemble_shape)))
-    kernels = []
-    depth = []
-    i = 0
-    for axis, n in zip(ensemble_axes, measurements.ensemble_shape):
-        if axis in _scan_axes(measurements):
-            scan_sampling = _scan_sampling(measurements)[i]
-            hw_pix = half_width[i] / scan_sampling
-            kernel = _lorentzian_kernel_1d(hw_pix, truncate)
-            kernels.append(kernel)
-            depth.append(min(len(kernel) // 2, n))
-            i += 1
-        else:
-            kernels.append(None)
-            depth.append(0)
+    scan_sampling = _scan_sampling(measurements)
+    hw_pixels = (
+        half_width[0] / scan_sampling[0],
+        half_width[1] / scan_sampling[1],
+    )
+    kernel_2d = _lorentzian_kernel_2d(hw_pixels, truncate)
 
-    # Two trailing measurement axes — never filtered
-    kernels += [None, None]
-    depth += [0, 0]
+    axes = (scan_axes[0], scan_axes[1])
 
     if measurements.is_lazy:
+        depth = [0] * measurements.array.ndim
+        depth[axes[0]] = min(kernel_2d.shape[0] // 2, measurements.shape[axes[0]])
+        depth[axes[1]] = min(kernel_2d.shape[1] // 2, measurements.shape[axes[1]])
+
         array = measurements.array.map_overlap(
-            functools.partial(_apply_convolve1d, kernels=kernels, mode="wrap"),
+            functools.partial(
+                _apply_convolve_2d_on_axes,
+                kernel_2d=kernel_2d,
+                axes=axes,
+                mode="wrap",
+            ),
             depth=tuple(depth),
             boundary="periodic",
             meta=xp.array((), dtype=xp.float32),
         )
     else:
-        ndimage = get_ndimage_module(measurements._array)
-        array = measurements.array
-        for axis, kernel in enumerate(kernels):
-            if kernel is not None:
-                array = ndimage.convolve1d(
-                    array, xp.asarray(kernel), axis=axis, mode="wrap"
-                )
+        array = _apply_convolve_2d_on_axes(
+            np.asarray(measurements.array), kernel_2d, axes=axes, mode="wrap"
+        )
+        array = xp.asarray(array)
 
     kwargs = measurements._copy_kwargs(exclude=("array",))
     return measurements.__class__(array, **kwargs)
@@ -2743,59 +2663,22 @@ def _voigtian_source_size(
     measurements,
     gaussian_sigma: float | tuple[float, float],
     lorentzian_gamma: float | tuple[float, float],
-    truncate: float = 5.0,
+    truncate: float = 10.0,
 ):
+    """Apply a Voigtian source-size convolution via Gaussian then Lorentzian.
+
+    Exploits the associativity of convolution: convolving with a Voigt profile
+    (Gaussian ∗ Lorentzian) is equivalent to convolving sequentially with a
+    Gaussian and then with a Lorentzian. The Lorentzian step uses the true
+    2-D non-separable kernel.
+    """
     if len(_scan_axes(measurements)) < 2:
         raise RuntimeError(
-            "Voigt source size not implemented for diffraction patterns with less"
+            "Voigtian source size not implemented for diffraction patterns with less"
             " than two scan axes."
         )
-
-    if np.isscalar(gaussian_sigma):
-        gaussian_sigma = (gaussian_sigma,) * 2
-    if np.isscalar(lorentzian_gamma):
-        lorentzian_gamma = (lorentzian_gamma,) * 2
-
-    xp = get_array_module(measurements.array)
-
-    ensemble_axes = tuple(range(len(measurements.ensemble_shape)))
-    kernels = []
-    depth = []
-    i = 0
-    for axis, n in zip(ensemble_axes, measurements.ensemble_shape):
-        if axis in _scan_axes(measurements):
-            scan_sampling = _scan_sampling(measurements)[i]
-            sigma_pix = gaussian_sigma[i] / scan_sampling
-            gamma_pix = lorentzian_gamma[i] / scan_sampling
-            kernel = _voigt_kernel_1d(sigma_pix, gamma_pix, truncate)
-            kernels.append(kernel)
-            depth.append(min(len(kernel) // 2, n))
-            i += 1
-        else:
-            kernels.append(None)
-            depth.append(0)
-
-    kernels += [None, None]
-    depth += [0, 0]
-
-    if measurements.is_lazy:
-        array = measurements.array.map_overlap(
-            functools.partial(_apply_convolve1d, kernels=kernels, mode="wrap"),
-            depth=tuple(depth),
-            boundary="periodic",
-            meta=xp.array((), dtype=xp.float32),
-        )
-    else:
-        ndimage = get_ndimage_module(measurements._array)
-        array = measurements.array
-        for axis, kernel in enumerate(kernels):
-            if kernel is not None:
-                array = ndimage.convolve1d(
-                    array, xp.asarray(kernel), axis=axis, mode="wrap"
-                )
-
-    kwargs = measurements._copy_kwargs(exclude=("array",))
-    return measurements.__class__(array, **kwargs)
+    g = _gaussian_source_size(measurements, gaussian_sigma)
+    return _lorentzian_source_size(g, lorentzian_gamma, truncate)
 
 
 def _pseudo_voigtian_source_size(
@@ -2805,57 +2688,29 @@ def _pseudo_voigtian_source_size(
     eta: float,
     truncate: float = 10.0,
 ):
+    """Apply a pseudo-Voigtian source-size convolution via a linear combination.
+
+    Exploits the linearity of convolution: PV = (1−η)·G + η·L, so the
+    pseudo-Voigt-filtered image is the same weighted combination of the
+    Gaussian- and Lorentzian-filtered images. Each component is computed
+    with its proper (separable Gaussian / true-2-D Lorentzian) kernel.
+    """
     if len(_scan_axes(measurements)) < 2:
         raise RuntimeError(
             "Pseudo-Voigtian source size not implemented for diffraction patterns"
             " with less than two scan axes."
         )
+    if eta == 0.0:
+        return _gaussian_source_size(measurements, gaussian_sigma)
+    if eta == 1.0:
+        return _lorentzian_source_size(measurements, lorentzian_gamma, truncate)
 
-    if np.isscalar(gaussian_sigma):
-        gaussian_sigma = (gaussian_sigma,) * 2
-    if np.isscalar(lorentzian_gamma):
-        lorentzian_gamma = (lorentzian_gamma,) * 2
-
-    xp = get_array_module(measurements.array)
-
-    ensemble_axes = tuple(range(len(measurements.ensemble_shape)))
-    kernels = []
-    depth = []
-    i = 0
-    for axis, n in zip(ensemble_axes, measurements.ensemble_shape):
-        if axis in _scan_axes(measurements):
-            scan_sampling = _scan_sampling(measurements)[i]
-            sigma_pix = gaussian_sigma[i] / scan_sampling
-            gamma_pix = lorentzian_gamma[i] / scan_sampling
-            kernel = _pseudo_voigt_kernel_1d(sigma_pix, gamma_pix, eta, truncate)
-            kernels.append(kernel)
-            depth.append(min(len(kernel) // 2, n))
-            i += 1
-        else:
-            kernels.append(None)
-            depth.append(0)
-
-    kernels += [None, None]
-    depth += [0, 0]
-
-    if measurements.is_lazy:
-        array = measurements.array.map_overlap(
-            functools.partial(_apply_convolve1d, kernels=kernels, mode="wrap"),
-            depth=tuple(depth),
-            boundary="periodic",
-            meta=xp.array((), dtype=xp.float32),
-        )
-    else:
-        ndimage = get_ndimage_module(measurements._array)
-        array = measurements.array
-        for axis, kernel in enumerate(kernels):
-            if kernel is not None:
-                array = ndimage.convolve1d(
-                    array, xp.asarray(kernel), axis=axis, mode="wrap"
-                )
-
+    g = _gaussian_source_size(measurements, gaussian_sigma)
+    l = _lorentzian_source_size(measurements, lorentzian_gamma, truncate)
     kwargs = measurements._copy_kwargs(exclude=("array",))
-    return measurements.__class__(array, **kwargs)
+    return measurements.__class__(
+        (1.0 - eta) * g.array + eta * l.array, **kwargs
+    )
 
 
 def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
@@ -3614,7 +3469,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         self,
         gaussian_sigma: float | tuple[float, float],
         lorentzian_gamma: float | tuple[float, float],
-        truncate: float = 5.0,
+        truncate: float = 10.0,
     ) -> DiffractionPatterns:
         """
         Simulate the effect of a finite source size on diffraction pattern(s) using a
@@ -3634,7 +3489,8 @@ class DiffractionPatterns(_BaseMeasurement2D):
             Half-width at half-maximum (HWHM, γ) of the Lorentzian component [Å].
             If given as a single number it is equal for both axes.
         truncate : float, optional
-            Truncate the kernel at this many Voigt half-widths (default is 5.0).
+            Truncate the Lorentzian component at this many half-widths
+            (default 10.0). The Gaussian component uses the SciPy default (4·σ).
 
         Returns
         -------
@@ -4718,7 +4574,7 @@ class PolarMeasurements(BaseMeasurements):
         self,
         gaussian_sigma: float | tuple[float, float],
         lorentzian_gamma: float | tuple[float, float],
-        truncate: float = 5.0,
+        truncate: float = 10.0,
     ) -> PolarMeasurements:
         """
         Simulate the effect of a finite source size on polar measurement(s) using a
@@ -4736,7 +4592,8 @@ class PolarMeasurements(BaseMeasurements):
             Half-width at half-maximum (HWHM, γ) of the Lorentzian component [Å].
             If given as a single number it is equal for both axes.
         truncate : float, optional
-            Truncate the kernel at this many Voigt half-widths (default is 5.0).
+            Truncate the Lorentzian component at this many half-widths
+            (default 10.0). The Gaussian component uses the SciPy default (4·σ).
 
         Returns
         -------

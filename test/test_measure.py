@@ -256,6 +256,49 @@ def test_lorentzian_filter_changes_image():
     assert not np.allclose(filtered.array, images.array)
 
 
+@pytest.mark.parametrize(
+    "filter_name,kwargs",
+    [
+        ("lorentzian_filter", dict(half_width=0.5, truncate=10.0)),
+        ("voigtian_filter", dict(gaussian_sigma=0.1, lorentzian_gamma=0.5)),
+        (
+            "pseudo_voigtian_filter",
+            dict(gaussian_sigma=0.1, lorentzian_gamma=0.5, eta=0.5),
+        ),
+    ],
+)
+def test_lorentzian_family_filters_are_rotationally_symmetric(filter_name, kwargs):
+    """
+    Filtering a delta image with the Lorentzian family of filters must produce
+    a rotationally-symmetric impulse response. A naively separable 1-D × 1-D
+    Lorentzian would be several times brighter along the x and y axes than
+    along the diagonal at the same radius, producing visible cross-shaped halos
+    around sharp features. Regression for that bug.
+    """
+    # Square delta image with isotropic sampling
+    n = 81
+    arr = np.zeros((n, n), dtype=np.float32)
+    arr[n // 2, n // 2] = 1.0
+    images = Images(arr, sampling=(0.1, 0.1))
+
+    out = getattr(images, filter_name)(**kwargs).array
+    c = n // 2
+
+    # Sample at several radii; compare on-axis vs along-diagonal at the same r.
+    for r in (4, 8, 12, 20):
+        d = int(round(r / np.sqrt(2)))  # so √2·d ≈ r
+        ax_val = float(out[c, c + r])
+        diag_val = float(out[c + d, c + d])
+        ratio = ax_val / diag_val
+        # True 2-D Lorentzian / Voigt is rotationally symmetric → ratio ≈ 1.
+        # The old separable implementation gave ratio ≳ 3 at large r.
+        assert 0.85 < ratio < 1.15, (
+            f"{filter_name}: axis/diag ratio = {ratio:.3g} at r={r} "
+            f"(ax={ax_val:.4g}, diag={diag_val:.4g}); kernel is not "
+            "rotationally symmetric"
+        )
+
+
 def test_voigtian_filter_changes_image():
     """Voigtian filter with non-trivial parameters should change the image."""
     wave = Probe(energy=100e3, semiangle_cutoff=30, extent=10, gpts=64)
