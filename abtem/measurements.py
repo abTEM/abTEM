@@ -41,7 +41,13 @@ from abtem.core.axes import (
     ScaleAxis,
     ScanAxis,
 )
-from abtem.core.backend import asnumpy, cp, get_array_module, get_ndimage_module
+from abtem.core.backend import (
+    asnumpy,
+    cp,
+    get_array_module,
+    get_ndimage_module,
+    get_scipy_module,
+)
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft_crop, fft_interpolate
@@ -1236,11 +1242,12 @@ class _BaseMeasurement2D(BaseMeasurements):
         else:
             # Use FFT-based convolution: cost is independent of kernel size,
             # which matters because the heavy-tailed Lorentzian kernel can
-            # easily be comparable in size to the image itself.
+            # easily be comparable in size to the image itself. The helper
+            # dispatches to scipy.signal or cupyx.scipy.signal based on the
+            # array's backend.
             array = _apply_convolve_2d_on_axes(
-                np.asarray(self.array), kernel_2d, axes=axes, mode=mode, cval=cval
+                self.array, kernel_2d, axes=axes, mode=mode, cval=cval
             )
-            array = xp.asarray(array)
 
         kwargs = self._copy_kwargs(exclude=("array",))
         kwargs["array"] = array
@@ -2553,17 +2560,19 @@ def _lorentzian_kernel_2d(
 def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     """Apply a 2-D convolution on a specified pair of axes of an n-D array.
 
-    Uses FFT-based convolution (``scipy.signal.fftconvolve``) so the cost is
-    O(N log N) per spatial slice — independent of kernel size. The heavy tails
-    of the Lorentzian and Voigtian kernels can make them comparable in size to
-    the image itself, which would be prohibitively slow with direct
-    convolution. The image is first padded according to ``mode`` so that the
-    valid-mode convolution returns the same shape as the input.
+    Uses FFT-based convolution (``scipy.signal.fftconvolve`` on CPU,
+    ``cupyx.scipy.signal.fftconvolve`` on GPU) so the cost is O(N log N) per
+    spatial slice — independent of kernel size. The heavy tails of the
+    Lorentzian and Voigtian kernels can make them comparable in size to the
+    image itself, which would be prohibitively slow with direct convolution.
+    The image is first padded according to ``mode`` so that the valid-mode
+    convolution returns the same shape as the input.
 
     The kernel is broadcast to ``array.ndim`` with size-1 dimensions on all
     axes other than ``axes``. Suitable for ``dask.array.map_overlap``.
     """
-    import scipy.signal
+    xp = get_array_module(array)
+    scipy_signal = get_scipy_module(array).signal
 
     kh, kw = kernel_2d.shape
 
@@ -2582,20 +2591,20 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     pad_widths[axes[1]] = (pw, pw)
 
     if mode == "wrap":
-        padded = np.pad(array, pad_widths, mode="wrap")
+        padded = xp.pad(array, pad_widths, mode="wrap")
     elif mode == "reflect":
-        padded = np.pad(array, pad_widths, mode="reflect")
+        padded = xp.pad(array, pad_widths, mode="reflect")
     elif mode == "constant":
-        padded = np.pad(array, pad_widths, mode="constant", constant_values=cval)
+        padded = xp.pad(array, pad_widths, mode="constant", constant_values=cval)
     else:
         raise ValueError(f"Unknown convolution mode: {mode!r}")
 
     shape = [1] * array.ndim
     shape[axes[0]] = kh
     shape[axes[1]] = kw
-    kernel_nd = kernel_2d.reshape(shape)
+    kernel_nd = xp.asarray(kernel_2d).reshape(shape)
 
-    result = scipy.signal.fftconvolve(padded, kernel_nd, mode="valid", axes=axes)
+    result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid", axes=axes)
     return result.astype(array.dtype, copy=False)
     return array
 
@@ -2651,9 +2660,8 @@ def _lorentzian_source_size(
         )
     else:
         array = _apply_convolve_2d_on_axes(
-            np.asarray(measurements.array), kernel_2d, axes=axes, mode="wrap"
+            measurements.array, kernel_2d, axes=axes, mode="wrap"
         )
-        array = xp.asarray(array)
 
     kwargs = measurements._copy_kwargs(exclude=("array",))
     return measurements.__class__(array, **kwargs)
