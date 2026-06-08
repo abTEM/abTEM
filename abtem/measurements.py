@@ -2615,26 +2615,16 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     # Convolve over all axes (no ``axes=`` kwarg). The size-1 dims of the
     # kernel make the FFT along non-target axes a length-1 no-op, so the
     # result is numerically identical to passing ``axes=axes`` — verified
-    # against scipy.signal.fftconvolve with explicit axes. We do not depend
-    # on the kwarg purely for code simplicity; ``axes=`` has actually been
-    # available in cupyx.scipy.signal.fftconvolve since the first version
-    # that shipped fftconvolve (CuPy 9.0, April 2021), which is also the
-    # effective minimum CuPy version for any GPU code in this module.
+    # against scipy.signal.fftconvolve with explicit axes.
     #
     # cupyx.scipy.signal.fftconvolve internally uses cupyx.jit.rawkernel,
-    # which raises a FutureWarning ("cupyx.jit.rawkernel is experimental ...").
-    # This is purely an upstream API-stability notice we cannot fix, but it
-    # would fail tests under filterwarnings=error and clutter library output,
-    # so suppress it precisely here. The filter is message- *and*
-    # category-matched: if CuPy changes the warning text, the category, or
-    # the fftconvolve interface itself, our GPU tests will catch the change.
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=r"cupyx\.jit\.rawkernel is experimental",
-            category=FutureWarning,
-        )
-        result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid")
+    # which emits a FutureWarning at import / decorator-application time
+    # ("cupyx.jit.rawkernel is experimental ..."). That warning is purely
+    # an upstream API-stability notice, so it is silenced project-wide via
+    # the ``filterwarnings`` block in pyproject.toml. If CuPy changes the
+    # warning text, the category, or the fftconvolve interface itself, the
+    # filter stops matching and the GPU tests catch the change.
+    result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid")
     return result.astype(array.dtype, copy=False)
     return array
 
