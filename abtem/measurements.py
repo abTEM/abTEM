@@ -1237,7 +1237,7 @@ class _BaseMeasurement2D(BaseMeasurements):
                 self.array,
                 depth=tuple(depth),
                 boundary=boundary,
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=self.array.dtype),
             )
         else:
             # Use FFT-based convolution: cost is independent of kernel size,
@@ -2526,6 +2526,10 @@ def _lorentzian_kernel_2d(
     cross-shaped halos around sharp features. This 2-D kernel avoids that
     artefact (it is elliptical when γ_x ≠ γ_y, isotropic when γ_x = γ_y).
 
+    The returned kernel uses the dtype configured via ``abtem.config['precision']``
+    (``float32`` or ``float64``), so the filter respects the global precision
+    setting.
+
     Parameters
     ----------
     hw_pixels : tuple of two float
@@ -2535,16 +2539,20 @@ def _lorentzian_kernel_2d(
     truncate : float
         Truncate the kernel at this many half-widths along each axis.
     """
+    out_dtype = get_dtype(complex=False)
+
     hw0, hw1 = hw_pixels
 
     zero0 = hw0 < _LORENTZIAN_SAFE_HW
     zero1 = hw1 < _LORENTZIAN_SAFE_HW
 
     if zero0 and zero1:
-        return np.array([[1.0]], dtype=np.float32)
+        return np.array([[1.0]], dtype=out_dtype)
 
     radius0 = 0 if zero0 else int(np.ceil(truncate * hw0))
     radius1 = 0 if zero1 else int(np.ceil(truncate * hw1))
+    # Always compute the kernel in float64 to keep the small-tail values
+    # accurate, then cast down to the configured precision at the end.
     y = np.arange(-radius0, radius0 + 1, dtype=np.float64)[:, None]
     x = np.arange(-radius1, radius1 + 1, dtype=np.float64)[None, :]
 
@@ -2554,7 +2562,7 @@ def _lorentzian_kernel_2d(
     if not zero1:
         denom = denom + (x / hw1) ** 2
     kernel = 1.0 / denom
-    return (kernel / kernel.sum()).astype(np.float32)
+    return (kernel / kernel.sum()).astype(out_dtype)
 
 
 def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
@@ -2604,20 +2612,26 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     shape[axes[1]] = kw
     kernel_nd = xp.asarray(kernel_2d).reshape(shape)
 
-    # cupyx.scipy.signal.fftconvolve internally uses cupyx.jit.rawkernel, which
-    # raises a FutureWarning ("cupyx.jit.rawkernel is experimental ..."). The
-    # warning is purely an upstream API-stability notice we can do nothing
-    # about, but it would fail tests under filterwarnings=error and clutter
-    # library output, so suppress it precisely at the call site.
+    # Convolve over all axes (no ``axes=`` kwarg). The size-1 dims of the
+    # kernel make the FFT along non-target axes a length-1 no-op, so the
+    # result is identical to passing ``axes=axes`` — but we stay compatible
+    # with CuPy versions whose cupyx.scipy.signal.fftconvolve predates the
+    # ``axes`` parameter.
+    #
+    # cupyx.scipy.signal.fftconvolve internally uses cupyx.jit.rawkernel,
+    # which raises a FutureWarning ("cupyx.jit.rawkernel is experimental ...").
+    # This is purely an upstream API-stability notice we cannot fix, but it
+    # would fail tests under filterwarnings=error and clutter library output,
+    # so suppress it precisely here. The filter is message- *and*
+    # category-matched: if CuPy changes the warning text, the category, or
+    # the fftconvolve interface itself, our GPU tests will catch the change.
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
             message=r"cupyx\.jit\.rawkernel is experimental",
             category=FutureWarning,
         )
-        result = scipy_signal.fftconvolve(
-            padded, kernel_nd, mode="valid", axes=axes
-        )
+        result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid")
     return result.astype(array.dtype, copy=False)
     return array
 
@@ -2669,7 +2683,7 @@ def _lorentzian_source_size(
             ),
             depth=tuple(depth),
             boundary="periodic",
-            meta=xp.array((), dtype=xp.float32),
+            meta=xp.array((), dtype=measurements.array.dtype),
         )
     else:
         array = _apply_convolve_2d_on_axes(

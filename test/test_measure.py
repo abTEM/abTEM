@@ -256,6 +256,37 @@ def test_lorentzian_filter_changes_image():
     assert not np.allclose(filtered.array, images.array)
 
 
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+def test_lorentzian_filter_respects_precision_config(precision):
+    """The Lorentzian family of filters must honour ``abtem.config['precision']``.
+
+    The kernel is built via :func:`_lorentzian_kernel_2d`, which queries the
+    config — and the output dtype must match the configured precision rather
+    than being silently downcast to float32. Regression for a bug where the
+    kernel was hardcoded to ``np.float32``.
+    """
+    expected_dtype = np.dtype(precision)
+    n = 21
+    with abtem.config.set({"precision": precision}):
+        arr = np.zeros((n, n), dtype=expected_dtype)
+        arr[n // 2, n // 2] = 1.0
+        images = Images(arr, sampling=(0.1, 0.1))
+
+        out_l = images.lorentzian_filter(0.3).array
+        out_v = images.voigtian_filter(0.2, 0.3).array
+        out_pv = images.pseudo_voigtian_filter(0.2, 0.3, eta=0.5).array
+
+    assert out_l.dtype == expected_dtype, (
+        f"lorentzian_filter: got {out_l.dtype}, expected {expected_dtype}"
+    )
+    assert out_v.dtype == expected_dtype, (
+        f"voigtian_filter: got {out_v.dtype}, expected {expected_dtype}"
+    )
+    assert out_pv.dtype == expected_dtype, (
+        f"pseudo_voigtian_filter: got {out_pv.dtype}, expected {expected_dtype}"
+    )
+
+
 @pytest.mark.parametrize(
     "filter_name,kwargs",
     [
