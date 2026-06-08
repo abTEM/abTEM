@@ -2604,7 +2604,20 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
     shape[axes[1]] = kw
     kernel_nd = xp.asarray(kernel_2d).reshape(shape)
 
-    result = scipy_signal.fftconvolve(padded, kernel_nd, mode="valid", axes=axes)
+    # cupyx.scipy.signal.fftconvolve internally uses cupyx.jit.rawkernel, which
+    # raises a FutureWarning ("cupyx.jit.rawkernel is experimental ..."). The
+    # warning is purely an upstream API-stability notice we can do nothing
+    # about, but it would fail tests under filterwarnings=error and clutter
+    # library output, so suppress it precisely at the call site.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"cupyx\.jit\.rawkernel is experimental",
+            category=FutureWarning,
+        )
+        result = scipy_signal.fftconvolve(
+            padded, kernel_nd, mode="valid", axes=axes
+        )
     return result.astype(array.dtype, copy=False)
     return array
 
