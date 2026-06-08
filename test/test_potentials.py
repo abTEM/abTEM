@@ -536,7 +536,19 @@ def test_all_modes_agree_on_fully_triclinic_cell():
     variants agree. This exercises every skew code path at once: the metric-aware
     propagator/integrator on the in-plane (a, b) parallelogram, the tilted-c atom
     wrap, the finite projection on a non-orthogonal grid, and the PRISM S-matrix
-    construction on a fully triclinic supercell."""
+    construction on a fully triclinic supercell.
+
+    The Bloch engine is NOT compared here -- and not because it's wrong, but because
+    for a fully triclinic crystal viewed along Cartesian +z the 3D reciprocal basis
+    vectors ``b_i`` have non-zero z-components (b1_3D has z = -a3_xy/V etc.), so
+    Bloch ``hkl = (h, k, 0)`` is in general off the Ewald sphere and does NOT
+    correspond to the multislice in-plane pixel ``(h, k)`` (which is at g_xy =
+    h*b1_2D + k*b2_2D, the *xy parts* of b1_3D, b2_3D). For each in-plane g_xy the
+    multislice intensity is physically a sum over the entire tower ``(h, k, l)`` of
+    3D reflections projecting onto that g_xy, not a single Bloch reflection. A fair
+    Bloch comparison would require summing over l. The in-plane-skew and orthogonal
+    tests (where c is perpendicular to ab so b_i = (b_i_2D, 0) and the indexing is
+    one-to-one) cover the Bloch cross-check."""
     import numpy as np
     from ase import Atoms
 
