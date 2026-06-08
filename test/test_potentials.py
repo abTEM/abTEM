@@ -529,7 +529,88 @@ def test_all_modes_agree_on_skew_grid_bragg_intensities():
         assert abs(I[(1, 0, 0)] - I[(0, 1, 0)]) / I[(1, 0, 0)] < 1e-5
 
 
-def test_waves_cell_survives_metadata_roundtrip():
+def test_all_modes_agree_on_fully_triclinic_cell():
+    """A fully triclinic cell -- all three lattice vectors mutually non-orthogonal:
+    a, b non-orthogonal in the xy-plane AND c with non-zero in-plane components in
+    BOTH x and y -- runs end-to-end through every engine and the three multislice
+    variants agree. This exercises every skew code path at once: the metric-aware
+    propagator/integrator on the in-plane (a, b) parallelogram, the tilted-c atom
+    wrap, the finite projection on a non-orthogonal grid, and the PRISM S-matrix
+    construction on a fully triclinic supercell."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+    from abtem.multislice import FourierMultislice, RealSpaceMultislice
+    from abtem.parametrizations import LobatoParametrization
+
+    # hex a, b at 60 deg; c tilted with non-zero cx AND cy -- mutually non-orthogonal
+    a, cz = 2.5, 3.35
+    cell = [
+        [a, 0.0, 0.0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0.0],
+        [0.7, 0.4, cz],
+    ]
+    # confirm no pair is orthogonal
+    c0, c1, c2 = (np.asarray(v) for v in cell)
+    assert abs(c0 @ c1) > 1e-3 and abs(c0 @ c2) > 1e-3 and abs(c1 @ c2) > 1e-3
+
+    triC = Atoms(
+        "C2", cell=cell, pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+
+    energy, nc = 100e3, 8
+    beams = [(0, 0), (1, 0), (0, 1), (1, 1), (-1, 0)]
+
+    param = LobatoParametrization(sigmas={"C": 0.0})
+    atoms = triC * (1, 1, nc)
+    pot = abtem.Potential(
+        atoms, sampling=0.030, slice_thickness=0.1,
+        projection="finite", parametrization=param,
+    )
+    N0, N1 = pot.gpts
+    assert not pot.grid.is_orthogonal, "in-plane grid should be skewed"
+
+    def bragg(w):
+        I = np.abs(np.fft.fft2(np.asarray(w))) ** 2
+        I = I / I.sum()
+        return {b: float(I[b[0] % N0, b[1] % N1]) for b in beams}
+
+    # Fourier multislice
+    wF = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=FourierMultislice()
+    ).compute().array
+    IF = bragg(wF)
+
+    # the calculation should actually scatter (no silently-dropped atoms)
+    assert IF[(0, 0)] < 0.999, "no scattering -- atoms may have been silently dropped"
+    assert IF[(0, 0)] > 0.5, "unexpectedly thick / strong scattering"
+
+    # real-space FD multislice (same potential)
+    wR = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=RealSpaceMultislice()
+    ).compute().array
+    IR = bragg(wR)
+
+    # PRISM (the (0, 0) plane-wave column of the S-matrix)
+    sm = abtem.SMatrix(
+        potential=pot, energy=energy, semiangle_cutoff=1.0,
+        interpolation=1, downsample=False,
+    ).build(lazy=False)
+    wv = np.asarray(sm.wave_vectors)
+    idx0 = int(np.argmin(np.linalg.norm(wv, axis=1)))
+    wP = np.asarray(sm.array)[idx0] * (np.prod(pot.gpts) / np.prod(sm.interpolation))
+    IP = bragg(wP)
+
+    # the three multislice variants agree among themselves
+    for b in beams:
+        if IF[b] < 1e-6:
+            continue
+        # Fourier MS and PRISM (0, 0) column take the same multislice path
+        assert abs(IF[b] - IP[b]) / IF[b] < 1e-4, f"PRISM disagrees on {b}"
+        # real-space FD agrees with Fourier MS within its FD discretisation
+        assert abs(IR[b] - IF[b]) / IF[b] < 1e-2, f"Real-space FD disagrees on {b}"
     """The non-orthogonal cell is stored in metadata and survives reconstruction."""
     import numpy as np
     from ase import Atoms
