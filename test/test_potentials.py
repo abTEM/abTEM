@@ -430,6 +430,105 @@ def test_finite_projection_tilted_c_axis():
     assert rel < 1e-5
 
 
+def test_all_modes_agree_on_skew_grid_bragg_intensities():
+    """Cross-algorithm consistency check: on a non-orthogonal (hex) cell, the four
+    multislice/dynamical engines must agree on the plane-wave Bragg intensities to
+    their respective convergence levels: Bloch (reference), Fourier multislice,
+    real-space finite-difference multislice, and the (0, 0) plane-wave column of the
+    PRISM S-matrix."""
+    import numpy as np
+    from ase import Atoms
+
+    import abtem
+    from abtem.multislice import FourierMultislice, RealSpaceMultislice
+    from abtem.parametrizations import LobatoParametrization
+
+    a, c = 2.46, 3.35
+    hexcell = [
+        [a, 0, 0],
+        [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+        [0, 0, c],
+    ]
+    hexC = Atoms(
+        "C2", cell=hexcell, pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+    energy, nc = 100e3, 12
+    beams = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+
+    # Bloch reference (matched parametrization, no DW)
+    sf = abtem.StructureFactor(
+        hexC, g_max=12.0, parametrization="lobato", centering="auto",
+        thermal_sigma=0.0,
+    )
+    bw = abtem.BlochWaves(sf, energy=energy, sg_max=0.6)
+    hkl = np.asarray(bw.hkl)
+    Ib = np.asarray(
+        bw.calculate_diffraction_patterns(nc * c, lazy=False).array
+    ).ravel()
+    ref = {
+        b: float(Ib[np.all(hkl == np.array(b), axis=1)][0])
+        for b in beams
+    }
+
+    # multislice potential matched to the Bloch structure factor
+    param = LobatoParametrization(sigmas={"C": 0.0})
+    atoms = hexC * (1, 1, nc)
+    pot = abtem.Potential(
+        atoms, sampling=0.030, slice_thickness=0.1,
+        projection="finite", parametrization=param,
+    )
+    N0, N1 = pot.gpts
+    assert not pot.grid.is_orthogonal
+
+    def bragg(w):
+        I = np.abs(np.fft.fft2(np.asarray(w))) ** 2
+        I = I / I.sum()
+        return {b: float(I[b[0] % N0, b[1] % N1]) for b in beams}
+
+    # Fourier multislice
+    wF = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=FourierMultislice()
+    ).compute().array
+    IF = bragg(wF)
+
+    # real-space finite-difference multislice (same potential, different propagator)
+    wR = abtem.PlaneWave(energy=energy).multislice(
+        pot, algorithm=RealSpaceMultislice()
+    ).compute().array
+    IR = bragg(wR)
+
+    # PRISM: the (0, 0) plane-wave column of the built S-matrix IS the plane-wave
+    # multislice exit wave through the same potential.
+    sm = abtem.SMatrix(
+        potential=pot, energy=energy, semiangle_cutoff=1.0,
+        interpolation=1, downsample=False,
+    ).build(lazy=False)
+    wv = np.asarray(sm.wave_vectors)
+    idx0 = int(np.argmin(np.linalg.norm(wv, axis=1)))
+    wP = np.asarray(sm.array)[idx0] * (np.prod(pot.gpts) / np.prod(sm.interpolation))
+    IP = bragg(wP)
+
+    # all four modes agree with Bloch on every selected beam to <= 1.5%
+    for I, name in [(IF, "Fourier MS"), (IR, "Real-space FD"), (IP, "PRISM S(0,0)")]:
+        for b in beams:
+            rel = abs(I[b] - ref[b]) / ref[b]
+            assert rel < 1.5e-2, f"{name} disagrees with Bloch on {b}: rel={rel:.2e}"
+
+    # Fourier MS and PRISM (0, 0) column are the same multislice path -> agreement at
+    # the float32 precision floor (drops to ~1e-15 in float64)
+    for b in beams:
+        assert abs(IF[b] - IP[b]) / max(IF[b], 1e-12) < 1e-5
+
+    # real-space FD agrees with Fourier MS within its own discretisation
+    for b in beams:
+        assert abs(IR[b] - IF[b]) / max(IF[b], 1e-12) < 5e-3
+
+    # hexagonal symmetry preserved across modes
+    for I in (IF, IR, IP):
+        assert abs(I[(1, 0, 0)] - I[(0, 1, 0)]) / I[(1, 0, 0)] < 1e-5
+
+
 def test_waves_cell_survives_metadata_roundtrip():
     """The non-orthogonal cell is stored in metadata and survives reconstruction."""
     import numpy as np
