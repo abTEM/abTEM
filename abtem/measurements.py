@@ -2614,9 +2614,12 @@ def _apply_convolve_2d_on_axes(array, kernel_2d, axes, mode, cval=0.0):
 
     # Convolve over all axes (no ``axes=`` kwarg). The size-1 dims of the
     # kernel make the FFT along non-target axes a length-1 no-op, so the
-    # result is identical to passing ``axes=axes`` — but we stay compatible
-    # with CuPy versions whose cupyx.scipy.signal.fftconvolve predates the
-    # ``axes`` parameter.
+    # result is numerically identical to passing ``axes=axes`` — verified
+    # against scipy.signal.fftconvolve with explicit axes. We do not depend
+    # on the kwarg purely for code simplicity; ``axes=`` has actually been
+    # available in cupyx.scipy.signal.fftconvolve since the first version
+    # that shipped fftconvolve (CuPy 9.0, April 2021), which is also the
+    # effective minimum CuPy version for any GPU code in this module.
     #
     # cupyx.scipy.signal.fftconvolve internally uses cupyx.jit.rawkernel,
     # which raises a FutureWarning ("cupyx.jit.rawkernel is experimental ...").
