@@ -11,7 +11,7 @@ import pytest
 
 import abtem
 from abtem.core.axes import OrdinalAxis
-from abtem.inelastic.core_loss import TransitionPotentialArray
+from abtem.inelastic.core_loss import TransitionPotentialArray, fast_roll
 from abtem.waves import Probe
 
 try:
@@ -20,6 +20,33 @@ except ImportError:
     cp = None
 
 from utils import gpu  # noqa: E402  -- pytest.param('gpu', skipif no cupy)
+
+
+def test_fast_roll_matches_numpy_roll():
+    """The vectorised fast_roll must give the same result as a per-site np.roll."""
+    rng = np.random.default_rng(0)
+    arr = rng.standard_normal((16, 16)).astype(np.complex64)
+    shifts = np.array([[0, 0], [3, 5], [15, 15], [1, 7], [10, 2]])
+    out = fast_roll(arr, shifts)
+    for i, s in enumerate(shifts):
+        expected = np.roll(arr, (int(s[0]), int(s[1])), axis=(0, 1))
+        assert np.array_equal(out[i], expected), f"mismatch at shift {tuple(s)}"
+
+
+def test_fast_roll_handles_negative_shifts():
+    """Modular indexing must produce the same result as np.roll with negative shifts.
+
+    The pre-Tier-2 implementation raised RuntimeError on negative shifts;
+    handle them correctly so atom positions outside the centred-cell convention
+    still work.
+    """
+    rng = np.random.default_rng(1)
+    arr = rng.standard_normal((8, 8)).astype(np.complex64)
+    shifts = np.array([[-1, -2], [-7, 3], [0, -5]])
+    out = fast_roll(arr, shifts)
+    for i, s in enumerate(shifts):
+        expected = np.roll(arr, (int(s[0]), int(s[1])), axis=(0, 1))
+        assert np.array_equal(out[i], expected), f"mismatch at shift {tuple(s)}"
 
 
 @pytest.fixture(scope="module")
