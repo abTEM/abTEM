@@ -799,6 +799,7 @@ def transition_potential_multislice_and_detect(
     threshold: float = 1.0,
     sites: Optional[SliceIndexedAtoms | Atoms] = None,
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
+    scatter_max_batch: int | str = 1,
     pbar: bool = False,
 ) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
@@ -939,10 +940,27 @@ def transition_potential_multislice_and_detect(
             )
             _update_measurements(waves, detectors, measurements, measurement_index)
 
+        # Pre-build (and bandlimit) all transmission functions for this configuration.
+        # The double-channel inner multislice re-visits slices [scatter_index+1 …]
+        # for every site batch; without this cache each slice's transmission function
+        # is rebuilt up to N_sites times per outer step. For FourierMultislice the
+        # cached objects are TransmissionFunction instances which short-circuit the
+        # rebuild inside conventional_multislice_step (see iam.py:1300-1302).
+        # For RealSpaceMultislice the slices are kept as PotentialArray.
+        if isinstance(algorithm, FourierMultislice):
+            slice_cache = [
+                antialias_aperture.bandlimit(
+                    slice_obj.transmission_function(energy=waves._valid_energy),
+                    in_place=False,
+                )
+                for slice_obj in potential_configuration.generate_slices()
+            ]
+        else:
+            slice_cache = list(potential_configuration.generate_slices())
+
+        n_outer = len(slice_cache)
         depth = 0.0
-        for scatter_index, potential_slice in enumerate(
-            potential_configuration.generate_slices()
-        ):
+        for scatter_index, potential_slice in enumerate(slice_cache):
             waves = multislice_step(
                 waves,
                 potential_slice,
@@ -964,7 +982,10 @@ def transition_potential_multislice_and_detect(
                 included_sites,
                 scattered_waves,
             ) in transition_potential.generate_scattered_waves(
-                waves, sites_slice, max_batch=1, threshold=absolute_threshold
+                waves,
+                sites_slice,
+                max_batch=scatter_max_batch,
+                threshold=absolute_threshold,
             ):
                 if len(scattered_waves) == 0:
                     continue
@@ -979,13 +1000,12 @@ def transition_potential_multislice_and_detect(
                         potential_index,
                     )
 
-                    # if scatter_index + 1 == len(potential):
-                    #    break
+                    # Nothing left to propagate through on the final outer slice.
+                    if scatter_index + 1 == n_outer:
+                        continue
 
-                    for inner_slice_index, inner_potential_slice in enumerate(
-                        potential_configuration.generate_slices(
-                            first_slice=scatter_index + 1
-                        )
+                    for inner_offset, inner_potential_slice in enumerate(
+                        slice_cache[scatter_index + 1:]
                     ):
                         scattered_waves = multislice_step(
                             scattered_waves,
@@ -999,7 +1019,7 @@ def transition_potential_multislice_and_detect(
                             scattered_waves,
                             detectors,
                             potential,
-                            inner_slice_index + scatter_index + 1,
+                            scatter_index + 1 + inner_offset,
                             potential_index,
                         )
 
