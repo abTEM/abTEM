@@ -940,27 +940,33 @@ def transition_potential_multislice_and_detect(
             )
             _update_measurements(waves, detectors, measurements, measurement_index)
 
-        # Pre-build (and bandlimit) all transmission functions for this configuration.
         # The double-channel inner multislice re-visits slices [scatter_index+1 …]
-        # for every site batch; without this cache each slice's transmission function
-        # is rebuilt up to N_sites times per outer step. For FourierMultislice the
-        # cached objects are TransmissionFunction instances which short-circuit the
-        # rebuild inside conventional_multislice_step (see iam.py:1300-1302).
-        # For RealSpaceMultislice the slices are kept as PotentialArray.
-        if isinstance(algorithm, FourierMultislice):
-            slice_cache = [
-                antialias_aperture.bandlimit(
-                    slice_obj.transmission_function(energy=waves._valid_energy),
-                    in_place=False,
-                )
-                for slice_obj in potential_configuration.generate_slices()
-            ]
+        # once per site batch; pre-building (and bandlimiting) the transmission
+        # functions saves N_sites rebuilds per outer step in that case (for
+        # FourierMultislice the cache short-circuits the rebuild inside
+        # conventional_multislice_step, see iam.py:1300-1302). Single-channel
+        # visits each slice exactly once, so caching is pure memory overhead and
+        # we stream slices instead.
+        if double_channel:
+            if isinstance(algorithm, FourierMultislice):
+                slice_cache = [
+                    antialias_aperture.bandlimit(
+                        slice_obj.transmission_function(energy=waves._valid_energy),
+                        in_place=False,
+                    )
+                    for slice_obj in potential_configuration.generate_slices()
+                ]
+            else:
+                slice_cache = list(potential_configuration.generate_slices())
+            n_outer = len(slice_cache)
+            outer_iter = enumerate(slice_cache)
         else:
-            slice_cache = list(potential_configuration.generate_slices())
+            slice_cache = None
+            n_outer = None
+            outer_iter = enumerate(potential_configuration.generate_slices())
 
-        n_outer = len(slice_cache)
         depth = 0.0
-        for scatter_index, potential_slice in enumerate(slice_cache):
+        for scatter_index, potential_slice in outer_iter:
             waves = multislice_step(
                 waves,
                 potential_slice,
