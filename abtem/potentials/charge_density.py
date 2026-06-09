@@ -13,7 +13,7 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.atoms import is_cell_orthogonal, plane_to_axes
+from abtem.atoms import plane_to_axes
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
@@ -255,7 +255,16 @@ def _interpolate_slice(array, cell, gpts, sampling, a, b):
     nz = max(int(np.ceil((b - a) / dz_charge)), 2)
     slice_shape = gpts + (nz,)
 
-    slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
+    # The slice spans the same in-plane (a, b) geometry as the source cell -- just
+    # with z thickness (b - a). Build slice_box as a full 3x3 cell so the
+    # interpolation between cells preserves the in-plane skew (the previous
+    # diagonal slice_box silently rectified non-orthogonal cells onto a Cartesian
+    # rectangle, losing the parallelogram shape).
+    cell_arr = np.asarray(cell, dtype=float)
+    slice_box = np.zeros((3, 3))
+    slice_box[0, :2] = cell_arr[0, :2]
+    slice_box[1, :2] = cell_arr[1, :2]
+    slice_box[2, 2] = b - a
 
     slice_array = _interpolate_between_cells(
         array, slice_shape, cell, slice_box, (0, 0, a)
@@ -399,18 +408,6 @@ class ChargeDensityPotential(_PotentialBuilder):
             self._frozen_phonons = DummyFrozenPhonons(atoms)
         else:
             raise RuntimeError()
-
-        # The slicer uses ``_interpolate_slice`` which projects the 3D charge density
-        # onto a rectangular slice_box and returns the result without a non-orthogonal
-        # cell -- so the skew metadata is lost and the projected slice is silently
-        # misaligned for a non-orthogonal in-plane cell. Gate explicitly until the
-        # slicer is generalised to skew slice boxes.
-        if not is_cell_orthogonal(self._frozen_phonons.atoms.cell):
-            raise NotImplementedError(
-                "ChargeDensityPotential is not yet supported on non-orthogonal cells; "
-                "the per-slice interpolation projects onto a rectangular slice box. "
-                "Use an orthogonalised supercell."
-            )
 
         self._charge_density = charge_density.astype(np.float32)
         self._repetitions = repetitions
@@ -585,6 +582,13 @@ class ChargeDensityPotential(_PotentialBuilder):
     def _get_ewald_potential(self):
         ewald_parametrization = EwaldParametrization(width=3)
 
+        # When the in-plane cell is non-orthogonal, do NOT forward ``box`` to the
+        # internal ewald Potential: the box-given path forces an orthogonalising
+        # build (``use_skew`` requires ``box is None``), which would silently
+        # rectify the skew cell. With ``box=None`` the Potential auto-detects the
+        # skew geometry and matches the parent's in-plane parallelogram.
+        box = None if self._non_orthogonal else self.box
+
         return Potential(
             atoms=self.frozen_phonons,
             gpts=self.gpts,
@@ -593,7 +597,7 @@ class ChargeDensityPotential(_PotentialBuilder):
             slice_thickness=self.slice_thickness,
             projection="finite",
             plane=self.plane,
-            box=self.box,
+            box=box,
             origin=self.origin,
             exit_planes=self.exit_planes,
             device=self.device,
@@ -631,6 +635,10 @@ class ChargeDensityPotential(_PotentialBuilder):
             array = np.tile(array, self.repetitions)
             atoms = self.frozen_phonons.atoms * self.repetitions
             ewald_parametrization = EwaldParametrization(width=3)
+            # See _get_ewald_potential: when the in-plane cell is non-orthogonal,
+            # leave box=None so the ewald Potential auto-detects the skew geometry
+            # rather than rectifying it.
+            box = None if self._non_orthogonal else self.box
             ewald_potential = Potential(
                 atoms=atoms,
                 gpts=self.gpts,
@@ -639,7 +647,7 @@ class ChargeDensityPotential(_PotentialBuilder):
                 slice_thickness=self.slice_thickness,
                 projection="finite",
                 plane=self.plane,
-                box=self.box,
+                box=box,
                 origin=self.origin,
                 exit_planes=self.exit_planes,
                 device=self.device,

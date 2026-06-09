@@ -105,6 +105,42 @@ def test_repetitions_property(carbon_atoms, charge_density_3d):
     assert pot.repetitions == reps
 
 
+def test_charge_density_potential_on_skew_cell_preserves_cell():
+    """ChargeDensityPotential.build on a non-orthogonal in-plane cell must produce a
+    PotentialArray on the same skew grid (not silently rectified onto a Cartesian
+    rectangle). Before the slicer was generalised, _interpolate_slice built the
+    target slice on a diagonal slice_box, so the resulting PotentialArray came back
+    with ``grid.is_orthogonal == True`` even on a skew input."""
+    import numpy as np
+    from ase import Atoms
+
+    a, c = 2.46, 3.35
+    atoms = Atoms(
+        "C2",
+        cell=[
+            [a, 0, 0],
+            [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0],
+            [0, 0, c],
+        ],
+        pbc=True,
+        scaled_positions=[(0, 0, 0), (1 / 3, 1 / 3, 0.5)],
+    )
+    density = np.random.RandomState(0).rand(32, 32, 32).astype(np.float32) * 0.1
+
+    pot = ChargeDensityPotential(atoms, density, sampling=0.1)
+    assert not pot.grid.is_orthogonal
+    assert pot.cell is not None
+
+    built = pot.build(lazy=False)
+    arr = np.asarray(built.array)
+    assert np.all(np.isfinite(arr))
+    # the cell metadata must propagate through the slicer to the built array
+    assert built.cell is not None, (
+        "ChargeDensityPotential.build silently lost the non-orthogonal cell metadata"
+    )
+    assert not built.grid.is_orthogonal
+
+
 def test_point_charges_general_cell_conserves_nuclear_charge():
     """The pixel-volume normalisation in _add_point_charges_real_space /
     _add_point_charges_fourier must be the true parallelepiped volume |det(cell)|,

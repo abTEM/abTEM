@@ -534,6 +534,7 @@ class _FieldBuilder(BaseField):
             slice_thickness=self.slice_thickness[first_slice:last_slice],
             exit_planes=self.exit_planes,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
+            cell=self.grid.cell,
         )
         return output_potential
 
@@ -816,6 +817,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 slice_thickness=self.slice_thickness[start:stop],
                 exit_planes=exit_planes,
                 extent=self.extent,
+                cell=self.grid.cell,
             )
 
             if return_depth:
@@ -1028,6 +1030,7 @@ class FieldArray(BaseField, ArrayObject):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         # assert len(array.shape) == self._base_dims
 
@@ -1038,7 +1041,9 @@ class FieldArray(BaseField, ArrayObject):
         self._exit_planes = _validate_exit_planes(
             exit_planes, len(self._slice_thickness)
         )
-        self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling)
+        self._grid = Grid(
+            extent=extent, gpts=array.shape[-2:], sampling=sampling, cell=cell
+        )
 
         super().__init__(
             array=array,
@@ -1271,6 +1276,7 @@ class PotentialArray(BasePotential, FieldArray):
         exit_planes: Optional[int | tuple[int, ...]] = None,
         ensemble_axes_metadata: Optional[list[AxisMetadata]] = None,
         metadata: Optional[dict] = None,
+        cell: Optional[np.ndarray] = None,
     ):
         if metadata is None:
             metadata = {}
@@ -1284,6 +1290,7 @@ class PotentialArray(BasePotential, FieldArray):
             exit_planes=exit_planes,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
+            cell=cell,
         )
 
     @staticmethod
