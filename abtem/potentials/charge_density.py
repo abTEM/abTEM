@@ -155,7 +155,9 @@ def _superpose_deltas(positions, array, scale=1):
 
 
 def _add_point_charges_real_space(array, atoms):
-    pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
+    # |det(cell)| is the true parallelepiped volume; reduces to prod(diag(cell)) for an
+    # orthogonal cell but is correct for non-orthogonal (skewed) cells too.
+    pixel_volume = abs(np.linalg.det(np.array(atoms.cell))) / np.prod(array.shape)
 
     inverse_cell = np.linalg.inv(np.array(atoms.cell))
     positions = np.dot(atoms.positions, inverse_cell)
@@ -201,7 +203,9 @@ def add_point_charges_fourier(
     density : np.ndarray
         3D charge density with added nuclear charges in reciprocal space.
     """
-    pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
+    # |det(cell)| is the true parallelepiped volume; reduces to prod(diag(cell)) for an
+    # orthogonal cell but is correct for non-orthogonal (skewed) cells too.
+    pixel_volume = abs(np.linalg.det(np.array(atoms.cell))) / np.prod(array.shape)
 
     kx, ky, kz = _spatial_frequencies(array.shape, atoms.cell)
 

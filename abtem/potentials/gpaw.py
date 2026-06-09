@@ -204,7 +204,11 @@ def _generate_slices(
     transform_valence_potential = None
     if potential.plane != "xy":
         if not is_cell_orthogonal(atoms.cell):
-            raise NotImplementedError
+            raise NotImplementedError(
+                "GPAW valence-potential projection along a non-xy plane is not "
+                "supported on non-orthogonal cells; use plane='xy' (matching the "
+                "general non-orthogonal Potential support, which is also xy-only)."
+            )
 
         axes = plane_to_axes(potential.plane)
         valence_potential = np.moveaxis(valence_potential, axes[:2], (0, 1))
