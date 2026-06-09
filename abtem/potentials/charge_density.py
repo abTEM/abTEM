@@ -13,7 +13,7 @@ from ase import Atoms
 from ase.cell import Cell
 from scipy.ndimage import map_coordinates
 
-from abtem.atoms import plane_to_axes
+from abtem.atoms import is_cell_orthogonal, plane_to_axes
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
@@ -399,6 +399,18 @@ class ChargeDensityPotential(_PotentialBuilder):
             self._frozen_phonons = DummyFrozenPhonons(atoms)
         else:
             raise RuntimeError()
+
+        # The slicer uses ``_interpolate_slice`` which projects the 3D charge density
+        # onto a rectangular slice_box and returns the result without a non-orthogonal
+        # cell -- so the skew metadata is lost and the projected slice is silently
+        # misaligned for a non-orthogonal in-plane cell. Gate explicitly until the
+        # slicer is generalised to skew slice boxes.
+        if not is_cell_orthogonal(self._frozen_phonons.atoms.cell):
+            raise NotImplementedError(
+                "ChargeDensityPotential is not yet supported on non-orthogonal cells; "
+                "the per-slice interpolation projects onto a rectangular slice box. "
+                "Use an orthogonalised supercell."
+            )
 
         self._charge_density = charge_density.astype(np.float32)
         self._repetitions = repetitions

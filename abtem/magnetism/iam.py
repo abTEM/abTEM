@@ -18,6 +18,7 @@ from abtem.core.grid import coordinate_grid
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.integrals import cutoff_taper
 from abtem.magnetism.parametrizations import LyonParametrization
+from abtem.atoms import is_cell_orthogonal
 from abtem.potentials.iam import (
     BaseField,
     FieldArray,
@@ -131,6 +132,20 @@ def _superpose_field_3d(
     parameters: Optional[dict] = None,
     cutoff: Optional[float] = None,
 ) -> np.ndarray:
+    if not is_cell_orthogonal(atoms.cell):
+        # The atom-field functions superpose B(r) on a *rectangular* Cartesian grid
+        # built by ``coordinate_grid(extent=cell.diagonal(), ...)``. For a
+        # non-orthogonal cell the diagonal does not span the parallelepiped (atoms
+        # at, e.g., position ``a + b`` fall outside the rectangle) and periodic
+        # images do not tile correctly, so the resulting field would be silently
+        # wrong. Gate explicitly until a proper parallelepiped-aware accumulator is
+        # implemented.
+        raise NotImplementedError(
+            "magnetic-field IAM is not yet supported on non-orthogonal cells; the "
+            "atom-field grid is built on a Cartesian rectangle that does not match "
+            "a skewed parallelepiped. Use an orthogonalised supercell."
+        )
+
     array = np.zeros((3,) + gpts)
     if cutoff is None:
         cutoff = 6.0
@@ -138,10 +153,10 @@ def _superpose_field_3d(
     if parameters is None:
         parameters = LyonParametrization().parameters
 
+    extent = atoms.cell.array.diagonal()
     for position, symbol, magnetic_moment in zip(
         atoms.positions, atoms.symbols, atoms.get_array("magnetic_moments")
     ):
-        extent = atoms.cell.array.diagonal()
         array += atom_field_func(
             extent=extent,
             gpts=gpts,
