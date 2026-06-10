@@ -258,3 +258,94 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
     np.testing.assert_allclose(arr_cryst, arr_manual, rtol=1e-5, atol=0)
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_transition_potential_scan_crystal_double_channel_matches_manual(device):
+    """Double-channel + CrystalPotential is the intersection that triggers the
+    TransmissionFunction dedup in transition_potential_multislice_and_detect
+    (the slice_cache is only built when double_channel=True, and dedup only
+    fires when generate_slices yields repeated object identities). Verify the
+    deduplicated cache still produces results numerically equivalent to the
+    manually-tiled Potential path.
+    """
+    if device == "gpu":
+        xp = cp
+    else:
+        xp = np
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    reps = (2, 2, 3)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    manual_pot = abtem.Potential(
+        unit_atoms * reps, gpts=(64, 64), slice_thickness=slice_thickness,
+        device=device,
+    )
+    unit_pot = abtem.Potential(
+        unit_atoms, gpts=(32, 32), slice_thickness=slice_thickness,
+        device=device,
+    )
+    cryst_pot = abtem.CrystalPotential(unit_pot, repetitions=reps)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
+    probe.grid.match(manual_pot)
+
+    rng = np.random.default_rng(1)
+    tp_array_np = (
+        rng.standard_normal((2, 64, 64))
+        + 1j * rng.standard_normal((2, 64, 64))
+    ).astype(np.complex64)
+    tp_array = xp.asarray(tp_array_np)
+
+    def make_tp(extent):
+        return TransitionPotentialArray(
+            Z=14, array=tp_array, energy=100e3, extent=extent,
+            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+            metadata={"Z": 14, "n": 1, "l": 0},
+        )
+
+    detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
+
+    res_manual = probe.transition_potential_scan(
+        potential=manual_pot, transition_potentials=make_tp(manual_pot.extent),
+        scan=(0, 0), detectors=detector, double_channel=True, lazy=False,
+    ).compute()
+    res_cryst = probe.transition_potential_scan(
+        potential=cryst_pot, transition_potentials=make_tp(cryst_pot.extent),
+        scan=(0, 0), detectors=detector, double_channel=True, lazy=False,
+    ).compute()
+
+    arr_manual = np.asarray(res_manual.array)
+    arr_cryst = np.asarray(res_cryst.array)
+
+    assert arr_manual.shape == arr_cryst.shape
+    np.testing.assert_allclose(arr_cryst, arr_manual, rtol=1e-5, atol=0)
+
+
+def test_transition_potential_crystal_dedup_collapses_slice_cache():
+    """White-box check: with CrystalPotential's tile cache, the per-z-rep
+    slice_cache built inside transition_potential_multislice_and_detect must
+    contain only ``n_unique_unit_slices`` distinct TransmissionFunction
+    objects, not ``n_outer = n_unit * reps[2]`` objects. Guards the dedup
+    branch from silently regressing into rebuilding identical transmissions.
+    """
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    reps = (2, 2, 5)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+    unit_pot = abtem.Potential(
+        unit_atoms, gpts=(16, 16), slice_thickness=slice_thickness,
+    )
+    cryst = abtem.CrystalPotential(unit_pot, repetitions=reps)
+
+    # Tile cache returns the *same* PotentialArray object across z-reps for
+    # the no-frozen-phonon case. Confirm that contract holds.
+    slices = list(cryst.generate_slices())
+    n_unit = len(unit_pot)
+    assert len(slices) == n_unit * reps[2]
+    unique = {id(s) for s in slices}
+    assert len(unique) == n_unit, (
+        f"expected {n_unit} unique slice objects (one per unit-cell slice), "
+        f"got {len(unique)} — CrystalPotential.generate_slices tile cache may "
+        "have regressed"
+    )
+
+

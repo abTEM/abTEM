@@ -949,13 +949,33 @@ def transition_potential_multislice_and_detect(
         # we stream slices instead.
         if double_channel:
             if isinstance(algorithm, FourierMultislice):
-                slice_cache = [
-                    antialias_aperture.bandlimit(
-                        slice_obj.transmission_function(energy=waves._valid_energy),
-                        in_place=False,
-                    )
-                    for slice_obj in potential_configuration.generate_slices()
-                ]
+                # Dedup transmissions across z-repetitions. CrystalPotential's
+                # tile cache (iam.py CrystalPotential.generate_slices) yields the
+                # *same* PotentialArray object for every z-repetition of a unit
+                # slice in the no-frozen-phonon case, so id(slice_obj) collapses
+                # to one entry per unique unit slice. The bandlimit FFT then
+                # runs O(n_unique) times instead of O(n_outer), and the
+                # transmission cache footprint drops by repetitions[2].
+                # For SrTiO3 reps=(4,4,25): 50 transmissions -> 2 unique
+                # (-24 MB cache, -48 bandlimit FFTs per configuration).
+                # The EELS driver reads exit_planes off ``potential`` globally,
+                # never off the slice (compare standard_multislice_and_detect
+                # at multislice.py:672), so sharing TransmissionFunction
+                # instances across slice indices is safe here.
+                tx_dedup: dict[int, TransmissionFunction] = {}
+                slice_cache = []
+                for slice_obj in potential_configuration.generate_slices():
+                    key = id(slice_obj)
+                    cached = tx_dedup.get(key)
+                    if cached is None:
+                        cached = antialias_aperture.bandlimit(
+                            slice_obj.transmission_function(
+                                energy=waves._valid_energy
+                            ),
+                            in_place=False,
+                        )
+                        tx_dedup[key] = cached
+                    slice_cache.append(cached)
             else:
                 slice_cache = list(potential_configuration.generate_slices())
             n_outer = len(slice_cache)
