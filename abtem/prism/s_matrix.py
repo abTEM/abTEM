@@ -1975,16 +1975,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         detectors=None,
         sites=None,
     ):
-        """**Experimental** PRISM-based core-loss scan (Stage 1 MVP).
+        """**Experimental** PRISM-based core-loss scan.
 
         Mirrors :meth:`Probe.transition_potential_scan` but uses the S-matrix
         plane-wave decomposition instead of running a full multislice per
-        scan position. At ``interpolation=(1, 1)`` and against the
-        ``double_channel=False`` branch of the multislice path, the result is
-        bit-equivalent to ``Probe.transition_potential_scan`` (float32 noise
-        level). See
-        :func:`abtem.inelastic.core_loss.prism_transition_potential_scan_mvp`
-        for the algorithm and the Stage 2 plan.
+        scan position. Supports any ``interpolation`` factor. At
+        ``interpolation=(1, 1)`` and against the ``double_channel=False``
+        branch of the multislice path, the result is bit-equivalent to
+        ``Probe.transition_potential_scan`` (float32 noise level). At
+        ``interpolation > 1`` the reduced wave functions are returned at
+        ``window_gpts`` size, matching the elastic :meth:`scan` convention.
+
+        See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan_mvp`
+        for the algorithm and the remaining Stage 3 plan (double-channel,
+        frozen phonons, Dask, GPU).
 
         Parameters
         ----------

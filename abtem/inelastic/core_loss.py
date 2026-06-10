@@ -1033,13 +1033,17 @@ def prism_transition_potential_scan_mvp(
     detectors=None,
     sites=None,
 ):
-    """**Experimental** Stage-1 PRISM-EELS MVP.
+    """**Experimental** PRISM-EELS driver (Stage 1 + Stage 2).
 
     Single-channel, single phonon configuration, single transition potential,
-    final-exit-plane only, ``interpolation=(1,1)`` only. At
-    ``interpolation=(1,1)`` this is bit-equivalent (to float32 noise) to
-    ``Probe.transition_potential_scan(..., double_channel=False)`` — the two
-    paths express the same numerical work, just in different bases.
+    final-exit-plane only. Supports any ``interpolation`` factor; at
+    ``interpolation=(1,1)`` the output is bit-equivalent (to float32 noise)
+    to ``Probe.transition_potential_scan(..., double_channel=False)``. At
+    ``interpolation > 1`` the reduction follows the same crop pattern as
+    the elastic ``SMatrixArray._reduce_to_waves`` (s_matrix.py:996-1033):
+    each scan position's wave function is reconstructed inside a window of
+    ``window_gpts = ceil(gpts / interpolation)``, and the detector sees
+    that windowed wave function rather than the full grid.
 
     Algorithm (single-channel form, matching
     ``transition_potential_multislice_and_detect``'s ``else`` branch):
@@ -1051,22 +1055,29 @@ def prism_transition_potential_scan_mvp(
           step (transmission × Fresnel propagator).
        b. For each scattering site in slice ``i``:
 
-          - Apply the transition potential to the S-matrix state at the site
-            (uncropped because ``interpolation=(1,1)`` → window = full grid).
-          - Reduce per-position: ``ψ(R) = Σ_k scattered(k) · coeff(k, R)``
-            for each scan position R, where the coefficients mirror the
-            elastic SMatrix.scan path (bare position phase ramp × CTF
-            coefficients normalised by ``sqrt(Σ_k |ctf(k)|²)`` —
-            ``_calculate_ctf_coefficients`` in s_matrix.py).
+          - Apply the transition potential to the S-matrix state at the site.
+          - Reduce per-position to wave functions:
+
+            * **interp=(1,1)**: full-grid contraction
+              ``ψ(R) = Σ_k scattered(k) · coeff(k, R)``.
+            * **interp > 1**: ``wrapped_crop_2d`` the scattered S-matrix to
+              the bounding window over all scan positions, contract with the
+              coefficients, then ``batch_crop_2d`` to per-position
+              ``window_gpts`` windows. Mirrors
+              ``SMatrixArray._reduce_to_waves``.
+
+          - Coefficients are bare position phase ramps × CTF coefficients
+            normalised by ``sqrt(Σ_k |ctf(k)|²)``, matching
+            ``_calculate_ctf_coefficients`` (s_matrix.py:1055-1065).
           - Detect, sum over transitions, accumulate into the per-position
             measurement buffer.
 
     The single-channel approximation detects immediately at the scatter
     slice without propagating the scattered wave further through the
     potential. Double-channel propagation (the ``double_channel=True``
-    branch of the multislice path) is Stage 2 along with ``interpolation > 1``
-    per-site cropping for true linear scaling, frozen-phonon ensembles, and
-    GPU dispatch. See issue #287 for the Stage 2 plan.
+    branch of the multislice path), full per-site cropping for true linear
+    scaling, frozen-phonon ensembles, GPU dispatch, Dask wiring, and
+    multi-exit-plane support remain Stage 3 work (issue #287).
 
     Parameters
     ----------
@@ -1097,16 +1108,16 @@ def prism_transition_potential_scan_mvp(
         allocate_multislice_measurements,
         conventional_multislice_step,
     )
-    from abtem.prism.utils import plane_waves
+    from abtem.prism.utils import (
+        batch_crop_2d,
+        minimum_crop,
+        plane_waves,
+        wrapped_crop_2d,
+    )
     from abtem.scan import BaseScan, validate_scan
     from abtem.slicing import SliceIndexedAtoms
     from abtem.waves import Waves
 
-    if s_matrix.interpolation != (1, 1):
-        raise NotImplementedError(
-            "PRISM-EELS MVP currently supports interpolation=(1, 1) only; "
-            "see issue #287 for the Stage 2 plan."
-        )
     if s_matrix.downsample is not False:
         raise NotImplementedError(
             "PRISM-EELS MVP requires downsample=False so the S-matrix and the "
@@ -1232,13 +1243,34 @@ def prism_transition_potential_scan_mvp(
     coefficients = (position_coefficients * ctf_array[None, :]).astype(np.complex64)
     # coefficients: (n_positions, n_k)
 
+    # --- Window properties ---
+    # For interpolation>1 PRISM crops the reduced wave functions to a window
+    # per scan position. window_gpts and window_extent shrink with
+    # interpolation; at interp=(1,1) they equal the full grid and the crop
+    # path is bypassed.
+    interpolation = s_matrix.interpolation
+    sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
+    if interpolation == (1, 1):
+        window_gpts = gpts
+        window_extent = extent
+        crop_path = False
+    else:
+        # Mirror SMatrix.window_gpts (s_matrix.py:1620-1625).
+        from abtem.core.utils import safe_ceiling_int
+        window_gpts = (
+            safe_ceiling_int(gpts[0] / interpolation[0]),
+            safe_ceiling_int(gpts[1] / interpolation[1]),
+        )
+        window_extent = (window_gpts[0] * sampling[0], window_gpts[1] * sampling[1])
+        crop_path = True
+
     # --- Allocate measurements with the scan shape ---
     scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
     dummy_scan_waves = Waves(
-        xp.zeros(scan_shape + gpts, dtype=np.complex64),
+        xp.zeros(scan_shape + window_gpts, dtype=np.complex64),
         energy=energy,
-        extent=extent,
+        extent=window_extent,
         ensemble_axes_metadata=scan_axes_metadata,
     )
     measurements = allocate_multislice_measurements(
@@ -1273,13 +1305,31 @@ def prism_transition_potential_scan_mvp(
             # adds the double-channel inner-loop propagation.
 
             # Reduce per-position: contract over wave_vectors axis.
-            # scattered.array shape: (n_T, n_k, H, W)
-            # coefficients shape: (n_positions, n_k)
-            # result shape: (n_T, n_positions, H, W)
+            # scattered.array shape: (n_T, n_k, H, W); coefficients (n_positions, n_k).
             scattered_array = scattered.array
-            waves_at_positions = xp.einsum(
-                "...kHW,pk->...pHW", scattered_array, coefficients
-            )
+
+            if crop_path:
+                # interpolation > 1: PRISM cropping pattern mirroring
+                # SMatrixArray._reduce_to_waves (s_matrix.py:996-1033).
+                # window_offset is (0, 0) here since we never pre-cropped the
+                # S-matrix during construction (downsample=False, full grid).
+                pixel_positions = positions / xp.asarray(sampling, dtype=np.float32)
+                crop_corner, size, corners = minimum_crop(
+                    pixel_positions, window_gpts
+                )
+                cropped = wrapped_crop_2d(scattered_array, crop_corner, size)
+                # tensordot: (n_positions, n_k) × (n_T, n_k, h, w) -> (n_positions, n_T, h, w)
+                reduced = xp.tensordot(coefficients, cropped, axes=[-1, -3])
+                # Move n_T from axis 1 to axis 0 to match Stage-1 layout.
+                reduced = xp.moveaxis(reduced, 1, 0)
+                # Per-position windows: (n_T, n_positions, *window_gpts)
+                waves_at_positions = batch_crop_2d(reduced, corners, window_gpts)
+            else:
+                # interpolation = (1,1): full-grid reduction, no cropping.
+                # result shape: (n_T, n_positions, H, W)
+                waves_at_positions = xp.einsum(
+                    "...kHW,pk->...pHW", scattered_array, coefficients
+                )
 
             # Reshape positions axis back into the scan shape.
             position_waves_shape = (
@@ -1293,7 +1343,7 @@ def prism_transition_potential_scan_mvp(
             position_waves = Waves(
                 waves_at_positions,
                 energy=energy,
-                extent=extent,
+                extent=window_extent,
                 ensemble_axes_metadata=[
                     OrdinalAxis(values=tuple(range(n_T)))
                 ]

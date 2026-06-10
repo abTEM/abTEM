@@ -277,28 +277,78 @@ def test_prism_eels_mvp_matches_multislice_eels_at_interp_1():
     np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
 
 
-def test_smatrix_transition_potential_scan_rejects_interpolation_gt_one():
-    """Until Stage 2 lands, ``interpolation > 1`` should raise a clear
-    NotImplementedError rather than silently producing wrong results."""
-    atoms = ase.build.bulk("Si", cubic=True)
-    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=2.7)
-    s_matrix = abtem.SMatrix(
-        potential=potential,
-        energy=100e3,
-        semiangle_cutoff=20,
-        interpolation=2,
-        downsample=False,
-        device="cpu",
+def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output():
+    """Stage-2 ``interpolation > 1`` runs through the cropping pattern from
+    SMatrixArray._reduce_to_waves (s_matrix.py:996-1033) and yields a
+    diffraction pattern at ``window_gpts`` size rather than the full
+    ``gpts``. The same windowing characterises the elastic SMatrix.scan
+    path; PRISM-EELS inherits the convention.
+    """
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 2)
+    slice_thickness = float(atoms.cell[2, 2]) / 2
+    # gpts must be divisible by interpolation.
+    potential = abtem.Potential(
+        atoms, gpts=(64, 64), slice_thickness=slice_thickness
     )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    rng = np.random.default_rng(0)
+    tp_array = (
+        rng.standard_normal((2, 64, 64))
+        + 1j * rng.standard_normal((2, 64, 64))
+    ).astype(np.complex64)
     tp = TransitionPotentialArray(
         Z=14,
-        array=np.zeros((1, 32, 32), dtype=np.complex64),
-        energy=100e3,
+        array=tp_array,
+        energy=energy,
         extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
         metadata={"Z": 14, "n": 1, "l": 0},
     )
-    with pytest.raises(NotImplementedError, match=r"interpolation"):
-        s_matrix.transition_potential_scan(
-            transition_potentials=tp, scan=(0, 0), sites=atoms,
-        )
+
+    detector = abtem.PixelatedDetector(max_angle=30)
+
+    # interp=(1, 1) gives the full-grid diffraction shape; interp=(2, 2)
+    # gives a smaller pattern derived from the cropped window. Confirm both
+    # match the corresponding shapes produced by the elastic SMatrix.scan
+    # path, so the windowing wiring is on the correct convention.
+    s1 = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
+        interpolation=1, downsample=False, device="cpu",
+    )
+    s2 = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
+        interpolation=2, downsample=False, device="cpu",
+    )
+
+    elastic_1 = s1.scan(scan=(0, 0), detectors=detector, lazy=False).compute()
+    elastic_2 = s2.scan(scan=(0, 0), detectors=detector, lazy=False).compute()
+    eels_1 = s1.transition_potential_scan(
+        transition_potentials=tp, scan=(0, 0), detectors=detector, sites=atoms,
+    )
+    eels_2 = s2.transition_potential_scan(
+        transition_potentials=tp, scan=(0, 0), detectors=detector, sites=atoms,
+    )
+
+    # The EELS diffraction pattern shape must equal the elastic one at the
+    # same interpolation factor — that's the test that the cropping wiring
+    # is on the right convention.
+    assert eels_1.shape[-2:] == elastic_1.shape[-2:], (
+        f"interp=1: EELS shape {eels_1.shape} vs elastic {elastic_1.shape}"
+    )
+    assert eels_2.shape[-2:] == elastic_2.shape[-2:], (
+        f"interp=2: EELS shape {eels_2.shape} vs elastic {elastic_2.shape}"
+    )
+    # And the two interpolation factors must yield genuinely different
+    # window shapes (i.e. the crop path is exercised, not a no-op).
+    assert eels_1.shape[-2:] != eels_2.shape[-2:], (
+        "interp=1 and interp=2 produced the same shape — crop path may be a "
+        f"no-op (both {eels_1.shape[-2:]})"
+    )
+
+    # Output is non-zero and finite (sanity).
+    arr_2 = np.asarray(eels_2.array)
+    assert np.all(np.isfinite(arr_2))
+    assert np.abs(arr_2).max() > 0
