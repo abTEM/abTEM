@@ -1968,6 +1968,62 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             lazy=lazy,
         )
 
+    def transition_potential_scan(
+        self,
+        transition_potentials,
+        scan=None,
+        detectors=None,
+        sites=None,
+    ):
+        """**Experimental** PRISM-based core-loss scan (Stage 1 MVP).
+
+        Mirrors :meth:`Probe.transition_potential_scan` but uses the S-matrix
+        plane-wave decomposition instead of running a full multislice per
+        scan position. At ``interpolation=(1, 1)`` and against the
+        ``double_channel=False`` branch of the multislice path, the result is
+        bit-equivalent to ``Probe.transition_potential_scan`` (float32 noise
+        level). See
+        :func:`abtem.inelastic.core_loss.prism_transition_potential_scan_mvp`
+        for the algorithm and the Stage 2 plan.
+
+        Parameters
+        ----------
+        transition_potentials : BaseTransitionPotential
+            Atomic transition potential (single instance — Stage 1 does not
+            accept a list).
+        scan : BaseScan or tuple, optional
+            Scan positions. Defaults to a ``GridScan`` over the full extent
+            at Nyquist sampling, mirroring :meth:`scan`.
+        detectors : BaseDetector or list, optional
+            Detectors. Defaults to a ``FlexibleAnnularDetector``.
+        sites : Atoms or SliceIndexedAtoms, optional
+            Scattering sites. Auto-extracted from the potential if not given.
+
+        Returns
+        -------
+        BaseMeasurements or list of BaseMeasurements
+            One measurement per detector. Always eager — Dask wiring is part
+            of the Stage 2 follow-up (see issue #287).
+        """
+        from abtem.inelastic.core_loss import (
+            prism_transition_potential_scan_mvp,
+        )
+
+        if scan is None:
+            scan = GridScan(
+                start=(0, 0),
+                end=self.extent,
+                sampling=self.dummy_probes().aperture.nyquist_sampling,
+            )
+
+        return prism_transition_potential_scan_mvp(
+            s_matrix=self,
+            transition_potentials=transition_potentials,
+            scan=scan,
+            detectors=detectors,
+            sites=sites,
+        )
+
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
         extra_ensemble_axes_shape = ()
         extra_ensemble_axes_metadata = []

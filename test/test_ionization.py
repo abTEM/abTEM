@@ -186,3 +186,119 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
     np.testing.assert_allclose(arr_cryst, arr_manual, rtol=1e-5, atol=0)
 
 
+
+
+def test_prism_eels_mvp_matches_multislice_eels_at_interp_1():
+    """Stage-1 MVP: SMatrix.transition_potential_scan at interpolation=(1,1)
+    reproduces Probe.transition_potential_scan on a small Si cell.
+    Both paths express the same physics — forward multislice through the
+    potential, scatter via the transition potential at each site, and
+    detect — just decomposed in the plane-wave basis vs a probe per
+    scan position. Stage 2 (interpolation > 1, S2_crop linear scaling,
+    frozen phonons, GPU) is tracked in issue #287.
+    """
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    reps = (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+    atoms = unit_atoms * reps
+
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device="cpu"
+    )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    rng = np.random.default_rng(0)
+    tp_array = (
+        rng.standard_normal((2, 32, 32))
+        + 1j * rng.standard_normal((2, 32, 32))
+    ).astype(np.complex64)
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=tp_array,
+        energy=energy,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.PixelatedDetector(max_angle=40)
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+    )
+    probe.grid.match(potential)
+    # ``double_channel=False`` matches the MVP's single-channel scope: scatter
+    # at the scatter slice and detect immediately, without propagating the
+    # scattered wave through the remaining potential. The multislice EELS
+    # default is ``double_channel=True``, which propagates and detects later
+    # at exit_planes; comparing against the double-channel path would be
+    # apples-to-oranges since the MVP doesn't (yet) do the inner propagation.
+    res_multislice = probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=tp,
+        scan=(0, 0),
+        detectors=detector,
+        sites=atoms,
+        double_channel=False,
+        lazy=False,
+    ).compute()
+    arr_multislice = np.asarray(res_multislice.array)
+
+    # ``downsample=False`` keeps the S-matrix on the same gpts as the probe;
+    # the default ``downsample="cutoff"`` would resample to the antialias
+    # cutoff and break the comparison.
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle_cutoff,
+        interpolation=1,
+        downsample=False,
+        device="cpu",
+    )
+    res_prism = s_matrix.transition_potential_scan(
+        transition_potentials=tp,
+        scan=(0, 0),
+        detectors=detector,
+        sites=atoms,
+    )
+    arr_prism = np.asarray(res_prism.array)
+
+    assert arr_multislice.shape == arr_prism.shape, (
+        f"shape mismatch: multislice {arr_multislice.shape} vs "
+        f"PRISM {arr_prism.shape}"
+    )
+    # Bit-equivalent at interpolation=(1,1): the two paths express the same
+    # numerical work, just in different bases. Measured max rel diff ~5e-7
+    # on this setup (float32 FFT plan-ordering noise); 1e-5 leaves
+    # comfortable headroom for run-to-run variation without masking real
+    # regressions.
+    np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
+
+
+def test_smatrix_transition_potential_scan_rejects_interpolation_gt_one():
+    """Until Stage 2 lands, ``interpolation > 1`` should raise a clear
+    NotImplementedError rather than silently producing wrong results."""
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(atoms, gpts=(32, 32), slice_thickness=2.7)
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        downsample=False,
+        device="cpu",
+    )
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=np.zeros((1, 32, 32), dtype=np.complex64),
+        energy=100e3,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+    with pytest.raises(NotImplementedError, match=r"interpolation"):
+        s_matrix.transition_potential_scan(
+            transition_potentials=tp, scan=(0, 0), sites=atoms,
+        )

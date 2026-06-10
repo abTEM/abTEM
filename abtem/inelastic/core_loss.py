@@ -1026,6 +1026,300 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         self.to_images().show(**kwargs)
 
 
+def prism_transition_potential_scan_mvp(
+    s_matrix: "SMatrix",
+    transition_potentials,
+    scan,
+    detectors=None,
+    sites=None,
+):
+    """**Experimental** Stage-1 PRISM-EELS MVP.
+
+    Single-channel, single phonon configuration, single transition potential,
+    final-exit-plane only, ``interpolation=(1,1)`` only. At
+    ``interpolation=(1,1)`` this is bit-equivalent (to float32 noise) to
+    ``Probe.transition_potential_scan(..., double_channel=False)`` — the two
+    paths express the same numerical work, just in different bases.
+
+    Algorithm (single-channel form, matching
+    ``transition_potential_multislice_and_detect``'s ``else`` branch):
+
+    1. Build the plane-wave S-matrix state at slice 0 (no potential applied).
+    2. For each potential slice ``i``:
+
+       a. Advance the state through slice ``i`` via the standard multislice
+          step (transmission × Fresnel propagator).
+       b. For each scattering site in slice ``i``:
+
+          - Apply the transition potential to the S-matrix state at the site
+            (uncropped because ``interpolation=(1,1)`` → window = full grid).
+          - Reduce per-position: ``ψ(R) = Σ_k scattered(k) · coeff(k, R)``
+            for each scan position R, where the coefficients mirror the
+            elastic SMatrix.scan path (bare position phase ramp × CTF
+            coefficients normalised by ``sqrt(Σ_k |ctf(k)|²)`` —
+            ``_calculate_ctf_coefficients`` in s_matrix.py).
+          - Detect, sum over transitions, accumulate into the per-position
+            measurement buffer.
+
+    The single-channel approximation detects immediately at the scatter
+    slice without propagating the scattered wave further through the
+    potential. Double-channel propagation (the ``double_channel=True``
+    branch of the multislice path) is Stage 2 along with ``interpolation > 1``
+    per-site cropping for true linear scaling, frozen-phonon ensembles, and
+    GPU dispatch. See issue #287 for the Stage 2 plan.
+
+    Parameters
+    ----------
+    s_matrix : SMatrix
+        S-matrix specification. Must have ``interpolation == (1, 1)``.
+    transition_potentials : BaseTransitionPotential
+        Atomic transition potential.
+    scan : BaseScan or tuple
+        Scan positions.
+    detectors : BaseDetector or list, optional
+        Detectors. Defaults to ``FlexibleAnnularDetector()``.
+    sites : Atoms or SliceIndexedAtoms, optional
+        Scattering sites. Auto-extracted from the potential if not given,
+        following the same logic as
+        ``transition_potential_multislice_and_detect``.
+
+    Returns
+    -------
+    BaseMeasurements or list of BaseMeasurements
+        One measurement per detector.
+    """
+    # Imports kept local so the module-level surface stays minimal while the
+    # MVP matures; promotion to top-level imports comes with Stage 2.
+    from abtem.antialias import AntialiasAperture
+    from abtem.detectors import FlexibleAnnularDetector, validate_detectors
+    from abtem.multislice import (
+        FresnelPropagator,
+        allocate_multislice_measurements,
+        conventional_multislice_step,
+    )
+    from abtem.prism.utils import plane_waves
+    from abtem.scan import BaseScan, validate_scan
+    from abtem.slicing import SliceIndexedAtoms
+    from abtem.waves import Waves
+
+    if s_matrix.interpolation != (1, 1):
+        raise NotImplementedError(
+            "PRISM-EELS MVP currently supports interpolation=(1, 1) only; "
+            "see issue #287 for the Stage 2 plan."
+        )
+    if s_matrix.downsample is not False:
+        raise NotImplementedError(
+            "PRISM-EELS MVP requires downsample=False so the S-matrix and the "
+            "reference Probe.transition_potential_scan share the same gpts. "
+            "Construct the SMatrix with ``downsample=False``."
+        )
+    if isinstance(transition_potentials, (list, tuple)):
+        if len(transition_potentials) != 1:
+            raise NotImplementedError(
+                "PRISM-EELS MVP supports a single transition potential."
+            )
+        transition_potential = transition_potentials[0]
+    else:
+        transition_potential = transition_potentials
+
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
+    potential = s_matrix.potential
+    energy = s_matrix.energy
+    extent = s_matrix.extent
+    gpts = s_matrix.gpts
+    xp = get_array_module(s_matrix.device)
+
+    # Normalise scan -> BaseScan with squeeze metadata applied to a single
+    # tuple input, matching what ``Probe.transition_potential_scan`` does
+    # internally via the same helper.
+    scan = validate_scan(scan)
+
+    # Detector list
+    if detectors is None:
+        detectors = [FlexibleAnnularDetector()]
+    detectors = validate_detectors(detectors)
+
+    # --- Build initial plane-wave state ---
+    wave_vectors = s_matrix.wave_vectors  # (n_k, 2)
+    wave_vectors_np = np.asarray(wave_vectors)
+    n_k = len(wave_vectors_np)
+
+    s_array = plane_waves(xp.asarray(wave_vectors_np, dtype=np.float32), extent, gpts)
+    # Mirror the normalisation in _build_s_matrix (s_matrix.py:1727)
+    s_array = s_array * (np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:]))
+
+    s_waves = Waves(
+        s_array,
+        energy=energy,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_k)))],
+    )
+
+    # --- Multislice machinery ---
+    antialias_aperture = AntialiasAperture()
+    propagator = FresnelPropagator()
+
+    def _step(waves, transmission):
+        return conventional_multislice_step(
+            waves,
+            potential_slice=transmission,
+            propagator=propagator,
+            antialias_aperture=antialias_aperture,
+        )
+
+    transmissions = [
+        antialias_aperture.bandlimit(
+            s.transmission_function(energy=energy), in_place=False
+        )
+        for s in potential.generate_slices()
+    ]
+    n_slices = len(transmissions)
+
+    # --- Transition potential setup ---
+    transition_potential.grid.match(s_waves)
+    transition_potential.accelerator.match(s_waves)
+    Z = transition_potential.Z
+
+    # --- Site extraction (mirror transition_potential_multislice_and_detect) ---
+    if sites is None and hasattr(potential, "get_sliced_atoms"):
+        sites = potential.get_sliced_atoms()
+    elif sites is None and hasattr(potential, "atoms"):
+        sites = potential.atoms
+    elif sites is None and hasattr(potential, "potential_unit"):
+        if hasattr(potential.potential_unit, "get_transformed_atoms"):
+            unit_atoms = potential.potential_unit.get_transformed_atoms()
+            sites = unit_atoms * potential.repetitions
+
+    if isinstance(sites, Atoms):
+        sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
+    elif not isinstance(sites, SliceIndexedAtoms):
+        raise ValueError(
+            "Could not derive scattering sites from the potential "
+            f"({type(potential).__name__}). Pass ``sites=`` explicitly."
+        )
+
+    # --- Position + CTF coefficients ---
+    # Mirror what the elastic SMatrix.scan path does in
+    # ``_batch_reduce_to_measurements`` (s_matrix.py:1067-1118): bare
+    # position phase ramps × CTF coefficients. The CTF normalisation
+    # handles the per-k aperture weighting (not just a uniform 1/sqrt(N_k));
+    # _calculate_ctf_coefficients (s_matrix.py:1055-1065) normalises by
+    # sqrt(sum_k |ctf(k)|^2) so the reduced wave-function amplitude lines up
+    # with what Probe.build / Probe.multislice produce.
+    from abtem.transfer import CTF
+    positions_np = np.asarray(scan.get_positions()).reshape((-1, 2))
+    positions = xp.asarray(positions_np, dtype=np.float32)
+    n_positions = positions.shape[0]
+    wave_vectors_xp = xp.asarray(wave_vectors_np, dtype=np.float32)
+
+    position_coefficients = complex_exponential(
+        -2.0 * np.float32(np.pi) * positions[:, 0:1] * wave_vectors_xp[None, :, 0]
+    ) * complex_exponential(
+        -2.0 * np.float32(np.pi) * positions[:, 1:2] * wave_vectors_xp[None, :, 1]
+    )
+
+    ctf = CTF(semiangle_cutoff=s_matrix.semiangle_cutoff, energy=energy)
+    ctf.grid.match(s_matrix.dummy_probes())
+    alpha = (
+        xp.sqrt(wave_vectors_xp[:, 0] ** 2 + wave_vectors_xp[:, 1] ** 2)
+        * np.float32(ctf.wavelength)
+    )
+    phi = xp.arctan2(wave_vectors_xp[:, 1], wave_vectors_xp[:, 0])
+    ctf_array = ctf._evaluate_from_angular_grid(alpha, phi)
+    ctf_array = ctf_array / xp.sqrt((ctf_array**2).sum(axis=-1, keepdims=True))
+    coefficients = (position_coefficients * ctf_array[None, :]).astype(np.complex64)
+    # coefficients: (n_positions, n_k)
+
+    # --- Allocate measurements with the scan shape ---
+    scan_axes_metadata = scan.ensemble_axes_metadata
+    scan_shape = scan.shape
+    dummy_scan_waves = Waves(
+        xp.zeros(scan_shape + gpts, dtype=np.complex64),
+        energy=energy,
+        extent=extent,
+        ensemble_axes_metadata=scan_axes_metadata,
+    )
+    measurements = allocate_multislice_measurements(
+        dummy_scan_waves, detectors, (), []
+    )
+
+    # --- Main loop ---
+    for slice_index, transmission in enumerate(transmissions):
+        s_waves = _step(s_waves, transmission)
+
+        sites_this_slice = sites.get_atoms_in_slices(
+            slice_index, atomic_number=Z
+        )
+        if len(sites_this_slice) == 0:
+            continue
+
+        for atom in sites_this_slice:
+            site_xy = np.array(
+                [atom.position[0], atom.position[1]], dtype=np.float32
+            )
+
+            # scatter() returns Waves with shape (n_sites_batch*n_T, n_k, H, W)
+            # For a single site batch this is (n_T, n_k, H, W).
+            scattered = transition_potential.scatter(s_waves, site_xy)
+
+            # Single-channel: detect at the scatter slice, do NOT propagate
+            # the scattered state through the remaining potential. This
+            # matches transition_potential_multislice_and_detect's
+            # ``not double_channel`` branch in multislice.py — the scattered
+            # inelastic wave is taken to propagate through vacuum to the
+            # detector (Brown's single-channel approximation). Stage 2
+            # adds the double-channel inner-loop propagation.
+
+            # Reduce per-position: contract over wave_vectors axis.
+            # scattered.array shape: (n_T, n_k, H, W)
+            # coefficients shape: (n_positions, n_k)
+            # result shape: (n_T, n_positions, H, W)
+            scattered_array = scattered.array
+            waves_at_positions = xp.einsum(
+                "...kHW,pk->...pHW", scattered_array, coefficients
+            )
+
+            # Reshape positions axis back into the scan shape.
+            position_waves_shape = (
+                waves_at_positions.shape[:-3]
+                + scan_shape
+                + waves_at_positions.shape[-2:]
+            )
+            waves_at_positions = waves_at_positions.reshape(position_waves_shape)
+
+            n_T = waves_at_positions.shape[0]
+            position_waves = Waves(
+                waves_at_positions,
+                energy=energy,
+                extent=extent,
+                ensemble_axes_metadata=[
+                    OrdinalAxis(values=tuple(range(n_T)))
+                ]
+                + list(scan_axes_metadata),
+            )
+
+            for det_idx, detector in enumerate(detectors):
+                m = detector.detect(position_waves)
+                # Sum over the leading transitions axis.
+                m = m.sum((0,))
+                # Accumulate
+                measurements[det_idx].array[...] += m.array
+
+    # Squeeze out single-point-scan axes the same way the multislice path
+    # does (via reduce_ensemble inside Waves.transition_potential_multislice
+    # — see waves.py:1075). This is what makes ``scan=(0, 0)`` return a bare
+    # detector-shaped measurement instead of a ``(1, *detector_shape)``
+    # array with a singleton scan axis.
+    from abtem.waves import reduce_ensemble
+    measurements = [reduce_ensemble(m) for m in measurements]
+
+    if len(measurements) == 1:
+        return measurements[0]
+    return measurements
+
+
 def linear_scaling_transition_multislice(
     S1: SMatrix, S2: SMatrix, scan, transition_potentials, reverse_multislice=False
 ):
