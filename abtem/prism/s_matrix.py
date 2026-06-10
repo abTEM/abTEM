@@ -1974,27 +1974,27 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         scan=None,
         detectors=None,
         sites=None,
+        double_channel: bool = False,
     ):
         """**Experimental** PRISM-based core-loss scan.
 
         Mirrors :meth:`Probe.transition_potential_scan` but uses the S-matrix
         plane-wave decomposition instead of running a full multislice per
-        scan position. Supports any ``interpolation`` factor. At
-        ``interpolation=(1, 1)`` and against the ``double_channel=False``
-        branch of the multislice path, the result is bit-equivalent to
-        ``Probe.transition_potential_scan`` (float32 noise level). At
-        ``interpolation > 1`` the reduced wave functions are returned at
+        scan position. Supports any ``interpolation`` factor and both
+        single- and double-channel modes. At ``interpolation=(1, 1)`` the
+        result is bit-equivalent to ``Probe.transition_potential_scan``
+        (float32 noise) against the matching ``double_channel`` setting.
+        At ``interpolation > 1`` the reduced wave functions are returned at
         ``window_gpts`` size, matching the elastic :meth:`scan` convention.
 
         See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan_mvp`
-        for the algorithm and the remaining Stage 3 plan (double-channel,
-        frozen phonons, Dask, GPU).
+        for the algorithm and remaining Stage-3 work (per-site cropping for
+        true linear scaling, frozen phonons, Dask, GPU).
 
         Parameters
         ----------
         transition_potentials : BaseTransitionPotential
-            Atomic transition potential (single instance — Stage 1 does not
-            accept a list).
+            Atomic transition potential (single instance).
         scan : BaseScan or tuple, optional
             Scan positions. Defaults to a ``GridScan`` over the full extent
             at Nyquist sampling, mirroring :meth:`scan`.
@@ -2002,12 +2002,18 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             Detectors. Defaults to a ``FlexibleAnnularDetector``.
         sites : Atoms or SliceIndexedAtoms, optional
             Scattering sites. Auto-extracted from the potential if not given.
+        double_channel : bool, optional
+            If True, propagate the scattered wave through the remaining
+            potential slices to the exit before detection (matching the
+            multislice EELS ``double_channel=True`` branch). If False
+            (default), detect immediately at the scatter slice — Brown's
+            single-channel approximation.
 
         Returns
         -------
         BaseMeasurements or list of BaseMeasurements
-            One measurement per detector. Always eager — Dask wiring is part
-            of the Stage 2 follow-up (see issue #287).
+            One measurement per detector. Always eager — Dask wiring is
+            Stage-3 work tracked in issue #287.
         """
         from abtem.inelastic.core_loss import (
             prism_transition_potential_scan_mvp,
@@ -2026,6 +2032,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             scan=scan,
             detectors=detectors,
             sites=sites,
+            double_channel=double_channel,
         )
 
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):

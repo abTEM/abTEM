@@ -1032,18 +1032,26 @@ def prism_transition_potential_scan_mvp(
     scan,
     detectors=None,
     sites=None,
+    double_channel: bool = False,
 ):
-    """**Experimental** PRISM-EELS driver (Stage 1 + Stage 2).
+    """**Experimental** PRISM-EELS driver (Stages 1, 2, 3a).
 
-    Single-channel, single phonon configuration, single transition potential,
-    final-exit-plane only. Supports any ``interpolation`` factor; at
-    ``interpolation=(1,1)`` the output is bit-equivalent (to float32 noise)
-    to ``Probe.transition_potential_scan(..., double_channel=False)``. At
-    ``interpolation > 1`` the reduction follows the same crop pattern as
-    the elastic ``SMatrixArray._reduce_to_waves`` (s_matrix.py:996-1033):
-    each scan position's wave function is reconstructed inside a window of
+    Single phonon configuration, single transition potential, final-exit-plane
+    only. Supports any ``interpolation`` factor and both single- and
+    double-channel modes. At ``interpolation=(1,1)`` the output is
+    bit-equivalent (to float32 noise) to
+    ``Probe.transition_potential_scan`` at the matching ``double_channel``
+    setting. At ``interpolation > 1`` the reduction follows the same crop
+    pattern as the elastic ``SMatrixArray._reduce_to_waves``
+    (s_matrix.py:996-1033): each scan position's wave function is
+    reconstructed inside a window of
     ``window_gpts = ceil(gpts / interpolation)``, and the detector sees
     that windowed wave function rather than the full grid.
+
+    The scatter operation is currently **full-grid**, so this does not
+    deliver the linear-scaling speedup the algorithm promises — that's
+    Stage 3b (per-site cropping of the S-matrix before scatter +
+    windowed inner propagation), tracked in issue #287.
 
     Algorithm (single-channel form, matching
     ``transition_potential_multislice_and_detect``'s ``else`` branch):
@@ -1072,12 +1080,16 @@ def prism_transition_potential_scan_mvp(
           - Detect, sum over transitions, accumulate into the per-position
             measurement buffer.
 
-    The single-channel approximation detects immediately at the scatter
-    slice without propagating the scattered wave further through the
-    potential. Double-channel propagation (the ``double_channel=True``
-    branch of the multislice path), full per-site cropping for true linear
-    scaling, frozen-phonon ensembles, GPU dispatch, Dask wiring, and
-    multi-exit-plane support remain Stage 3 work (issue #287).
+    ``double_channel=True`` propagates the scattered state through the
+    remaining potential slices to the exit before reducing per-position;
+    ``double_channel=False`` (default) detects immediately at the scatter
+    slice — Brown's single-channel approximation. Both match the
+    corresponding branches of
+    ``transition_potential_multislice_and_detect``.
+
+    Per-site cropping for true linear scaling (Stage 3b), frozen-phonon
+    ensembles, GPU dispatch, Dask wiring, and multi-exit-plane support
+    remain follow-up work (issue #287).
 
     Parameters
     ----------
@@ -1296,13 +1308,20 @@ def prism_transition_potential_scan_mvp(
             # For a single site batch this is (n_T, n_k, H, W).
             scattered = transition_potential.scatter(s_waves, site_xy)
 
-            # Single-channel: detect at the scatter slice, do NOT propagate
-            # the scattered state through the remaining potential. This
-            # matches transition_potential_multislice_and_detect's
-            # ``not double_channel`` branch in multislice.py — the scattered
-            # inelastic wave is taken to propagate through vacuum to the
-            # detector (Brown's single-channel approximation). Stage 2
-            # adds the double-channel inner-loop propagation.
+            if double_channel:
+                # Double-channel: propagate the scattered state through the
+                # remaining potential slices to the final exit before
+                # reducing per position. Mirrors
+                # transition_potential_multislice_and_detect's
+                # ``double_channel`` inner-loop propagation (multislice.py
+                # :990-1009). The MVP currently only supports
+                # final-exit-plane detection, so we propagate once to the
+                # end rather than checking each slice against exit_planes.
+                for inner_transmission in transmissions[slice_index + 1:]:
+                    scattered = _step(scattered, inner_transmission)
+            # else (single-channel): detect at the scatter slice, no further
+            # propagation — Brown's single-channel approximation, matching
+            # transition_potential_multislice_and_detect's ``else`` branch.
 
             # Reduce per-position: contract over wave_vectors axis.
             # scattered.array shape: (n_T, n_k, H, W); coefficients (n_positions, n_k).

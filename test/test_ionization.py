@@ -277,6 +277,77 @@ def test_prism_eels_mvp_matches_multislice_eels_at_interp_1():
     np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
 
 
+def test_prism_eels_mvp_double_channel_matches_multislice_at_interp_1():
+    """Stage-3 double-channel: with ``double_channel=True`` the MVP
+    propagates the scattered wave through the remaining potential slices
+    to the exit before reduction, matching the multislice EELS
+    ``double_channel=True`` branch. At ``interpolation=(1,1)`` the result
+    must again be bit-equivalent to ``Probe.transition_potential_scan``.
+    """
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device="cpu"
+    )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    rng = np.random.default_rng(0)
+    tp_array = (
+        rng.standard_normal((2, 32, 32))
+        + 1j * rng.standard_normal((2, 32, 32))
+    ).astype(np.complex64)
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=tp_array,
+        energy=energy,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.PixelatedDetector(max_angle=40)
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+    )
+    probe.grid.match(potential)
+    res_multislice = probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=tp,
+        scan=(0, 0),
+        detectors=detector,
+        sites=atoms,
+        double_channel=True,
+        lazy=False,
+    ).compute()
+    arr_multislice = np.asarray(res_multislice.array)
+
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle_cutoff,
+        interpolation=1,
+        downsample=False,
+        device="cpu",
+    )
+    res_prism = s_matrix.transition_potential_scan(
+        transition_potentials=tp,
+        scan=(0, 0),
+        detectors=detector,
+        sites=atoms,
+        double_channel=True,
+    )
+    arr_prism = np.asarray(res_prism.array)
+
+    assert arr_multislice.shape == arr_prism.shape
+    # Measured max rel diff ~6e-7 (float32 FFT plan-ordering noise).
+    np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
+
+
 def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output():
     """Stage-2 ``interpolation > 1`` runs through the cropping pattern from
     SMatrixArray._reduce_to_waves (s_matrix.py:996-1033) and yields a
