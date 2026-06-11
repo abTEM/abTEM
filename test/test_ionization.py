@@ -423,3 +423,85 @@ def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output():
     arr_2 = np.asarray(eels_2.array)
     assert np.all(np.isfinite(arr_2))
     assert np.abs(arr_2).max() > 0
+
+
+def test_prism_eels_interp_2_accuracy_vs_multislice():
+    """Stage 3b: the total integrated EELS signal at interp=2 should be
+    within ~10% of the multislice reference (Brown et al. Sec. IV B).
+
+    We compare the angle-integrated spatial map because the smaller FFT grid
+    at interp>1 redistributes intensity among angular bins — the same effect
+    as in elastic PRISM.  The total signal is the physically meaningful
+    quantity for EELS mapping.
+
+    The window must be large enough to capture the transition potential.
+    A random (non-localized) TP requires a large window; with gpts=128 and
+    interp=2, window_gpts=64 gives adequate coverage.
+    """
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+    potential = abtem.Potential(
+        atoms, gpts=(128, 128), slice_thickness=slice_thickness, device="cpu"
+    )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    from abtem.inelastic.core_loss import energy2sigma
+    rng = np.random.default_rng(42)
+    sampling = tuple(e / g for e, g in zip(potential.extent, (128, 128)))
+    y = np.arange(128).astype(np.float32) * sampling[0]
+    x = np.arange(128).astype(np.float32) * sampling[1]
+    yy, xx = np.meshgrid(y, x, indexing="ij")
+    sigma_gauss = 0.5
+    gauss = np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma_gauss ** 2)).astype(np.float32)
+    raw = (
+        rng.standard_normal((2, 128, 128))
+        + 1j * rng.standard_normal((2, 128, 128))
+    ).astype(np.complex64)
+    real_space_tp = raw * gauss[None]
+    tp_array = np.fft.fft2(real_space_tp) / energy2sigma(energy)
+    tp_array = tp_array.astype(np.complex64)
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=tp_array,
+        energy=energy,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.FlexibleAnnularDetector()
+    scan = abtem.GridScan(
+        start=(0, 0),
+        end=(unit_atoms.cell[0, 0], unit_atoms.cell[1, 1]),
+        sampling=0.5, endpoint=False,
+    )
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+    )
+    probe.grid.match(potential)
+    ms = probe.transition_potential_scan(
+        potential=potential, transition_potentials=tp,
+        scan=scan, detectors=detector, sites=atoms,
+        double_channel=False, lazy=False,
+    ).compute()
+
+    s2 = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
+        interpolation=2, downsample=False, device="cpu",
+    )
+    pr = s2.transition_potential_scan(
+        transition_potentials=tp, scan=scan, detectors=detector, sites=atoms,
+        double_channel=False,
+    )
+
+    ms_map = np.asarray(ms.array).sum(axis=(-2, -1))
+    pr_map = np.asarray(pr.array).sum(axis=(-2, -1))
+
+    total_error = np.sqrt(np.sum((ms_map - pr_map) ** 2) / np.sum(ms_map ** 2))
+    assert total_error < 0.10, (
+        f"PRISM-EELS interp=2 total integrated error {total_error:.1%} exceeds 10%"
+    )
