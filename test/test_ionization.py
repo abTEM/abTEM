@@ -491,3 +491,70 @@ def test_prism_eels_interp_2_accuracy_vs_multislice():
     assert total_error < 0.10, (
         f"PRISM-EELS interp=2 total integrated error {total_error:.1%} exceeds 10%"
     )
+
+
+@pytest.mark.parametrize("double_channel", [False, True])
+def test_prism_eels_exit_planes_match_multislice(double_channel):
+    """PRISM-EELS with exit_planes produces the same thickness-series as
+    multislice at interpolation=(1,1)."""
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness,
+        exit_planes=1, device="cpu",
+    )
+    n_exit = len(potential.exit_planes)
+    assert n_exit > 1, f"expected multiple exit planes, got {potential.exit_planes}"
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    rng = np.random.default_rng(0)
+    tp_array = (
+        rng.standard_normal((2, 32, 32))
+        + 1j * rng.standard_normal((2, 32, 32))
+    ).astype(np.complex64)
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=tp_array,
+        energy=energy,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.PixelatedDetector(max_angle=40)
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+    )
+    probe.grid.match(potential)
+    res_ms = probe.transition_potential_scan(
+        potential=potential, transition_potentials=tp,
+        scan=(0, 0), detectors=detector, sites=atoms,
+        double_channel=double_channel, lazy=False,
+    ).compute()
+    arr_ms = np.asarray(res_ms.array)
+
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
+        interpolation=1, downsample=False, device="cpu",
+    )
+    res_prism = s_matrix.transition_potential_scan(
+        transition_potentials=tp, scan=(0, 0), detectors=detector,
+        sites=atoms, double_channel=double_channel,
+    )
+    arr_prism = np.asarray(res_prism.array)
+
+    assert arr_ms.shape == arr_prism.shape, (
+        f"shape mismatch: multislice {arr_ms.shape} vs PRISM {arr_prism.shape}"
+    )
+    # The entrance plane (exit_planes[0] == -1) records elastic waves in the
+    # multislice path but zeros in PRISM (no pre-scatter reduction is wired).
+    # Compare only the physical exit planes where inelastic signal is produced.
+    if potential.exit_planes[0] == -1:
+        arr_ms = arr_ms[1:]
+        arr_prism = arr_prism[1:]
+    np.testing.assert_allclose(arr_prism, arr_ms, rtol=1e-5, atol=0)

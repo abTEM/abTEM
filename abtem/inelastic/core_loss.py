@@ -4,6 +4,7 @@ import contextlib
 import itertools
 import os
 from abc import ABCMeta, abstractmethod
+from bisect import bisect_left
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -1080,6 +1081,7 @@ def prism_transition_potential_scan(
     from abtem.detectors import FlexibleAnnularDetector, validate_detectors
     from abtem.multislice import (
         FresnelPropagator,
+        _potential_ensemble_shape_and_metadata,
         allocate_multislice_measurements,
         conventional_multislice_step,
     )
@@ -1263,6 +1265,14 @@ def prism_transition_potential_scan(
         pixel_positions, output_window_gpts
     )
 
+    # --- Exit planes ---
+    exit_planes = potential.exit_planes
+    n_exit = len(exit_planes)
+    (
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    ) = _potential_ensemble_shape_and_metadata(potential)
+
     # --- Allocate measurements with the scan shape ---
     scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
@@ -1273,8 +1283,87 @@ def prism_transition_potential_scan(
         ensemble_axes_metadata=scan_axes_metadata,
     )
     measurements = allocate_multislice_measurements(
-        dummy_scan_waves, detectors, (), []
+        dummy_scan_waves,
+        detectors,
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
     )
+
+    # --- Reduce, detect, accumulate helper ---
+    def _reduce_and_record(scattered_window, site_xy, exit_idx):
+        ds_sampling_arr = np.array(ds_sampling, dtype=np.float32)
+        site_pixel_ds = site_xy / ds_sampling_arr
+        site_pixel_int_ds = np.rint(site_pixel_ds).astype(int)
+        site_crop_corner_ds = (
+            int(site_pixel_int_ds[0]) - output_window_gpts[0] // 2,
+            int(site_pixel_int_ds[1]) - output_window_gpts[1] // 2,
+        )
+        site_in_bbox = (
+            site_crop_corner_ds[0] - reduce_crop_corner[0],
+            site_crop_corner_ds[1] - reduce_crop_corner[1],
+        )
+        bbox_scattered = xp.zeros(
+            scattered_window.shape[:-2] + tuple(reduce_size),
+            dtype=np.complex64,
+        )
+        for _n0 in range(-1, 2):
+            for _n1 in range(-1, 2):
+                _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
+                _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
+                _s0 = max(0, -_r0)
+                _s1 = max(0, -_r1)
+                _d0 = max(0, _r0)
+                _d1 = max(0, _r1)
+                _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
+                _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
+                if _d0 >= _e0 or _d1 >= _e1:
+                    continue
+                bbox_scattered[
+                    ..., _d0:_e0, _d1:_e1
+                ] = scattered_window[
+                    ...,
+                    _s0 : _s0 + (_e0 - _d0),
+                    _s1 : _s1 + (_e1 - _d1),
+                ]
+
+        reduced = xp.tensordot(
+            coefficients, bbox_scattered, axes=[-1, -3]
+        )
+        reduced = xp.moveaxis(reduced, 1, 0)
+        waves_at_positions = batch_crop_2d(
+            reduced, reduce_corners, output_window_gpts
+        )
+
+        position_waves_shape = (
+            waves_at_positions.shape[:-3]
+            + scan_shape
+            + waves_at_positions.shape[-2:]
+        )
+        waves_at_positions = waves_at_positions.reshape(
+            position_waves_shape
+        )
+
+        n_T = waves_at_positions.shape[0]
+        position_waves = Waves(
+            waves_at_positions,
+            energy=energy,
+            extent=output_window_extent,
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(n_T)))
+            ]
+            + list(scan_axes_metadata),
+        )
+
+        for det_idx, detector in enumerate(detectors):
+            m = detector.detect(position_waves)
+            m = m.sum((0,))
+            if isinstance(exit_idx, int):
+                idx = () if n_exit == 1 else (exit_idx,)
+                measurements[det_idx].array[idx] += m.array
+            else:
+                measurements[det_idx].array[exit_idx] += (
+                    m.array[(None,) * len(exit_idx)]
+                )
 
     # --- Main loop ---
     for slice_index, transmission in enumerate(transmissions):
@@ -1292,10 +1381,6 @@ def prism_transition_potential_scan(
             )
 
             # --- Windowed scatter (Brown et al. Sec IV B) ---
-            # Scatter and propagate on a scatter_window_gpts-sized
-            # region at full resolution, optionally Fourier-crop to
-            # output_window_gpts, then embed into the bbox for
-            # per-position extraction.
             full_sampling_arr = np.array(full_sampling, dtype=np.float32)
             site_pixel = site_xy / full_sampling_arr
             site_pixel_int = np.rint(site_pixel).astype(int)
@@ -1330,9 +1415,24 @@ def prism_transition_potential_scan(
                         )
                     ],
                 )
-                for inner_transmission in transmissions[
-                    slice_index + 1 :
-                ]:
+
+                if slice_index in exit_planes:
+                    sw_out = sw_waves.array.reshape(
+                        (n_T_val, n_k) + tuple(scatter_window_gpts)
+                    )
+                    if needs_downsample:
+                        sw_out = fft_interpolate(
+                            sw_out, output_window_gpts,
+                            normalization="intensity",
+                        )
+                    _reduce_and_record(
+                        sw_out, site_xy,
+                        exit_planes.index(slice_index),
+                    )
+
+                for inner_idx, inner_transmission in enumerate(
+                    transmissions[slice_index + 1 :]
+                ):
                     inner_t_arr = wrapped_crop_2d(
                         inner_transmission.array,
                         site_crop_corner,
@@ -1344,89 +1444,35 @@ def prism_transition_potential_scan(
                         thickness=inner_transmission.slice_thickness[0],
                         in_place=True,
                     )
-                scattered_window = sw_waves.array.reshape(
-                    (n_T_val, n_k) + tuple(scatter_window_gpts)
+                    abs_inner = slice_index + 1 + inner_idx
+                    if abs_inner in exit_planes:
+                        sw_out = sw_waves.array.reshape(
+                            (n_T_val, n_k) + tuple(scatter_window_gpts)
+                        )
+                        if needs_downsample:
+                            sw_out = fft_interpolate(
+                                sw_out, output_window_gpts,
+                                normalization="intensity",
+                            )
+                        _reduce_and_record(
+                            sw_out, site_xy,
+                            exit_planes.index(abs_inner),
+                        )
+
+            else:
+                if needs_downsample:
+                    scattered_window = fft_interpolate(
+                        scattered_window, output_window_gpts,
+                        normalization="intensity",
+                    )
+
+                ep_start = bisect_left(exit_planes, slice_index)
+                exit_idx = () if n_exit == 1 else (
+                    slice(ep_start, n_exit),
                 )
-
-            if needs_downsample:
-                scattered_window = fft_interpolate(
-                    scattered_window, output_window_gpts,
-                    normalization="intensity",
+                _reduce_and_record(
+                    scattered_window, site_xy, exit_idx
                 )
-
-            # Place windowed result into the bbox-sized reduction
-            # array with periodic tiling.  The bbox from minimum_crop
-            # can exceed the grid size, so the same window must appear
-            # at all periodic copies that overlap the bbox.
-            # Site position in the downsampled grid:
-            ds_sampling_arr = np.array(ds_sampling, dtype=np.float32)
-            site_pixel_ds = site_xy / ds_sampling_arr
-            site_pixel_int_ds = np.rint(site_pixel_ds).astype(int)
-            site_crop_corner_ds = (
-                int(site_pixel_int_ds[0]) - output_window_gpts[0] // 2,
-                int(site_pixel_int_ds[1]) - output_window_gpts[1] // 2,
-            )
-            site_in_bbox = (
-                site_crop_corner_ds[0] - reduce_crop_corner[0],
-                site_crop_corner_ds[1] - reduce_crop_corner[1],
-            )
-            bbox_scattered = xp.zeros(
-                scattered_window.shape[:-2] + tuple(reduce_size),
-                dtype=np.complex64,
-            )
-            for _n0 in range(-1, 2):
-                for _n1 in range(-1, 2):
-                    _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
-                    _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
-                    _s0 = max(0, -_r0)
-                    _s1 = max(0, -_r1)
-                    _d0 = max(0, _r0)
-                    _d1 = max(0, _r1)
-                    _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
-                    _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
-                    if _d0 >= _e0 or _d1 >= _e1:
-                        continue
-                    bbox_scattered[
-                        ..., _d0:_e0, _d1:_e1
-                    ] = scattered_window[
-                        ...,
-                        _s0 : _s0 + (_e0 - _d0),
-                        _s1 : _s1 + (_e1 - _d1),
-                    ]
-
-            reduced = xp.tensordot(
-                coefficients, bbox_scattered, axes=[-1, -3]
-            )
-            reduced = xp.moveaxis(reduced, 1, 0)
-            waves_at_positions = batch_crop_2d(
-                reduced, reduce_corners, output_window_gpts
-            )
-
-            # Reshape positions axis back into the scan shape.
-            position_waves_shape = (
-                waves_at_positions.shape[:-3]
-                + scan_shape
-                + waves_at_positions.shape[-2:]
-            )
-            waves_at_positions = waves_at_positions.reshape(position_waves_shape)
-
-            n_T = waves_at_positions.shape[0]
-            position_waves = Waves(
-                waves_at_positions,
-                energy=energy,
-                extent=output_window_extent,
-                ensemble_axes_metadata=[
-                    OrdinalAxis(values=tuple(range(n_T)))
-                ]
-                + list(scan_axes_metadata),
-            )
-
-            for det_idx, detector in enumerate(detectors):
-                m = detector.detect(position_waves)
-                # Sum over the leading transitions axis.
-                m = m.sum((0,))
-                # Accumulate
-                measurements[det_idx].array[...] += m.array
 
     # Squeeze out single-point-scan axes the same way the multislice path
     # does (via reduce_ensemble inside Waves.transition_potential_multislice
