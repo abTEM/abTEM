@@ -188,15 +188,9 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
 
 
 
-def test_prism_eels_mvp_matches_multislice_eels_at_interp_1():
-    """Stage-1 MVP: SMatrix.transition_potential_scan at interpolation=(1,1)
-    reproduces Probe.transition_potential_scan on a small Si cell.
-    Both paths express the same physics — forward multislice through the
-    potential, scatter via the transition potential at each site, and
-    detect — just decomposed in the plane-wave basis vs a probe per
-    scan position. Stage 2 (interpolation > 1, S2_crop linear scaling,
-    frozen phonons, GPU) is tracked in issue #287.
-    """
+def test_prism_eels_matches_multislice_eels_at_interp_1():
+    """SMatrix.transition_potential_scan at interpolation=(1,1) reproduces
+    Probe.transition_potential_scan on a small Si cell."""
     unit_atoms = ase.build.bulk("Si", cubic=True)
     reps = (1, 1, 2)
     slice_thickness = float(unit_atoms.cell[2, 2])
@@ -229,12 +223,8 @@ def test_prism_eels_mvp_matches_multislice_eels_at_interp_1():
         energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
     )
     probe.grid.match(potential)
-    # ``double_channel=False`` matches the MVP's single-channel scope: scatter
-    # at the scatter slice and detect immediately, without propagating the
-    # scattered wave through the remaining potential. The multislice EELS
-    # default is ``double_channel=True``, which propagates and detects later
-    # at exit_planes; comparing against the double-channel path would be
-    # apples-to-oranges since the MVP doesn't (yet) do the inner propagation.
+    # ``double_channel=False``: scatter at each site and detect immediately,
+    # without propagating through the remaining potential.
     res_multislice = probe.transition_potential_scan(
         potential=potential,
         transition_potentials=tp,
@@ -277,13 +267,9 @@ def test_prism_eels_mvp_matches_multislice_eels_at_interp_1():
     np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
 
 
-def test_prism_eels_mvp_double_channel_matches_multislice_at_interp_1():
-    """Stage-3 double-channel: with ``double_channel=True`` the MVP
-    propagates the scattered wave through the remaining potential slices
-    to the exit before reduction, matching the multislice EELS
-    ``double_channel=True`` branch. At ``interpolation=(1,1)`` the result
-    must again be bit-equivalent to ``Probe.transition_potential_scan``.
-    """
+def test_prism_eels_double_channel_matches_multislice_at_interp_1():
+    """Double-channel PRISM-EELS at interpolation=(1,1) reproduces
+    Probe.transition_potential_scan with double_channel=True."""
     unit_atoms = ase.build.bulk("Si", cubic=True)
     atoms = unit_atoms * (1, 1, 2)
     slice_thickness = float(unit_atoms.cell[2, 2])

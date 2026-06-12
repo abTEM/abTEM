@@ -1987,9 +1987,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         At ``interpolation > 1`` the reduced wave functions are returned at
         ``window_gpts`` size, matching the elastic :meth:`scan` convention.
 
-        See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan_mvp`
-        for the algorithm and remaining Stage-3 work (per-site cropping for
-        true linear scaling, frozen phonons, Dask, GPU).
+        See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan`
+        for the algorithm details.
 
         Parameters
         ----------
@@ -2016,7 +2015,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             Stage-3 work tracked in issue #287.
         """
         from abtem.inelastic.core_loss import (
-            prism_transition_potential_scan_mvp,
+            prism_transition_potential_scan,
         )
 
         if scan is None:
@@ -2026,7 +2025,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 sampling=self.dummy_probes().aperture.nyquist_sampling,
             )
 
-        return prism_transition_potential_scan_mvp(
+        return prism_transition_potential_scan(
             s_matrix=self,
             transition_potentials=transition_potentials,
             scan=scan,
