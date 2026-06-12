@@ -1077,12 +1077,35 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         xp = get_array_module(self.wave_vectors)
 
         if isinstance(scan, GridScan):
-            x = xp.asarray(scan._x_coordinates())
-            y = xp.asarray(scan._y_coordinates())
+            u = xp.asarray(scan._x_coordinates())
+            v = xp.asarray(scan._y_coordinates())
+
+            # For skew cells the Cartesian scan position is
+            #   (x, y) = u * hat1 + v * hat2
+            # so the phase is exp(-2 pi i [u*(hat1.k) + v*(hat2.k)]),
+            # which stays separable in u and v.
+            cell = scan._cell
+            if cell is not None:
+                cell = xp.asarray(np.asarray(cell, dtype=float))
+                norms = xp.sqrt((cell**2).sum(axis=1))
+                hat1 = cell[0] / norms[0]
+                hat2 = cell[1] / norms[1]
+                k_u = (
+                    hat1[0] * self.wave_vectors[:, 0]
+                    + hat1[1] * self.wave_vectors[:, 1]
+                )
+                k_v = (
+                    hat2[0] * self.wave_vectors[:, 0]
+                    + hat2[1] * self.wave_vectors[:, 1]
+                )
+            else:
+                k_u = self.wave_vectors[:, 0]
+                k_v = self.wave_vectors[:, 1]
+
             coefficients = complex_exponential(
-                -2.0 * xp.pi * x[:, None, None] * self.wave_vectors[None, None, :, 0]
+                -2.0 * xp.pi * u[:, None, None] * k_u[None, None, :]
             ) * complex_exponential(
-                -2.0 * xp.pi * y[None, :, None] * self.wave_vectors[None, None, :, 1]
+                -2.0 * xp.pi * v[None, :, None] * k_v[None, None, :]
             )
         else:
             positions = xp.asarray(scan.get_positions())
@@ -2183,16 +2206,17 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         elif disable_s_matrix_chunks == "auto":
             disable_s_matrix_chunks = False
 
-        if not lazy:
-            scan = validate_scan(scan, self)
+        # validate early so the scan picks up the cell from self.grid
+        # (needed for all code paths, not just the eager one)
+        scan = validate_scan(scan, self)
 
+        if not lazy:
             measurements = self._eager_build_s_matrix_detect(
                 scan, ctf, detectors, squeeze=True
             )
             return _wrap_measurements(measurements)
 
         if disable_s_matrix_chunks:
-            scan = validate_scan(scan, self)
 
             blocks = self.ensemble_blocks(1)
 
