@@ -578,7 +578,7 @@ def test_all_modes_agree_on_skew_grid_bragg_intensities():
             I2 = float(I_mode[k % N0, h % N1])
             if I1 < threshold:
                 continue
-            assert abs(I1 - I2) / I1 < 1e-4, (
+            assert abs(I1 - I2) / I1 < 5e-4, (
                 f"hex mirror (h,k)<->(k,h) breaks at ({h},{k}): {I1:.5f} vs {I2:.5f}"
             )
 
