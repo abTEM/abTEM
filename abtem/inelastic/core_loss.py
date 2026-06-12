@@ -1128,7 +1128,9 @@ def prism_transition_potential_scan(
 
     # --- Build initial plane-wave state ---
     wave_vectors = s_matrix.wave_vectors  # (n_k, 2)
-    wave_vectors_np = np.asarray(wave_vectors)
+    wave_vectors_np = np.array(
+        wave_vectors.get() if hasattr(wave_vectors, "get") else wave_vectors
+    )
     n_k = len(wave_vectors_np)
 
     s_array = plane_waves(xp.asarray(wave_vectors_np, dtype=np.float32), extent, gpts)
@@ -1165,6 +1167,7 @@ def prism_transition_potential_scan(
     # --- Transition potential setup ---
     transition_potential.grid.match(s_waves)
     transition_potential.accelerator.match(s_waves)
+    transition_potential = transition_potential.copy_to_device(s_matrix.device)
     Z = transition_potential.Z
 
     # --- Site extraction (mirror transition_potential_multislice_and_detect) ---
