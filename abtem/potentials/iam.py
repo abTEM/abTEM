@@ -1537,16 +1537,35 @@ class CrystalPotential(_PotentialBuilder):
 
         assert hasattr(potential_unit, "device")
 
+        # Propagate the in-plane cell geometry: if the unit potential has a
+        # non-orthogonal grid, tile the full 3×3 cell so _FieldBuilder can
+        # detect and preserve the skew metric.  Do not pass ``box`` in that
+        # case -- _FieldBuilder derives it from the cell and ``box is None``
+        # is required for the auto-detection of the skew path.
+        unit_cell_2d = potential_unit.grid.cell
+        if unit_cell_2d is not None:
+            cell_3d = np.zeros((3, 3))
+            cell_3d[:2, :2] = np.asarray(unit_cell_2d)
+            cell_3d[2, 2] = potential_unit.thickness
+            cell_3d[0] *= repetitions[0]
+            cell_3d[1] *= repetitions[1]
+            cell_3d[2] *= repetitions[2]
+            cell = Cell(cell_3d)
+            init_box = None
+        else:
+            cell = Cell(np.diag(box))
+            init_box = box
+
         super().__init__(
             array_object=PotentialArray,
             gpts=gpts,
-            cell=Cell(np.diag(box)),
+            cell=cell,
             slice_thickness=slice_thickness,
             exit_planes=exit_planes,
             device=potential_unit.device,
             plane="xy",
             origin=(0.0, 0.0, 0.0),
-            box=box,
+            box=init_box,
             periodic=True,
         )
 
