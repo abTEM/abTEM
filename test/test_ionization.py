@@ -551,6 +551,83 @@ def test_prism_eels_exit_planes_match_multislice(double_channel, device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("ensemble_mean", [True, False])
+def test_prism_eels_frozen_phonons_match_multislice(ensemble_mean, device):
+    """PRISM-EELS with frozen phonons matches multislice-EELS at interp=1."""
+    from abtem import FrozenPhonons
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    fp = FrozenPhonons(
+        atoms, num_configs=2, sigmas=0.1, seed=42, ensemble_mean=ensemble_mean
+    )
+    potential = abtem.Potential(
+        fp, gpts=(32, 32), slice_thickness=slice_thickness, device=device,
+    )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    rng = np.random.default_rng(0)
+    tp_array = (
+        rng.standard_normal((2, 32, 32))
+        + 1j * rng.standard_normal((2, 32, 32))
+    ).astype(np.complex64)
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=tp_array,
+        energy=energy,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
+    scan = abtem.GridScan(
+        start=(0, 0), end=potential.extent,
+        gpts=(2, 2), endpoint=False,
+    )
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
+    )
+    probe.grid.match(potential)
+    res_ms = probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=tp,
+        scan=scan,
+        detectors=detector,
+        sites=atoms,
+        double_channel=False,
+        lazy=True,
+    ).compute()
+    arr_ms = np.asarray(res_ms.array)
+
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle_cutoff,
+        interpolation=1,
+        downsample=False,
+        device=device,
+    )
+    res_prism = s_matrix.transition_potential_scan(
+        transition_potentials=tp,
+        scan=scan,
+        detectors=detector,
+        sites=atoms,
+    )
+    arr_prism = np.asarray(res_prism.array)
+
+    assert arr_ms.shape == arr_prism.shape, (
+        f"shape mismatch: multislice {arr_ms.shape} vs PRISM {arr_prism.shape}"
+    )
+    np.testing.assert_allclose(arr_prism, arr_ms, rtol=1e-5, atol=0)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_eels_lazy_matches_eager(device):
     """PRISM-EELS with lazy=True produces the same result as lazy=False."""
     unit_atoms = ase.build.bulk("Si", cubic=True)
