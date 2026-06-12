@@ -1969,7 +1969,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
 
     def _eager_transition_potential_scan(
-        self, scan, detectors, transition_potentials, sites, double_channel
+        self, scan, detectors, transition_potentials, sites, double_channel,
+        squeeze=True,
     ):
         from abtem.inelastic.core_loss import prism_transition_potential_scan
 
@@ -1984,7 +1985,25 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             else:
                 extra_ensemble_axes_shape += (shape,)
 
-        measurements = None
+        if self.potential is not None and len(self.potential.exit_planes) > 1:
+            extra_ensemble_axes_shape = extra_ensemble_axes_shape + (
+                len(self.potential.exit_planes),
+            )
+            extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
+                self.potential.base_axes_metadata[0]
+            ]
+
+        if self.ensemble_shape:
+            dummy_waves = self.build(lazy=True).dummy_probes(scan)
+            measurements = allocate_multislice_measurements(
+                dummy_waves,
+                detectors,
+                extra_ensemble_axes_shape,
+                extra_ensemble_axes_metadata,
+            )
+        else:
+            measurements = None
+
         num_blocks = 0
         for i, _, s_matrix in self.generate_blocks(1):
             s_matrix = s_matrix.item()
@@ -2014,12 +2033,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             num_blocks += 1
 
         for idx, measurement in enumerate(measurements):
-            if (
-                measurement.axes_metadata
-                and measurement.axes_metadata[0]._ensemble_mean
-            ):
+            if measurement.axes_metadata[0]._ensemble_mean:
                 if num_blocks > 1:
                     measurement.array[:] /= num_blocks
+                if squeeze:
+                    measurements[idx] = measurement.squeeze((0,))
 
         return measurements
 
@@ -2034,6 +2052,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             transition_potentials=transition_potentials,
             sites=sites,
             double_channel=double_channel,
+            squeeze=False,
         )
 
         array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
