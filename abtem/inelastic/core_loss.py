@@ -1054,8 +1054,7 @@ def prism_transition_potential_scan(
     ``double_channel=False`` (default) detects immediately at the scatter
     slice — Brown's single-channel approximation.
 
-    Frozen-phonon ensembles, GPU dispatch, Dask wiring, and multi-exit-plane
-    support remain follow-up work (issue #287).
+    Frozen-phonon ensembles and Dask wiring remain follow-up work.
 
     Parameters
     ----------

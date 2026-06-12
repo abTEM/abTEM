@@ -188,7 +188,8 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
 
 
 
-def test_prism_eels_matches_multislice_eels_at_interp_1():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_eels_matches_multislice_eels_at_interp_1(device):
     """SMatrix.transition_potential_scan at interpolation=(1,1) reproduces
     Probe.transition_potential_scan on a small Si cell."""
     unit_atoms = ase.build.bulk("Si", cubic=True)
@@ -197,7 +198,7 @@ def test_prism_eels_matches_multislice_eels_at_interp_1():
     atoms = unit_atoms * reps
 
     potential = abtem.Potential(
-        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device="cpu"
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device=device
     )
 
     energy = 100e3
@@ -217,14 +218,12 @@ def test_prism_eels_matches_multislice_eels_at_interp_1():
         metadata={"Z": 14, "n": 1, "l": 0},
     )
 
-    detector = abtem.PixelatedDetector(max_angle=40)
+    detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
     probe = abtem.Probe(
-        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
     )
     probe.grid.match(potential)
-    # ``double_channel=False``: scatter at each site and detect immediately,
-    # without propagating through the remaining potential.
     res_multislice = probe.transition_potential_scan(
         potential=potential,
         transition_potentials=tp,
@@ -236,16 +235,13 @@ def test_prism_eels_matches_multislice_eels_at_interp_1():
     ).compute()
     arr_multislice = np.asarray(res_multislice.array)
 
-    # ``downsample=False`` keeps the S-matrix on the same gpts as the probe;
-    # the default ``downsample="cutoff"`` would resample to the antialias
-    # cutoff and break the comparison.
     s_matrix = abtem.SMatrix(
         potential=potential,
         energy=energy,
         semiangle_cutoff=semiangle_cutoff,
         interpolation=1,
         downsample=False,
-        device="cpu",
+        device=device,
     )
     res_prism = s_matrix.transition_potential_scan(
         transition_potentials=tp,
@@ -259,15 +255,11 @@ def test_prism_eels_matches_multislice_eels_at_interp_1():
         f"shape mismatch: multislice {arr_multislice.shape} vs "
         f"PRISM {arr_prism.shape}"
     )
-    # Bit-equivalent at interpolation=(1,1): the two paths express the same
-    # numerical work, just in different bases. Measured max rel diff ~5e-7
-    # on this setup (float32 FFT plan-ordering noise); 1e-5 leaves
-    # comfortable headroom for run-to-run variation without masking real
-    # regressions.
     np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
 
 
-def test_prism_eels_double_channel_matches_multislice_at_interp_1():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_eels_double_channel_matches_multislice_at_interp_1(device):
     """Double-channel PRISM-EELS at interpolation=(1,1) reproduces
     Probe.transition_potential_scan with double_channel=True."""
     unit_atoms = ase.build.bulk("Si", cubic=True)
@@ -275,7 +267,7 @@ def test_prism_eels_double_channel_matches_multislice_at_interp_1():
     slice_thickness = float(unit_atoms.cell[2, 2])
 
     potential = abtem.Potential(
-        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device="cpu"
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device=device
     )
 
     energy = 100e3
@@ -295,10 +287,10 @@ def test_prism_eels_double_channel_matches_multislice_at_interp_1():
         metadata={"Z": 14, "n": 1, "l": 0},
     )
 
-    detector = abtem.PixelatedDetector(max_angle=40)
+    detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
     probe = abtem.Probe(
-        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
     )
     probe.grid.match(potential)
     res_multislice = probe.transition_potential_scan(
@@ -318,7 +310,7 @@ def test_prism_eels_double_channel_matches_multislice_at_interp_1():
         semiangle_cutoff=semiangle_cutoff,
         interpolation=1,
         downsample=False,
-        device="cpu",
+        device=device,
     )
     res_prism = s_matrix.transition_potential_scan(
         transition_potentials=tp,
@@ -330,11 +322,11 @@ def test_prism_eels_double_channel_matches_multislice_at_interp_1():
     arr_prism = np.asarray(res_prism.array)
 
     assert arr_multislice.shape == arr_prism.shape
-    # Measured max rel diff ~6e-7 (float32 FFT plan-ordering noise).
     np.testing.assert_allclose(arr_prism, arr_multislice, rtol=1e-5, atol=0)
 
 
-def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output(device):
     """Stage-2 ``interpolation > 1`` runs through the cropping pattern from
     SMatrixArray._reduce_to_waves (s_matrix.py:996-1033) and yields a
     diffraction pattern at ``window_gpts`` size rather than the full
@@ -345,7 +337,7 @@ def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output():
     slice_thickness = float(atoms.cell[2, 2]) / 2
     # gpts must be divisible by interpolation.
     potential = abtem.Potential(
-        atoms, gpts=(64, 64), slice_thickness=slice_thickness
+        atoms, gpts=(64, 64), slice_thickness=slice_thickness, device=device
     )
 
     energy = 100e3
@@ -365,19 +357,15 @@ def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output():
         metadata={"Z": 14, "n": 1, "l": 0},
     )
 
-    detector = abtem.PixelatedDetector(max_angle=30)
+    detector = abtem.PixelatedDetector(max_angle=30, to_cpu=True)
 
-    # interp=(1, 1) gives the full-grid diffraction shape; interp=(2, 2)
-    # gives a smaller pattern derived from the cropped window. Confirm both
-    # match the corresponding shapes produced by the elastic SMatrix.scan
-    # path, so the windowing wiring is on the correct convention.
     s1 = abtem.SMatrix(
         potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
-        interpolation=1, downsample=False, device="cpu",
+        interpolation=1, downsample=False, device=device,
     )
     s2 = abtem.SMatrix(
         potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
-        interpolation=2, downsample=False, device="cpu",
+        interpolation=2, downsample=False, device=device,
     )
 
     elastic_1 = s1.scan(scan=(0, 0), detectors=detector, lazy=False).compute()
@@ -411,7 +399,8 @@ def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output():
     assert np.abs(arr_2).max() > 0
 
 
-def test_prism_eels_interp_2_accuracy_vs_multislice():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_eels_interp_2_accuracy_vs_multislice(device):
     """Stage 3b: the total integrated EELS signal at interp=2 should be
     within ~10% of the multislice reference (Brown et al. Sec. IV B).
 
@@ -428,7 +417,7 @@ def test_prism_eels_interp_2_accuracy_vs_multislice():
     atoms = unit_atoms * (1, 1, 2)
     slice_thickness = float(unit_atoms.cell[2, 2])
     potential = abtem.Potential(
-        atoms, gpts=(128, 128), slice_thickness=slice_thickness, device="cpu"
+        atoms, gpts=(128, 128), slice_thickness=slice_thickness, device=device
     )
 
     energy = 100e3
@@ -458,7 +447,7 @@ def test_prism_eels_interp_2_accuracy_vs_multislice():
         metadata={"Z": 14, "n": 1, "l": 0},
     )
 
-    detector = abtem.FlexibleAnnularDetector()
+    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
         start=(0, 0),
         end=(unit_atoms.cell[0, 0], unit_atoms.cell[1, 1]),
@@ -466,7 +455,7 @@ def test_prism_eels_interp_2_accuracy_vs_multislice():
     )
 
     probe = abtem.Probe(
-        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
     )
     probe.grid.match(potential)
     ms = probe.transition_potential_scan(
@@ -477,7 +466,7 @@ def test_prism_eels_interp_2_accuracy_vs_multislice():
 
     s2 = abtem.SMatrix(
         potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
-        interpolation=2, downsample=False, device="cpu",
+        interpolation=2, downsample=False, device=device,
     )
     pr = s2.transition_potential_scan(
         transition_potentials=tp, scan=scan, detectors=detector, sites=atoms,
@@ -493,8 +482,9 @@ def test_prism_eels_interp_2_accuracy_vs_multislice():
     )
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("double_channel", [False, True])
-def test_prism_eels_exit_planes_match_multislice(double_channel):
+def test_prism_eels_exit_planes_match_multislice(double_channel, device):
     """PRISM-EELS with exit_planes produces the same thickness-series as
     multislice at interpolation=(1,1)."""
     unit_atoms = ase.build.bulk("Si", cubic=True)
@@ -503,7 +493,7 @@ def test_prism_eels_exit_planes_match_multislice(double_channel):
 
     potential = abtem.Potential(
         atoms, gpts=(32, 32), slice_thickness=slice_thickness,
-        exit_planes=1, device="cpu",
+        exit_planes=1, device=device,
     )
     n_exit = len(potential.exit_planes)
     assert n_exit > 1, f"expected multiple exit planes, got {potential.exit_planes}"
@@ -525,10 +515,10 @@ def test_prism_eels_exit_planes_match_multislice(double_channel):
         metadata={"Z": 14, "n": 1, "l": 0},
     )
 
-    detector = abtem.PixelatedDetector(max_angle=40)
+    detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
     probe = abtem.Probe(
-        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
     )
     probe.grid.match(potential)
     res_ms = probe.transition_potential_scan(
@@ -540,7 +530,7 @@ def test_prism_eels_exit_planes_match_multislice(double_channel):
 
     s_matrix = abtem.SMatrix(
         potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
-        interpolation=1, downsample=False, device="cpu",
+        interpolation=1, downsample=False, device=device,
     )
     res_prism = s_matrix.transition_potential_scan(
         transition_potentials=tp, scan=(0, 0), detectors=detector,
