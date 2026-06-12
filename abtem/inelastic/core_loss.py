@@ -1106,11 +1106,15 @@ def prism_transition_potential_scan(
     if isinstance(transition_potential, TransitionPotential):
         transition_potential = transition_potential.build()
 
+    from abtem.core.utils import get_dtype
+
     potential = s_matrix.potential
     energy = s_matrix.energy
     extent = s_matrix.extent
     gpts = s_matrix.gpts
     xp = get_array_module(s_matrix.device)
+    complex_dtype = get_dtype(complex=True)
+    real_dtype = get_dtype(complex=False)
 
     # Normalise scan -> BaseScan with squeeze metadata applied to a single
     # tuple input, matching what ``Probe.transition_potential_scan`` does
@@ -1210,7 +1214,7 @@ def prism_transition_potential_scan(
     phi = xp.arctan2(wave_vectors_xp[:, 1], wave_vectors_xp[:, 0])
     ctf_array = ctf._evaluate_from_angular_grid(alpha, phi)
     ctf_array = ctf_array / xp.sqrt((ctf_array**2).sum(axis=-1, keepdims=True))
-    coefficients = (position_coefficients * ctf_array[None, :]).astype(np.complex64)
+    coefficients = (position_coefficients * ctf_array[None, :]).astype(complex_dtype)
     # coefficients: (n_positions, n_k)
 
     # --- Window properties ---
@@ -1276,7 +1280,7 @@ def prism_transition_potential_scan(
     scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
     dummy_scan_waves = Waves(
-        xp.zeros(scan_shape + output_window_gpts, dtype=np.complex64),
+        xp.zeros(scan_shape + output_window_gpts, dtype=complex_dtype),
         energy=energy,
         extent=output_window_extent,
         ensemble_axes_metadata=scan_axes_metadata,
@@ -1303,7 +1307,7 @@ def prism_transition_potential_scan(
         )
         bbox_scattered = xp.zeros(
             scattered_window.shape[:-2] + tuple(reduce_size),
-            dtype=np.complex64,
+            dtype=complex_dtype,
         )
         for _n0 in range(-1, 2):
             for _n1 in range(-1, 2):
