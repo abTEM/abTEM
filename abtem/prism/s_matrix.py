@@ -1968,6 +1968,78 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             lazy=lazy,
         )
 
+    def _eager_transition_potential_scan(
+        self, scan, detectors, transition_potentials, sites, double_channel
+    ):
+        from abtem.inelastic.core_loss import prism_transition_potential_scan
+
+        extra_ensemble_axes_shape = ()
+        extra_ensemble_axes_metadata = []
+        for shape, axis_metadata in zip(
+            self.ensemble_shape, self.ensemble_axes_metadata
+        ):
+            extra_ensemble_axes_metadata += [axis_metadata]
+            if axis_metadata._ensemble_mean:
+                extra_ensemble_axes_shape += (1,)
+            else:
+                extra_ensemble_axes_shape += (shape,)
+
+        measurements = None
+        num_blocks = 0
+        for i, _, s_matrix in self.generate_blocks(1):
+            s_matrix = s_matrix.item()
+
+            new_measurements = ensure_list(
+                prism_transition_potential_scan(
+                    s_matrix=s_matrix,
+                    transition_potentials=transition_potentials,
+                    scan=scan,
+                    detectors=detectors,
+                    sites=sites,
+                    double_channel=double_channel,
+                )
+            )
+
+            if measurements is None:
+                measurements = new_measurements
+            else:
+                for measurement, new_measurement in zip(
+                    measurements, new_measurements
+                ):
+                    if measurement.axes_metadata[0]._ensemble_mean:
+                        measurement.array[:] += new_measurement.array
+                    else:
+                        measurement.array[i] = new_measurement.array
+
+            num_blocks += 1
+
+        for idx, measurement in enumerate(measurements):
+            if (
+                measurement.axes_metadata
+                and measurement.axes_metadata[0]._ensemble_mean
+            ):
+                if num_blocks > 1:
+                    measurement.array[:] /= num_blocks
+
+        return measurements
+
+    @staticmethod
+    def _lazy_transition_potential_scan(
+        s_matrix, scan, detectors, transition_potentials, sites, double_channel
+    ):
+        s_matrix = s_matrix.item()
+        measurements = s_matrix._eager_transition_potential_scan(
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            double_channel=double_channel,
+        )
+
+        array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
+        itemset(array, 0, measurements)
+        return array
+
     def transition_potential_scan(
         self,
         transition_potentials,
@@ -1975,6 +2047,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         detectors=None,
         sites=None,
         double_channel: bool = False,
+        lazy: bool = None,
     ):
         """**Experimental** PRISM-based core-loss scan.
 
@@ -2007,12 +2080,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             multislice EELS ``double_channel=True`` branch). If False
             (default), detect immediately at the scatter slice — Brown's
             single-channel approximation.
+        lazy : bool, optional
+            If True, create the measurements lazily using Dask; otherwise,
+            compute eagerly. Defaults to the user configuration value.
 
         Returns
         -------
         BaseMeasurements or list of BaseMeasurements
-            One measurement per detector. Always eager — Dask wiring is
-            Stage-3 work tracked in issue #287.
+            One measurement per detector.
         """
         from abtem.inelastic.core_loss import (
             prism_transition_potential_scan,
@@ -2025,14 +2100,60 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 sampling=self.dummy_probes().aperture.nyquist_sampling,
             )
 
-        return prism_transition_potential_scan(
-            s_matrix=self,
-            transition_potentials=transition_potentials,
+        detectors = validate_detectors(detectors)
+        scan = validate_scan(scan, self)
+        lazy = validate_lazy(lazy)
+
+        if not lazy:
+            measurements = self._eager_transition_potential_scan(
+                scan=scan,
+                detectors=detectors,
+                transition_potentials=transition_potentials,
+                sites=sites,
+                double_channel=double_channel,
+            )
+            return _wrap_measurements(measurements)
+
+        blocks = self.ensemble_blocks(1)
+
+        chunks = ()
+        drop_axis = ()
+        if not self.ensemble_shape:
+            blocks = blocks[None]
+            drop_axis = (0,)
+            new_axis = tuple_range(offset=0, length=len(scan.shape))
+        else:
+            chunks += blocks.chunks
+            new_axis = tuple_range(
+                offset=len(blocks.shape), length=len(scan.shape)
+            )
+
+        chunks += scan.shape
+
+        arrays = blocks.map_blocks(
+            self._lazy_transition_potential_scan,
+            drop_axis=drop_axis,
+            new_axis=new_axis,
+            chunks=chunks,
             scan=scan,
             detectors=detectors,
+            transition_potentials=transition_potentials,
             sites=sites,
             double_channel=double_channel,
+            meta=np.array((), dtype=object),
         )
+
+        waves = self.build(lazy=True).dummy_probes(scan=scan)
+
+        extra_axes_metadata = []
+        if self.potential is not None:
+            extra_axes_metadata = self.potential.ensemble_axes_metadata
+
+        measurements = _finalize_lazy_measurements(
+            arrays, waves, detectors, extra_axes_metadata
+        )
+
+        return _wrap_measurements(measurements)
 
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
         extra_ensemble_axes_shape = ()

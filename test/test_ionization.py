@@ -548,3 +548,62 @@ def test_prism_eels_exit_planes_match_multislice(double_channel, device):
         arr_ms = arr_ms[1:]
         arr_prism = arr_prism[1:]
     np.testing.assert_allclose(arr_prism, arr_ms, rtol=1e-5, atol=0)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_eels_lazy_matches_eager(device):
+    """PRISM-EELS with lazy=True produces the same result as lazy=False."""
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device=device
+    )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    rng = np.random.default_rng(0)
+    tp_array = (
+        rng.standard_normal((2, 32, 32))
+        + 1j * rng.standard_normal((2, 32, 32))
+    ).astype(np.complex64)
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=tp_array,
+        energy=energy,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
+    scan = abtem.GridScan(
+        start=(0, 0), end=potential.extent,
+        gpts=(4, 4), endpoint=False,
+    )
+
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle_cutoff,
+        interpolation=1,
+        downsample=False,
+        device=device,
+    )
+
+    res_eager = s_matrix.transition_potential_scan(
+        transition_potentials=tp, scan=scan,
+        detectors=detector, sites=atoms, lazy=False,
+    )
+    arr_eager = np.asarray(res_eager.array)
+
+    res_lazy = s_matrix.transition_potential_scan(
+        transition_potentials=tp, scan=scan,
+        detectors=detector, sites=atoms, lazy=True,
+    ).compute()
+    arr_lazy = np.asarray(res_lazy.array)
+
+    assert arr_eager.shape == arr_lazy.shape
+    np.testing.assert_allclose(arr_lazy, arr_eager, rtol=1e-5, atol=0)

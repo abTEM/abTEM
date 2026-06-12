@@ -1054,7 +1054,9 @@ def prism_transition_potential_scan(
     ``double_channel=False`` (default) detects immediately at the scatter
     slice — Brown's single-channel approximation.
 
-    Frozen-phonon ensembles and Dask wiring remain follow-up work.
+    Frozen-phonon ensemble averaging is handled at the ``SMatrix`` level
+    (see ``SMatrix.transition_potential_scan``); Dask lazy evaluation is
+    supported via the ``lazy`` parameter on that method.
 
     Parameters
     ----------
