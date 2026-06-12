@@ -45,8 +45,8 @@ srtio3_unit = Atoms(
 # Simulation parameters
 energy = 200e3  # 200 keV
 semiangle_cutoff = 25.0  # mrad
-gpts = (64, 64)
-interp = 4
+gpts = (128, 128)
+interp = 8
 n_k = (gpts[0] // interp) * (gpts[1] // interp)  # 256
 
 
