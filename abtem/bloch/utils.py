@@ -352,7 +352,7 @@ def retrieve_structure_factor_values(
         array = cp.asnumpy(array)
 
     df = pd.Series(array, index=hkl_source)
-    array = df.loc[hkl_destination].to_numpy()
+    array = df.loc[hkl_destination].to_numpy().copy()
 
     if convert_to_numpy:
         array = cp.asarray(array)
