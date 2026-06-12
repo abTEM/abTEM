@@ -1037,15 +1037,16 @@ def prism_transition_potential_scan(
     """PRISM-EELS driver following Brown et al. (Phys. Rev. Research 1,
     033186, 2019).
 
-    Supports any ``interpolation`` factor and both single- and double-channel
-    modes. The scatter and (optionally) double-channel propagation operate on
-    a ``window_gpts``-sized cropped grid centered at each scattering site
-    (Sec. IV B), and the per-position reduction follows the same crop pattern
-    as the elastic ``SMatrixArray._reduce_to_waves``.
+    Supports any ``interpolation`` factor, ``downsample`` setting, and both
+    single- and double-channel modes. The scatter and (optionally)
+    double-channel propagation operate on a cropped grid at full resolution
+    centered at each scattering site (Sec. IV B); when ``downsample`` is
+    enabled the scattered result is Fourier-cropped to the downsampled
+    resolution before per-position reduction.
 
-    At ``interpolation=(1,1)`` the output is bit-equivalent (to float32 noise)
-    to ``Probe.transition_potential_scan`` at the matching ``double_channel``
-    setting.
+    At ``interpolation=(1,1)`` with ``downsample=False`` the output is
+    bit-equivalent (to float32 noise) to ``Probe.transition_potential_scan``
+    at the matching ``double_channel`` setting.
 
     ``double_channel=True`` propagates the scattered state through the
     remaining potential slices to the exit before reducing per-position;
@@ -1092,12 +1093,6 @@ def prism_transition_potential_scan(
     from abtem.slicing import SliceIndexedAtoms
     from abtem.waves import Waves
 
-    if s_matrix.downsample is not False:
-        raise NotImplementedError(
-            "PRISM-EELS requires downsample=False so the S-matrix and the "
-            "transition potential share the same gpts. "
-            "Construct the SMatrix with ``downsample=False``."
-        )
     if isinstance(transition_potentials, (list, tuple)):
         if len(transition_potentials) != 1:
             raise NotImplementedError(
@@ -1218,50 +1213,63 @@ def prism_transition_potential_scan(
     # coefficients: (n_positions, n_k)
 
     # --- Window properties ---
-    # window_gpts and window_extent shrink with interpolation; at
-    # interp=(1,1) they equal the full grid.  The windowed scatter path
-    # handles all interpolation factors uniformly.
-    interpolation = s_matrix.interpolation
-    sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
-    if interpolation == (1, 1):
-        window_gpts = gpts
-    else:
-        from abtem.core.utils import safe_ceiling_int
-        window_gpts = (
-            safe_ceiling_int(gpts[0] / interpolation[0]),
-            safe_ceiling_int(gpts[1] / interpolation[1]),
-        )
-    window_extent = (window_gpts[0] * sampling[0], window_gpts[1] * sampling[1])
+    # Scatter happens at full gpts resolution; the result is optionally
+    # Fourier-cropped to the downsampled resolution before reduction.
+    from abtem.core.utils import safe_ceiling_int
+    from abtem.core.fft import fft_interpolate
 
-    # --- Stage 3b: pre-compute windowed TP (Brown et al. Sec. IV B) ---
-    # Scatter and double-channel propagation operate on a window_gpts-sized
-    # grid centered at each site.  The real-space TP is pre-computed once:
-    #   tp_real_origin = IFFT(TP_k * sigma) centered at pixel (0,0)
-    # then cropped to window_gpts centered at origin so the TP sits at
-    # (wH//2, wW//2).  Per-site sub-pixel shifts are applied via a small-
-    # grid FFT shift kernel.
+    interpolation = s_matrix.interpolation
+    ds_gpts = s_matrix.downsampled_gpts
+    full_sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
+    ds_sampling = (extent[0] / ds_gpts[0], extent[1] / ds_gpts[1])
+    needs_downsample = ds_gpts != gpts
+
+    scatter_window_gpts = (
+        safe_ceiling_int(gpts[0] / interpolation[0]),
+        safe_ceiling_int(gpts[1] / interpolation[1]),
+    )
+    output_window_gpts = (
+        safe_ceiling_int(ds_gpts[0] / interpolation[0]),
+        safe_ceiling_int(ds_gpts[1] / interpolation[1]),
+    )
+    scatter_window_extent = (
+        scatter_window_gpts[0] * full_sampling[0],
+        scatter_window_gpts[1] * full_sampling[1],
+    )
+    output_window_extent = (
+        output_window_gpts[0] * ds_sampling[0],
+        output_window_gpts[1] * ds_sampling[1],
+    )
+
+    # --- Pre-compute windowed TP (Brown et al. Sec. IV B) ---
+    # Scatter and double-channel propagation operate on a
+    # scatter_window_gpts-sized grid centered at each site.
     _tp_real_origin = ifft2(
         transition_potential.array * energy2sigma(energy)
     )
-    _tp_crop_corner = (-window_gpts[0] // 2, -window_gpts[1] // 2)
+    _tp_crop_corner = (
+        -scatter_window_gpts[0] // 2,
+        -scatter_window_gpts[1] // 2,
+    )
     _tp_window_real = wrapped_crop_2d(
-        _tp_real_origin, _tp_crop_corner, window_gpts
+        _tp_real_origin, _tp_crop_corner, scatter_window_gpts
     )
     _tp_window_k = fft2(_tp_window_real)
     _window_propagator = FresnelPropagator()
 
-    pixel_positions = positions / xp.asarray(sampling, dtype=np.float32)
+    # Reduction helpers operate in the downsampled grid.
+    pixel_positions = positions / xp.asarray(ds_sampling, dtype=np.float32)
     reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
-        pixel_positions, window_gpts
+        pixel_positions, output_window_gpts
     )
 
     # --- Allocate measurements with the scan shape ---
     scan_axes_metadata = scan.ensemble_axes_metadata
     scan_shape = scan.shape
     dummy_scan_waves = Waves(
-        xp.zeros(scan_shape + window_gpts, dtype=np.complex64),
+        xp.zeros(scan_shape + output_window_gpts, dtype=np.complex64),
         energy=energy,
-        extent=window_extent,
+        extent=output_window_extent,
         ensemble_axes_metadata=scan_axes_metadata,
     )
     measurements = allocate_multislice_measurements(
@@ -1284,26 +1292,27 @@ def prism_transition_potential_scan(
             )
 
             # --- Windowed scatter (Brown et al. Sec IV B) ---
-            # Scatter and propagate on a window_gpts-sized region
-            # centered at the site, then embed into the bbox-sized
-            # reduction array for per-position extraction.
-            sampling_arr = np.array(sampling, dtype=np.float32)
-            site_pixel = site_xy / sampling_arr
+            # Scatter and propagate on a scatter_window_gpts-sized
+            # region at full resolution, optionally Fourier-crop to
+            # output_window_gpts, then embed into the bbox for
+            # per-position extraction.
+            full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+            site_pixel = site_xy / full_sampling_arr
             site_pixel_int = np.rint(site_pixel).astype(int)
             sub_pixel = xp.asarray(
                 (site_pixel - site_pixel_int).reshape(1, 2),
                 dtype=np.float32,
             )
             site_crop_corner = (
-                int(site_pixel_int[0]) - window_gpts[0] // 2,
-                int(site_pixel_int[1]) - window_gpts[1] // 2,
+                int(site_pixel_int[0]) - scatter_window_gpts[0] // 2,
+                int(site_pixel_int[1]) - scatter_window_gpts[1] // 2,
             )
 
             s_cropped = wrapped_crop_2d(
-                s_waves.array, site_crop_corner, window_gpts
+                s_waves.array, site_crop_corner, scatter_window_gpts
             )
 
-            shift_k = fft_shift_kernel(sub_pixel, window_gpts)
+            shift_k = fft_shift_kernel(sub_pixel, scatter_window_gpts)
             tp_shifted = ifft2(_tp_window_k * shift_k)
 
             scattered_window = tp_shifted[:, None] * s_cropped[None, :]
@@ -1311,10 +1320,10 @@ def prism_transition_potential_scan(
             if double_channel:
                 n_T_val = scattered_window.shape[0]
                 sw_flat = scattered_window.reshape(
-                    (-1,) + tuple(window_gpts)
+                    (-1,) + tuple(scatter_window_gpts)
                 )
                 sw_waves = Waves(
-                    sw_flat, energy=energy, extent=window_extent,
+                    sw_flat, energy=energy, extent=scatter_window_extent,
                     ensemble_axes_metadata=[
                         OrdinalAxis(
                             values=tuple(range(sw_flat.shape[0]))
@@ -1327,7 +1336,7 @@ def prism_transition_potential_scan(
                     inner_t_arr = wrapped_crop_2d(
                         inner_transmission.array,
                         site_crop_corner,
-                        window_gpts,
+                        scatter_window_gpts,
                     )
                     sw_waves._array = sw_waves._array * inner_t_arr
                     sw_waves = _window_propagator.propagate(
@@ -1336,16 +1345,30 @@ def prism_transition_potential_scan(
                         in_place=True,
                     )
                 scattered_window = sw_waves.array.reshape(
-                    (n_T_val, n_k) + tuple(window_gpts)
+                    (n_T_val, n_k) + tuple(scatter_window_gpts)
+                )
+
+            if needs_downsample:
+                scattered_window = fft_interpolate(
+                    scattered_window, output_window_gpts,
+                    normalization="intensity",
                 )
 
             # Place windowed result into the bbox-sized reduction
             # array with periodic tiling.  The bbox from minimum_crop
             # can exceed the grid size, so the same window must appear
             # at all periodic copies that overlap the bbox.
+            # Site position in the downsampled grid:
+            ds_sampling_arr = np.array(ds_sampling, dtype=np.float32)
+            site_pixel_ds = site_xy / ds_sampling_arr
+            site_pixel_int_ds = np.rint(site_pixel_ds).astype(int)
+            site_crop_corner_ds = (
+                int(site_pixel_int_ds[0]) - output_window_gpts[0] // 2,
+                int(site_pixel_int_ds[1]) - output_window_gpts[1] // 2,
+            )
             site_in_bbox = (
-                site_crop_corner[0] - reduce_crop_corner[0],
-                site_crop_corner[1] - reduce_crop_corner[1],
+                site_crop_corner_ds[0] - reduce_crop_corner[0],
+                site_crop_corner_ds[1] - reduce_crop_corner[1],
             )
             bbox_scattered = xp.zeros(
                 scattered_window.shape[:-2] + tuple(reduce_size),
@@ -1353,14 +1376,14 @@ def prism_transition_potential_scan(
             )
             for _n0 in range(-1, 2):
                 for _n1 in range(-1, 2):
-                    _r0 = site_in_bbox[0] + _n0 * gpts[0]
-                    _r1 = site_in_bbox[1] + _n1 * gpts[1]
+                    _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
+                    _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
                     _s0 = max(0, -_r0)
                     _s1 = max(0, -_r1)
                     _d0 = max(0, _r0)
                     _d1 = max(0, _r1)
-                    _e0 = min(reduce_size[0], _r0 + window_gpts[0])
-                    _e1 = min(reduce_size[1], _r1 + window_gpts[1])
+                    _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
+                    _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
                     if _d0 >= _e0 or _d1 >= _e1:
                         continue
                     bbox_scattered[
@@ -1376,7 +1399,7 @@ def prism_transition_potential_scan(
             )
             reduced = xp.moveaxis(reduced, 1, 0)
             waves_at_positions = batch_crop_2d(
-                reduced, reduce_corners, window_gpts
+                reduced, reduce_corners, output_window_gpts
             )
 
             # Reshape positions axis back into the scan shape.
@@ -1391,7 +1414,7 @@ def prism_transition_potential_scan(
             position_waves = Waves(
                 waves_at_positions,
                 energy=energy,
-                extent=window_extent,
+                extent=output_window_extent,
                 ensemble_axes_metadata=[
                     OrdinalAxis(values=tuple(range(n_T)))
                 ]
