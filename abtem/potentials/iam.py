@@ -553,7 +553,7 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
         if is_cell_orthogonal(atoms.cell) and self.plane != "xy":
             atoms = rotate_atoms_to_plane(atoms, self.plane)
 
-        elif tuple(np.diag(atoms.cell)) != self.box:
+        elif not is_cell_orthogonal(atoms.cell):
             if self.periodic:
                 atoms = orthogonalize_cell(
                     atoms,

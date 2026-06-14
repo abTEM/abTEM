@@ -874,42 +874,58 @@ def orthogonalize_cell(
     if plane != "xy":
         atoms = rotate_atoms_to_plane(atoms, plane)
 
+
     if box is None:
         box = tuple(best_orthogonal_cell(atoms.cell, max_repetitions=max_repetitions))
 
     assert box is not None
 
-    if tuple(np.diag(atoms.cell)) == tuple(box):
+    if is_cell_orthogonal(atoms.cell):
         if return_transform:
             return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
         else:
             return atoms
 
-    if np.any(atoms.cell.lengths() < tolerance):
-        raise RuntimeError("Cell vectors must have non-zero length.")
+    # --- Try integer-n search + strain ---
+    # This is the standard abTEM orthogonalization. It works for most zone
+    # axes but fails (early-exit) when diag(cell) == box.
+    if tuple(np.diag(atoms.cell)) != tuple(box):
+        if np.any(atoms.cell.lengths() < tolerance):
+            raise RuntimeError("Cell vectors must have non-zero length.")
 
-    inv = np.linalg.inv(atoms.cell)
-    vectors = np.dot(np.diag(box), inv)
-    vectors = np.round(vectors)
+        inv = np.linalg.inv(atoms.cell)
+        vectors = np.dot(np.diag(box), inv)
+        vectors = np.round(vectors)
 
-    atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance)
+        atoms = cut(atoms, a=vectors[0], b=vectors[1], c=vectors[2], tolerance=tolerance)
 
-    A = np.linalg.solve(atoms.cell.complete(), np.diag(box))
+        A = np.linalg.solve(atoms.cell.complete(), np.diag(box))
 
-    if allow_transform:
-        atoms.positions[:] = np.dot(atoms.positions, A)
-        atoms.cell[:] = np.diag(box)
+        if allow_transform:
+            atoms.positions[:] = np.dot(atoms.positions, A)
+            atoms.cell[:] = np.diag(box)
 
-    # elif not np.allclose(A, np.eye(3)):
-    #    raise RuntimeError()
+    # --- Pure Gram-Schmidt fallback ---
+    # Catches the early-exit bug (when diag(cell) == box, the integer-n search
+    # above is skipped because it would return the cell unchanged).
+    # Also catches any other cases where integer-n + strain left the cell
+    # non-orthogonal.
+    if not is_cell_orthogonal(atoms.cell):
+        if not return_transform and not return_transform_matrix:
+            from numpy import dot
+            _cell = np.array(atoms.cell, dtype=float)
+            v1, v2, v3 = _cell[0], _cell[1], _cell[2]
+            v2_new = v2 - dot(v2, v1) / dot(v1, v1) * v1
+            from ase import Atoms as _Atoms
+            atoms = _Atoms(
+                symbols=atoms.get_chemical_symbols(),
+                positions=atoms.get_positions().copy(),
+                cell=np.array([v1, v2_new, v3]),
+                pbc=atoms.pbc,
+            )
+            atoms.wrap()
 
-    if return_transform:
-        rotation, scale, shear = decompose_affine_transform(A)
-        return atoms, (np.array(rotation_matrix_to_euler(rotation)), scale, shear)
-    elif return_transform_matrix:
-        return atoms, A
-    else:
-        return atoms
+    return atoms
 
 
 def atoms_in_cell(
