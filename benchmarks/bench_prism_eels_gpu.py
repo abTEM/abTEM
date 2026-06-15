@@ -15,6 +15,7 @@ Usage
 import gc
 import sys
 import time
+import threading
 
 import cupy as cp
 import numpy as np
@@ -26,29 +27,52 @@ from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import TransitionPotentialArray, energy2sigma
 
 _mempool = cp.get_default_memory_pool()
+_pinned_pool = cp.get_default_pinned_memory_pool()
 
 
 def _gpu_sync():
     cp.cuda.Device().synchronize()
 
 
-def _reset_gpu_memory():
-    """Free all cached GPU blocks so the next run starts from a clean slate."""
+def _measure_peak_gpu(func, *args, **kwargs):
+    """Run *func* and return ``(result, elapsed_s, peak_gpu_delta_mb)``.
+
+    A background thread samples ``memGetInfo`` every 5 ms to capture
+    the true peak GPU memory delta (allocations that are freed before
+    the function returns are still counted).
+    """
     _gpu_sync()
     gc.collect()
     _mempool.free_all_blocks()
+    _pinned_pool.free_all_blocks()
     _gpu_sync()
 
+    free_before, _ = cp.cuda.runtime.memGetInfo()
+    min_free = free_before
+    lock = threading.Lock()
+    stop = threading.Event()
 
-def _peak_gpu_mb():
-    """Return peak GPU allocation in MB since the last pool reset.
+    def _sampler():
+        nonlocal min_free
+        while not stop.wait(0.005):
+            f, _ = cp.cuda.runtime.memGetInfo()
+            with lock:
+                if f < min_free:
+                    min_free = f
 
-    After a computation the pool holds both used and freed-but-cached
-    blocks.  ``total_bytes()`` counts all of them, giving the high-water
-    mark of CUDA memory the pool requested from the driver.
-    """
+    sampler = threading.Thread(target=_sampler, daemon=True)
+    sampler.start()
     _gpu_sync()
-    return _mempool.total_bytes() / 1024**2
+    t0 = time.perf_counter()
+    result = func(*args, **kwargs)
+    _gpu_sync()
+    elapsed = time.perf_counter() - t0
+    stop.set()
+    sampler.join()
+
+    with lock:
+        peak_mb = (free_before - min_free) / 1024**2
+    return result, elapsed, max(peak_mb, 0.0)
 
 # ---------------------------------------------------------------------------
 # SrTiO3 unit cell (perovskite, a = 3.905 Å)
@@ -107,41 +131,31 @@ def make_potential_and_tp(atoms):
 
 def timed_ms(probe, potential, tp, scan, atoms):
     """Run multislice EELS and return (time_s, peak_gpu_mem_MB)."""
-    detector = abtem.FlexibleAnnularDetector()
-    _reset_gpu_memory()
-    _gpu_sync()
-    t0 = time.perf_counter()
-    probe.transition_potential_scan(
-        potential=potential,
-        transition_potentials=tp,
-        scan=scan,
-        detectors=detector,
-        sites=atoms,
-        double_channel=double,
-        lazy=False,
-    ).compute()
-    _gpu_sync()
-    elapsed = time.perf_counter() - t0
-    peak = _peak_gpu_mb()
+    def _run():
+        return probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=tp,
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=atoms,
+            double_channel=double,
+            lazy=False,
+        ).compute()
+    _, elapsed, peak = _measure_peak_gpu(_run)
     return elapsed, peak
 
 
 def timed_prism(S, tp, scan, atoms):
     """Run PRISM EELS and return (time_s, peak_gpu_mem_MB)."""
-    detector = abtem.FlexibleAnnularDetector()
-    _reset_gpu_memory()
-    _gpu_sync()
-    t0 = time.perf_counter()
-    S.transition_potential_scan(
-        transition_potentials=tp,
-        scan=scan,
-        detectors=detector,
-        sites=atoms,
-        double_channel=double,
-    )
-    _gpu_sync()
-    elapsed = time.perf_counter() - t0
-    peak = _peak_gpu_mb()
+    def _run():
+        return S.transition_potential_scan(
+            transition_potentials=tp,
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(),
+            sites=atoms,
+            double_channel=double,
+        )
+    _, elapsed, peak = _measure_peak_gpu(_run)
     return elapsed, peak
 
 
