@@ -5,7 +5,7 @@ Two sweeps per channeling mode (single + double):
   2. Specimen thickness (fixed scan size above crossover) — shows how the
      per-position saving accumulates with more slices.
 
-Peak GPU memory is recorded per data point via background memGetInfo sampling.
+Peak GPU memory is recorded per data point via CuPy MemoryHook.
 
 Usage
 -----
@@ -15,7 +15,6 @@ Usage
 import gc
 import sys
 import time
-import threading
 
 import cupy as cp
 import numpy as np
@@ -34,12 +33,24 @@ def _gpu_sync():
     cp.cuda.Device().synchronize()
 
 
+class _PeakMemoryHook(cp.cuda.MemoryHook):
+    """Track peak pool usage by hooking every allocation."""
+
+    def __init__(self, baseline):
+        self.peak = baseline
+
+    def malloc_postprocess(self, device_id, size, mem_size, mem_ptr, pmem_id):
+        used = _mempool.used_bytes()
+        if used > self.peak:
+            self.peak = used
+
+
 def _measure_peak_gpu(func, *args, **kwargs):
     """Run *func* and return ``(result, elapsed_s, peak_gpu_delta_mb)``.
 
-    A background thread samples ``memGetInfo`` every 5 ms to capture
-    the true peak GPU memory delta (allocations that are freed before
-    the function returns are still counted).
+    Uses CuPy's MemoryHook to intercept every pool allocation and track
+    the true high-water mark of ``used_bytes()``.  Unlike a background
+    sampling thread, this never misses short-lived allocations.
     """
     _gpu_sync()
     gc.collect()
@@ -47,31 +58,15 @@ def _measure_peak_gpu(func, *args, **kwargs):
     _pinned_pool.free_all_blocks()
     _gpu_sync()
 
-    free_before, _ = cp.cuda.runtime.memGetInfo()
-    min_free = free_before
-    lock = threading.Lock()
-    stop = threading.Event()
+    baseline = _mempool.used_bytes()
+    hook = _PeakMemoryHook(baseline)
+    with hook:
+        t0 = time.perf_counter()
+        result = func(*args, **kwargs)
+        _gpu_sync()
+        elapsed = time.perf_counter() - t0
 
-    def _sampler():
-        nonlocal min_free
-        while not stop.wait(0.005):
-            f, _ = cp.cuda.runtime.memGetInfo()
-            with lock:
-                if f < min_free:
-                    min_free = f
-
-    sampler = threading.Thread(target=_sampler, daemon=True)
-    sampler.start()
-    _gpu_sync()
-    t0 = time.perf_counter()
-    result = func(*args, **kwargs)
-    _gpu_sync()
-    elapsed = time.perf_counter() - t0
-    stop.set()
-    sampler.join()
-
-    with lock:
-        peak_mb = (free_before - min_free) / 1024**2
+    peak_mb = (hook.peak - baseline) / 1024**2
     return result, elapsed, max(peak_mb, 0.0)
 
 # ---------------------------------------------------------------------------
