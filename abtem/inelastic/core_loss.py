@@ -1267,6 +1267,14 @@ def prism_transition_potential_scan(
     _tp_window_k = fft2(_tp_window_real)
     _window_propagator = FresnelPropagator()
 
+    _dummy_window_waves = Waves(
+        xp.zeros((1,) + tuple(scatter_window_gpts), dtype=complex_dtype),
+        energy=energy,
+        extent=scatter_window_extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+    )
+    full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+
     # Reduction helpers operate in the downsampled grid.
     pixel_positions = positions / xp.asarray(ds_sampling, dtype=np.float32)
     reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
@@ -1383,13 +1391,14 @@ def prism_transition_potential_scan(
         if len(sites_this_slice) == 0:
             continue
 
+        # Per-site scatter on the windowed grid (position-dependent).
+        site_xys = []
+        site_crop_corners = []
+        scattered_windows = []
         for atom in sites_this_slice:
             site_xy = np.array(
                 [atom.position[0], atom.position[1]], dtype=np.float32
             )
-
-            # --- Windowed scatter (Brown et al. Sec IV B) ---
-            full_sampling_arr = np.array(full_sampling, dtype=np.float32)
             site_pixel = site_xy / full_sampling_arr
             site_pixel_int = np.rint(site_pixel).astype(int)
             sub_pixel = xp.asarray(
@@ -1404,28 +1413,78 @@ def prism_transition_potential_scan(
             s_cropped = wrapped_crop_2d(
                 s_waves.array, site_crop_corner, scatter_window_gpts
             )
-
             shift_k = fft_shift_kernel(sub_pixel, scatter_window_gpts)
             tp_shifted = ifft2(_tp_window_k * shift_k)
-
             scattered_window = tp_shifted[:, None] * s_cropped[None, :]
 
-            if double_channel:
-                n_T_val = scattered_window.shape[0]
-                sw_flat = scattered_window.reshape(
-                    (-1,) + tuple(scatter_window_gpts)
-                )
-                sw_waves = Waves(
-                    sw_flat, energy=energy, extent=scatter_window_extent,
-                    ensemble_axes_metadata=[
-                        OrdinalAxis(
-                            values=tuple(range(sw_flat.shape[0]))
-                        )
-                    ],
-                )
+            site_xys.append(site_xy)
+            site_crop_corners.append(site_crop_corner)
+            scattered_windows.append(scattered_window)
 
-                if slice_index in exit_planes:
-                    sw_out = sw_waves.array.reshape(
+        n_T_val = scattered_windows[0].shape[0]
+        n_sites_slice = len(scattered_windows)
+
+        if not double_channel:
+            for s_idx in range(n_sites_slice):
+                sw = scattered_windows[s_idx]
+                if needs_downsample:
+                    sw = fft_interpolate(
+                        sw, output_window_gpts,
+                        normalization="intensity",
+                    )
+                ep_start = bisect_left(exit_planes, slice_index)
+                exit_idx = () if n_exit == 1 else (
+                    slice(ep_start, n_exit),
+                )
+                _reduce_and_record(sw, site_xys[s_idx], exit_idx)
+            continue
+
+        # Double-channel: batch inner propagation across all sites in
+        # this slice.  Shape: (n_sites, n_T * n_k, wh, ww).
+        batched = xp.stack([
+            sw.reshape((-1,) + tuple(scatter_window_gpts))
+            for sw in scattered_windows
+        ])
+
+        if slice_index in exit_planes:
+            ep_idx = exit_planes.index(slice_index)
+            for s_idx in range(n_sites_slice):
+                sw_out = batched[s_idx].reshape(
+                    (n_T_val, n_k) + tuple(scatter_window_gpts)
+                )
+                if needs_downsample:
+                    sw_out = fft_interpolate(
+                        sw_out, output_window_gpts,
+                        normalization="intensity",
+                    )
+                _reduce_and_record(sw_out, site_xys[s_idx], ep_idx)
+
+        for inner_idx, inner_transmission in enumerate(
+            transmissions[slice_index + 1:]
+        ):
+            # Crop transmission for each site: (n_sites, 1, wh, ww).
+            # Transmissions may carry a leading singleton ensemble dim
+            # (shape (1, H, W)); squeeze to 2D before stacking.
+            t_arr = inner_transmission.array
+            if t_arr.ndim > 2:
+                t_arr = t_arr[0]
+            cropped_t = xp.stack([
+                wrapped_crop_2d(t_arr, sc, scatter_window_gpts)
+                for sc in site_crop_corners
+            ])[:, None]
+            batched *= cropped_t
+
+            kernel = _window_propagator.get_array(
+                _dummy_window_waves,
+                thickness=inner_transmission.slice_thickness[0],
+            )
+            batched = fft2_convolve(batched, kernel, overwrite_x=True)
+
+            abs_inner = slice_index + 1 + inner_idx
+            if abs_inner in exit_planes:
+                ep_idx = exit_planes.index(abs_inner)
+                for s_idx in range(n_sites_slice):
+                    sw_out = batched[s_idx].reshape(
                         (n_T_val, n_k) + tuple(scatter_window_gpts)
                     )
                     if needs_downsample:
@@ -1434,53 +1493,8 @@ def prism_transition_potential_scan(
                             normalization="intensity",
                         )
                     _reduce_and_record(
-                        sw_out, site_xy,
-                        exit_planes.index(slice_index),
+                        sw_out, site_xys[s_idx], ep_idx
                     )
-
-                for inner_idx, inner_transmission in enumerate(
-                    transmissions[slice_index + 1 :]
-                ):
-                    inner_t_arr = wrapped_crop_2d(
-                        inner_transmission.array,
-                        site_crop_corner,
-                        scatter_window_gpts,
-                    )
-                    sw_waves._array = sw_waves._array * inner_t_arr
-                    sw_waves = _window_propagator.propagate(
-                        sw_waves,
-                        thickness=inner_transmission.slice_thickness[0],
-                        in_place=True,
-                    )
-                    abs_inner = slice_index + 1 + inner_idx
-                    if abs_inner in exit_planes:
-                        sw_out = sw_waves.array.reshape(
-                            (n_T_val, n_k) + tuple(scatter_window_gpts)
-                        )
-                        if needs_downsample:
-                            sw_out = fft_interpolate(
-                                sw_out, output_window_gpts,
-                                normalization="intensity",
-                            )
-                        _reduce_and_record(
-                            sw_out, site_xy,
-                            exit_planes.index(abs_inner),
-                        )
-
-            else:
-                if needs_downsample:
-                    scattered_window = fft_interpolate(
-                        scattered_window, output_window_gpts,
-                        normalization="intensity",
-                    )
-
-                ep_start = bisect_left(exit_planes, slice_index)
-                exit_idx = () if n_exit == 1 else (
-                    slice(ep_start, n_exit),
-                )
-                _reduce_and_record(
-                    scattered_window, site_xy, exit_idx
-                )
 
     # Squeeze out single-point-scan axes the same way the multislice path
     # does (via reduce_ensemble inside Waves.transition_potential_multislice
