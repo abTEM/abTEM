@@ -1,22 +1,22 @@
-"""Benchmark: PRISM-EELS vs multislice on SrTiO3.
+"""Benchmark: PRISM-EELS vs multislice on SrTiO3 (GPU).
 
 Two sweeps:
   1. Scan positions (fixed thickness) — shows crossover and linear scaling.
   2. Specimen thickness (fixed scan size above crossover) — shows how the
      per-position saving accumulates with more slices.
 
-Peak traced-memory is recorded for every data point via tracemalloc.
+Peak GPU memory is recorded per data point via the CuPy memory pool.
 
 Usage
 -----
-    python benchmarks/bench_prism_eels.py            # saves .png next to script
-    python benchmarks/bench_prism_eels.py out.png     # custom output path
+    python benchmarks/bench_prism_eels_gpu.py            # saves .png next to script
+    python benchmarks/bench_prism_eels_gpu.py out.png     # custom output path
 """
 import gc
 import sys
 import time
-import tracemalloc
 
+import cupy as cp
 import numpy as np
 import matplotlib.pyplot as plt
 from ase import Atoms
@@ -24,6 +24,31 @@ from ase import Atoms
 import abtem
 from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import TransitionPotentialArray, energy2sigma
+
+_mempool = cp.get_default_memory_pool()
+
+
+def _gpu_sync():
+    cp.cuda.Device().synchronize()
+
+
+def _reset_gpu_memory():
+    """Free all cached GPU blocks so the next run starts from a clean slate."""
+    _gpu_sync()
+    gc.collect()
+    _mempool.free_all_blocks()
+    _gpu_sync()
+
+
+def _peak_gpu_mb():
+    """Return peak GPU allocation in MB since the last pool reset.
+
+    After a computation the pool holds both used and freed-but-cached
+    blocks.  ``total_bytes()`` counts all of them, giving the high-water
+    mark of CUDA memory the pool requested from the driver.
+    """
+    _gpu_sync()
+    return _mempool.total_bytes() / 1024**2
 
 # ---------------------------------------------------------------------------
 # SrTiO3 unit cell (perovskite, a = 3.905 Å)
@@ -81,10 +106,10 @@ def make_potential_and_tp(atoms):
 
 
 def timed_ms(probe, potential, tp, scan, atoms):
-    """Run multislice EELS and return (time_s, peak_mem_MB)."""
+    """Run multislice EELS and return (time_s, peak_gpu_mem_MB)."""
     detector = abtem.FlexibleAnnularDetector()
-    gc.collect()
-    tracemalloc.start()
+    _reset_gpu_memory()
+    _gpu_sync()
     t0 = time.perf_counter()
     probe.transition_potential_scan(
         potential=potential,
@@ -95,17 +120,17 @@ def timed_ms(probe, potential, tp, scan, atoms):
         double_channel=double,
         lazy=False,
     ).compute()
+    _gpu_sync()
     elapsed = time.perf_counter() - t0
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    return elapsed, peak / 1024**2
+    peak = _peak_gpu_mb()
+    return elapsed, peak
 
 
 def timed_prism(S, tp, scan, atoms):
-    """Run PRISM EELS and return (time_s, peak_mem_MB)."""
+    """Run PRISM EELS and return (time_s, peak_gpu_mem_MB)."""
     detector = abtem.FlexibleAnnularDetector()
-    gc.collect()
-    tracemalloc.start()
+    _reset_gpu_memory()
+    _gpu_sync()
     t0 = time.perf_counter()
     S.transition_potential_scan(
         transition_potentials=tp,
@@ -114,10 +139,10 @@ def timed_prism(S, tp, scan, atoms):
         sites=atoms,
         double_channel=double,
     )
+    _gpu_sync()
     elapsed = time.perf_counter() - t0
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    return elapsed, peak / 1024**2
+    peak = _peak_gpu_mb()
+    return elapsed, peak
 
 
 def sweep_scan_positions(nz=8):
@@ -339,8 +364,8 @@ def plot(r1, r2, out_path):
         x1, r1["pr_m"], "C0s-", ms=5, lw=1.5, label=f"PRISM interp={interp}"
     )
     ax.set_xlabel("Scan positions")
-    ax.set_ylabel("Peak traced memory (MB)")
-    ax.set_title("Peak memory vs scan positions")
+    ax.set_ylabel("Peak GPU memory (MB)")
+    ax.set_title("Peak GPU memory vs scan positions")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
@@ -395,13 +420,13 @@ def plot(r1, r2, out_path):
         label=f"PRISM interp={interp}",
     )
     ax.set_xlabel("Specimen thickness (Å)")
-    ax.set_ylabel("Peak traced memory (MB)")
-    ax.set_title(f"Peak memory vs thickness ({r2['n_pos']} positions)")
+    ax.set_ylabel("Peak GPU memory (MB)")
+    ax.set_title(f"Peak GPU memory vs thickness ({r2['n_pos']} positions)")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
     fig.suptitle(
-        f"PRISM-EELS benchmark: SrTiO3 4×4×N, "
+        f"PRISM-EELS benchmark (GPU): SrTiO3 4×4×N, "
         f"{gpts[0]}×{gpts[1]} gpts, interp={interp}, "
         f"N$_k$={n_k}, {energy / 1e3:.0f} keV, {semiangle_cutoff} mrad",
         fontsize=11,
@@ -415,7 +440,7 @@ def plot(r1, r2, out_path):
 if __name__ == "__main__":
     import pathlib
 
-    default_out = pathlib.Path(__file__).with_name("bench_prism_eels.png")
+    default_out = pathlib.Path(__file__).with_name("bench_prism_eels_gpu.png")
     out_path = sys.argv[1] if len(sys.argv) > 1 else str(default_out)
 
     r1 = sweep_scan_positions(nz=8)
