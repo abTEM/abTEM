@@ -155,7 +155,7 @@ def sweep_scan_positions(double_channel, nz=8):
     )
     print("=" * 72)
 
-    scan_ns = [2, 4, 8, 12, 16, 20, 24, 30, 36, 42, 50]
+    scan_ns = [2, 4, 8, 16, 32, 64]
     n_pos_list = [n * n for n in scan_ns]
 
     print(
@@ -199,7 +199,7 @@ def sweep_thickness(double_channel, scan_n=32):
     """Sweep 2: vary z-repetitions, fixed scan grid."""
     mode = "double" if double_channel else "single"
     n_pos = scan_n**2
-    nz_values = [2, 4, 6, 8, 10, 12, 16, 20]
+    nz_values = [2, 4, 8, 16, 32, 64]
 
     print(
         f"\n--- Sweep 2: thickness ({mode}-channel, fixed {scan_n}x{scan_n} "
