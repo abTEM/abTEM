@@ -451,12 +451,66 @@ def plot(r1, r2, out_path):
     plt.close()
 
 
+def validate_interp1():
+    """Sanity check: PRISM at interp=1 must match multislice."""
+    print("Validating PRISM vs multislice at interp=1 ... ", end="", flush=True)
+    atoms = srtio3_unit * (2, 2, 2)
+    potential, tp = make_potential_and_tp(atoms)
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device="gpu"
+    )
+    probe.grid.match(potential)
+
+    scan = abtem.GridScan(
+        start=(0, 0), end=potential.extent, gpts=(2, 2), endpoint=False
+    )
+    detector = abtem.FlexibleAnnularDetector()
+
+    res_ms = probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=tp,
+        scan=scan,
+        detectors=detector,
+        sites=atoms,
+        double_channel=double,
+        lazy=True,
+    ).compute()
+
+    S1 = abtem.SMatrix(
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle_cutoff,
+        interpolation=1,
+        downsample=False,
+        device="gpu",
+    )
+    res_prism = S1.transition_potential_scan(
+        transition_potentials=tp,
+        scan=scan,
+        detectors=detector,
+        sites=atoms,
+        double_channel=double,
+    )
+
+    arr_ms = np.asarray(res_ms.array)
+    arr_pr = np.asarray(res_prism.array)
+    assert arr_ms.shape == arr_pr.shape, (
+        f"shape mismatch: MS {arr_ms.shape} vs PRISM {arr_pr.shape}"
+    )
+    np.testing.assert_allclose(arr_pr, arr_ms, rtol=1e-4, atol=0)
+    print(
+        f"OK  (max rel err {np.max(np.abs(arr_pr - arr_ms) / np.abs(arr_ms).clip(1e-30)):.2e})"
+    )
+
+
 if __name__ == "__main__":
     import pathlib
 
     default_out = pathlib.Path(__file__).with_name("bench_prism_eels_gpu.png")
     out_path = sys.argv[1] if len(sys.argv) > 1 else str(default_out)
 
+    validate_interp1()
     r1 = sweep_scan_positions(nz=8)
     r2 = sweep_thickness(scan_n=30)
     plot(r1, r2, out_path)
