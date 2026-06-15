@@ -1,16 +1,16 @@
 """Benchmark: PRISM-EELS vs multislice on SrTiO3 (GPU).
 
-Two sweeps:
+Two sweeps per channeling mode (single + double):
   1. Scan positions (fixed thickness) — shows crossover and linear scaling.
   2. Specimen thickness (fixed scan size above crossover) — shows how the
      per-position saving accumulates with more slices.
 
-Peak GPU memory is recorded per data point via the CuPy memory pool.
+Peak GPU memory is recorded per data point via background memGetInfo sampling.
 
 Usage
 -----
-    python benchmarks/bench_prism_eels_gpu.py            # saves .pdf next to script
-    python benchmarks/bench_prism_eels_gpu.py out.pdf     # custom output path
+    python benchmarks/bench_prism_eels_gpu.py
+        # saves bench_prism_eels_gpu_single.pdf and _double.pdf next to script
 """
 import gc
 import sys
@@ -97,7 +97,7 @@ semiangle_cutoff = 25.0  # mrad
 gpts = (128, 128)
 interp = 8
 n_k = (gpts[0] // interp) * (gpts[1] // interp)  # 256
-double = True
+
 
 def make_potential_and_tp(atoms):
     """Build Potential and synthetic Ti K-edge TransitionPotentialArray."""
@@ -129,7 +129,7 @@ def make_potential_and_tp(atoms):
     return potential, tp
 
 
-def timed_ms(probe, potential, tp, scan, atoms):
+def timed_ms(probe, potential, tp, scan, atoms, double_channel):
     """Run multislice EELS and return (time_s, peak_gpu_mem_MB)."""
     def _run():
         return probe.transition_potential_scan(
@@ -138,14 +138,14 @@ def timed_ms(probe, potential, tp, scan, atoms):
             scan=scan,
             detectors=abtem.FlexibleAnnularDetector(),
             sites=atoms,
-            double_channel=double,
+            double_channel=double_channel,
             lazy=False,
         ).compute()
     _, elapsed, peak = _measure_peak_gpu(_run)
     return elapsed, peak
 
 
-def timed_prism(S, tp, scan, atoms):
+def timed_prism(S, tp, scan, atoms, double_channel):
     """Run PRISM EELS and return (time_s, peak_gpu_mem_MB)."""
     def _run():
         return S.transition_potential_scan(
@@ -153,15 +153,16 @@ def timed_prism(S, tp, scan, atoms):
             scan=scan,
             detectors=abtem.FlexibleAnnularDetector(),
             sites=atoms,
-            double_channel=double,
+            double_channel=double_channel,
             lazy=False,
         )
     _, elapsed, peak = _measure_peak_gpu(_run)
     return elapsed, peak
 
 
-def sweep_scan_positions(nz=8):
+def sweep_scan_positions(double_channel, nz=8):
     """Sweep 1: vary scan grid, fixed thickness."""
+    mode = "double" if double_channel else "single"
     atoms = srtio3_unit * (4, 4, nz)
     potential, tp = make_potential_and_tp(atoms)
     n_slices = len(list(potential.generate_slices()))
@@ -186,7 +187,7 @@ def sweep_scan_positions(nz=8):
     print(
         f"SrTiO3 4x4x{nz}  |  {gpts[0]}x{gpts[1]} gpts  |  "
         f"{n_slices} slices ({atoms.cell[2, 2]:.1f} A)  |  "
-        f"{energy / 1e3:.0f} keV  {semiangle_cutoff} mrad"
+        f"{energy / 1e3:.0f} keV  {semiangle_cutoff} mrad  |  {mode}-channel"
     )
     print(
         f"PRISM interp={interp}, N_k={n_k}, window={S.window_gpts}"
@@ -197,7 +198,7 @@ def sweep_scan_positions(nz=8):
     n_pos_list = [n * n for n in scan_ns]
 
     print(
-        f"\n--- Sweep 1: scan positions ---\n"
+        f"\n--- Sweep 1: scan positions ({mode}-channel) ---\n"
         f"{'n':>4s}  {'N_pos':>6s}  {'MS (s)':>8s} {'ms/pos':>7s} "
         f"{'MB':>6s}  {'PRISM (s)':>9s} {'ms/pos':>7s} {'MB':>6s}  "
         f"{'speedup':>7s}"
@@ -209,8 +210,8 @@ def sweep_scan_positions(nz=8):
             start=(0, 0), end=cell_xy, gpts=(n, n), endpoint=False
         )
         n_pos = n * n
-        t_ms, m_ms = timed_ms(probe, potential, tp, scan, atoms)
-        t_pr, m_pr = timed_prism(S, tp, scan, atoms)
+        t_ms, m_ms = timed_ms(probe, potential, tp, scan, atoms, double_channel)
+        t_pr, m_pr = timed_prism(S, tp, scan, atoms, double_channel)
         ms_t.append(t_ms)
         ms_m.append(m_ms)
         pr_t.append(t_pr)
@@ -233,13 +234,14 @@ def sweep_scan_positions(nz=8):
     )
 
 
-def sweep_thickness(scan_n=30):
+def sweep_thickness(double_channel, scan_n=32):
     """Sweep 2: vary z-repetitions, fixed scan grid."""
+    mode = "double" if double_channel else "single"
     n_pos = scan_n**2
-    nz_values = [2, 4, 8, 16, 32, 64] 
+    nz_values = [2, 4, 8, 16, 32, 64]
 
     print(
-        f"\n--- Sweep 2: thickness (fixed {scan_n}x{scan_n} "
+        f"\n--- Sweep 2: thickness ({mode}-channel, fixed {scan_n}x{scan_n} "
         f"= {n_pos} positions) ---\n"
         f"{'nz':>4s}  {'slices':>6s}  {'thick':>6s}  {'MS (s)':>8s} "
         f"{'MB':>6s}  {'PRISM (s)':>9s} {'MB':>6s}  {'speedup':>7s}"
@@ -277,8 +279,8 @@ def sweep_thickness(scan_n=30):
             endpoint=False,
         )
 
-        t_ms, m_ms = timed_ms(probe, potential, tp, scan, atoms)
-        t_pr, m_pr = timed_prism(S, tp, scan, atoms)
+        t_ms, m_ms = timed_ms(probe, potential, tp, scan, atoms, double_channel)
+        t_pr, m_pr = timed_prism(S, tp, scan, atoms, double_channel)
         ms_t.append(t_ms)
         ms_m.append(m_ms)
         pr_t.append(t_pr)
@@ -302,8 +304,9 @@ def sweep_thickness(scan_n=30):
     )
 
 
-def plot(r1, r2, out_path):
+def plot(r1, r2, out_path, double_channel):
     """Six-panel figure: top row = scan sweep, bottom row = thickness sweep."""
+    mode = "double" if double_channel else "single"
     fig, axes = plt.subplots(2, 3, figsize=(15, 9))
 
     # ---- Row 1: scan positions ----
@@ -318,7 +321,7 @@ def plot(r1, r2, out_path):
     extrap_x1 = np.linspace(0, 3000, 200)
 
     print(
-        f"\nScan-position fit: "
+        f"\nScan-position fit ({mode}-channel): "
         f"MS {ms_slope1 * 1000:.2f} ms/pos + {ms_int1:.3f} s  |  "
         f"PRISM {pr_slope1 * 1000:.2f} ms/pos + {pr_int1:.3f} s"
     )
@@ -391,7 +394,7 @@ def plot(r1, r2, out_path):
     pr_slope2, pr_int2 = np.polyfit(slices_arr, r2["pr_t"], 1)
 
     print(
-        f"\nThickness fit ({r2['n_pos']} positions): "
+        f"\nThickness fit ({mode}-channel, {r2['n_pos']} positions): "
         f"MS {ms_slope2:.3f} s/slice + {ms_int2:.3f} s  |  "
         f"PRISM {pr_slope2:.3f} s/slice + {pr_int2:.3f} s"
     )
@@ -441,7 +444,7 @@ def plot(r1, r2, out_path):
     ax.grid(True, alpha=0.3)
 
     fig.suptitle(
-        f"PRISM-EELS benchmark (GPU): SrTiO3 4×4×N, "
+        f"PRISM-EELS benchmark (GPU, {mode}-channel): SrTiO3 4×4×N, "
         f"{gpts[0]}×{gpts[1]} gpts, interp={interp}, "
         f"N$_k$={n_k}, {energy / 1e3:.0f} keV, {semiangle_cutoff} mrad",
         fontsize=11,
@@ -453,8 +456,7 @@ def plot(r1, r2, out_path):
 
 
 def validate_interp1():
-    """Sanity check: PRISM at interp=1 must match multislice."""
-    print("Validating PRISM vs multislice at interp=1 ... ", end="", flush=True)
+    """Sanity check: PRISM at interp=1 must match multislice (both modes)."""
     atoms = srtio3_unit * (2, 2, 2)
     potential, tp = make_potential_and_tp(atoms)
 
@@ -468,16 +470,6 @@ def validate_interp1():
     )
     detector = abtem.FlexibleAnnularDetector()
 
-    res_ms = probe.transition_potential_scan(
-        potential=potential,
-        transition_potentials=tp,
-        scan=scan,
-        detectors=detector,
-        sites=atoms,
-        double_channel=double,
-        lazy=True,
-    ).compute()
-
     S1 = abtem.SMatrix(
         potential=potential,
         energy=energy,
@@ -486,33 +478,54 @@ def validate_interp1():
         downsample=False,
         device="gpu",
     )
-    res_prism = S1.transition_potential_scan(
-        transition_potentials=tp,
-        scan=scan,
-        detectors=detector,
-        sites=atoms,
-        double_channel=double,
-        lazy=False,
-    )
 
-    arr_ms = np.asarray(res_ms.array)
-    arr_pr = np.asarray(res_prism.array)
-    assert arr_ms.shape == arr_pr.shape, (
-        f"shape mismatch: MS {arr_ms.shape} vs PRISM {arr_pr.shape}"
-    )
-    np.testing.assert_allclose(arr_pr, arr_ms, rtol=1e-4, atol=0)
-    print(
-        f"OK  (max rel err {np.max(np.abs(arr_pr - arr_ms) / np.abs(arr_ms).clip(1e-30)):.2e})"
-    )
+    for dc in [False, True]:
+        mode = "double" if dc else "single"
+        print(
+            f"Validating PRISM vs multislice at interp=1 ({mode}-channel) ... ",
+            end="", flush=True,
+        )
+        res_ms = probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=tp,
+            scan=scan,
+            detectors=detector,
+            sites=atoms,
+            double_channel=dc,
+            lazy=True,
+        ).compute()
+
+        res_prism = S1.transition_potential_scan(
+            transition_potentials=tp,
+            scan=scan,
+            detectors=detector,
+            sites=atoms,
+            double_channel=dc,
+            lazy=False,
+        )
+
+        arr_ms = np.asarray(res_ms.array)
+        arr_pr = np.asarray(res_prism.array)
+        assert arr_ms.shape == arr_pr.shape, (
+            f"shape mismatch: MS {arr_ms.shape} vs PRISM {arr_pr.shape}"
+        )
+        np.testing.assert_allclose(arr_pr, arr_ms, rtol=1e-4, atol=0)
+        print(
+            f"OK  (max rel err "
+            f"{np.max(np.abs(arr_pr - arr_ms) / np.abs(arr_ms).clip(1e-30)):.2e})"
+        )
 
 
 if __name__ == "__main__":
     import pathlib
 
-    default_out = pathlib.Path(__file__).with_name("bench_prism_eels_gpu.pdf")
-    out_path = sys.argv[1] if len(sys.argv) > 1 else str(default_out)
+    stem = pathlib.Path(__file__).with_suffix("")
 
     validate_interp1()
-    r1 = sweep_scan_positions(nz=8)
-    r2 = sweep_thickness(scan_n=30)
-    plot(r1, r2, out_path)
+
+    for dc in [False, True]:
+        mode = "single" if not dc else "double"
+        out_path = f"{stem}_{mode}.pdf"
+        r1 = sweep_scan_positions(double_channel=dc, nz=8)
+        r2 = sweep_thickness(double_channel=dc, scan_n=32)
+        plot(r1, r2, out_path, double_channel=dc)
