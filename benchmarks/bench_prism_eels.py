@@ -9,8 +9,8 @@ Peak traced-memory is recorded for every data point via tracemalloc.
 
 Usage
 -----
-    python benchmarks/bench_prism_eels.py            # saves .png next to script
-    python benchmarks/bench_prism_eels.py out.png     # custom output path
+    python benchmarks/bench_prism_eels.py            # saves .pdf next to script
+    python benchmarks/bench_prism_eels.py out.pdf     # custom output path
 """
 import gc
 import sys
@@ -113,6 +113,7 @@ def timed_prism(S, tp, scan, atoms):
         detectors=detector,
         sites=atoms,
         double_channel=False,
+        lazy=False,
     )
     elapsed = time.perf_counter() - t0
     _, peak = tracemalloc.get_traced_memory()
@@ -415,7 +416,7 @@ def plot(r1, r2, out_path):
 if __name__ == "__main__":
     import pathlib
 
-    default_out = pathlib.Path(__file__).with_name("bench_prism_eels.png")
+    default_out = pathlib.Path(__file__).with_name("bench_prism_eels.pdf")
     out_path = sys.argv[1] if len(sys.argv) > 1 else str(default_out)
 
     r1 = sweep_scan_positions(nz=8)

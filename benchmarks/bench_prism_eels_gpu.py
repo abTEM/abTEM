@@ -9,8 +9,8 @@ Peak GPU memory is recorded per data point via the CuPy memory pool.
 
 Usage
 -----
-    python benchmarks/bench_prism_eels_gpu.py            # saves .png next to script
-    python benchmarks/bench_prism_eels_gpu.py out.png     # custom output path
+    python benchmarks/bench_prism_eels_gpu.py            # saves .pdf next to script
+    python benchmarks/bench_prism_eels_gpu.py out.pdf     # custom output path
 """
 import gc
 import sys
@@ -154,6 +154,7 @@ def timed_prism(S, tp, scan, atoms):
             detectors=abtem.FlexibleAnnularDetector(),
             sites=atoms,
             double_channel=double,
+            lazy=False,
         )
     _, elapsed, peak = _measure_peak_gpu(_run)
     return elapsed, peak
@@ -491,6 +492,7 @@ def validate_interp1():
         detectors=detector,
         sites=atoms,
         double_channel=double,
+        lazy=False,
     )
 
     arr_ms = np.asarray(res_ms.array)
@@ -507,7 +509,7 @@ def validate_interp1():
 if __name__ == "__main__":
     import pathlib
 
-    default_out = pathlib.Path(__file__).with_name("bench_prism_eels_gpu.png")
+    default_out = pathlib.Path(__file__).with_name("bench_prism_eels_gpu.pdf")
     out_path = sys.argv[1] if len(sys.argv) > 1 else str(default_out)
 
     validate_interp1()
