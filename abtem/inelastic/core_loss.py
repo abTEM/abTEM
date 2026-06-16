@@ -1598,16 +1598,23 @@ def prism_transition_potential_scan_beam_basis(
 
     Implements Brown's beam-basis contraction (un-reduced S-matrix columns
     against a transition-potential window, *before* applying the periodic
-    position phase ramps) as a foundation for eventually exceeding the
-    real-space driver's PRISM-cell window cap — see GitHub issue
-    abTEM/abTEM#293. **As of this implementation, ``inelastic_crop`` is
-    clamped to the PRISM cell exactly like the real-space driver**: the
-    window-exceeds-cell extension (the actual accuracy payoff for delocalized
-    edges) is not yet correctly implemented — see Limitations below and the
-    issue for the root cause. What this driver currently offers over the
-    real-space path is a validated, independent re-derivation of the
-    beam-basis contraction itself (useful as a foundation for that follow-up
-    work), not yet a behavioural improvement.
+    position phase ramps). This was originally pursued (GitHub issue
+    abTEM/abTEM#293) to let the transition-potential window *exceed* the
+    real-space driver's PRISM-cell cap, in the hope of fixing the
+    delocalized-edge truncation error at ``interpolation > 1``. **That goal
+    turned out to be unfounded:** the interpolation-decimated PRISM probe is
+    exactly periodic with the PRISM cell (``extent / interpolation``), so a
+    window larger than the cell multiplies the transition-potential tail
+    against an exact *copy* of the probe peak — adding spurious signal rather
+    than recovering accuracy. A direct experiment (issue #293, Update 4)
+    confirms the shape error is flat-to-worse as the window grows past the
+    cell, and Brown's own published run uses a window *smaller* than the cell.
+    ``inelastic_crop`` is therefore clamped to the cell, exactly like the
+    real-space driver. This function is kept as a **validated, independent
+    re-derivation** of Brown's reduction (bit-exact at ``interpolation=1``);
+    it does not — and now appears it cannot — beat the real-space path on
+    delocalized-edge accuracy. The lever for delocalized edges is a larger
+    cell (lower ``interpolation`` or a bigger supercell), not a larger window.
 
     Normalisation derivation (validated bit-exact against
     ``Probe.transition_potential_scan`` at ``interpolation=(1, 1)`` for both
@@ -1629,21 +1636,14 @@ def prism_transition_potential_scan_beam_basis(
         SHn0[q, k]    = N * sum_{r in window} conj(S2[q, r]) * H(r) * S1[k, r]
         recip[pos, q] = sum_k coeff[pos, k] * SHn0[q, k]
 
-    **Limitations** (see GitHub issue abTEM/abTEM#293 for the follow-up work):
+    **Limitations** (this is a validated reference implementation, not an
+    optimised production path — see GitHub issue abTEM/abTEM#293):
 
-    - ``inelastic_crop`` exceeding the PRISM cell is clamped (with a warning)
-      rather than honoured — see the docstring intro above. The fix requires
-      ``S2``'s reciprocal basis ``q`` to be the *same interpolation-decimated,
-      aperture-restricted set as ``wave_vectors``* (matching Brown's
-      ``PRISM02.m`` beam-selection mask for both ``S1`` and ``S2``), not the
-      dense full-grid basis this implementation currently builds — and a way
-      to feed that sparse basis into a generic ``detector.detect()`` pipeline
-      (Brown's own reference code bypasses a detector object and sums
-      directly).
+    - ``inelastic_crop`` exceeding the PRISM cell is clamped (with a warning):
+      it is not a useful regime — see the docstring intro.
     - ``S2`` (double-channel) is built over the *full* native reciprocal grid
-      (``prod(gpts)`` beams) rather than the (much smaller) decimated set
-      above. Memory and compute scale as ``O(prod(gpts)^2)`` per scattering
-      site per slice — only practical for small grids until fixed.
+      (``prod(gpts)`` beams). Memory and compute scale as ``O(prod(gpts)^2)``
+      per scattering site per slice — only practical for small grids.
     - Single exit plane only (``len(potential.exit_planes) == 1``).
     - No frozen-phonon ensemble (``potential.ensemble_shape == ()``).
     - No ``downsample`` support (``s_matrix.downsampled_gpts == s_matrix.gpts``).
@@ -1856,10 +1856,13 @@ def prism_transition_potential_scan_beam_basis(
 
         warnings.warn(
             "PRISM-EELS beam-basis: inelastic_crop exceeding the PRISM cell "
-            "is not yet correctly implemented (the output q-basis must be "
-            "tied to the interpolation-decimated wave_vectors, not a "
-            "window-sized or full-grid FFT — see GitHub issue "
-            "abTEM/abTEM#293); clamping to the cell.",
+            "(extent / interpolation) does not improve accuracy and is "
+            "clamped to the cell. The interpolation-decimated PRISM probe is "
+            "exactly cell-periodic, so a larger window multiplies the "
+            "transition-potential tail against a copy of the probe peak "
+            "(spurious signal, not recovered accuracy) — see GitHub issue "
+            "abTEM/abTEM#293, Update 4. The lever for delocalized edges is a "
+            "larger cell (lower interpolation / bigger supercell).",
             stacklevel=2,
         )
         window_gpts = (
