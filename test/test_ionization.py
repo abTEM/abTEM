@@ -259,6 +259,86 @@ def test_prism_eels_matches_multislice_eels_at_interp_1(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("double_channel", [False, True])
+def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_channel):
+    """The beam-basis reduction (GitHub issue abTEM/abTEM#293) at
+    interpolation=(1,1), window=cell=full grid, reproduces
+    Probe.transition_potential_scan -- bit-exact for both single- and
+    double-channel. This is the validation gate for the normalisation
+    derivation recorded in the project_prism_eels_beam_basis_convention
+    memory note: ``recip[q] = N * sum_r conj(S2[q, r]) * psi[r]``.
+    """
+    from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device=device
+    )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    rng = np.random.default_rng(0)
+    tp_array = (
+        rng.standard_normal((2, 32, 32))
+        + 1j * rng.standard_normal((2, 32, 32))
+    ).astype(np.complex64)
+    tp = TransitionPotentialArray(
+        Z=14,
+        array=tp_array,
+        energy=energy,
+        extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(unit_atoms.cell[0, 0], unit_atoms.cell[1, 1]),
+        sampling=0.5, endpoint=False,
+    )
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
+    )
+    probe.grid.match(potential)
+    res_multislice = probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=tp,
+        scan=scan,
+        detectors=detector,
+        sites=atoms,
+        double_channel=double_channel,
+        lazy=False,
+    ).compute()
+    arr_multislice = np.asarray(res_multislice.array)
+
+    s_matrix = abtem.SMatrix(
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle_cutoff,
+        interpolation=1,
+        downsample=False,
+        device=device,
+    )
+    res_beam_basis = prism_transition_potential_scan_beam_basis(
+        s_matrix,
+        transition_potentials=tp,
+        scan=scan,
+        detectors=detector,
+        sites=atoms,
+        double_channel=double_channel,
+    )
+    arr_beam_basis = np.asarray(res_beam_basis.array)
+
+    assert arr_multislice.shape == arr_beam_basis.shape
+    np.testing.assert_allclose(arr_beam_basis, arr_multislice, rtol=1e-4, atol=1e-6)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_eels_double_channel_matches_multislice_at_interp_1(device):
     """Double-channel PRISM-EELS at interpolation=(1,1) reproduces
     Probe.transition_potential_scan with double_channel=True."""
