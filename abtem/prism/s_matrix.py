@@ -1478,7 +1478,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             warnings.warn(
-                "The interpolation factor does not exactly divide 'gpts', normalization"
+                "The interpolation factor does not exactly divide 'gpts', normalization "
                 "may not be exactly preserved."
             )
 
