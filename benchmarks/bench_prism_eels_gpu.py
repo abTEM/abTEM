@@ -90,7 +90,8 @@ srtio3_unit = Atoms(
 energy = 200e3  # 200 keV
 semiangle_cutoff = 25.0  # mrad
 gpts = (128, 128)
-interp = 8
+interp = 3
+sc = 2
 n_k = (gpts[0] // interp) * (gpts[1] // interp)  # 256
 
 
@@ -158,7 +159,7 @@ def timed_prism(S, tp, scan, atoms, double_channel):
 def sweep_scan_positions(double_channel, nz=8):
     """Sweep 1: vary scan grid, fixed thickness."""
     mode = "double" if double_channel else "single"
-    atoms = srtio3_unit * (4, 4, nz)
+    atoms = srtio3_unit * (2, 2, nz)
     potential, tp = make_potential_and_tp(atoms)
     n_slices = len(list(potential.generate_slices()))
 
@@ -180,7 +181,7 @@ def sweep_scan_positions(double_channel, nz=8):
 
     print("=" * 72)
     print(
-        f"SrTiO3 4x4x{nz}  |  {gpts[0]}x{gpts[1]} gpts  |  "
+        f"SrTiO3 {sc}x{sc}x{nz}  |  {gpts[0]}x{gpts[1]} gpts  |  "
         f"{n_slices} slices ({atoms.cell[2, 2]:.1f} A)  |  "
         f"{energy / 1e3:.0f} keV  {semiangle_cutoff} mrad  |  {mode}-channel"
     )
@@ -247,7 +248,7 @@ def sweep_thickness(double_channel, scan_n=32):
     thickness_list = []
 
     for nz in nz_values:
-        atoms = srtio3_unit * (4, 4, nz)
+        atoms = srtio3_unit * (sc, sc, nz)
         potential, tp = make_potential_and_tp(atoms)
         n_sl = len(list(potential.generate_slices()))
         n_slices_list.append(n_sl)
@@ -439,7 +440,7 @@ def plot(r1, r2, out_path, double_channel):
     ax.grid(True, alpha=0.3)
 
     fig.suptitle(
-        f"PRISM-EELS benchmark (GPU, {mode}-channel): SrTiO3 4×4×N, "
+        f"PRISM-EELS benchmark (GPU, {mode}-channel): SrTiO3 {sc}×{sc}×N, "
         f"{gpts[0]}×{gpts[1]} gpts, interp={interp}, "
         f"N$_k$={n_k}, {energy / 1e3:.0f} keV, {semiangle_cutoff} mrad",
         fontsize=11,
@@ -452,7 +453,7 @@ def plot(r1, r2, out_path, double_channel):
 
 def validate_interp1():
     """Sanity check: PRISM at interp=1 must match multislice (both modes)."""
-    atoms = srtio3_unit * (2, 2, 2)
+    atoms = srtio3_unit * (sc, sc, sc)
     potential, tp = make_potential_and_tp(atoms)
 
     probe = abtem.Probe(
@@ -520,7 +521,7 @@ if __name__ == "__main__":
 
     for dc in [False, True]:
         mode = "single" if not dc else "double"
-        out_path = f"{stem}_{mode}.pdf"
+        out_path = f"{stem}_{mode}_f{interp}_g{gpts[0]}_sc{sc}.pdf"
         r1 = sweep_scan_positions(double_channel=dc, nz=8)
         r2 = sweep_thickness(double_channel=dc, scan_n=32)
         plot(r1, r2, out_path, double_channel=dc)
