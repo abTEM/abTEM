@@ -1034,6 +1034,7 @@ def prism_transition_potential_scan(
     detectors=None,
     sites=None,
     double_channel: bool = False,
+    inelastic_crop: float | tuple[float, float] | None = None,
 ):
     """PRISM-EELS driver following Brown et al. (Phys. Rev. Research 1,
     033186, 2019).
@@ -1072,6 +1073,19 @@ def prism_transition_potential_scan(
         Scattering sites. Auto-extracted from the potential if not given,
         following the same logic as
         ``transition_potential_multislice_and_detect``.
+    inelastic_crop : float or tuple of float, optional
+        Real-space side length [Å] of the window on which the transition
+        potential ``H_n0`` and the scattered wave are evaluated, following
+        Brown et al. Sec. IV B (their independent ``inelastic_crop`` factor).
+        Smaller windows speed up the scatter and — most significantly — the
+        double-channel inner propagation, at the cost of truncating the
+        ``H_n0`` tails (cf. their Fig. 4 / Table II). If ``None`` (default)
+        the full PRISM cell ``extent / interpolation`` is used (current
+        behaviour). The window is clamped to the PRISM cell: values larger
+        than ``extent / interpolation`` are not supported by this real-space
+        reduction (they would admit aliased probe copies) and are clamped
+        with a warning — exceeding the cell requires the beam-basis reduction
+        (see the PRISM-EELS follow-up note).
 
     Returns
     -------
@@ -1251,26 +1265,81 @@ def prism_transition_potential_scan(
         output_window_gpts[1] * ds_sampling[1],
     )
 
+    # --- Inelastic crop window (Brown et al. Sec. IV B, independent of the
+    # interpolation factor) ---
+    # The scatter and double-channel propagation run on this window; the
+    # scattered result is then embedded (centered, zero-padded) back into
+    # scatter_window_gpts before the per-position reduction so that the
+    # detection grid — and hence the validated normalisation — is unchanged.
+    # The window is clamped to the PRISM cell (scatter_window_gpts): a larger
+    # window would admit aliased probe copies in this real-space reduction
+    # and requires the beam-basis path instead.
+    if inelastic_crop is None:
+        inelastic_window_gpts = scatter_window_gpts
+    else:
+        if np.isscalar(inelastic_crop):
+            inelastic_crop = (inelastic_crop, inelastic_crop)
+        requested = (
+            safe_ceiling_int(inelastic_crop[0] / full_sampling[0]),
+            safe_ceiling_int(inelastic_crop[1] / full_sampling[1]),
+        )
+        inelastic_window_gpts = (
+            min(requested[0], scatter_window_gpts[0]),
+            min(requested[1], scatter_window_gpts[1]),
+        )
+        if (
+            requested[0] > scatter_window_gpts[0]
+            or requested[1] > scatter_window_gpts[1]
+        ):
+            import warnings
+
+            warnings.warn(
+                "inelastic_crop exceeds the PRISM cell "
+                f"(extent / interpolation = {scatter_window_extent[0]:.2f} x "
+                f"{scatter_window_extent[1]:.2f} A); clamping to the cell. "
+                "Larger inelastic windows require the beam-basis reduction.",
+                stacklevel=2,
+            )
+    inelastic_window_extent = (
+        inelastic_window_gpts[0] * full_sampling[0],
+        inelastic_window_gpts[1] * full_sampling[1],
+    )
+
+    def _embed_in_scatter_window(arr):
+        # Place an inelastic_window_gpts-sized array (centered on the site)
+        # into a scatter_window_gpts-sized zero array (also centered). When
+        # the two match (inelastic_crop is None) this is a no-op.
+        src = tuple(arr.shape[-2:])
+        if src == tuple(scatter_window_gpts):
+            return arr
+        out = xp.zeros(
+            arr.shape[:-2] + tuple(scatter_window_gpts), dtype=arr.dtype
+        )
+        o0 = (scatter_window_gpts[0] - src[0]) // 2
+        o1 = (scatter_window_gpts[1] - src[1]) // 2
+        out[..., o0 : o0 + src[0], o1 : o1 + src[1]] = arr
+        return out
+
     # --- Pre-compute windowed TP (Brown et al. Sec. IV B) ---
-    # Scatter and double-channel propagation operate on a
-    # scatter_window_gpts-sized grid centered at each site.
+    # Scatter and double-channel propagation operate on an
+    # inelastic_window_gpts-sized grid centered at each site.
     _tp_real_origin = ifft2(
         transition_potential.array * energy2sigma(energy)
     )
     _tp_crop_corner = (
-        -scatter_window_gpts[0] // 2,
-        -scatter_window_gpts[1] // 2,
+        -inelastic_window_gpts[0] // 2,
+        -inelastic_window_gpts[1] // 2,
     )
     _tp_window_real = wrapped_crop_2d(
-        _tp_real_origin, _tp_crop_corner, scatter_window_gpts
+        _tp_real_origin, _tp_crop_corner, inelastic_window_gpts
     )
     _tp_window_k = fft2(_tp_window_real)
     _window_propagator = FresnelPropagator()
 
     _dummy_window_waves = Waves(
-        xp.zeros((1,) + tuple(scatter_window_gpts), dtype=complex_dtype),
+        xp.zeros((1,) + tuple(inelastic_window_gpts), dtype=complex_dtype),
         energy=energy,
-        extent=scatter_window_extent,
+        extent=inelastic_window_extent,
         ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
     )
     full_sampling_arr = np.array(full_sampling, dtype=np.float32)
@@ -1406,14 +1475,14 @@ def prism_transition_potential_scan(
                 dtype=np.float32,
             )
             site_crop_corner = (
-                int(site_pixel_int[0]) - scatter_window_gpts[0] // 2,
-                int(site_pixel_int[1]) - scatter_window_gpts[1] // 2,
+                int(site_pixel_int[0]) - inelastic_window_gpts[0] // 2,
+                int(site_pixel_int[1]) - inelastic_window_gpts[1] // 2,
             )
 
             s_cropped = wrapped_crop_2d(
-                s_waves.array, site_crop_corner, scatter_window_gpts
+                s_waves.array, site_crop_corner, inelastic_window_gpts
             )
-            shift_k = fft_shift_kernel(sub_pixel, scatter_window_gpts)
+            shift_k = fft_shift_kernel(sub_pixel, inelastic_window_gpts)
             tp_shifted = ifft2(_tp_window_k * shift_k)
             scattered_window = tp_shifted[:, None] * s_cropped[None, :]
 
@@ -1426,7 +1495,7 @@ def prism_transition_potential_scan(
 
         if not double_channel:
             for s_idx in range(n_sites_slice):
-                sw = scattered_windows[s_idx]
+                sw = _embed_in_scatter_window(scattered_windows[s_idx])
                 if needs_downsample:
                     sw = fft_interpolate(
                         sw, output_window_gpts,
@@ -1440,17 +1509,20 @@ def prism_transition_potential_scan(
             continue
 
         # Double-channel: batch inner propagation across all sites in
-        # this slice.  Shape: (n_sites, n_T * n_k, wh, ww).
+        # this slice.  Shape: (n_sites, n_T * n_k, wh, ww) on the inelastic
+        # window; embedded back into scatter_window_gpts at each exit plane.
         batched = xp.stack([
-            sw.reshape((-1,) + tuple(scatter_window_gpts))
+            sw.reshape((-1,) + tuple(inelastic_window_gpts))
             for sw in scattered_windows
         ])
 
         if slice_index in exit_planes:
             ep_idx = exit_planes.index(slice_index)
             for s_idx in range(n_sites_slice):
-                sw_out = batched[s_idx].reshape(
-                    (n_T_val, n_k) + tuple(scatter_window_gpts)
+                sw_out = _embed_in_scatter_window(
+                    batched[s_idx].reshape(
+                        (n_T_val, n_k) + tuple(inelastic_window_gpts)
+                    )
                 )
                 if needs_downsample:
                     sw_out = fft_interpolate(
@@ -1469,7 +1541,7 @@ def prism_transition_potential_scan(
             if t_arr.ndim > 2:
                 t_arr = t_arr[0]
             cropped_t = xp.stack([
-                wrapped_crop_2d(t_arr, sc, scatter_window_gpts)
+                wrapped_crop_2d(t_arr, sc, inelastic_window_gpts)
                 for sc in site_crop_corners
             ])[:, None]
             batched *= cropped_t
@@ -1484,8 +1556,10 @@ def prism_transition_potential_scan(
             if abs_inner in exit_planes:
                 ep_idx = exit_planes.index(abs_inner)
                 for s_idx in range(n_sites_slice):
-                    sw_out = batched[s_idx].reshape(
-                        (n_T_val, n_k) + tuple(scatter_window_gpts)
+                    sw_out = _embed_in_scatter_window(
+                        batched[s_idx].reshape(
+                            (n_T_val, n_k) + tuple(inelastic_window_gpts)
+                        )
                     )
                     if needs_downsample:
                         sw_out = fft_interpolate(

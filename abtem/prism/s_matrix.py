@@ -1970,6 +1970,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     def _eager_transition_potential_scan(
         self, scan, detectors, transition_potentials, sites, double_channel,
+        inelastic_crop=None,
         squeeze=True,
     ):
         from abtem.inelastic.core_loss import prism_transition_potential_scan
@@ -2016,6 +2017,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     detectors=detectors,
                     sites=sites,
                     double_channel=double_channel,
+                    inelastic_crop=inelastic_crop,
                 )
             )
 
@@ -2043,7 +2045,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     @staticmethod
     def _lazy_transition_potential_scan(
-        s_matrix, scan, detectors, transition_potentials, sites, double_channel
+        s_matrix, scan, detectors, transition_potentials, sites, double_channel,
+        inelastic_crop=None,
     ):
         s_matrix = s_matrix.item()
         measurements = s_matrix._eager_transition_potential_scan(
@@ -2052,6 +2055,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             transition_potentials=transition_potentials,
             sites=sites,
             double_channel=double_channel,
+            inelastic_crop=inelastic_crop,
             squeeze=False,
         )
 
@@ -2066,6 +2070,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         detectors=None,
         sites=None,
         double_channel: bool = False,
+        inelastic_crop=None,
         lazy: bool = None,
     ):
         """**Experimental** PRISM-based core-loss scan.
@@ -2099,6 +2104,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             multislice EELS ``double_channel=True`` branch). If False
             (default), detect immediately at the scatter slice — Brown's
             single-channel approximation.
+        inelastic_crop : float or tuple of float, optional
+            Real-space side length [Å] of the window on which the transition
+            potential and scattered wave are evaluated (Brown et al. Sec.
+            IV B). Smaller windows speed up the scatter and double-channel
+            propagation at the cost of truncating the transition-potential
+            tails. Defaults to ``None`` (the full PRISM cell,
+            ``extent / interpolation``). Values larger than the PRISM cell
+            are clamped with a warning.
         lazy : bool, optional
             If True, create the measurements lazily using Dask; otherwise,
             compute eagerly. Defaults to the user configuration value.
@@ -2130,6 +2143,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 transition_potentials=transition_potentials,
                 sites=sites,
                 double_channel=double_channel,
+                inelastic_crop=inelastic_crop,
             )
             return _wrap_measurements(measurements)
 
@@ -2159,6 +2173,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             transition_potentials=transition_potentials,
             sites=sites,
             double_channel=double_channel,
+            inelastic_crop=inelastic_crop,
             meta=np.array((), dtype=object),
         )
 

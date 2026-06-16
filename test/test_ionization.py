@@ -483,6 +483,101 @@ def test_prism_eels_interp_2_accuracy_vs_multislice(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+def test_prism_eels_inelastic_crop_window(device):
+    """The ``inelastic_crop`` knob (Brown et al. Sec. IV B) decouples the
+    transition-potential scatter window from the interpolation factor.
+
+    Invariants:
+      * a window >= the PRISM cell (``extent / interpolation``) reproduces the
+        default ``None`` result exactly — the centered embed is a no-op and
+        over-large requests are clamped to the cell (with a warning);
+      * a tighter window stays the same shape but changes the values
+        (transition-potential truncation), and never crashes.
+    """
+    import warnings
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (1, 1, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+    potential = abtem.Potential(
+        atoms, gpts=(128, 128), slice_thickness=slice_thickness, device=device
+    )
+
+    energy = 100e3
+    semiangle_cutoff = 20.0
+
+    # Localized (Gaussian-enveloped) transition potential so that the scatter
+    # carries real signal and a tighter window measurably truncates it.
+    from abtem.inelastic.core_loss import energy2sigma
+    rng = np.random.default_rng(7)
+    sampling = tuple(e / g for e, g in zip(potential.extent, (128, 128)))
+    yy, xx = np.meshgrid(
+        np.arange(128).astype(np.float32) * sampling[0],
+        np.arange(128).astype(np.float32) * sampling[1],
+        indexing="ij",
+    )
+    gauss = np.exp(-(xx ** 2 + yy ** 2) / (2 * 0.5 ** 2)).astype(np.float32)
+    raw = (
+        rng.standard_normal((2, 128, 128))
+        + 1j * rng.standard_normal((2, 128, 128))
+    ).astype(np.complex64)
+    tp_array = (np.fft.fft2(raw * gauss[None]) / energy2sigma(energy)).astype(
+        np.complex64
+    )
+    tp = TransitionPotentialArray(
+        Z=14, array=tp_array, energy=energy, extent=potential.extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
+        metadata={"Z": 14, "n": 1, "l": 0},
+    )
+
+    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
+    scan = abtem.GridScan(
+        start=(0, 0), end=(unit_atoms.cell[0, 0], unit_atoms.cell[1, 1]),
+        sampling=0.5, endpoint=False,
+    )
+
+    s2 = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=semiangle_cutoff,
+        interpolation=2, downsample=False, device=device,
+    )
+    cell_extent = potential.extent[0] / 2  # extent / interpolation
+
+    def run(inelastic_crop):
+        res = s2.transition_potential_scan(
+            transition_potentials=tp, scan=scan, detectors=detector,
+            sites=atoms, double_channel=False, inelastic_crop=inelastic_crop,
+        )
+        return np.asarray(res.array)
+
+    base = run(None)
+
+    # >= cell: clamped to the cell, embed is a no-op -> identical to None.
+    at_cell = run(cell_extent)
+    assert np.allclose(at_cell, base, rtol=1e-6), (
+        "inelastic_crop == PRISM cell should reproduce the default"
+    )
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        over = run(2 * cell_extent)
+    assert np.allclose(over, base, rtol=1e-6), "over-large crop must clamp"
+    assert any("PRISM cell" in str(wi.message) for wi in w), (
+        "clamping should warn"
+    )
+
+    # Tighter window: same shape, but a measurable change (TP truncation).
+    tight = run(cell_extent / 2)
+    assert tight.shape == base.shape
+    rel_change = np.sqrt(
+        np.sum((tight - base) ** 2) / np.sum(base ** 2)
+    )
+    assert rel_change > 1e-3, (
+        f"a tighter inelastic_crop should change the result "
+        f"(relative change {rel_change:.2e})"
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize("double_channel", [False, True])
 def test_prism_eels_exit_planes_match_multislice(double_channel, device):
     """PRISM-EELS with exit_planes produces the same thickness-series as
