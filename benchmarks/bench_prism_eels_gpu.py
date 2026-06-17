@@ -6,6 +6,7 @@ Two sweeps per channeling mode (single + double):
      per-position saving accumulates with more slices.
 
 Peak GPU memory is recorded per data point via CuPy MemoryHook.
+Uses CrystalPotential to tile the unit-cell potential lazily.
 
 Usage
 -----
@@ -94,17 +95,21 @@ interp = 3
 sc = 2
 n_k = (gpts[0] // interp) * (gpts[1] // interp)  # 256
 
+pot_unit = abtem.Potential(
+    srtio3_unit, gpts=(gpts[0] // sc, gpts[1] // sc),
+    slice_thickness=a, device="gpu",
+)
 
-def make_potential_and_tp(atoms):
-    """Build Potential and synthetic Ti K-edge TransitionPotentialArray."""
-    potential = abtem.Potential(
-        atoms, gpts=gpts, slice_thickness=a, device="gpu"
+
+def make_potential_and_tp(nz):
+    """Build CrystalPotential and synthetic Ti K-edge TransitionPotentialArray."""
+    atoms = srtio3_unit * (sc, sc, nz)
+    crystal_pot = abtem.CrystalPotential(
+        potential_unit=pot_unit, repetitions=(sc, sc, nz)
     )
+    extent = crystal_pot.extent
     rng = np.random.default_rng(42)
-    sampling = (
-        potential.extent[0] / gpts[0],
-        potential.extent[1] / gpts[1],
-    )
+    sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
     y = np.arange(gpts[0], dtype=np.float32) * sampling[0]
     x = np.arange(gpts[1], dtype=np.float32) * sampling[1]
     yy, xx = np.meshgrid(y, x, indexing="ij")
@@ -118,11 +123,11 @@ def make_potential_and_tp(atoms):
         Z=22,
         array=tp_array.astype(np.complex64),
         energy=energy,
-        extent=potential.extent,
+        extent=extent,
         ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
         metadata={"Z": 22, "n": 1, "l": 0},
     )
-    return potential, tp
+    return crystal_pot, tp, atoms
 
 
 def timed_ms(probe, potential, tp, scan, atoms, double_channel):
@@ -159,8 +164,7 @@ def timed_prism(S, tp, scan, atoms, double_channel):
 def sweep_scan_positions(double_channel, nz=8):
     """Sweep 1: vary scan grid, fixed thickness."""
     mode = "double" if double_channel else "single"
-    atoms = srtio3_unit * (2, 2, nz)
-    potential, tp = make_potential_and_tp(atoms)
+    potential, tp, atoms = make_potential_and_tp(nz)
     n_slices = len(list(potential.generate_slices()))
 
     probe = abtem.Probe(
@@ -248,8 +252,7 @@ def sweep_thickness(double_channel, scan_n=32):
     thickness_list = []
 
     for nz in nz_values:
-        atoms = srtio3_unit * (sc, sc, nz)
-        potential, tp = make_potential_and_tp(atoms)
+        potential, tp, atoms = make_potential_and_tp(nz)
         n_sl = len(list(potential.generate_slices()))
         n_slices_list.append(n_sl)
         thickness_list.append(nz * a)
@@ -453,8 +456,7 @@ def plot(r1, r2, out_path, double_channel):
 
 def validate_interp1():
     """Sanity check: PRISM at interp=1 must match multislice (both modes)."""
-    atoms = srtio3_unit * (sc, sc, sc)
-    potential, tp = make_potential_and_tp(atoms)
+    potential, tp, atoms = make_potential_and_tp(sc)
 
     probe = abtem.Probe(
         energy=energy, semiangle_cutoff=semiangle_cutoff, device="gpu"
