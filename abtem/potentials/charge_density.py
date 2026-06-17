@@ -17,7 +17,7 @@ from abtem.atoms import plane_to_axes
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
-from abtem.core.fft import fft_crop, fft_interpolate
+from abtem.core.fft import fft_crop
 from abtem.core.utils import itemset
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
@@ -557,27 +557,6 @@ class ChargeDensityPotential(_PotentialBuilder):
             _default_atoms=self.frozen_phonons.atoms,
             **kwargs,
         )
-
-    def _interpolate_slice(self, array, cell, a, b):
-        slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)
-
-        slice_box = np.diag(self.box[:2] + (b - a,))
-
-        slice_array = _interpolate_between_cells(
-            array, slice_shape, cell, slice_box, (0, 0, a)
-        )
-
-        pixel_thickness = slice_shape[-1] - 1
-
-        return np.trapezoid(slice_array, axis=-1, dx=(b - a) / pixel_thickness)
-
-    def _integrate_slice(self, array, a, b):
-        dz = self.box[2] / array.shape[2]
-        na = int(np.floor(a / dz))
-        nb = int(np.floor(b / dz))
-        dx = (b - a) / (nb - na - 1)
-        slice_array = np.trapezoid(array[..., na:nb], axis=-1, dx=dx)
-        return fft_interpolate(slice_array, new_shape=self.gpts, normalization="values")
 
     def _get_ewald_potential(self):
         ewald_parametrization = EwaldParametrization(width=3)
