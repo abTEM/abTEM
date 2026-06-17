@@ -51,15 +51,13 @@ interp = 8
 sc = 4
 n_k = (gpts[0] // interp) * (gpts[1] // interp)  # 256
 
-pot_unit = abtem.Potential(
-    srtio3_unit, gpts=(gpts[0] // sc, gpts[1] // sc),
-    slice_thickness=a, device="cpu",
-)
-
-
 def make_potential_and_tp(nz):
     """Build CrystalPotential and synthetic Ti K-edge TransitionPotentialArray."""
     atoms = srtio3_unit * (sc, sc, nz)
+    pot_unit = abtem.Potential(
+        srtio3_unit, gpts=(gpts[0] // sc, gpts[1] // sc),
+        slice_thickness=a, device="cpu",
+    )
     crystal_pot = abtem.CrystalPotential(
         potential_unit=pot_unit, repetitions=(sc, sc, nz)
     )

@@ -95,15 +95,14 @@ interp = 3
 sc = 2
 n_k = (gpts[0] // interp) * (gpts[1] // interp)  # 256
 
-pot_unit = abtem.Potential(
-    srtio3_unit, gpts=(gpts[0] // sc, gpts[1] // sc),
-    slice_thickness=a, device="gpu",
-)
-
 
 def make_potential_and_tp(nz):
     """Build CrystalPotential and synthetic Ti K-edge TransitionPotentialArray."""
     atoms = srtio3_unit * (sc, sc, nz)
+    pot_unit = abtem.Potential(
+        srtio3_unit, gpts=(gpts[0] // sc, gpts[1] // sc),
+        slice_thickness=a, device="gpu",
+    )
     crystal_pot = abtem.CrystalPotential(
         potential_unit=pot_unit, repetitions=(sc, sc, nz)
     )
@@ -490,8 +489,8 @@ def validate_interp1():
             detectors=detector,
             sites=atoms,
             double_channel=dc,
-            lazy=True,
-        ).compute()
+            lazy=False,
+        )
 
         res_prism = S1.transition_potential_scan(
             transition_potentials=tp,
