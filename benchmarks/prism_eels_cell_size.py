@@ -6,20 +6,40 @@ cell = extent/interpolation, and that realistic large-FOV simulations
 even for delocalized edges like O K.
 
 Uses CrystalPotential to keep memory manageable at large tilings.
-Tracks wall-clock time and peak RSS for each configuration.
+Tracks wall-clock time and peak RSS for MS and PRISM separately.
 
 System: SrTiO3 unit-cell potential tiled NxNx4, 200 keV, 25 mrad,
 single-channel, real O K edge (delocalized).
 Reference: conventional multislice on the SAME tiled system.
 Scan: 4x4 grid over one unit cell (kept modest for tractability).
+
+Memory: peak RSS is the process high-water mark (ru_maxrss) at each
+checkpoint.  Because it is monotonically increasing, a later phase
+can only report the same or a higher number.  Columns pk_ms / pk_pr
+are the absolute process peak *after* that phase completes; compare
+them to see which phase pushed the watermark higher.
+
+All configs run sequentially so each simulation gets full RAM and CPU.
+Large simulations use lazy=True with dask.array.to_zarr() to stream
+results to disk chunk by chunk (max_batch=1 for MS reference).
 """
 import gc
 import os
 import resource
+import shutil
+import tempfile
 import time
 
+import warnings
+
+import dask
+import dask.array as da
 import numpy as np
+import zarr
 from ase import Atoms
+
+dask.config.set(scheduler="synchronous")
+warnings.filterwarnings("ignore", message="Passing storage-related")
 
 import abtem
 from abtem.inelastic.core_loss import SubshellTransitions
@@ -52,30 +72,55 @@ def rms(a, b):
     return np.sqrt(np.sum((a - b) ** 2) / np.sum(b ** 2))
 
 
+def get_maxrss_mb():
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if os.uname().sysname == "Darwin":
+        return rss / 1024 / 1024  # bytes on macOS
+    return rss / 1024  # KB on Linux
+
+
+def compute_to_zarr(result, zarr_path):
+    """Write a lazy measurement to zarr, chunk by chunk via dask."""
+    arr = result.array
+    if hasattr(arr, "dask"):
+        da.to_zarr(arr, zarr_path, overwrite=True)
+    else:
+        z = zarr.open(zarr_path, mode="w", shape=arr.shape, dtype=arr.dtype)
+        z[:] = np.asarray(arr)
+
+
+def read_map_from_zarr(zarr_path):
+    """Read back a zarr array and return the angle-integrated 1-D map."""
+    z = zarr.open(zarr_path, mode="r")
+    arr = np.asarray(z)
+    return arr.sum(axis=tuple(range(arr.ndim - 2, arr.ndim))).flatten()
+
+
 # --- Configurations to benchmark ---
 # (tile_xy, interp) -> cell = tile_xy * lat / interp
+# Ordered by tiling then interpolation.
 configs = [
-    (1, 1),   # exact baseline, cell=3.9
-    (2, 2),   # cell=3.9, extent=7.8
-    (4, 4),   # cell=3.9, extent=15.6
+    (1, 1),   # cell=3.9, exact baseline
     (2, 1),   # cell=7.8, exact
-    (4, 2),   # cell=7.8, extent=15.6
-    (8, 4),   # cell=7.8, extent=31.2
+    (2, 2),   # cell=3.9, extent=7.8
     (4, 1),   # cell=15.6, exact
-    (8, 2),   # cell=15.6, extent=31.2
-    (16, 8),  # cell=7.8, extent=62.4
-    (16, 4),  # cell=15.6, extent=62.4
+    (4, 2),   # cell=7.8, extent=15.6
+    (4, 4),   # cell=3.9, extent=15.6
+    (8, 4),   # cell=7.8, extent=31.2
 ]
+
+tmpdir = tempfile.mkdtemp(prefix="bench_cell_")
 
 print(
     f"{'tile':>5} {'interp':>6} {'cell_A':>7} {'extent':>7} {'gpts':>7} "
-    f"{'RMS':>8} {'t_ms':>6} {'t_prism':>7} {'peak_MB':>8}",
+    f"{'RMS':>8} {'t_ms':>6} {'t_prism':>7} "
+    f"{'pk_ms':>8} {'pk_pr':>8}",
     flush=True,
 )
-print("-" * 78, flush=True)
+print("-" * 90, flush=True)
 
 results = []
-ms_cache = {}
+ms_cache = {}  # tile_xy -> (ms_map, dt_ms, peak_ms_mb)
 
 for tile_xy, interp in configs:
     cell_a = tile_xy * lat / interp
@@ -109,7 +154,11 @@ for tile_xy, interp in configs:
             energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
         )
         probe.grid.match(crystal_pot)
+
+        gc.collect()
         t0_ms = time.perf_counter()
+
+        ms_zarr = os.path.join(tmpdir, f"ms_tile{tile_xy}.zarr")
         res_ms = probe.transition_potential_scan(
             potential=crystal_pot,
             transition_potentials=tp,
@@ -117,13 +166,23 @@ for tile_xy, interp in configs:
             detectors=detector,
             sites=atoms,
             double_channel=False,
-            lazy=False,
+            lazy=True,
+            max_batch="auto",
         )
+        compute_to_zarr(res_ms, ms_zarr)
+
         dt_ms = time.perf_counter() - t0_ms
-        ms_map = np.asarray(res_ms.array).sum(axis=(-2, -1)).flatten()
-        ms_cache[tile_xy] = (ms_map, dt_ms)
+        peak_ms_mb = get_maxrss_mb()
+
         del res_ms, probe
-    ms_map, dt_ms = ms_cache[tile_xy]
+        gc.collect()
+
+        ms_map = read_map_from_zarr(ms_zarr)
+        shutil.rmtree(ms_zarr, ignore_errors=True)
+
+        ms_cache[tile_xy] = (ms_map, dt_ms, peak_ms_mb)
+
+    ms_map, dt_ms, peak_ms_mb = ms_cache[tile_xy]
 
     # --- PRISM ---
     S = abtem.SMatrix(
@@ -136,26 +195,28 @@ for tile_xy, interp in configs:
     )
 
     gc.collect()
-    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     t0 = time.perf_counter()
 
+    pr_zarr = os.path.join(tmpdir, f"prism_t{tile_xy}_i{interp}.zarr")
     res_pr = S.transition_potential_scan(
         transition_potentials=tp,
         scan=scan,
         detectors=detector,
         sites=atoms,
         double_channel=False,
-        lazy=False,
+        lazy=True,
     )
+    compute_to_zarr(res_pr, pr_zarr)
 
     dt_prism = time.perf_counter() - t0
-    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if os.uname().sysname == "Darwin":
-        peak_mb = rss_after / 1024 / 1024
-    else:
-        peak_mb = rss_after / 1024
+    peak_prism_mb = get_maxrss_mb()
 
-    pr_map = np.asarray(res_pr.array).sum(axis=(-2, -1)).flatten()
+    del res_pr, S
+    gc.collect()
+
+    pr_map = read_map_from_zarr(pr_zarr)
+    shutil.rmtree(pr_zarr, ignore_errors=True)
+
     err = rms(pr_map, ms_map)
 
     row = {
@@ -167,7 +228,8 @@ for tile_xy, interp in configs:
         "rms": err,
         "t_ms": dt_ms,
         "t_prism": dt_prism,
-        "peak_mb": peak_mb,
+        "peak_ms": peak_ms_mb,
+        "peak_prism": peak_prism_mb,
     }
     results.append(row)
 
@@ -175,26 +237,29 @@ for tile_xy, interp in configs:
     print(
         f"{tile_xy:>5} {interp:>6} {cell_a:>7.2f} {extent_a:>7.2f} "
         f"{gpts[0]:>7} {err:>8.4f} {dt_ms:>6.1f} {dt_prism:>7.1f} "
-        f"{peak_mb:>8.0f}{tag}",
+        f"{peak_ms_mb:>8.0f} {peak_prism_mb:>8.0f}{tag}",
         flush=True,
     )
 
-    del S, res_pr, tp, crystal_pot, pot_unit, atoms, pr_map
+    del tp, crystal_pot, pot_unit, atoms, pr_map
     gc.collect()
+
+# cleanup
+shutil.rmtree(tmpdir, ignore_errors=True)
 
 # --- Markdown summary table ---
 print("\n\n### PRISM-EELS O K edge: accuracy vs cell size (CrystalPotential)\n")
 print(
     "| tile | interp | cell (Å) | extent (Å) | gpts "
-    "| RMS | t_ms (s) | t_prism (s) | peak RSS (MB) |"
+    "| RMS | t_ms (s) | t_prism (s) | peak MS (MB) | peak PRISM (MB) |"
 )
-print("|---|---|---|---|---|---|---|---|---|")
+print("|---|---|---|---|---|---|---|---|---|---|")
 for r in results:
     tag = " (exact)" if r["interp"] == 1 else ""
     print(
         f"| {r['tile']} | {r['interp']} | {r['cell']:.2f} | {r['extent']:.1f} "
         f"| {r['gpts']} | {r['rms']:.4f}{tag} | {r['t_ms']:.1f} "
-        f"| {r['t_prism']:.1f} | {r['peak_mb']:.0f} |"
+        f"| {r['t_prism']:.1f} | {r['peak_ms']:.0f} | {r['peak_prism']:.0f} |"
     )
 
 # --- Grouped by cell ---

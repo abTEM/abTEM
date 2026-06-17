@@ -1460,7 +1460,49 @@ def prism_transition_potential_scan(
         if len(sites_this_slice) == 0:
             continue
 
-        # Per-site scatter on the windowed grid (position-dependent).
+        # --- Single-channel: scatter and reduce each site immediately to
+        # avoid holding all sites' scattered windows in memory at once.
+        # At interp=1 on large grids each window is (n_T, n_k, gpts, gpts)
+        # complex — ~300 MB per site for O K on 128×128 — so accumulating
+        # n_sites windows per slice is the dominant memory cost.
+        if not double_channel:
+            ep_start = bisect_left(exit_planes, slice_index)
+            exit_idx = () if n_exit == 1 else (
+                slice(ep_start, n_exit),
+            )
+            for atom in sites_this_slice:
+                site_xy = np.array(
+                    [atom.position[0], atom.position[1]], dtype=np.float32
+                )
+                site_pixel = site_xy / full_sampling_arr
+                site_pixel_int = np.rint(site_pixel).astype(int)
+                sub_pixel = xp.asarray(
+                    (site_pixel - site_pixel_int).reshape(1, 2),
+                    dtype=np.float32,
+                )
+                site_crop_corner = (
+                    int(site_pixel_int[0]) - inelastic_window_gpts[0] // 2,
+                    int(site_pixel_int[1]) - inelastic_window_gpts[1] // 2,
+                )
+
+                s_cropped = wrapped_crop_2d(
+                    s_waves.array, site_crop_corner, inelastic_window_gpts
+                )
+                shift_k = fft_shift_kernel(sub_pixel, inelastic_window_gpts)
+                tp_shifted = ifft2(_tp_window_k * shift_k)
+                sw = tp_shifted[:, None] * s_cropped[None, :]
+
+                sw = _embed_in_scatter_window(sw)
+                if needs_downsample:
+                    sw = fft_interpolate(
+                        sw, output_window_gpts,
+                        normalization="intensity",
+                    )
+                _reduce_and_record(sw, site_xy, exit_idx)
+            continue
+
+        # --- Double-channel: accumulate per-site scattered windows for
+        # batched inner propagation.
         site_xys = []
         site_crop_corners = []
         scattered_windows = []
@@ -1492,21 +1534,6 @@ def prism_transition_potential_scan(
 
         n_T_val = scattered_windows[0].shape[0]
         n_sites_slice = len(scattered_windows)
-
-        if not double_channel:
-            for s_idx in range(n_sites_slice):
-                sw = _embed_in_scatter_window(scattered_windows[s_idx])
-                if needs_downsample:
-                    sw = fft_interpolate(
-                        sw, output_window_gpts,
-                        normalization="intensity",
-                    )
-                ep_start = bisect_left(exit_planes, slice_index)
-                exit_idx = () if n_exit == 1 else (
-                    slice(ep_start, n_exit),
-                )
-                _reduce_and_record(sw, site_xys[s_idx], exit_idx)
-            continue
 
         # Double-channel: batch inner propagation across all sites in
         # this slice.  Shape: (n_sites, n_T * n_k, wh, ww) on the inelastic
