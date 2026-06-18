@@ -14,6 +14,7 @@ from matplotlib.patches import Rectangle
 from matplotlib.ticker import ScalarFormatter
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
+from abtem.atoms import is_cell_orthogonal
 from abtem.core import config
 from abtem.core.axes import LinearAxis, ReciprocalSpaceAxis
 from abtem.core.colors import hsluv_cmap
@@ -462,8 +463,7 @@ def _is_skew_cell(measurement):
     cell = measurement.metadata.get("cell", None)
     if cell is None:
         return False
-    cell = np.asarray(cell)
-    return not (np.isclose(cell[0, 1], 0.0) and np.isclose(cell[1, 0], 0.0))
+    return not is_cell_orthogonal(cell)
 
 
 def _build_skew_mesh(measurement, units=None):
