@@ -1898,6 +1898,7 @@ def prism_transition_potential_scan_beam_basis(
                 (n_positions,) + m.array.shape[1:], dtype=m.array.dtype
             )
             full_partial[mask] = m.array
+            full_partial = copy_to_device(full_partial, measurements[det_idx].array)
             measurements[det_idx].array += full_partial.reshape(
                 scan_shape + m.array.shape[1:]
             )
