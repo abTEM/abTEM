@@ -29,6 +29,7 @@ from ase.cell import Cell
 from matplotlib.axes import Axes
 from numba import jit  # type: ignore
 
+from abtem.atoms import is_cell_orthogonal
 from abtem.array import ArrayObject, _validate_array_items, stack
 from abtem.core import config
 from abtem.core.axes import (
@@ -90,11 +91,6 @@ if TYPE_CHECKING:
 BaseMeasurementsSubclass = TypeVar("BaseMeasurementsSubclass", bound="BaseMeasurements")
 
 
-def _is_cell_skew(cell: np.ndarray) -> bool:
-    """Whether a 2x2 in-plane cell matrix has off-diagonal components."""
-    return not np.allclose(cell, np.diag(np.diag(cell)))
-
-
 def _cell_sin_gamma(metadata: dict | None) -> float:
     """Return ``sin(gamma)`` of the in-plane cell, where gamma is the angle between
     the two lattice vectors.  Returns 1.0 for orthogonal cells (or if no cell metadata
@@ -106,7 +102,7 @@ def _cell_sin_gamma(metadata: dict | None) -> float:
     if cell is None:
         return 1.0
     cell = np.asarray(cell, dtype=float)
-    if not _is_cell_skew(cell):
+    if is_cell_orthogonal(cell):
         return 1.0
     norms = np.linalg.norm(cell, axis=1)
     return float(abs(np.linalg.det(cell)) / (norms[0] * norms[1]))
@@ -1046,7 +1042,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         cart_positions = scan.get_positions(lazy=False) - self.offset
         if cell is not None:
             cell_arr = np.asarray(cell, dtype=float)
-            if _is_cell_skew(cell_arr):
+            if not is_cell_orthogonal(cell_arr):
                 # Map Cartesian positions to fractional pixel indices via inverse cell
                 inv_cell = np.linalg.inv(cell_arr)  # maps Cartesian -> fractional
                 frac = cart_positions @ inv_cell.T  # fractional coordinates

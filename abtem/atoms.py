@@ -155,8 +155,9 @@ def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
         cell = cell.cell
 
     cell = np.array(cell)
+    n = cell.shape[0]
 
-    return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
+    return not np.any(np.abs(cell[~np.eye(n, dtype=bool)]) > tol)
 
 
 def is_cell_z_separable(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12) -> bool:
