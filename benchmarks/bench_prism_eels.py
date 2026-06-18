@@ -5,13 +5,13 @@ Two sweeps per channeling mode (single + double):
   2. Specimen thickness (fixed scan size above crossover) — shows how the
      per-position saving accumulates with more slices.
 
-Peak traced-memory is recorded for every data point via tracemalloc.
+Peak memory is recorded via tracemalloc (CPU) or CuPy MemoryHook (GPU).
 Uses CrystalPotential to tile the unit-cell potential lazily.
 
 Usage
 -----
-    python benchmarks/bench_prism_eels.py
-        # saves bench_prism_eels_single.pdf and _double.pdf next to script
+    python benchmarks/bench_prism_eels.py [device] [sc] [interp]
+    python benchmarks/bench_prism_eels.py gpu 2 3
 """
 import gc
 import sys
@@ -27,9 +27,60 @@ from abtem.core.axes import OrdinalAxis
 from abtem.inelastic.core_loss import TransitionPotentialArray, energy2sigma
 
 # ---------------------------------------------------------------------------
+# CLI arguments
+# ---------------------------------------------------------------------------
+device = sys.argv[1] if len(sys.argv) > 1 else "cpu"
+sc = int(sys.argv[2]) if len(sys.argv) > 2 else (2 if device == "gpu" else 4)
+interp = int(sys.argv[3]) if len(sys.argv) > 3 else (3 if device == "gpu" else 8)
+
+# ---------------------------------------------------------------------------
+# GPU-specific helpers (conditional import)
+# ---------------------------------------------------------------------------
+if device == "gpu":
+    import cupy as cp
+
+    _mempool = cp.get_default_memory_pool()
+    _pinned_pool = cp.get_default_pinned_memory_pool()
+
+    def _gpu_sync():
+        cp.cuda.Device().synchronize()
+
+    class _PeakMemoryHook(cp.cuda.MemoryHook):
+        def __init__(self, baseline):
+            self.peak = baseline
+
+        def malloc_postprocess(self, device_id, size, mem_size, mem_ptr, pmem_id):
+            used = _mempool.used_bytes()
+            if used > self.peak:
+                self.peak = used
+
+    def _measure_peak_gpu(func, *args, **kwargs):
+        _gpu_sync()
+        gc.collect()
+        _mempool.free_all_blocks()
+        _pinned_pool.free_all_blocks()
+        _gpu_sync()
+
+        baseline = _mempool.used_bytes()
+        hook = _PeakMemoryHook(baseline)
+        with hook:
+            t0 = time.perf_counter()
+            result = func(*args, **kwargs)
+            _gpu_sync()
+            elapsed = time.perf_counter() - t0
+
+        peak_mb = (hook.peak - baseline) / 1024**2
+        return result, elapsed, max(peak_mb, 0.0)
+
+# ---------------------------------------------------------------------------
 # SrTiO3 unit cell (perovskite, a = 3.905 Å)
 # ---------------------------------------------------------------------------
 a = 3.905
+energy = 200e3
+semiangle_cutoff = 25.0
+gpts = (128, 128)
+n_k = (gpts[0] // interp) * (gpts[1] // interp)
+
 srtio3_unit = Atoms(
     "SrTiO3",
     positions=[
@@ -43,20 +94,13 @@ srtio3_unit = Atoms(
     pbc=True,
 )
 
-# Simulation parameters
-energy = 200e3  # 200 keV
-semiangle_cutoff = 25.0  # mrad
-gpts = (128, 128)
-interp = 8
-sc = 4
-n_k = (gpts[0] // interp) * (gpts[1] // interp)  # 256
 
 def make_potential_and_tp(nz):
     """Build CrystalPotential and synthetic Ti K-edge TransitionPotentialArray."""
     atoms = srtio3_unit * (sc, sc, nz)
     pot_unit = abtem.Potential(
         srtio3_unit, gpts=(gpts[0] // sc, gpts[1] // sc),
-        slice_thickness=a, device="cpu",
+        slice_thickness=a, device=device,
     )
     crystal_pot = abtem.CrystalPotential(
         potential_unit=pot_unit, repetitions=(sc, sc, nz)
@@ -84,45 +128,60 @@ def make_potential_and_tp(nz):
     return crystal_pot, tp, atoms
 
 
+# ---------------------------------------------------------------------------
+# Timing wrappers — dispatch CPU (tracemalloc) vs GPU (CuPy hook)
+# ---------------------------------------------------------------------------
 def timed_ms(probe, potential, tp, scan, atoms, double_channel):
     """Run multislice EELS and return (time_s, peak_mem_MB)."""
-    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
-    gc.collect()
-    tracemalloc.start()
-    t0 = time.perf_counter()
-    probe.transition_potential_scan(
-        potential=potential,
-        transition_potentials=tp,
-        scan=scan,
-        detectors=detector,
-        sites=atoms,
-        double_channel=double_channel,
-        lazy=False,
-    ).compute()
-    elapsed = time.perf_counter() - t0
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    return elapsed, peak / 1024**2
+    def _run():
+        return probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=tp,
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(to_cpu=True),
+            sites=atoms,
+            double_channel=double_channel,
+            lazy=False,
+        ).compute()
+
+    if device == "gpu":
+        _, elapsed, peak = _measure_peak_gpu(_run)
+    else:
+        gc.collect()
+        tracemalloc.start()
+        t0 = time.perf_counter()
+        _run()
+        elapsed = time.perf_counter() - t0
+        _, peak_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        peak = peak_bytes / 1024**2
+    return elapsed, peak
 
 
 def timed_prism(S, tp, scan, atoms, double_channel):
     """Run PRISM EELS and return (time_s, peak_mem_MB)."""
-    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
-    gc.collect()
-    tracemalloc.start()
-    t0 = time.perf_counter()
-    S.transition_potential_scan(
-        transition_potentials=tp,
-        scan=scan,
-        detectors=detector,
-        sites=atoms,
-        double_channel=double_channel,
-        lazy=False,
-    )
-    elapsed = time.perf_counter() - t0
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    return elapsed, peak / 1024**2
+    def _run():
+        return S.transition_potential_scan(
+            transition_potentials=tp,
+            scan=scan,
+            detectors=abtem.FlexibleAnnularDetector(to_cpu=True),
+            sites=atoms,
+            double_channel=double_channel,
+            lazy=False,
+        )
+
+    if device == "gpu":
+        _, elapsed, peak = _measure_peak_gpu(_run)
+    else:
+        gc.collect()
+        tracemalloc.start()
+        t0 = time.perf_counter()
+        _run()
+        elapsed = time.perf_counter() - t0
+        _, peak_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        peak = peak_bytes / 1024**2
+    return elapsed, peak
 
 
 def sweep_scan_positions(double_channel, nz=8):
@@ -132,7 +191,7 @@ def sweep_scan_positions(double_channel, nz=8):
     n_slices = len(list(potential.generate_slices()))
 
     probe = abtem.Probe(
-        energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
     )
     probe.grid.match(potential)
 
@@ -142,7 +201,7 @@ def sweep_scan_positions(double_channel, nz=8):
         semiangle_cutoff=semiangle_cutoff,
         interpolation=interp,
         downsample=False,
-        device="cpu",
+        device=device,
     )
 
     cell_xy = potential.extent
@@ -222,7 +281,7 @@ def sweep_thickness(double_channel, scan_n=32):
         thickness_list.append(nz * a)
 
         probe = abtem.Probe(
-            energy=energy, semiangle_cutoff=semiangle_cutoff, device="cpu"
+            energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
         )
         probe.grid.match(potential)
 
@@ -232,7 +291,7 @@ def sweep_thickness(double_channel, scan_n=32):
             semiangle_cutoff=semiangle_cutoff,
             interpolation=interp,
             downsample=False,
-            device="cpu",
+            device=device,
         )
 
         scan = abtem.GridScan(
@@ -270,6 +329,7 @@ def sweep_thickness(double_channel, scan_n=32):
 def plot(r1, r2, out_path, double_channel):
     """Six-panel figure: top row = scan sweep, bottom row = thickness sweep."""
     mode = "double" if double_channel else "single"
+    mem_label = "Peak GPU memory (MB)" if device == "gpu" else "Peak traced memory (MB)"
     fig, axes = plt.subplots(2, 3, figsize=(15, 9))
 
     # ---- Row 1: scan positions ----
@@ -345,7 +405,7 @@ def plot(r1, r2, out_path, double_channel):
         x1, r1["pr_m"], "C0s-", ms=5, lw=1.5, label=f"PRISM interp={interp}"
     )
     ax.set_xlabel("Scan positions")
-    ax.set_ylabel("Peak traced memory (MB)")
+    ax.set_ylabel(mem_label)
     ax.set_title("Peak memory vs scan positions")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -401,13 +461,13 @@ def plot(r1, r2, out_path, double_channel):
         label=f"PRISM interp={interp}",
     )
     ax.set_xlabel("Specimen thickness (Å)")
-    ax.set_ylabel("Peak traced memory (MB)")
+    ax.set_ylabel(mem_label)
     ax.set_title(f"Peak memory vs thickness ({r2['n_pos']} positions)")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
     fig.suptitle(
-        f"PRISM-EELS benchmark ({mode}-channel): SrTiO3 {sc}×{sc}×N, "
+        f"PRISM-EELS benchmark ({device}, {mode}-channel): SrTiO3 {sc}×{sc}×N, "
         f"{gpts[0]}×{gpts[1]} gpts, interp={interp}, "
         f"N$_k$={n_k}, {energy / 1e3:.0f} keV, {semiangle_cutoff} mrad",
         fontsize=11,
@@ -418,14 +478,76 @@ def plot(r1, r2, out_path, double_channel):
     plt.close()
 
 
+def validate_interp1():
+    """Sanity check: PRISM at interp=1 must match multislice (both modes)."""
+    potential, tp, atoms = make_potential_and_tp(sc)
+
+    probe = abtem.Probe(
+        energy=energy, semiangle_cutoff=semiangle_cutoff, device=device
+    )
+    probe.grid.match(potential)
+
+    scan = abtem.GridScan(
+        start=(0, 0), end=potential.extent, gpts=(2, 2), endpoint=False
+    )
+    detector = abtem.FlexibleAnnularDetector()
+
+    S1 = abtem.SMatrix(
+        potential=potential,
+        energy=energy,
+        semiangle_cutoff=semiangle_cutoff,
+        interpolation=1,
+        downsample=False,
+        device=device,
+    )
+
+    for dc in [False, True]:
+        mode = "double" if dc else "single"
+        print(
+            f"Validating PRISM vs multislice at interp=1 ({mode}-channel) ... ",
+            end="", flush=True,
+        )
+        res_ms = probe.transition_potential_scan(
+            potential=potential,
+            transition_potentials=tp,
+            scan=scan,
+            detectors=detector,
+            sites=atoms,
+            double_channel=dc,
+            lazy=False,
+        )
+
+        res_prism = S1.transition_potential_scan(
+            transition_potentials=tp,
+            scan=scan,
+            detectors=detector,
+            sites=atoms,
+            double_channel=dc,
+            lazy=False,
+        )
+
+        arr_ms = np.asarray(res_ms.array)
+        arr_pr = np.asarray(res_prism.array)
+        assert arr_ms.shape == arr_pr.shape, (
+            f"shape mismatch: MS {arr_ms.shape} vs PRISM {arr_pr.shape}"
+        )
+        np.testing.assert_allclose(arr_pr, arr_ms, rtol=1e-4, atol=0)
+        print(
+            f"OK  (max rel err "
+            f"{np.max(np.abs(arr_pr - arr_ms) / np.abs(arr_ms).clip(1e-30)):.2e})"
+        )
+
+
 if __name__ == "__main__":
     import pathlib
 
     stem = pathlib.Path(__file__).with_suffix("")
 
+    validate_interp1()
+
     for dc in [False, True]:
         mode = "single" if not dc else "double"
-        out_path = f"{stem}_{mode}.pdf"
+        out_path = f"{stem}_{device}_{mode}_f{interp}_g{gpts[0]}_sc{sc}.pdf"
         r1 = sweep_scan_positions(double_channel=dc, nz=8)
         r2 = sweep_thickness(double_channel=dc, scan_n=32)
         plot(r1, r2, out_path, double_channel=dc)

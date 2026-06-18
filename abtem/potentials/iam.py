@@ -1621,46 +1621,15 @@ class CrystalPotential(_PotentialBuilder):
         start = first_slice
         stop = first_slice + 1
 
-        # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
-        # Without it each (z-rep, unit-slice) pair re-tiles the same array via
-        # ``.tile(self.repetitions[:2])`` — for the no-frozen-phonon case
-        # (n_configs == 1) every z-rep produces an identical result so the
-        # cost scales linearly with ``repetitions[2]``. The cache turns this
-        # into ``n_configs * len(self.potential_unit)`` unique tile calls.
-        # For the SrTiO3 tutorial (reps=(4,4,25), 2 unit slices, no FP) this
-        # is 2 tiles instead of 50; the cache footprint is bounded by the
-        # tiled-unit byte size and freed when the generator is exhausted.
-        tiled_cache: dict[tuple[int, int], PotentialArray] = {}
-        unit_generators: dict[int, object] = {}
-        tile_xy = self.repetitions[:2]
-
-        def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
-            key = (config_idx, j)
-            cached = tiled_cache.get(key)
-            if cached is not None:
-                return cached
-            gen = unit_generators.get(config_idx)
-            if gen is None:
-                gen = potentials[config_idx].generate_slices()
-                unit_generators[config_idx] = gen
-            slic = next(gen).tile(tile_xy)
-            tiled_cache[key] = slic
-            return slic
-
         for i in range(self.repetitions[2]):
-            config_idx = int(rng.integers(0, potentials.shape[0]))
+            potential = potentials[rng.integers(0, potentials.shape[0])]
+            generator = potential.generate_slices()
 
             for j in range(len(self.potential_unit)):
-                slic = _tiled_slice(config_idx, j)
+                slic = next(generator).tile(self.repetitions[:2])
 
                 exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
 
-                # Mutating the cached slice is safe in the standard sequential
-                # consumption pattern (the consumer reads ``slic.exit_planes``
-                # immediately upon receiving the yield and never holds a back-
-                # reference across iterations — see multislice.py:672). Reset
-                # the value on every yield so re-entering the same cached
-                # slice on a different z-rep still carries the right metadata.
                 slic._exit_planes = exit_planes
 
                 start += 1

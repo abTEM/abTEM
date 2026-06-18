@@ -22,6 +22,22 @@ except ImportError:
 from utils import gpu  # noqa: E402  -- pytest.param('gpu', skipif no cupy)
 
 
+def _make_synthetic_tp(Z, gpts, extent, energy=100e3, n_transitions=2, seed=0):
+    rng = np.random.default_rng(seed)
+    array = (
+        rng.standard_normal((n_transitions, *gpts))
+        + 1j * rng.standard_normal((n_transitions, *gpts))
+    ).astype(np.complex64)
+    return TransitionPotentialArray(
+        Z=Z,
+        array=array,
+        energy=energy,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
+        metadata={"Z": Z, "n": 1, "l": 0},
+    )
+
+
 @pytest.fixture(scope="module")
 def si_potential():
     atoms = ase.build.bulk("Si", cubic=True)
@@ -30,21 +46,8 @@ def si_potential():
 
 @pytest.fixture(scope="module")
 def si_transition_potential(si_potential):
-    # Synthetic transition potential: skips numerov / GPAW so the wiring is
-    # exercised without depending on the heavy DFT setup the tutorial uses.
-    n_transitions = 2
-    rng = np.random.default_rng(0)
-    array = (
-        rng.standard_normal((n_transitions, *si_potential.gpts))
-        + 1j * rng.standard_normal((n_transitions, *si_potential.gpts))
-    ).astype(np.complex64)
-    return TransitionPotentialArray(
-        Z=14,
-        array=array,
-        energy=100e3,
-        extent=si_potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_transitions)))],
-        metadata={"Z": 14, "n": 1, "l": 0},
+    return _make_synthetic_tp(
+        Z=14, gpts=si_potential.gpts, extent=si_potential.extent,
     )
 
 
@@ -151,28 +154,16 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
     probe = abtem.Probe(energy=100e3, semiangle_cutoff=20, device=device)
     probe.grid.match(manual_pot)
 
-    rng = np.random.default_rng(0)
-    tp_array_np = (
-        rng.standard_normal((2, 64, 64))
-        + 1j * rng.standard_normal((2, 64, 64))
-    ).astype(np.complex64)
-    tp_array = xp.asarray(tp_array_np)
-
-    def make_tp(extent):
-        return TransitionPotentialArray(
-            Z=14, array=tp_array, energy=100e3, extent=extent,
-            ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-            metadata={"Z": 14, "n": 1, "l": 0},
-        )
-
     detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
     res_manual = probe.transition_potential_scan(
-        potential=manual_pot, transition_potentials=make_tp(manual_pot.extent),
+        potential=manual_pot,
+        transition_potentials=_make_synthetic_tp(14, (64, 64), manual_pot.extent),
         scan=(0, 0), detectors=detector, lazy=False,
     ).compute()
     res_cryst = probe.transition_potential_scan(
-        potential=cryst_pot, transition_potentials=make_tp(cryst_pot.extent),
+        potential=cryst_pot,
+        transition_potentials=_make_synthetic_tp(14, (64, 64), cryst_pot.extent),
         scan=(0, 0), detectors=detector, lazy=False,
     ).compute()
 
@@ -204,19 +195,7 @@ def test_prism_eels_matches_multislice_eels_at_interp_1(device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    rng = np.random.default_rng(0)
-    tp_array = (
-        rng.standard_normal((2, 32, 32))
-        + 1j * rng.standard_normal((2, 32, 32))
-    ).astype(np.complex64)
-    tp = TransitionPotentialArray(
-        Z=14,
-        array=tp_array,
-        energy=energy,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
+    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
 
     detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
@@ -281,19 +260,7 @@ def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_cha
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    rng = np.random.default_rng(0)
-    tp_array = (
-        rng.standard_normal((2, 32, 32))
-        + 1j * rng.standard_normal((2, 32, 32))
-    ).astype(np.complex64)
-    tp = TransitionPotentialArray(
-        Z=14,
-        array=tp_array,
-        energy=energy,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
+    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
 
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
@@ -353,19 +320,7 @@ def test_prism_eels_double_channel_matches_multislice_at_interp_1(device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    rng = np.random.default_rng(0)
-    tp_array = (
-        rng.standard_normal((2, 32, 32))
-        + 1j * rng.standard_normal((2, 32, 32))
-    ).astype(np.complex64)
-    tp = TransitionPotentialArray(
-        Z=14,
-        array=tp_array,
-        energy=energy,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
+    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
 
     detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
@@ -423,19 +378,7 @@ def test_smatrix_transition_potential_scan_interp_2_produces_windowed_output(dev
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    rng = np.random.default_rng(0)
-    tp_array = (
-        rng.standard_normal((2, 64, 64))
-        + 1j * rng.standard_normal((2, 64, 64))
-    ).astype(np.complex64)
-    tp = TransitionPotentialArray(
-        Z=14,
-        array=tp_array,
-        energy=energy,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
+    tp = _make_synthetic_tp(14, (64, 64), potential.extent, energy=energy)
 
     detector = abtem.PixelatedDetector(max_angle=30, to_cpu=True)
 
@@ -676,19 +619,7 @@ def test_prism_eels_exit_planes_match_multislice(double_channel, device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    rng = np.random.default_rng(0)
-    tp_array = (
-        rng.standard_normal((2, 32, 32))
-        + 1j * rng.standard_normal((2, 32, 32))
-    ).astype(np.complex64)
-    tp = TransitionPotentialArray(
-        Z=14,
-        array=tp_array,
-        energy=energy,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
+    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
 
     detector = abtem.PixelatedDetector(max_angle=40, to_cpu=True)
 
@@ -745,19 +676,7 @@ def test_prism_eels_frozen_phonons_match_multislice(ensemble_mean, device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    rng = np.random.default_rng(0)
-    tp_array = (
-        rng.standard_normal((2, 32, 32))
-        + 1j * rng.standard_normal((2, 32, 32))
-    ).astype(np.complex64)
-    tp = TransitionPotentialArray(
-        Z=14,
-        array=tp_array,
-        energy=energy,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
+    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
 
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(
@@ -816,19 +735,7 @@ def test_prism_eels_lazy_matches_eager(device):
     energy = 100e3
     semiangle_cutoff = 20.0
 
-    rng = np.random.default_rng(0)
-    tp_array = (
-        rng.standard_normal((2, 32, 32))
-        + 1j * rng.standard_normal((2, 32, 32))
-    ).astype(np.complex64)
-    tp = TransitionPotentialArray(
-        Z=14,
-        array=tp_array,
-        energy=energy,
-        extent=potential.extent,
-        ensemble_axes_metadata=[OrdinalAxis(values=(0, 1))],
-        metadata={"Z": 14, "n": 1, "l": 0},
-    )
+    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
 
     detector = abtem.FlexibleAnnularDetector(to_cpu=True)
     scan = abtem.GridScan(

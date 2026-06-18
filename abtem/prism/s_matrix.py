@@ -1968,13 +1968,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             lazy=lazy,
         )
 
-    def _eager_transition_potential_scan(
-        self, scan, detectors, transition_potentials, sites, double_channel,
-        inelastic_crop=None,
-        squeeze=True,
-    ):
-        from abtem.inelastic.core_loss import prism_transition_potential_scan
-
+    def _build_ensemble_shape_metadata(self):
         extra_ensemble_axes_shape = ()
         extra_ensemble_axes_metadata = []
         for shape, axis_metadata in zip(
@@ -1993,6 +1987,18 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
                 self.potential.base_axes_metadata[0]
             ]
+        return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
+
+    def _eager_transition_potential_scan(
+        self, scan, detectors, transition_potentials, sites, double_channel,
+        inelastic_crop=None,
+        squeeze=True,
+    ):
+        from abtem.inelastic.core_loss import prism_transition_potential_scan
+
+        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
+            self._build_ensemble_shape_metadata()
+        )
 
         if self.ensemble_shape:
             dummy_waves = self.build(lazy=True).dummy_probes(scan)
@@ -2190,24 +2196,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         return _wrap_measurements(measurements)
 
     def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
-        extra_ensemble_axes_shape = ()
-        extra_ensemble_axes_metadata = []
-        for shape, axis_metadata in zip(
-            self.ensemble_shape, self.ensemble_axes_metadata
-        ):
-            extra_ensemble_axes_metadata += [axis_metadata]
-            if axis_metadata._ensemble_mean:
-                extra_ensemble_axes_shape += (1,)
-            else:
-                extra_ensemble_axes_shape += (shape,)
-
-        if self.potential is not None and len(self.potential.exit_planes) > 1:
-            extra_ensemble_axes_shape = extra_ensemble_axes_shape + (
-                len(self.potential.exit_planes),
-            )
-            extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
-                self.potential.base_axes_metadata[0]
-            ]
+        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
+            self._build_ensemble_shape_metadata()
+        )
 
         detectors = validate_detectors(detectors)
 
