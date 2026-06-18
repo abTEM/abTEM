@@ -322,7 +322,16 @@ def _annular_detector_mask(
     bins = (k2 >= inner**2) & (k2 < outer**2)
 
     if sensitivity is not None:
-        weights = xp.asarray(sensitivity(xp.sqrt(k2)), dtype=get_dtype(complex=False))
+        # Weight the (boolean) mask by the per-pixel radial sensitivity. The combined
+        # float mask is rolled and fftshifted below, so the weights are computed here
+        # without an fftshift.
+        weights = _radial_weight_map(
+            gpts=gpts,
+            sampling=sampling,
+            sensitivity=sensitivity,
+            fftshift=False,
+            xp=xp,
+        )
         bins = bins * weights
 
     if np.any(np.array(offset) != 0.0):

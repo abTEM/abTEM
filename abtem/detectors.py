@@ -212,9 +212,10 @@ class RadialSensitivity:
         Validate the sensitivity against a detector's integration range [inner, outer].
 
         For a measured ``(angles, values)`` curve, all provided angles must lie within
-        ``[inner, outer]`` so that no detector angle relies on extrapolation. For a
-        callable, the domain cannot be introspected, so instead the function is sampled
-        across ``[inner, outer]`` and checked to return finite, non-negative weights.
+        ``[inner, outer]`` so that no detector angle relies on extrapolation (the values
+        are already validated to lie within ``[0, 1]`` at construction). For a callable,
+        the domain cannot be introspected, so instead the function is sampled across
+        ``[inner, outer]`` and checked to return finite weights within ``[0, 1]``.
 
         Parameters
         ----------
@@ -227,7 +228,7 @@ class RadialSensitivity:
         ------
         ValueError
             If the measured angles fall outside ``[inner, outer]``, or if a callable
-            produces non-finite or negative weights over that range.
+            produces non-finite weights or weights outside ``[0, 1]`` over that range.
         """
         tol = 1e-6
 
@@ -582,7 +583,7 @@ class _AbstractRadialDetector(BaseDetector):
             outer=outer,
             rotation=self._rotation,
             offset=self._offset,
-            sensitivity=self._sensitivity,
+            sensitivity=self.sensitivity,
         )
 
         if self.to_cpu:
