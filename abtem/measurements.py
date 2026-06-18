@@ -3321,9 +3321,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
         array = self.array
         if self.is_lazy:
             array = array.compute()
-        # rasterise on the host (forward-scatter uses numpy scatter); ``.get()`` brings a
-        # cupy array to numpy, and is a no-op fallback for numpy arrays.
-        array = np.asarray(getattr(array, "get", lambda: array)())
+        array = asnumpy(array)
         if self.fftshift:
             array = np.fft.ifftshift(array, axes=(-2, -1))  # match k_components (fft order)
 

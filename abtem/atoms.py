@@ -156,8 +156,6 @@ def is_cell_orthogonal(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12):
 
     cell = np.array(cell)
 
-    assert isinstance(cell, np.ndarray)
-
     return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
 
 
@@ -184,7 +182,6 @@ def is_cell_z_separable(cell: Atoms | Cell | np.ndarray, tol: float = 1e-12) -> 
         cell = cell.cell
 
     cell = np.array(cell)
-    assert isinstance(cell, np.ndarray)
 
     z_coupling = np.abs([cell[0, 2], cell[1, 2], cell[2, 0], cell[2, 1]])
     return not np.any(z_coupling > tol)
@@ -219,7 +216,6 @@ def is_cell_ab_in_plane(cell: Atoms | Cell | np.ndarray, tol: float = 1e-9) -> b
         cell = cell.cell
 
     cell = np.array(cell)
-    assert isinstance(cell, np.ndarray)
 
     return bool(abs(cell[0, 2]) <= tol and abs(cell[1, 2]) <= tol)
 

@@ -629,32 +629,6 @@ class TestStencilNumericalAccuracy:
 
 
 def test_realspace_multislice_non_orthogonal():
-    """The real-space (finite-difference) multislice on a non-orthogonal grid uses the
-    metric Laplacian and agrees with the Fourier multislice to the finite-difference
-    discretisation level (the same level as the orthogonal case)."""
-    a, cz, nz, st = 3.0, 2.0, 6, 0.5
-    cell = np.array(
-        [[a, 0, 0], [a * np.cos(np.deg2rad(60)), a * np.sin(np.deg2rad(60)), 0], [0, 0, cz]]
-    )
-    atoms = ase.Atoms("C", cell=cell, pbc=True, positions=[(0, 0, 0)]) * (3, 3, nz)
-    pot = abtem.Potential(atoms, gpts=(144, 144), slice_thickness=st)
-    assert not pot.grid.is_orthogonal
-
-    fourier = abtem.PlaneWave(energy=100e3).multislice(
-        pot, algorithm=FourierMultislice()
-    ).compute()
-    realspace = abtem.PlaneWave(energy=100e3).multislice(
-        pot, algorithm=RealSpaceMultislice()
-    ).compute()
-
-    F = to_numpy(fourier.array)
-    R = to_numpy(realspace.array)
-    # agreement at the 2nd-order finite-difference level (a wrong/orthogonal Laplacian
-    # on a skewed grid would diverge or differ by order 1)
-    assert np.max(np.abs(R - F)) / np.max(np.abs(F)) < 0.05
-
-
-def test_realspace_multislice_non_orthogonal():
     """The real-space (finite-difference) multislice on a non-orthogonal grid must
     agree with the Fourier multislice to the finite-difference accuracy, and the
     metric Laplacian must reduce to the isotropic one for an orthogonal cell."""

@@ -691,6 +691,9 @@ def test_all_modes_agree_on_fully_triclinic_cell():
     assert rel_FR.mean() < 1e-2, (
         f"Real-space FD vs Fourier MS mean rel error {rel_FR.mean():.2e} too large"
     )
+
+
+def test_skew_cell_metadata_survives_reconstruction():
     """The non-orthogonal cell is stored in metadata and survives reconstruction."""
     import numpy as np
     from ase import Atoms
