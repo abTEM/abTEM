@@ -486,7 +486,9 @@ class Grid(CopyMixin, EqualityMixin):
         ):
             self.sampling = other.sampling
 
-        # propagate a non-orthogonal cell between matched grids
+        # Propagate a non-orthogonal cell between matched grids in both directions:
+        # the potential carries the cell and the wave starts without one, so whichever
+        # side has it shares it with the other during multislice setup.
         other_grid = other if isinstance(other, Grid) else getattr(other, "grid", other)
         other_cell = getattr(other_grid, "_cell", None)
         if other_cell is not None and self._cell is None:
