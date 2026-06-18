@@ -1429,6 +1429,7 @@ class CrystalPotential(_PotentialBuilder):
         self._potential_unit = potential_unit
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
+        self._sliced_atoms: Optional[BaseSlicedAtoms] = None
 
     @property
     def ensemble_mean(self) -> bool:
@@ -1499,6 +1500,55 @@ class CrystalPotential(_PotentialBuilder):
             return []
         else:
             return [FrozenPhononsAxis(_ensemble_mean=self._ensemble_mean)]
+
+    def get_sliced_atoms(self) -> BaseSlicedAtoms:
+        """
+        The atoms of the full crystal grouped into the slices given by the slice
+        thicknesses.
+
+        The atoms are reconstructed by tiling the unit potential's transformed
+        (orthogonalised) atoms by the crystal repetitions. This makes
+        ``CrystalPotential`` work with any code path that derives atomic sites
+        from a potential via ``get_sliced_atoms`` -- e.g. the core-loss EELS
+        driver's automatic site extraction -- without special-casing the
+        repeating-unit structure.
+
+        Notes
+        -----
+        - **Frozen phonons are not displaced.** ``get_transformed_atoms``
+          returns the equilibrium (mean) positions, so the returned sites are
+          the un-displaced atomic columns. This is deliberate: a
+          ``CrystalPotential`` ensemble draws an independent random unit
+          configuration per z-repetition, so there is no single displaced
+          realisation to return, and atomic-column site identification (the
+          main consumer) wants the equilibrium column positions anyway. This
+          differs from ``Potential.get_sliced_atoms``, which applies the
+          frozen-phonon displacement of its single configuration.
+        - The result is cached; the tile is non-trivial for large supercells.
+
+        Returns
+        -------
+        sliced_atoms : BaseSlicedAtoms
+        """
+        if self._sliced_atoms is not None:
+            return self._sliced_atoms
+
+        if not hasattr(self._potential_unit, "get_transformed_atoms"):
+            raise RuntimeError(
+                "Cannot derive atoms from a CrystalPotential whose "
+                f"potential_unit ({type(self._potential_unit).__name__}) does "
+                "not expose 'get_transformed_atoms' (e.g. a precomputed "
+                "PotentialArray). Pass the scattering sites explicitly instead."
+            )
+
+        unit_atoms = self._potential_unit.get_transformed_atoms()
+        tiled_atoms = unit_atoms * self._repetitions
+
+        self._sliced_atoms = SliceIndexedAtoms(
+            tiled_atoms, slice_thickness=self.slice_thickness
+        )
+
+        return self._sliced_atoms
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
