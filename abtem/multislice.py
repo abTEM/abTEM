@@ -636,9 +636,12 @@ def multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
+    waves_input = waves.copy()
+
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
+        waves = waves_input.copy()
         exit_plane_index = 0
 
         # Handle entrance plane detection (before first slice)
@@ -930,10 +933,13 @@ def transition_potential_multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
+    waves_input = waves.copy()
+
     for (
         potential_index,
         potential_configuration,
     ) in _generate_potential_configurations(potential):
+        waves = waves_input.copy()
         if potential.exit_planes[0] == -1:
             measurement_index = _validate_potential_ensemble_indices(
                 potential_index, 0, potential
