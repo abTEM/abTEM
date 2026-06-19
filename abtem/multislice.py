@@ -799,6 +799,7 @@ def transition_potential_multislice_and_detect(
     threshold: float = 1.0,
     sites: Optional[SliceIndexedAtoms | Atoms] = None,
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
+    scatter_max_batch: int | str = 1,
     pbar: bool = False,
 ) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
@@ -939,10 +940,53 @@ def transition_potential_multislice_and_detect(
             )
             _update_measurements(waves, detectors, measurements, measurement_index)
 
+        # The double-channel inner multislice re-visits slices [scatter_index+1 …]
+        # once per site batch; pre-building (and bandlimiting) the transmission
+        # functions saves N_sites rebuilds per outer step in that case (for
+        # FourierMultislice the cache short-circuits the rebuild inside
+        # conventional_multislice_step, see iam.py:1300-1302). Single-channel
+        # visits each slice exactly once, so caching is pure memory overhead and
+        # we stream slices instead.
+        if double_channel:
+            if isinstance(algorithm, FourierMultislice):
+                # Dedup transmissions across z-repetitions. CrystalPotential's
+                # tile cache (iam.py CrystalPotential.generate_slices) yields the
+                # *same* PotentialArray object for every z-repetition of a unit
+                # slice in the no-frozen-phonon case, so id(slice_obj) collapses
+                # to one entry per unique unit slice. The bandlimit FFT then
+                # runs O(n_unique) times instead of O(n_outer), and the
+                # transmission cache footprint drops by repetitions[2].
+                # For SrTiO3 reps=(4,4,25): 50 transmissions -> 2 unique
+                # (-24 MB cache, -48 bandlimit FFTs per configuration).
+                # The EELS driver reads exit_planes off ``potential`` globally,
+                # never off the slice (compare standard_multislice_and_detect
+                # at multislice.py:672), so sharing TransmissionFunction
+                # instances across slice indices is safe here.
+                tx_dedup: dict[int, TransmissionFunction] = {}
+                slice_cache = []
+                for slice_obj in potential_configuration.generate_slices():
+                    key = id(slice_obj)
+                    cached = tx_dedup.get(key)
+                    if cached is None:
+                        cached = antialias_aperture.bandlimit(
+                            slice_obj.transmission_function(
+                                energy=waves._valid_energy
+                            ),
+                            in_place=False,
+                        )
+                        tx_dedup[key] = cached
+                    slice_cache.append(cached)
+            else:
+                slice_cache = list(potential_configuration.generate_slices())
+            n_outer = len(slice_cache)
+            outer_iter = enumerate(slice_cache)
+        else:
+            slice_cache = None
+            n_outer = None
+            outer_iter = enumerate(potential_configuration.generate_slices())
+
         depth = 0.0
-        for scatter_index, potential_slice in enumerate(
-            potential_configuration.generate_slices()
-        ):
+        for scatter_index, potential_slice in outer_iter:
             waves = multislice_step(
                 waves,
                 potential_slice,
@@ -964,7 +1008,10 @@ def transition_potential_multislice_and_detect(
                 included_sites,
                 scattered_waves,
             ) in transition_potential.generate_scattered_waves(
-                waves, sites_slice, max_batch=1, threshold=absolute_threshold
+                waves,
+                sites_slice,
+                max_batch=scatter_max_batch,
+                threshold=absolute_threshold,
             ):
                 if len(scattered_waves) == 0:
                     continue
@@ -979,13 +1026,12 @@ def transition_potential_multislice_and_detect(
                         potential_index,
                     )
 
-                    # if scatter_index + 1 == len(potential):
-                    #    break
+                    # Nothing left to propagate through on the final outer slice.
+                    if scatter_index + 1 == n_outer:
+                        continue
 
-                    for inner_slice_index, inner_potential_slice in enumerate(
-                        potential_configuration.generate_slices(
-                            first_slice=scatter_index + 1
-                        )
+                    for inner_offset, inner_potential_slice in enumerate(
+                        slice_cache[scatter_index + 1:]
                     ):
                         scattered_waves = multislice_step(
                             scattered_waves,
@@ -999,7 +1045,7 @@ def transition_potential_multislice_and_detect(
                             scattered_waves,
                             detectors,
                             potential,
-                            inner_slice_index + scatter_index + 1,
+                            scatter_index + 1 + inner_offset,
                             potential_index,
                         )
 
