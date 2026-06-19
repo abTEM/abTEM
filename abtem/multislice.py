@@ -893,6 +893,9 @@ def transition_potential_multislice_and_detect(
 
     transition_potential = transition_potential.copy_to_device(waves.device)
 
+    # CrystalPotential implements get_sliced_atoms by tiling its unit, so the
+    # first branch covers repeating-unit potentials too (see
+    # CrystalPotential.get_sliced_atoms).
     if sites is None and hasattr(potential, "get_sliced_atoms"):
         sites = potential.get_sliced_atoms()
     elif sites is None and hasattr(potential, "atoms"):
@@ -901,7 +904,11 @@ def transition_potential_multislice_and_detect(
     if isinstance(sites, Atoms):
         sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
     elif not isinstance(sites, SliceIndexedAtoms):
-        raise ValueError()
+        raise ValueError(
+            "Could not derive scattering sites from the potential "
+            f"({type(potential).__name__}). Pass ``sites=`` explicitly as an "
+            "ase.Atoms or SliceIndexedAtoms covering the full simulation cell."
+        )
 
     n_sites = np.sum(sites.atoms.numbers == transition_potential.Z)
 

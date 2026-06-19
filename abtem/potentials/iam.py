@@ -1429,6 +1429,7 @@ class CrystalPotential(_PotentialBuilder):
         self._potential_unit = potential_unit
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
+        self._sliced_atoms: Optional[BaseSlicedAtoms] = None
 
     @property
     def ensemble_mean(self) -> bool:
@@ -1499,6 +1500,55 @@ class CrystalPotential(_PotentialBuilder):
             return []
         else:
             return [FrozenPhononsAxis(_ensemble_mean=self._ensemble_mean)]
+
+    def get_sliced_atoms(self) -> BaseSlicedAtoms:
+        """
+        The atoms of the full crystal grouped into the slices given by the slice
+        thicknesses.
+
+        The atoms are reconstructed by tiling the unit potential's transformed
+        (orthogonalised) atoms by the crystal repetitions. This makes
+        ``CrystalPotential`` work with any code path that derives atomic sites
+        from a potential via ``get_sliced_atoms`` -- e.g. the core-loss EELS
+        driver's automatic site extraction -- without special-casing the
+        repeating-unit structure.
+
+        Notes
+        -----
+        - **Frozen phonons are not displaced.** ``get_transformed_atoms``
+          returns the equilibrium (mean) positions, so the returned sites are
+          the un-displaced atomic columns. This is deliberate: a
+          ``CrystalPotential`` ensemble draws an independent random unit
+          configuration per z-repetition, so there is no single displaced
+          realisation to return, and atomic-column site identification (the
+          main consumer) wants the equilibrium column positions anyway. This
+          differs from ``Potential.get_sliced_atoms``, which applies the
+          frozen-phonon displacement of its single configuration.
+        - The result is cached; the tile is non-trivial for large supercells.
+
+        Returns
+        -------
+        sliced_atoms : BaseSlicedAtoms
+        """
+        if self._sliced_atoms is not None:
+            return self._sliced_atoms
+
+        if not hasattr(self._potential_unit, "get_transformed_atoms"):
+            raise RuntimeError(
+                "Cannot derive atoms from a CrystalPotential whose "
+                f"potential_unit ({type(self._potential_unit).__name__}) does "
+                "not expose 'get_transformed_atoms' (e.g. a precomputed "
+                "PotentialArray). Pass the scattering sites explicitly instead."
+            )
+
+        unit_atoms = self._potential_unit.get_transformed_atoms()
+        tiled_atoms = unit_atoms * self._repetitions
+
+        self._sliced_atoms = SliceIndexedAtoms(
+            tiled_atoms, slice_thickness=self.slice_thickness
+        )
+
+        return self._sliced_atoms
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
@@ -1621,15 +1671,46 @@ class CrystalPotential(_PotentialBuilder):
         start = first_slice
         stop = first_slice + 1
 
+        # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
+        # Without it each (z-rep, unit-slice) pair re-tiles the same array via
+        # ``.tile(self.repetitions[:2])`` — for the no-frozen-phonon case
+        # (n_configs == 1) every z-rep produces an identical result so the
+        # cost scales linearly with ``repetitions[2]``. The cache turns this
+        # into ``n_configs * len(self.potential_unit)`` unique tile calls.
+        # For the SrTiO3 tutorial (reps=(4,4,25), 2 unit slices, no FP) this
+        # is 2 tiles instead of 50; the cache footprint is bounded by the
+        # tiled-unit byte size and freed when the generator is exhausted.
+        tiled_cache: dict[tuple[int, int], PotentialArray] = {}
+        unit_generators: dict[int, object] = {}
+        tile_xy = self.repetitions[:2]
+
+        def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
+            key = (config_idx, j)
+            cached = tiled_cache.get(key)
+            if cached is not None:
+                return cached
+            gen = unit_generators.get(config_idx)
+            if gen is None:
+                gen = potentials[config_idx].generate_slices()
+                unit_generators[config_idx] = gen
+            slic = next(gen).tile(tile_xy)
+            tiled_cache[key] = slic
+            return slic
+
         for i in range(self.repetitions[2]):
-            potential = potentials[rng.integers(0, potentials.shape[0])]
-            generator = potential.generate_slices()
+            config_idx = int(rng.integers(0, potentials.shape[0]))
 
             for j in range(len(self.potential_unit)):
-                slic = next(generator).tile(self.repetitions[:2])
+                slic = _tiled_slice(config_idx, j)
 
                 exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
 
+                # Mutating the cached slice is safe in the standard sequential
+                # consumption pattern (the consumer reads ``slic.exit_planes``
+                # immediately upon receiving the yield and never holds a back-
+                # reference across iterations — see multislice.py:672). Reset
+                # the value on every yield so re-entering the same cached
+                # slice on a different z-rep still carries the right metadata.
                 slic._exit_planes = exit_planes
 
                 start += 1
