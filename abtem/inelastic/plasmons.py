@@ -17,7 +17,9 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import chunk_ranges, validate_chunks
-from abtem.core.utils import itemset
+from abtem.core.energy import energy2wavelength
+from abtem.core.grid import coordinate_grid
+from abtem.core.utils import get_dtype, itemset
 from abtem.transform import ArrayObjectTransform
 
 if TYPE_CHECKING:
@@ -577,4 +579,304 @@ class MonteCarloPlasmons:
             azimuthal_angles,
             weights,
             ensemble_mean=self.ensemble_mean,
+        )
+
+
+def _config_rng(seed, potential_index, config_seed=None) -> np.random.Generator:
+    """Deterministic per-configuration random generator for phase scrambling.
+
+    With ``seed=None`` the streams are simply independent (fresh entropy per
+    configuration), matching the reference implementation's per-repetition reshuffling.
+
+    With an explicit ``seed`` the stream is reproducible and made unique per
+    configuration. The preferred discriminator is ``config_seed`` -- the per-config
+    frozen-phonon seed, which is globally unique and survives Dask partitioning (so
+    lazy and eager runs agree). If it is unavailable (e.g. a potential without
+    frozen-phonon seeds) the local ``potential_index`` is used as a best-effort
+    fallback, which is only globally unique under eager execution.
+    """
+    if seed is None:
+        return np.random.default_rng()
+
+    entropy = [int(seed)]
+    if config_seed is not None:
+        entropy.append(int(config_seed))
+    elif isinstance(potential_index, tuple):
+        entropy.extend(int(i) for i in potential_index)
+    else:
+        entropy.append(int(potential_index))
+
+    return np.random.default_rng(np.random.SeedSequence(entropy))
+
+
+class _PlasmonSliceOperator:
+    """Inline per-slice plasmon scattering operator (single configuration).
+
+    Holds the precomputed, phase-scrambled tilted-beam basis (random-order Bessel
+    functions ``J_n(2*pi*k_t*R)``) and the per-configuration random generator. The
+    operator is applied to the real-space wave function at the bottom of every slice
+    during the multislice loop; see :class:`PhaseScramblePlasmons`.
+    """
+
+    def __init__(
+        self,
+        bessel_stack: np.ndarray,
+        angle_weights: np.ndarray,
+        azimuthal_norm: float,
+        mean_free_path: float,
+        rng: np.random.Generator,
+    ):
+        # bessel_stack: (num_angles, num_copies, gpts_x, gpts_y), real valued
+        self._bessel_stack = bessel_stack
+        self._angle_weights = angle_weights  # P(theta) per angle bin
+        self._azimuthal_norm = azimuthal_norm  # sqrt(2*pi/phi_min)
+        self._mean_free_path = mean_free_path
+        self._rng = rng
+
+    def _scatter_params(self, depth: float, slice_thickness: float):
+        """Compute per-slice scatter probability and draw random Bessel copies."""
+        lp = self._mean_free_path
+        scatter_prob = float(np.exp(-depth / lp) * (slice_thickness / lp))
+        num_angles, num_copies = self._bessel_stack.shape[:2]
+        chosen = [int(self._rng.integers(num_copies)) for _ in range(num_angles)]
+        return scatter_prob, chosen
+
+    def scatter(self, waves: "Waves", depth: float, slice_thickness: float) -> None:
+        """Apply one slice of plasmon scattering to ``waves`` in place (real space)."""
+        xp = get_array_module(waves.device)
+        scatter_prob, chosen = self._scatter_params(depth, slice_thickness)
+        num_angles = self._bessel_stack.shape[0]
+
+        psi = waves._array
+        psi_dup = psi.copy()
+
+        out = np.sqrt(1.0 - scatter_prob) * psi_dup
+
+        for a in range(num_angles):
+            bessel = self._bessel_stack[a, chosen[a]]
+            amplitude = np.sqrt(scatter_prob * self._angle_weights[a])
+            out = out + (amplitude * self._azimuthal_norm) * (bessel * psi_dup)
+
+        waves._array = xp.asarray(out, dtype=psi.dtype)
+
+    def scatter_by_order(
+        self,
+        order_waves: list,
+        depth: float,
+        slice_thickness: float,
+    ) -> None:
+        """Apply order-resolved plasmon scattering in place.
+
+        Maintains separate wave functions for each plasmon-loss order.  At each
+        slice the update rule is::
+
+            ψ_0' = √(1-P) ψ_0
+            ψ_n' = √(1-P) ψ_n  +  S(ψ_{n-1})   for n ≥ 1
+
+        where S is the phase-scramble scattering operator (sum over angle bins).
+        The same random Bessel copy draw is shared across all orders so that the
+        sum  Σ_n ψ_n  reproduces the single-pass result (up to truncation at
+        ``max_order``).
+
+        Parameters
+        ----------
+        order_waves : list of Waves
+            ``[ψ_0, ψ_1, …, ψ_N]`` — one Waves object per loss order.
+            Modified in place.
+        depth : float
+            Cumulative depth at the bottom of the current slice [Å].
+        slice_thickness : float
+            Thickness of the current slice [Å].
+        """
+        xp = get_array_module(order_waves[0].device)
+        scatter_prob, chosen = self._scatter_params(depth, slice_thickness)
+        num_angles = self._bessel_stack.shape[0]
+        max_order = len(order_waves) - 1
+
+        scatter_kernel = xp.zeros(
+            self._bessel_stack.shape[2:], dtype=self._bessel_stack.dtype
+        )
+        for a in range(num_angles):
+            amplitude = np.sqrt(scatter_prob * self._angle_weights[a])
+            scatter_kernel += (
+                float(amplitude * self._azimuthal_norm)
+                * self._bessel_stack[a, chosen[a]]
+            )
+
+        sqrt_one_minus_p = np.sqrt(1.0 - scatter_prob)
+
+        for n in range(max_order, -1, -1):
+            arr = order_waves[n]._array
+            if n > 0:
+                prev_arr = order_waves[n - 1]._array
+                order_waves[n]._array = xp.asarray(
+                    sqrt_one_minus_p * arr + scatter_kernel * prev_arr,
+                    dtype=arr.dtype,
+                )
+            else:
+                order_waves[n]._array = xp.asarray(
+                    sqrt_one_minus_p * arr, dtype=arr.dtype
+                )
+
+
+class PhaseScramblePlasmons:
+    """Fast single-pass plasmon energy-loss model (phase-scramble method).
+
+    Implements the inelastic multislice method of B.G. Mendis,
+    *Ultramicroscopy* **206** (2019) 112816 (and its 2020 corrigendum) in the efficient
+    "phase-scramble" formulation shared by the author. In contrast to
+    :class:`MonteCarloPlasmons` — which runs a separate full multislice for every
+    sampled scattering event — this model applies plasmon scattering *inline* at the
+    bottom of every slice within a single multislice pass, so all plasmon orders
+    accumulate simultaneously. Statistical convergence is obtained by incoherently
+    averaging over phase-scramble repetitions, which are realised by reusing the
+    frozen-phonon configuration ensemble of the potential (``num_configs`` plays the
+    role of the number of repetitions).
+
+    At the bottom of each slice the real-space wave function ``psi`` is updated as
+
+    .. math::
+
+        \\psi \\rightarrow \\sqrt{1 - P_s}\\,\\psi
+            + \\sqrt{\\tfrac{2\\pi}{\\phi_{min}}}
+              \\sum_a \\sqrt{P_s\\,P(\\theta_a)}\\, J_{n}(2\\pi k_{t,a} R)\\, \\psi,
+
+    where :math:`P_s = e^{-s/\\lambda_p}\\,\\Delta z/\\lambda_p` is the plasmon
+    scattering probability for the slice at depth :math:`s`, :math:`P(\\theta_a)` is the
+    (Lorentzian) angular scattering probability, and the random-order Bessel functions
+    represent azimuthally-scrambled tilted beams with transverse wavenumber
+    :math:`k_{t,a} = k\\sin\\theta_a`.
+
+    Parameters
+    ----------
+    mean_free_path : float
+        Plasmon mean free path :math:`\\lambda_p` [Å].
+    excitation_energy : float
+        Plasmon excitation (peak) energy :math:`E_p` [eV]. Sets the characteristic
+        scattering angle :math:`\\theta_E = E_p / (2 E_0)`.
+    critical_angle : float
+        Critical (cut-off) scattering angle :math:`\\theta_c` [mrad], above which single
+        electron excitations dominate.
+    num_angles : int, optional
+        Number of discrete scattering-angle bins (default 5).
+    num_copies : int, optional
+        Number of independent random-order Bessel realisations per angle bin to draw
+        from during phase scrambling (default 5).
+    max_bessel_order : float, optional
+        Maximum (non-integer) Bessel-function order used for phase scrambling
+        (default 30).
+    seed : int, optional
+        Base random seed. Combined with the frozen-phonon configuration index to give a
+        reproducible, per-configuration scramble (eager execution). If ``None``
+        (default), each configuration draws fresh entropy, giving independent scramble
+        streams in both eager and lazy execution (matching the reference
+        implementation's per-repetition reshuffling).
+    max_loss_order : int, optional
+        If set, the multislice loop maintains separate wave functions for each
+        plasmon-loss order from 0 (zero loss) up to ``max_loss_order``, returning
+        order-resolved diffraction patterns.  If ``None`` (default), a single wave
+        function accumulating all orders is propagated (faster, but only the total
+        unfiltered signal is available).
+    """
+
+    def __init__(
+        self,
+        mean_free_path: float,
+        excitation_energy: float,
+        critical_angle: float,
+        num_angles: int = 5,
+        num_copies: int = 5,
+        max_bessel_order: float = 30.0,
+        seed: int = None,
+        max_loss_order: int = None,
+    ):
+        self._mean_free_path = mean_free_path
+        self._excitation_energy = excitation_energy
+        self._critical_angle = critical_angle
+        self._num_angles = num_angles
+        self._num_copies = num_copies
+        self._max_bessel_order = max_bessel_order
+        self._seed = seed
+        self._max_loss_order = max_loss_order
+
+    @property
+    def mean_free_path(self) -> float:
+        return self._mean_free_path
+
+    @property
+    def excitation_energy(self) -> float:
+        return self._excitation_energy
+
+    @property
+    def critical_angle(self) -> float:
+        return self._critical_angle
+
+    @property
+    def seed(self):
+        return self._seed
+
+    @property
+    def max_loss_order(self):
+        return self._max_loss_order
+
+    def _build_operator(
+        self, waves: "Waves", potential_index=0, config_seed=None
+    ) -> _PlasmonSliceOperator:
+        """Build the per-configuration slice operator for the given wave functions.
+
+        Precomputes the radial-distance image, the discrete scattering angles, the
+        Lorentzian angular weights and the random-order Bessel-function basis on the
+        host (SciPy provides non-integer-order Bessel functions), transferring the basis
+        to the wave backend once per configuration.
+        """
+        from scipy.special import jv
+
+        extent = waves.extent
+        gpts = waves.gpts
+        wavelength = energy2wavelength(waves.energy)  # [Å]
+        k = 1.0 / wavelength  # [1/Å]
+
+        rng = _config_rng(self._seed, potential_index, config_seed)
+
+        # Characteristic and critical angles [rad].
+        theta_E = self._excitation_energy / (2.0 * waves.energy)
+        theta_c = self._critical_angle * 1e-3
+
+        # Pixel-limited angular step and discrete scattering angles (Matlab reference).
+        reciprocal_step = wavelength * min(1.0 / extent[0], 1.0 / extent[1])
+        theta = (np.arange(self._num_angles) + 0.5) * reciprocal_step
+        phi_min = reciprocal_step / theta[-1]
+        azimuthal_norm = float(np.sqrt(2.0 * np.pi / phi_min))
+
+        # Normalised Lorentzian angular scattering probability P(theta_a) (Eq. 3).
+        lorentz_norm = np.log(1.0 + (theta_c / theta_E) ** 2)
+        angle_weights = (
+            2.0 * theta * reciprocal_step / (theta**2 + theta_E**2) / lorentz_norm
+        )
+
+        # Cell-centred real-space radial-distance image [Å].
+        origin = (extent[0] / 2.0, extent[1] / 2.0)
+        x, y = coordinate_grid(extent, gpts, origin=origin, endpoint=False)
+        radial = np.sqrt(x**2 + y**2)
+
+        real_dtype = get_dtype(complex=False)
+        bessel_stack = np.empty(
+            (self._num_angles, self._num_copies) + tuple(gpts), dtype=real_dtype
+        )
+        for a in range(self._num_angles):
+            kt = k * np.sin(theta[a])
+            argument = 2.0 * np.pi * kt * radial
+            for c in range(self._num_copies):
+                order = self._max_bessel_order * rng.random()
+                bessel_stack[a, c] = jv(order, argument).astype(real_dtype)
+
+        xp = get_array_module(waves.device)
+        bessel_stack = xp.asarray(bessel_stack)
+
+        return _PlasmonSliceOperator(
+            bessel_stack=bessel_stack,
+            angle_weights=angle_weights,
+            azimuthal_norm=azimuthal_norm,
+            mean_free_path=self._mean_free_path,
+            rng=rng,
         )

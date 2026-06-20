@@ -14,6 +14,7 @@ from abtem.detectors import (
     WavesDetector,
 )
 from abtem.inelastic.phonons import AtomsEnsemble, FrozenPhonons
+from abtem.inelastic.plasmons import PhaseScramblePlasmons
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -56,6 +57,7 @@ __all__ = [
     "SMatrixArray",
     "FrozenPhonons",
     "AtomsEnsemble",
+    "PhaseScramblePlasmons",
     "Potential",
     "CrystalPotential",
     "PotentialArray",

@@ -13,7 +13,7 @@ from ase import Atoms
 
 from abtem.antialias import AntialiasAperture, antialias_aperture
 from abtem.core import config
-from abtem.core.axes import AxisMetadata
+from abtem.core.axes import AxisMetadata, OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import Chunks, ValidatedChunks, validate_chunks
 from abtem.core.complex import complex_exponential
@@ -40,6 +40,7 @@ from abtem.tilt import _get_tilt_axes
 from abtem.transform import WavesTransform
 
 if TYPE_CHECKING:
+    from abtem.inelastic.plasmons import PhaseScramblePlasmons
     from abtem.waves import Waves
 
 
@@ -423,6 +424,100 @@ def conventional_multislice_step(
     return waves
 
 
+def _configuration_seed(potential_configuration) -> Optional[int]:
+    """Per-configuration frozen-phonon seed, if available.
+
+    Used to give the plasmon phase-scramble a globally-unique, reproducible,
+    partition-safe per-configuration random stream. Returns ``None`` for potentials
+    without frozen-phonon seeds (e.g. a static potential).
+    """
+    frozen_phonons = getattr(potential_configuration, "frozen_phonons", None)
+    seed = getattr(frozen_phonons, "seed", None)
+    if seed is None:
+        return None
+    if hasattr(seed, "__len__"):
+        return int(seed[0]) if len(seed) else None
+    return int(seed)
+
+
+def _plasmon_total_intensity(waves: Waves):
+    """Total wave-function intensity per ensemble member (summed over the grid axes)."""
+    xp = get_array_module(waves.device)
+    arr = xp.abs(waves._array).astype(xp.float64)
+    return xp.sum(arr**2, axis=(-2, -1), keepdims=True)
+
+
+def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
+    """Return a copy of ``waves`` rescaled to the given per-member total intensity.
+
+    The phase-scramble plasmon operator is non-unitary, so the exit wave is renormalized
+    to conserve the incident electron count before detection (following the reference
+    implementation, which normalizes the wave before forming the diffraction pattern).
+    """
+    xp = get_array_module(waves.device)
+    arr = xp.abs(waves._array).astype(xp.float64)
+    current = xp.sum(arr**2, axis=(-2, -1), keepdims=True)
+    scale = xp.sqrt(target_norm / current).astype(waves._array.dtype)
+    kwargs = waves._copy_kwargs(exclude=("array",))
+    kwargs["array"] = waves._array * scale
+    return waves.__class__(**kwargs)
+
+
+def _renormalize_order_waves(order_waves: list, target_norm) -> None:
+    """Renormalize order-resolved waves so their total intensity matches the
+    incident beam.  The same scale factor is applied to every order so that
+    relative intensities are preserved."""
+    xp = get_array_module(order_waves[0].device)
+    total = sum(
+        xp.sum(
+            xp.abs(w._array).astype(xp.float64) ** 2,
+            axis=(-2, -1),
+            keepdims=True,
+        )
+        for w in order_waves
+    )
+    scale = xp.sqrt(target_norm / total).astype(order_waves[0]._array.dtype)
+    for w in order_waves:
+        w._array = w._array * scale
+
+
+def _detect_order_resolved(
+    order_waves: list,
+    target_norm,
+    detectors: list,
+    measurements: list,
+    config_meas_index: tuple[int, ...],
+) -> None:
+    """Renormalize and detect each order, writing into the pre-allocated
+    measurements at ``(order_index,) + config_meas_index``."""
+    _renormalize_order_waves(order_waves, target_norm)
+    for n, w in enumerate(order_waves):
+        idx = (n,) + config_meas_index
+        _update_measurements(w, detectors, measurements, idx)
+
+
+def _stack_order_detections(
+    order_waves: list,
+    detector,
+    potential_ensemble_shape: tuple[int, ...],
+    order_axis: "OrdinalAxis",
+):
+    """Detect each order and stack with a leading order axis (single-config
+    path where ``measurements is None``)."""
+    xp = get_array_module(order_waves[0].device)
+    detected = [detector.detect(w) for w in order_waves]
+    arrays = xp.stack([d.array for d in detected], axis=0)
+    pad = (None,) * len(potential_ensemble_shape)
+    arrays = arrays[pad]
+
+    kwargs = detected[0]._copy_kwargs(exclude=("array",))
+    kwargs["array"] = arrays
+    kwargs["ensemble_axes_metadata"] = (
+        [order_axis] + kwargs["ensemble_axes_metadata"]
+    )
+    return detected[0].__class__(**kwargs)
+
+
 def _update_measurements(
     waves: Waves,
     detectors: list[BaseDetector],
@@ -545,6 +640,7 @@ def multislice_and_detect(
     detectors: Optional[list[BaseDetector]] = None,
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     return_backscattered: bool = False,
+    plasmons: Optional["PhaseScramblePlasmons"] = None,
     pbar: bool = False,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
@@ -566,6 +662,12 @@ def multislice_and_detect(
     return_backscattered: bool, optional
         If algorithm.expansion_scope="full" and return_backscatter is True, then the
         backscattered components are also returned. Requires potential exit_planes
+    plasmons : PhaseScramblePlasmons, optional
+        If given, plasmon energy-loss scattering is applied inline at every slice using
+        the fast phase-scramble method. Phase-scramble repetitions are realised through
+        the potential's frozen-phonon configuration ensemble, so use a potential with
+        ``num_configs`` (frozen phonons) set to the desired number of repetitions and
+        ``ensemble_mean=True`` to obtain the incoherent average.
 
     """
     waves = waves.ensure_real_space()
@@ -619,6 +721,22 @@ def multislice_and_detect(
         extra_ensemble_axes_metadata,
     ) = _potential_ensemble_shape_and_metadata(potential)
 
+    # Order-resolved plasmon scattering: prepend a loss-order axis.
+    max_loss_order = (
+        plasmons.max_loss_order if plasmons is not None else None
+    )
+    order_resolved = max_loss_order is not None
+    if order_resolved:
+        n_orders = max_loss_order + 1
+        order_labels = ("Zero loss",) + tuple(
+            f"{n}-plasmon" for n in range(1, n_orders)
+        )
+        order_axis = OrdinalAxis(
+            label="Plasmon order", values=order_labels
+        )
+        extra_ensemble_axes_shape = (n_orders,) + extra_ensemble_axes_shape
+        extra_ensemble_axes_metadata = [order_axis] + extra_ensemble_axes_metadata
+
     if sum(extra_ensemble_axes_shape) == 1:
         measurements = None
     else:
@@ -644,6 +762,24 @@ def multislice_and_detect(
         waves = waves_input.copy()
         exit_plane_index = 0
 
+        if plasmons is not None:
+            plasmon_operator = plasmons._build_operator(
+                waves,
+                potential_index,
+                config_seed=_configuration_seed(potential_configuration),
+            )
+            plasmon_target_norm = _plasmon_total_intensity(waves)
+        else:
+            plasmon_operator = None
+            plasmon_target_norm = None
+
+        # Initialise per-order wave channels for order-resolved mode.
+        if order_resolved:
+            xp = get_array_module(waves.device)
+            order_waves = [waves.copy() for _ in range(n_orders)]
+            for n in range(1, n_orders):
+                order_waves[n]._array = xp.zeros_like(waves._array)
+
         # Handle entrance plane detection (before first slice)
         if potential.exit_planes[0] == -1:
             measurement_index = _validate_potential_ensemble_indices(
@@ -660,7 +796,19 @@ def multislice_and_detect(
         for potential_slice, next_slice in lookahead(
             potential_configuration.generate_slices()
         ):
-            if algorithm.expansion_scope == "full":
+            if order_resolved:
+                if isinstance(potential_slice, TransmissionFunction):
+                    tf = potential_slice
+                else:
+                    tf = potential_slice.transmission_function(
+                        energy=order_waves[0]._valid_energy
+                    )
+                    tf = antialias_aperture.bandlimit(tf, in_place=False)
+                for n in range(n_orders):
+                    order_waves[n] = multislice_step(
+                        order_waves[n], tf, next_slice=None
+                    )
+            elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(
                     waves, potential_slice, next_slice=next_slice
                 )
@@ -668,38 +816,72 @@ def multislice_and_detect(
                 waves = multislice_step(waves, potential_slice, next_slice=None)
             tqdm_pbar.update_if_exists(int(n_waves))
 
-            depth += potential_slice.axes_metadata[0].values[0]
+            slice_thickness = potential_slice.axes_metadata[0].values[0]
+            depth += slice_thickness
 
-            _update_plasmon_axes(waves, depth)
+            if order_resolved:
+                for n in range(n_orders):
+                    _update_plasmon_axes(order_waves[n], depth)
+                plasmon_operator.scatter_by_order(
+                    order_waves, depth, slice_thickness
+                )
+            else:
+                _update_plasmon_axes(waves, depth)
+                if plasmon_operator is not None:
+                    plasmon_operator.scatter(waves, depth, slice_thickness)
 
             if potential_slice.exit_planes:
-                measurement_index = _validate_potential_ensemble_indices(
+                config_meas_index = _validate_potential_ensemble_indices(
                     potential_index, exit_plane_index, potential
                 )
 
                 if measurements is not None:
-                    if algorithm.expansion_scope == "full" and return_backscattered:
+                    if order_resolved:
+                        _detect_order_resolved(
+                            order_waves,
+                            plasmon_target_norm,
+                            detectors,
+                            measurements,
+                            config_meas_index,
+                        )
+                    elif algorithm.expansion_scope == "full" and return_backscattered:
                         _update_measurements(
-                            waves, detectors[:-1], measurements[:-1], measurement_index
+                            waves, detectors[:-1], measurements[:-1], config_meas_index
                         )
                         _update_measurements(
                             backscatter_waves,
                             detectors[-1:],
                             measurements[-1:],
-                            measurement_index,
+                            config_meas_index,
                         )
                     else:
+                        detect_waves = waves
+                        if plasmon_operator is not None:
+                            detect_waves = _renormalize_total_intensity(
+                                waves, plasmon_target_norm
+                            )
                         _update_measurements(
-                            waves, detectors, measurements, measurement_index
+                            detect_waves, detectors, measurements, config_meas_index
                         )
                 exit_plane_index += 1
 
     # Handle final output if not using intermediate measurements
     if measurements is None:
-        measurements = [
-            detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
-            for detector in detectors
-        ]
+        if order_resolved:
+            _renormalize_order_waves(order_waves, plasmon_target_norm)
+            measurements = [
+                _stack_order_detections(
+                    order_waves, detector, potential.ensemble_shape, order_axis
+                )
+                for detector in detectors
+            ]
+        else:
+            if plasmon_operator is not None:
+                waves = _renormalize_total_intensity(waves, plasmon_target_norm)
+            measurements = [
+                detector.detect(waves)[(None,) * len(potential.ensemble_shape)]
+                for detector in detectors
+            ]
 
     elif return_backscattered:
         _back_propagate_backscattered_waves(
@@ -975,9 +1157,7 @@ def transition_potential_multislice_and_detect(
                     cached = tx_dedup.get(key)
                     if cached is None:
                         cached = antialias_aperture.bandlimit(
-                            slice_obj.transmission_function(
-                                energy=waves._valid_energy
-                            ),
+                            slice_obj.transmission_function(energy=waves._valid_energy),
                             in_place=False,
                         )
                         tx_dedup[key] = cached
@@ -1037,7 +1217,7 @@ def transition_potential_multislice_and_detect(
                         continue
 
                     for inner_offset, inner_potential_slice in enumerate(
-                        slice_cache[scatter_index + 1:]
+                        slice_cache[scatter_index + 1 :]
                     ):
                         scattered_waves = multislice_step(
                             scattered_waves,
@@ -1067,11 +1247,11 @@ def transition_potential_multislice_and_detect(
 
                     for i, detector in enumerate(detectors):
                         new_measurement = detector.detect(scattered_waves).sum((0,))
-                        measurements[i].array[measurement_plane_indices] += (
-                            new_measurement.array[
-                                (None,) * len(measurement_plane_indices)
-                            ]
-                        )
+                        measurements[i].array[
+                            measurement_plane_indices
+                        ] += new_measurement.array[
+                            (None,) * len(measurement_plane_indices)
+                        ]
 
     tqdm_pbar.close_if_exists()
 
@@ -1173,7 +1353,21 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         return self._detectors
 
     @property
+    def _plasmon_order_axis(self):
+        plasmons = self._multislice_func_kwargs.get("plasmons")
+        if plasmons is not None and plasmons.max_loss_order is not None:
+            n = plasmons.max_loss_order + 1
+            labels = ("Zero loss",) + tuple(
+                f"{i}-plasmon" for i in range(1, n)
+            )
+            return OrdinalAxis(label="Plasmon order", values=labels)
+        return None
+
+    @property
     def ensemble_axes_metadata(self):
+        order_axis = self._plasmon_order_axis
+        order_meta = [order_axis] if order_axis is not None else []
+
         ensemble_axes_metadata = self.potential.ensemble_axes_metadata
 
         if len(self.potential.exit_planes) > 1:
@@ -1182,6 +1376,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             exit_planes_metadata = []
 
         ensemble_axes_metadata = [
+            *order_meta,
             *ensemble_axes_metadata,
             *exit_planes_metadata,
         ]
@@ -1189,10 +1384,13 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
     @property
     def ensemble_shape(self):
+        order_axis = self._plasmon_order_axis
+        order_shape = (len(order_axis.values),) if order_axis is not None else ()
+
         ensemble_shape = self._potential.ensemble_shape
         if len(self._potential.exit_planes) > 1:
             ensemble_shape = (*ensemble_shape, len(self._potential.exit_planes))
-        return ensemble_shape
+        return order_shape + ensemble_shape
 
     def _out_metadata(self, waves: Waves) -> tuple[dict, ...]:
         return tuple(detector._out_metadata(waves)[0] for detector in self.detectors)
@@ -1227,6 +1425,9 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     def _out_ensemble_axes_metadata(
         self, waves: Waves
     ) -> tuple[list[AxisMetadata], ...]:
+        order_axis = self._plasmon_order_axis
+        order_meta = [order_axis] if order_axis is not None else []
+
         if len(self.potential.exit_planes) > 1:
             potential_axes_metadata = self.potential.ensemble_axes_metadata + [
                 self.potential._get_exit_planes_axes_metadata()
@@ -1235,7 +1436,8 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
             potential_axes_metadata = self.potential.ensemble_axes_metadata
 
         ensemble_axes_metadata = tuple(
-            potential_axes_metadata + detector._out_ensemble_axes_metadata(waves)[0]
+            order_meta + potential_axes_metadata
+            + detector._out_ensemble_axes_metadata(waves)[0]
             for detector in self.detectors
         )
 
@@ -1244,6 +1446,10 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     @property
     def _default_ensemble_chunks(self) -> Chunks:
         chunks: tuple[int, ...] = ()
+
+        order_axis = self._plasmon_order_axis
+        if order_axis is not None:
+            chunks = chunks + (len(order_axis.values),)
 
         if len(self.potential.ensemble_shape) > 0:
             chunks = chunks + (1,)
@@ -1276,13 +1482,25 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
     def _partition_args(self, chunks: Optional[Chunks] = None, lazy: bool = True):
         chunks = self._validate_ensemble_chunks(chunks)
 
-        if self.potential.num_exit_planes > 1:
-            chunks = chunks[:-1]
+        # Strip the order-axis chunk (not a potential dimension).
+        order_axis = self._plasmon_order_axis
+        pot_chunks = chunks
+        if order_axis is not None:
+            pot_chunks = pot_chunks[1:]
 
-        args = self._potential._partition_args(chunks=chunks, lazy=lazy)
+        if self.potential.num_exit_planes > 1:
+            pot_chunks = pot_chunks[:-1]
+
+        args = self._potential._partition_args(chunks=pot_chunks, lazy=lazy)
 
         if len(self._potential.exit_planes) > 1:
             args = (args[0][..., None],)
+
+        # Prepend a trivial dimension for the order axis so blockwise
+        # broadcasting works (the order dimension is produced entirely
+        # inside multislice_and_detect, not partitioned here).
+        if order_axis is not None:
+            args = (args[0][None],)
 
         return args
 
