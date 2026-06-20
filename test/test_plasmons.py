@@ -7,6 +7,12 @@ import abtem
 from abtem import FrozenPhonons, PhaseScramblePlasmons, PlaneWave, Potential
 
 
+def _to_numpy(array):
+    if hasattr(array, "get"):
+        return array.get()
+    return np.asarray(array)
+
+
 def _setup(device, num_configs=4, sigmas=0.078, ensemble_mean=True, nz=20, seed=1):
     atoms = ase.build.bulk("Si", cubic=True) * (3, 3, nz)
     frozen_phonons = FrozenPhonons(
@@ -40,7 +46,7 @@ def test_plasmons_none_is_noop(device, lazy):
     ref = wave.multislice(potential, detector).compute()
     out = wave.multislice(potential, detector, plasmons=None).compute()
 
-    assert np.allclose(np.asarray(ref.array), np.asarray(out.array))
+    assert np.allclose(_to_numpy(ref.array), _to_numpy(out.array))
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -54,8 +60,8 @@ def test_plasmons_conserve_total_intensity(device):
     exit_ref = wave.multislice(potential).compute()
     exit_pl = wave.multislice(potential, plasmons=_plasmons()).compute()
 
-    i_ref = float((np.abs(np.asarray(exit_ref.array)) ** 2).sum())
-    i_pl = float((np.abs(np.asarray(exit_pl.array)) ** 2).sum())
+    i_ref = float((np.abs(_to_numpy(exit_ref.array)) ** 2).sum())
+    i_pl = float((np.abs(_to_numpy(exit_pl.array)) ** 2).sum())
 
     # renormalization keeps the plasmon exit intensity within a couple percent of the
     # (bandlimited) plasmon-free exit -- in particular it does not blow up.
@@ -69,8 +75,8 @@ def test_plasmons_redistribute_to_higher_angles(device):
     wave, potential, _ = _setup(device)
     detector = abtem.PixelatedDetector(max_angle=40)
 
-    d_ref = np.asarray(wave.multislice(potential, detector).compute().array)
-    d_pl = np.asarray(
+    d_ref = _to_numpy(wave.multislice(potential, detector).compute().array)
+    d_pl = _to_numpy(
         wave.multislice(potential, detector, plasmons=_plasmons()).compute().array
     )
 
@@ -92,15 +98,15 @@ def test_plasmons_reproducible_with_seed(device):
     wave, potential, _ = _setup(device)
     detector = abtem.PixelatedDetector(max_angle=40)
 
-    a = np.asarray(
+    a = _to_numpy(
         wave.multislice(potential, detector, plasmons=_plasmons(seed=3)).compute().array
     )
-    b = np.asarray(
+    b = _to_numpy(
         wave.multislice(potential, detector, plasmons=_plasmons(seed=3)).compute().array
     )
     assert np.allclose(a, b)
 
-    c = np.asarray(
+    c = _to_numpy(
         wave.multislice(potential, detector, plasmons=_plasmons(seed=99))
         .compute()
         .array
@@ -115,7 +121,7 @@ def test_plasmons_decorrelate_per_configuration(device):
     wave, potential, _ = _setup(device, num_configs=3, sigmas=0.0, ensemble_mean=False)
     detector = abtem.PixelatedDetector(max_angle=40)
 
-    a = np.asarray(
+    a = _to_numpy(
         wave.multislice(potential, detector, plasmons=_plasmons()).compute().array
     )
     assert a.shape[0] == 3
@@ -138,7 +144,7 @@ def test_plasmons_order_resolved_output_shape(device):
     )
     result = wave.multislice(potential, detector, plasmons=plasmons).compute()
 
-    arr = np.asarray(result.array)
+    arr = _to_numpy(result.array)
     assert arr.ndim == 3
     assert arr.shape[0] == 3  # orders 0, 1, 2
 
@@ -150,7 +156,7 @@ def test_plasmons_order_resolved_zero_loss_matches_elastic(device):
     wave, potential, _ = _setup(device, num_configs=4, nz=10)
     detector = abtem.PixelatedDetector(max_angle=40)
 
-    d_elastic = np.asarray(
+    d_elastic = _to_numpy(
         wave.multislice(potential, detector).compute().array
     )
 
@@ -162,7 +168,7 @@ def test_plasmons_order_resolved_zero_loss_matches_elastic(device):
         max_loss_order=2,
     )
     result = wave.multislice(potential, detector, plasmons=plasmons).compute()
-    d_zero_loss = np.asarray(result.array[0])
+    d_zero_loss = _to_numpy(result.array[0])
 
     # Normalise both to unit peak and compare shapes — zero-loss should
     # closely resemble the elastic pattern.
