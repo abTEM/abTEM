@@ -667,7 +667,10 @@ def multislice_and_detect(
         the fast phase-scramble method. Phase-scramble repetitions are realised through
         the potential's frozen-phonon configuration ensemble, so use a potential with
         ``num_configs`` (frozen phonons) set to the desired number of repetitions and
-        ``ensemble_mean=True`` to obtain the incoherent average.
+        ``ensemble_mean=True`` to obtain the incoherent average. The operator is a
+        real-space multiplication at each slice boundary, so it composes with both the
+        ``FourierMultislice`` and ``RealSpaceMultislice`` algorithms (the latter only
+        with ``expansion_scope='propagator'``; backscattering is not supported).
 
     """
     waves = waves.ensure_real_space()
@@ -687,7 +690,9 @@ def multislice_and_detect(
         # moved to MultisliceTransform
         # detectors = list(detectors) + [WavesDetector()]
 
-    if isinstance(algorithm, FourierMultislice):
+    is_fourier = isinstance(algorithm, FourierMultislice)
+
+    if is_fourier:
         antialias_aperture = AntialiasAperture()
         propagator = FresnelPropagator()
 
@@ -726,6 +731,12 @@ def multislice_and_detect(
         plasmons.max_loss_order if plasmons is not None else None
     )
     order_resolved = max_loss_order is not None
+    if order_resolved and not is_fourier and algorithm.expansion_scope == "full":
+        raise NotImplementedError(
+            "Order-resolved plasmon scattering is not compatible with "
+            "expansion_scope='full' (backscattering is not defined per loss "
+            "order). Use expansion_scope='propagator' (the default)."
+        )
     if order_resolved:
         n_orders = max_loss_order + 1
         order_labels = ("Zero loss",) + tuple(
@@ -797,16 +808,28 @@ def multislice_and_detect(
             potential_configuration.generate_slices()
         ):
             if order_resolved:
-                if isinstance(potential_slice, TransmissionFunction):
-                    tf = potential_slice
+                # Build a single slice operand shared across all loss-order
+                # channels, then step each channel through the same
+                # (algorithm-agnostic) ``multislice_step`` closure.
+                if is_fourier:
+                    # Pre-compute the transmission function once per slice so
+                    # ``exp(i·sigma·V)`` is not recomputed for every order.
+                    if isinstance(potential_slice, TransmissionFunction):
+                        shared_slice = potential_slice
+                    else:
+                        shared_slice = potential_slice.transmission_function(
+                            energy=order_waves[0]._valid_energy
+                        )
+                        shared_slice = antialias_aperture.bandlimit(
+                            shared_slice, in_place=False
+                        )
                 else:
-                    tf = potential_slice.transmission_function(
-                        energy=order_waves[0]._valid_energy
-                    )
-                    tf = antialias_aperture.bandlimit(tf, in_place=False)
+                    # The real-space (finite-difference) step consumes the
+                    # potential slice directly.
+                    shared_slice = potential_slice
                 for n in range(n_orders):
                     order_waves[n] = multislice_step(
-                        order_waves[n], tf, next_slice=None
+                        order_waves[n], shared_slice, next_slice=None
                     )
             elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(

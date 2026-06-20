@@ -5,6 +5,7 @@ from utils import gpu
 
 import abtem
 from abtem import FrozenPhonons, PhaseScramblePlasmons, PlaneWave, Potential
+from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
 
 def _to_numpy(array):
@@ -175,3 +176,81 @@ def test_plasmons_order_resolved_zero_loss_matches_elastic(device):
     d_elastic_norm = d_elastic / d_elastic.max()
     d_zero_norm = d_zero_loss / d_zero_loss.max()
     assert np.corrcoef(d_elastic_norm.ravel(), d_zero_norm.ravel())[0, 1] > 0.99
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_realspace_conserve_total_intensity(device):
+    """The plasmon operator is a real-space multiplication, so it composes with
+    the real-space (finite-difference) multislice exactly as with the Fourier
+    algorithm: the renormalized exit intensity stays close to the plasmon-free
+    real-space exit."""
+    wave, potential, _ = _setup(device, nz=10)
+
+    algorithm = RealSpaceMultislice()
+    exit_ref = wave.multislice(potential, algorithm=algorithm).compute()
+    exit_pl = wave.multislice(
+        potential, plasmons=_plasmons(), algorithm=algorithm
+    ).compute()
+
+    i_ref = float((np.abs(_to_numpy(exit_ref.array)) ** 2).sum())
+    i_pl = float((np.abs(_to_numpy(exit_pl.array)) ** 2).sum())
+
+    assert i_pl == pytest.approx(i_ref, rel=2e-2)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_realspace_order_resolved_matches_fourier(device):
+    """Order-resolved plasmon scattering is algorithm-agnostic: the per-order
+    diffraction patterns from the real-space and Fourier multislice agree, since
+    both apply the identical real-space scatter operator at each slice boundary."""
+    wave, potential, _ = _setup(device, num_configs=4, nz=10)
+    detector = abtem.PixelatedDetector(max_angle=40)
+
+    def _orders(algorithm):
+        plasmons = PhaseScramblePlasmons(
+            mean_free_path=1050.0,
+            excitation_energy=16.7,
+            critical_angle=19.1,
+            seed=7,
+            max_loss_order=2,
+        )
+        result = wave.multislice(
+            potential, detector, plasmons=plasmons, algorithm=algorithm
+        ).compute()
+        return _to_numpy(result.array)
+
+    arr_realspace = _orders(RealSpaceMultislice())
+    arr_fourier = _orders(FourierMultislice())
+
+    assert arr_realspace.shape == arr_fourier.shape
+    assert arr_realspace.shape[0] == 3
+    # Per-order total intensities agree (same scatter draw via shared seed).
+    for n in range(3):
+        assert arr_realspace[n].sum() == pytest.approx(
+            arr_fourier[n].sum(), rel=1e-3
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_order_resolved_rejects_full_expansion(device):
+    """Backscattering (expansion_scope='full') is not defined per loss order, so
+    combining it with order-resolved plasmons must raise rather than silently
+    mishandle the backscattered component."""
+    wave, potential, _ = _setup(device, num_configs=2, nz=6)
+    detector = abtem.PixelatedDetector(max_angle=40)
+
+    plasmons = PhaseScramblePlasmons(
+        mean_free_path=1050.0,
+        excitation_energy=16.7,
+        critical_angle=19.1,
+        seed=7,
+        max_loss_order=2,
+    )
+
+    with pytest.raises(NotImplementedError):
+        wave.multislice(
+            potential,
+            detector,
+            plasmons=plasmons,
+            algorithm=RealSpaceMultislice(expansion_scope="full"),
+        ).compute()
