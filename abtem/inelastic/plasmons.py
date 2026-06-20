@@ -648,14 +648,19 @@ class _PlasmonSliceOperator:
         num_angles = self._bessel_stack.shape[0]
 
         psi = waves._array
+        # Keep scalar coefficients at the wave's real precision; a Python/NumPy
+        # float64 scalar times a complex64 array would upcast the (large)
+        # intermediates to complex128, defeating ``config['precision']``.
+        real_dtype = psi.real.dtype.type
         psi_dup = psi.copy()
 
-        out = np.sqrt(1.0 - scatter_prob) * psi_dup
+        out = real_dtype(np.sqrt(1.0 - scatter_prob)) * psi_dup
 
         for a in range(num_angles):
             bessel = self._bessel_stack[a, chosen[a]]
             amplitude = np.sqrt(scatter_prob * self._angle_weights[a])
-            out = out + (amplitude * self._azimuthal_norm) * (bessel * psi_dup)
+            coeff = real_dtype(amplitude * self._azimuthal_norm)
+            out = out + coeff * (bessel * psi_dup)
 
         waves._array = xp.asarray(out, dtype=psi.dtype)
 
@@ -693,17 +698,21 @@ class _PlasmonSliceOperator:
         num_angles = self._bessel_stack.shape[0]
         max_order = len(order_waves) - 1
 
+        # Cast scalars to the wave's real precision so a float64 scalar does not
+        # upcast the complex64 channels/kernel to complex128 (see ``scatter``).
+        real_dtype = order_waves[0]._array.real.dtype.type
+
         scatter_kernel = xp.zeros(
             self._bessel_stack.shape[2:], dtype=self._bessel_stack.dtype
         )
         for a in range(num_angles):
             amplitude = np.sqrt(scatter_prob * self._angle_weights[a])
             scatter_kernel += (
-                float(amplitude * self._azimuthal_norm)
+                real_dtype(amplitude * self._azimuthal_norm)
                 * self._bessel_stack[a, chosen[a]]
             )
 
-        sqrt_one_minus_p = np.sqrt(1.0 - scatter_prob)
+        sqrt_one_minus_p = real_dtype(np.sqrt(1.0 - scatter_prob))
 
         for n in range(max_order, -1, -1):
             arr = order_waves[n]._array
