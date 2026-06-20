@@ -49,6 +49,7 @@ extra = [
     "ipycytoscape",
     "dask-labextension",
     "bokeh",
+    "mendeleev",  # optional: auto valence-electron lookup for plasmon estimation
 ]
 
 [dependency-groups]

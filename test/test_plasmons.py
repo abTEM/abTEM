@@ -5,6 +5,7 @@ from utils import gpu
 
 import abtem
 from abtem import FrozenPhonons, PhaseScramblePlasmons, PlaneWave, Potential
+from abtem.inelastic.plasmons import estimate_plasmon_parameters
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
 
@@ -254,3 +255,53 @@ def test_plasmons_order_resolved_rejects_full_expansion(device):
             plasmons=plasmons,
             algorithm=RealSpaceMultislice(expansion_scope="full"),
         ).compute()
+
+
+def test_estimate_plasmon_parameters_silicon():
+    """The free-electron plasmon energy is accurate for Si (~16.7 eV); the
+    critical angle and mean free path are positive, physically-sized estimates."""
+    si = ase.build.bulk("Si", cubic=True)
+    E_p, theta_c, lambda_p = estimate_plasmon_parameters(
+        si, 200e3, valence_electrons=4
+    )
+    # Plasmon energy is the reliable estimate — within a few percent of 16.7 eV.
+    assert E_p == pytest.approx(16.7, abs=0.5)
+    # theta_c and lambda_p are order-of-magnitude free-electron estimates.
+    assert 1.0 < theta_c < 50.0          # mrad
+    assert 200.0 < lambda_p < 5000.0     # Å
+
+
+def test_estimate_plasmon_parameters_density_intensive():
+    """E_p depends on valence-electron density, not on supercell tiling."""
+    unit = ase.build.bulk("Si", cubic=True)
+    super_cell = unit * (2, 2, 2)
+    e_unit = estimate_plasmon_parameters(unit, 200e3, valence_electrons=4)
+    e_super = estimate_plasmon_parameters(super_cell, 200e3, valence_electrons=4)
+    assert e_unit == pytest.approx(e_super, rel=1e-6)
+
+
+def test_from_atoms_overrides_and_kwargs():
+    """from_atoms estimates E_p but honours explicit overrides and forwards
+    constructor kwargs (e.g. max_loss_order)."""
+    si = ase.build.bulk("Si", cubic=True)
+    plasmons = PhaseScramblePlasmons.from_atoms(
+        si,
+        200e3,
+        valence_electrons=4,
+        critical_angle=19.1,     # calibrated override
+        mean_free_path=1050.0,   # calibrated override
+        max_loss_order=3,
+    )
+    assert plasmons.excitation_energy == pytest.approx(16.7, abs=0.5)  # estimated
+    assert plasmons.critical_angle == 19.1       # override respected
+    assert plasmons.mean_free_path == 1050.0     # override respected
+    assert plasmons.max_loss_order == 3          # kwarg forwarded
+
+
+def test_estimate_plasmon_parameters_compound_valence():
+    """A {symbol: count} valence mapping works for compounds."""
+    gaas = ase.build.bulk("GaAs", crystalstructure="zincblende", a=5.65)
+    E_p, _, _ = estimate_plasmon_parameters(
+        gaas, 200e3, valence_electrons={"Ga": 3, "As": 5}
+    )
+    assert E_p == pytest.approx(15.7, abs=1.5)

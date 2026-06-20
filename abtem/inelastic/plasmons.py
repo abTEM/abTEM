@@ -728,6 +728,116 @@ class _PlasmonSliceOperator:
                 )
 
 
+def _valence_electrons_from_atoms(atoms) -> int:
+    """Total number of valence electrons in ``atoms``, via the ``mendeleev`` package.
+
+    ``mendeleev`` is an optional dependency; if it is not installed the caller
+    should pass ``valence_electrons`` explicitly instead.
+    """
+    try:
+        from mendeleev import element
+    except ImportError as exc:  # pragma: no cover - exercised only without mendeleev
+        raise ImportError(
+            "Automatic valence-electron lookup requires the 'mendeleev' package "
+            "(`pip install mendeleev`). Alternatively pass 'valence_electrons' "
+            "explicitly (an int per atom, or a {symbol: count} mapping)."
+        ) from exc
+
+    symbols = atoms.get_chemical_symbols()
+    per_species = {sym: element(sym).nvalence() for sym in set(symbols)}
+    return int(sum(per_species[sym] for sym in symbols))
+
+
+def estimate_plasmon_parameters(
+    atoms,
+    energy: float,
+    valence_electrons: "int | dict | None" = None,
+) -> tuple[float, float, float]:
+    """Estimate free-electron plasmon parameters for a material.
+
+    Uses the free-electron (jellium) model to estimate the three inputs of
+    :class:`PhaseScramblePlasmons` from the atomic structure and beam energy.
+
+    - **Plasmon energy** :math:`E_p = \\hbar\\sqrt{n_e e^2 / (\\varepsilon_0 m_e)}`
+      with the valence-electron density :math:`n_e` taken from the cell volume.
+      This is accurate (≈1 %) for free-electron-like materials.
+    - **Critical angle** from the Landau cut-off wavevector
+      :math:`q_c = \\omega_p / v_F`, as :math:`\\theta_c = q_c / k_0`.
+    - **Mean free path** from Egerton's free-electron expression
+      :math:`\\lambda_p = 2 a_0 / [\\gamma\\,\\theta_E \\ln(1 + \\theta_c^2/\\theta_E^2)]`.
+
+    .. warning::
+
+        Only :math:`E_p` is reliable. The free-electron :math:`\\theta_c` and
+        :math:`\\lambda_p` are order-of-magnitude estimates — e.g. for Si at
+        200 kV this gives :math:`\\theta_c \\approx 5` mrad and
+        :math:`\\lambda_p \\approx 170` nm, versus the calibrated literature
+        values of ~19 mrad and ~105 nm. For quantitative work, supply measured
+        values via the override arguments of :meth:`PhaseScramblePlasmons.from_atoms`.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        Atomic structure; the (intensive) valence-electron density is taken from
+        its cell volume, so a unit cell or a supercell give the same result.
+    energy : float
+        Electron beam energy [eV].
+    valence_electrons : int or dict, optional
+        Valence electrons per atom (int, applied to every atom) or a
+        ``{chemical_symbol: count}`` mapping. If ``None`` (default), looked up
+        per species via the optional ``mendeleev`` package.
+
+    Returns
+    -------
+    excitation_energy : float
+        Plasmon energy :math:`E_p` [eV].
+    critical_angle : float
+        Critical angle :math:`\\theta_c` [mrad].
+    mean_free_path : float
+        Plasmon mean free path :math:`\\lambda_p` [Å].
+    """
+    # Physical constants (SI).
+    hbar = 1.054571817e-34
+    m_e = 9.1093837015e-31
+    e = 1.602176634e-19
+    eps0 = 8.8541878128e-12
+    c = 299792458.0
+    a0 = 5.29177210903e-11
+
+    symbols = atoms.get_chemical_symbols()
+    if valence_electrons is None:
+        total_valence = _valence_electrons_from_atoms(atoms)
+    elif isinstance(valence_electrons, dict):
+        total_valence = sum(valence_electrons[sym] for sym in symbols)
+    else:
+        total_valence = float(valence_electrons) * len(symbols)
+
+    volume = atoms.get_volume() * 1e-30  # m^3
+    n_e = total_valence / volume  # valence electrons per m^3
+
+    omega_p = np.sqrt(n_e * e**2 / (eps0 * m_e))
+    excitation_energy = hbar * omega_p / e  # eV
+
+    k_F = (3.0 * np.pi**2 * n_e) ** (1.0 / 3.0)
+    v_F = hbar * k_F / m_e
+
+    gamma = 1.0 + energy * e / (m_e * c**2)
+    v = c * np.sqrt(1.0 - 1.0 / gamma**2)
+    k0 = gamma * m_e * v / hbar  # = 2*pi / lambda
+
+    theta_c = (omega_p / v_F) / k0  # rad
+    theta_E = excitation_energy * e / (gamma * m_e * v**2)  # rad
+    mean_free_path = 2.0 * a0 / (
+        gamma * theta_E * np.log(1.0 + (theta_c / theta_E) ** 2)
+    )  # m
+
+    return (
+        float(excitation_energy),
+        float(theta_c * 1e3),  # mrad
+        float(mean_free_path * 1e10),  # Å
+    )
+
+
 class PhaseScramblePlasmons:
     """Fast single-pass plasmon energy-loss model (phase-scramble method).
 
@@ -807,6 +917,56 @@ class PhaseScramblePlasmons:
         self._max_bessel_order = max_bessel_order
         self._seed = seed
         self._max_loss_order = max_loss_order
+
+    @classmethod
+    def from_atoms(
+        cls,
+        atoms,
+        energy: float,
+        valence_electrons: "int | dict | None" = None,
+        excitation_energy: float = None,
+        critical_angle: float = None,
+        mean_free_path: float = None,
+        **kwargs,
+    ) -> "PhaseScramblePlasmons":
+        """Construct a model with parameters estimated from a free-electron model.
+
+        Convenience constructor that fills in ``excitation_energy``,
+        ``critical_angle`` and ``mean_free_path`` from the atomic structure and
+        beam energy via :func:`estimate_plasmon_parameters`. Any of the three may
+        be overridden by passing it explicitly — recommended for ``critical_angle``
+        and ``mean_free_path``, whose free-electron estimates are only
+        order-of-magnitude (see the warning in
+        :func:`estimate_plasmon_parameters`). Only ``excitation_energy`` is
+        reliably estimated.
+
+        Parameters
+        ----------
+        atoms : ase.Atoms
+            Atomic structure used to estimate the valence-electron density.
+        energy : float
+            Electron beam energy [eV].
+        valence_electrons : int or dict, optional
+            Valence electrons per atom or a ``{symbol: count}`` mapping. If
+            ``None`` (default), looked up via the optional ``mendeleev`` package.
+        excitation_energy, critical_angle, mean_free_path : float, optional
+            Explicit overrides ([eV], [mrad], [Å]). Any left as ``None`` is taken
+            from the free-electron estimate.
+        kwargs
+            Forwarded to :class:`PhaseScramblePlasmons` (``num_angles``,
+            ``num_copies``, ``max_bessel_order``, ``seed``, ``max_loss_order``).
+        """
+        est_energy, est_angle, est_mfp = estimate_plasmon_parameters(
+            atoms, energy, valence_electrons
+        )
+        return cls(
+            mean_free_path=est_mfp if mean_free_path is None else mean_free_path,
+            excitation_energy=(
+                est_energy if excitation_energy is None else excitation_energy
+            ),
+            critical_angle=est_angle if critical_angle is None else critical_angle,
+            **kwargs,
+        )
 
     @property
     def mean_free_path(self) -> float:
