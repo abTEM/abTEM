@@ -463,15 +463,72 @@ def test_plasmons_prism_matches_single_probe(device):
     assert prism.sum() == pytest.approx(single.sum(), rel=1e-3)
 
 
-def test_plasmons_prism_order_resolved_not_supported():
-    """Order-resolved PRISM is not yet implemented and must raise clearly."""
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_prism_order_resolved_matches_single_probe(device):
+    """Order-resolved PRISM reproduces the single-probe order-resolved result:
+    each loss-order probe is the linear recombination of that order's S-matrix
+    channel, and the orders share a single renormalization scale."""
+    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 6)
+    potential = Potential(atoms, gpts=128, slice_thickness=2.0, device=device)
+    energy, semiangle = 200e3, 20.0
+    pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    def plasmons():
+        return PhaseScramblePlasmons(
+            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+            seed=42, max_loss_order=2,
+        )
+
+    s_matrix = SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=semiangle,
+        interpolation=1, downsample=False, plasmons=plasmons(), device=device,
+    ).build(lazy=False)
+    prism = _to_numpy(
+        s_matrix.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
+    )  # (n_orders, 1, ny, nx)
+
+    probe = Probe(energy=energy, semiangle_cutoff=semiangle, device=device)
+    probe.grid.match(potential)
+    single = _to_numpy(
+        probe.multislice(
+            potential, scan=CustomScan([pos]), detectors=detector, plasmons=plasmons()
+        ).compute().array
+    )  # (n_orders, 1, ny, nx)
+
+    assert prism.shape == single.shape
+    assert prism.shape[0] == 3  # leading loss-order axis
+    for n in range(3):
+        assert (
+            np.corrcoef(prism[n].ravel(), single[n].ravel())[0, 1] > 0.999
+        )
+    # The orders share one renormalization scale, so the total matches too.
+    assert prism.sum() == pytest.approx(single.sum(), rel=1e-3)
+
+
+def test_plasmons_prism_order_resolved_restrictions():
+    """Order-resolved PRISM currently requires eager, single-configuration builds."""
     atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 4)
-    potential = Potential(atoms, gpts=64, slice_thickness=2.0)
-    plasmons = PhaseScramblePlasmons(
-        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-        max_loss_order=2,
+    static = Potential(atoms, gpts=64, slice_thickness=2.0)
+    fp = Potential(
+        FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1),
+        gpts=64, slice_thickness=2.0,
     )
+
+    def plasmons():
+        return PhaseScramblePlasmons(
+            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+            max_loss_order=2,
+        )
+
+    # Lazy build is not yet supported.
     with pytest.raises(NotImplementedError):
         SMatrix(
-            potential=potential, energy=200e3, semiangle_cutoff=20.0, plasmons=plasmons
-        )
+            potential=static, energy=200e3, semiangle_cutoff=20.0, plasmons=plasmons()
+        ).build(lazy=True)
+
+    # Multi-configuration (frozen-phonon) potentials are not yet supported.
+    with pytest.raises(NotImplementedError):
+        SMatrix(
+            potential=fp, energy=200e3, semiangle_cutoff=20.0, plasmons=plasmons()
+        ).build(lazy=False)

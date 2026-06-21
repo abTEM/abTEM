@@ -1094,6 +1094,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         # intensity instead — equivalent to the single-probe behaviour by
         # linearity of the reduction.
         plasmon_renormalize = self.metadata.get("plasmon_renormalize", False)
+        plasmon_order_resolved = self.metadata.get("plasmon_order_resolved", False)
         plasmon_target_norm = None
         if plasmon_renormalize:
             incident = dummy_probes.build(lazy=False)
@@ -1148,9 +1149,14 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 waves_array = self._reduce_to_waves(array, positions, coefficients)
 
                 if plasmon_renormalize:
+                    # Sum over the grid (and, when order-resolved, the leading
+                    # loss-order axis) so each probe position is renormalized to
+                    # the incident-probe intensity with a single scale shared
+                    # across loss orders.
+                    sum_axes = (0, -2, -1) if plasmon_order_resolved else (-2, -1)
                     current = (
                         xp.abs(waves_array).astype(xp.float64) ** 2
-                    ).sum(axis=(-2, -1), keepdims=True)
+                    ).sum(axis=sum_axes, keepdims=True)
                     scale = xp.sqrt(plasmon_target_norm / current).astype(
                         waves_array.dtype
                     )
@@ -1478,13 +1484,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     ):
         if downsample is True:
             downsample = "cutoff"
-
-        if plasmons is not None and plasmons.max_loss_order is not None:
-            raise NotImplementedError(
-                "Order-resolved plasmon scattering (max_loss_order) is not yet "
-                "supported with PRISM; use a single accumulated channel "
-                "(max_loss_order=None)."
-            )
 
         self._device = validate_device(device)
         self._plasmons = plasmons
@@ -1827,6 +1826,31 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         """
         lazy = validate_lazy(lazy)
 
+        # Order-resolved plasmons add a leading loss-order axis to the S-matrix.
+        order_resolved = (
+            self.plasmons is not None and self.plasmons.max_loss_order is not None
+        )
+        order_axis = None
+        n_orders = 1
+        if order_resolved:
+            if lazy:
+                raise NotImplementedError(
+                    "Order-resolved PRISM plasmons are currently only supported "
+                    "with lazy=False."
+                )
+            if self.ensemble_shape:
+                raise NotImplementedError(
+                    "Order-resolved PRISM plasmons currently require a "
+                    "single-configuration (static) potential; the per-loss-order "
+                    "and frozen-phonon axes cannot yet be reduced together."
+                )
+            n_orders = self.plasmons.max_loss_order + 1
+            order_axis = OrdinalAxis(
+                label="Plasmon order",
+                values=("Zero loss",)
+                + tuple(f"{n}-plasmon" for n in range(1, n_orders)),
+            )
+
         downsampled_gpts = self.downsampled_gpts
 
         s_matrix_blocks = self.ensemble_blocks(1)
@@ -1887,37 +1911,42 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 wave_vector_chunks, lazy=False
             )
 
-            if self.store_on_host:
-                array = np.zeros(
-                    self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
-                )
-            else:
-                array = xp.zeros(
-                    self.ensemble_shape + (len(self),) + self.downsampled_gpts,
-                    dtype=np.complex64,
-                )
+            # Order-resolved adds a leading loss-order axis; otherwise the leading
+            # axes are the (frozen-phonon) ensemble axes.
+            leading_shape = (
+                (n_orders,) if order_resolved else self.ensemble_shape
+            )
+            zeros = np.zeros if self.store_on_host else xp.zeros
+            array = zeros(
+                leading_shape + (len(self),) + self.downsampled_gpts,
+                dtype=np.complex64,
+            )
 
             for i, _, s_matrix in self.generate_blocks(1):
                 s_matrix = s_matrix.item()
                 for start, stop in wave_vector_blocks:
-                    items = (slice(start, stop),)
-                    if self.ensemble_shape:
-                        items = i + items
-
                     new_array = self._build_s_matrix(s_matrix, slice(start, stop))
 
                     if self.store_on_host:
                         new_array = xp.asnumpy(new_array)
 
-                    array[items] = new_array
+                    if order_resolved:
+                        # new_array is (n_orders, beam_block, gpts_y, gpts_x).
+                        array[:, start:stop] = new_array
+                    else:
+                        items = (slice(start, stop),)
+                        if self.ensemble_shape:
+                            items = i + items
+                        array[items] = new_array
 
+        leading_axes = (
+            [order_axis] if order_resolved else self.ensemble_axes_metadata
+        )
         waves = Waves(
             array,
             energy=self.energy,
             extent=self.extent,
-            ensemble_axes_metadata=self.ensemble_axes_metadata
-            + self.base_axes_metadata[:1],
+            ensemble_axes_metadata=leading_axes + self.base_axes_metadata[:1],
         )
 
         if self.downsampled_gpts != self.gpts:
@@ -1930,6 +1959,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             # reduction to renormalize each recombined probe (conserving the
             # incident electron count) before detection.
             waves.metadata["plasmon_renormalize"] = True
+            if order_resolved:
+                # The reduction must sum over loss orders when renormalizing.
+                waves.metadata["plasmon_order_resolved"] = True
 
         s_matrix_array = SMatrixArray._from_waves(
             waves,
