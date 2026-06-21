@@ -243,6 +243,7 @@ def test_plasmons_realspace_order_resolved_matches_fourier(device):
         )
 
 
+@pytest.mark.filterwarnings("ignore:Grid size")  # small grid, GPU occupancy hint
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_plasmons_order_resolved_backscatter(device):
     """Order-resolved plasmon scattering composes with real-space backscattering:

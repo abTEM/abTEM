@@ -1097,8 +1097,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         plasmon_target_norm = None
         if plasmon_renormalize:
             incident = dummy_probes.build(lazy=False)
-            incident_intensity = xp.asarray(
-                np.abs(np.asarray(incident.array)) ** 2
+            # ``incident.array`` is on the reduction device (CuPy on GPU); keep
+            # everything in ``xp`` rather than forcing a NumPy conversion.
+            incident_intensity = (
+                xp.abs(xp.asarray(incident.array)).astype(xp.float64) ** 2
             )
             plasmon_target_norm = float(
                 incident_intensity.sum(axis=(-2, -1)).max()
