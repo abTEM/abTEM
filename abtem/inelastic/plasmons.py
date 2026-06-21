@@ -768,12 +768,22 @@ def estimate_plasmon_parameters(
 
     .. warning::
 
-        Only :math:`E_p` is reliable. The free-electron :math:`\\theta_c` and
-        :math:`\\lambda_p` are order-of-magnitude estimates — e.g. for Si at
-        200 kV this gives :math:`\\theta_c \\approx 5` mrad and
-        :math:`\\lambda_p \\approx 170` nm, versus the calibrated literature
-        values of ~19 mrad and ~105 nm. For quantitative work, supply measured
-        values via the override arguments of :meth:`PhaseScramblePlasmons.from_atoms`.
+        Only :math:`E_p` is reliable. The returned :math:`\\theta_c` is the
+        *physical* plasmon dispersion cut-off (the Landau angle
+        :math:`q_c = \\omega_p / v_F`, :math:`q_c \\approx 1.2`
+        :math:`\\mathrm{\\AA^{-1}}` for Si, consistent with tabulated values),
+        which is ~5 mrad at 200 kV. Note that the Lorentzian angular model uses
+        :math:`\\theta_c` merely as the upper truncation of
+        :math:`P(\\theta) \\propto \\theta / (\\theta^2 + \\theta_E^2)`, so
+        published values are often a larger *effective* angle calibrated to the
+        observed angular spread (e.g. Mendis uses 19.1 mrad for Si, implying an
+        unphysical :math:`q_c \\approx 4.8` :math:`\\mathrm{\\AA^{-1}}`, well past
+        the Brillouin-zone boundary). All physical cut-off formulas (Landau,
+        dispersion-merge, :math:`q_c = k_F`, zone boundary) cluster at 2-9 mrad.
+        :math:`\\lambda_p` is likewise an order-of-magnitude estimate (~170 nm
+        for Si vs ~105 nm calibrated). For quantitative work, supply measured
+        :math:`\\theta_c` and :math:`\\lambda_p` via the override arguments of
+        :meth:`PhaseScramblePlasmons.from_atoms`.
 
     Parameters
     ----------
