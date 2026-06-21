@@ -731,12 +731,13 @@ def multislice_and_detect(
         plasmons.max_loss_order if plasmons is not None else None
     )
     order_resolved = max_loss_order is not None
-    if order_resolved and not is_fourier and algorithm.expansion_scope == "full":
-        raise NotImplementedError(
-            "Order-resolved plasmon scattering is not compatible with "
-            "expansion_scope='full' (backscattering is not defined per loss "
-            "order). Use expansion_scope='propagator' (the default)."
-        )
+    # Per-loss-order backscattering: each forward loss-order channel produces its
+    # own backscattered component, reverse-propagated independently at the end.
+    order_resolved_backscatter = (
+        order_resolved
+        and algorithm.expansion_scope == "full"
+        and return_backscattered
+    )
     if order_resolved:
         n_orders = max_loss_order + 1
         order_labels = ("Zero loss",) + tuple(
@@ -827,10 +828,19 @@ def multislice_and_detect(
                     # The real-space (finite-difference) step consumes the
                     # potential slice directly.
                     shared_slice = potential_slice
+                order_backscatter = (
+                    [None] * n_orders if order_resolved_backscatter else None
+                )
                 for n in range(n_orders):
-                    order_waves[n] = multislice_step(
-                        order_waves[n], shared_slice, next_slice=None
+                    stepped = multislice_step(
+                        order_waves[n],
+                        shared_slice,
+                        next_slice=next_slice if order_resolved_backscatter else None,
                     )
+                    if order_resolved_backscatter:
+                        order_waves[n], order_backscatter[n] = stepped
+                    else:
+                        order_waves[n] = stepped
             elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(
                     waves, potential_slice, next_slice=next_slice
@@ -859,7 +869,25 @@ def multislice_and_detect(
                 )
 
                 if measurements is not None:
-                    if order_resolved:
+                    if order_resolved_backscatter:
+                        # Forward loss-order channels -> forward detectors;
+                        # per-order backscattered waves -> the backscatter
+                        # detector, indexed by loss order and exit plane.
+                        _detect_order_resolved(
+                            order_waves,
+                            plasmon_target_norm,
+                            detectors[:-1],
+                            measurements[:-1],
+                            config_meas_index,
+                        )
+                        for n in range(n_orders):
+                            _update_measurements(
+                                order_backscatter[n],
+                                detectors[-1:],
+                                measurements[-1:],
+                                (n,) + config_meas_index,
+                            )
+                    elif order_resolved:
                         _detect_order_resolved(
                             order_waves,
                             plasmon_target_norm,
@@ -907,11 +935,19 @@ def multislice_and_detect(
             ]
 
     elif return_backscattered:
-        _back_propagate_backscattered_waves(
-            measurements[-1],  # type: ignore
-            potential,
-            multislice_step,
-        )
+        if order_resolved_backscatter:
+            _back_propagate_order_resolved_backscatter(
+                measurements[-1],  # type: ignore
+                potential,
+                multislice_step,
+                n_orders,
+            )
+        else:
+            _back_propagate_backscattered_waves(
+                measurements[-1],  # type: ignore
+                potential,
+                multislice_step,
+            )
 
     tqdm_pbar.close_if_exists()
 
@@ -993,6 +1029,35 @@ def _back_propagate_backscattered_waves(
             contribution_at_slice, effective_slices[i + 1], next_slice=None
         )
         backscattered_waves[i].array += xp.conj(contribution_at_slice.array)
+
+    return backscattered_waves
+
+
+def _back_propagate_order_resolved_backscatter(
+    backscattered_waves: Waves,
+    potential: BasePotential,
+    multislice_step: Callable,
+    n_orders: int,
+) -> Waves:
+    """Reverse-propagate per-loss-order backscattered waves.
+
+    ``backscattered_waves`` has a leading plasmon-order axis followed by the
+    exit-plane axis. Backscattering is elastic on the way out (it carries no
+    further plasmon loss), so each loss-order channel is reverse-propagated
+    independently with :func:`_back_propagate_backscattered_waves`.
+    """
+    base_kwargs = backscattered_waves._copy_kwargs(
+        exclude=("array", "ensemble_axes_metadata")
+    )
+    sub_axes = backscattered_waves.ensemble_axes_metadata[1:]
+    for n in range(n_orders):
+        sub = backscattered_waves.__class__(
+            array=backscattered_waves._array[n],
+            ensemble_axes_metadata=sub_axes,
+            **base_kwargs,
+        )
+        _back_propagate_backscattered_waves(sub, potential, multislice_step)
+        backscattered_waves._array[n] = sub._array
 
     return backscattered_waves
 

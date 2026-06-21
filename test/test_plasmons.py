@@ -236,12 +236,16 @@ def test_plasmons_realspace_order_resolved_matches_fourier(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_plasmons_order_resolved_rejects_full_expansion(device):
-    """Backscattering (expansion_scope='full') is not defined per loss order, so
-    combining it with order-resolved plasmons must raise rather than silently
-    mishandle the backscattered component."""
-    wave, potential, _ = _setup(device, num_configs=2, nz=6)
-    detector = abtem.PixelatedDetector(max_angle=40)
+def test_plasmons_order_resolved_backscatter(device):
+    """Order-resolved plasmon scattering composes with real-space backscattering:
+    each loss-order channel yields a forward diffraction pattern and an
+    independently reverse-propagated backscattered wave."""
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 4)
+    potential = Potential(
+        atoms, gpts=48, slice_thickness=2.0, exit_planes=1, device=device
+    )
+    wave = PlaneWave(energy=200e3, device=device)
+    detector = abtem.PixelatedDetector(max_angle="valid")
 
     plasmons = PhaseScramblePlasmons(
         mean_free_path=1050.0,
@@ -251,13 +255,21 @@ def test_plasmons_order_resolved_rejects_full_expansion(device):
         max_loss_order=2,
     )
 
-    with pytest.raises(NotImplementedError):
-        wave.multislice(
-            potential,
-            detector,
-            plasmons=plasmons,
-            algorithm=RealSpaceMultislice(expansion_scope="full"),
-        ).compute()
+    forward, backward = wave.multislice(
+        potential,
+        detector,
+        plasmons=plasmons,
+        algorithm=RealSpaceMultislice(order=3, expansion_scope="full"),
+        return_backscattered=True,
+    ).compute()
+
+    n_orders = 3
+    n_exit = potential.num_exit_planes
+    # Both forward and backscatter carry a leading plasmon-order axis.
+    assert _to_numpy(forward.array).shape[:2] == (n_orders, n_exit)
+    assert _to_numpy(backward.array).shape[:2] == (n_orders, n_exit)
+    # Reverse propagation produced finite backscattered waves.
+    assert np.all(np.isfinite(_to_numpy(backward.array)))
 
 
 def test_estimate_plasmon_parameters_silicon():
