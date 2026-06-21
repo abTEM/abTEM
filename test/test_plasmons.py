@@ -506,29 +506,58 @@ def test_plasmons_prism_order_resolved_matches_single_probe(device):
     assert prism.sum() == pytest.approx(single.sum(), rel=1e-3)
 
 
-def test_plasmons_prism_order_resolved_restrictions():
-    """Order-resolved PRISM currently requires eager, single-configuration builds."""
-    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 4)
-    static = Potential(atoms, gpts=64, slice_thickness=2.0)
-    fp = Potential(
-        FrozenPhonons(atoms, num_configs=2, sigmas=0.05, seed=1),
-        gpts=64, slice_thickness=2.0,
-    )
+def test_plasmons_prism_order_resolved_lazy_matches_eager():
+    """Lazy and eager order-resolved PRISM builds give identical results."""
+    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 5)
+    potential = Potential(atoms, gpts=96, slice_thickness=2.0)
+    pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
+    detector = abtem.PixelatedDetector(max_angle="valid")
 
-    def plasmons():
-        return PhaseScramblePlasmons(
+    def build(lazy):
+        plasmons = PhaseScramblePlasmons(
             mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
-            max_loss_order=2,
+            seed=42, max_loss_order=2,
+        )
+        sma = SMatrix(
+            potential=potential, energy=200e3, semiangle_cutoff=20.0,
+            interpolation=1, downsample=False, plasmons=plasmons,
+        ).build(lazy=lazy)
+        return np.squeeze(
+            _to_numpy(sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array)
         )
 
-    # Lazy build is not yet supported.
-    with pytest.raises(NotImplementedError):
-        SMatrix(
-            potential=static, energy=200e3, semiangle_cutoff=20.0, plasmons=plasmons()
-        ).build(lazy=True)
+    eager, lazy = build(False), build(True)
+    assert eager.shape == lazy.shape
+    assert eager.shape[0] == 3  # loss-order axis preserved
+    assert np.allclose(eager, lazy)
 
-    # Multi-configuration (frozen-phonon) potentials are not yet supported.
-    with pytest.raises(NotImplementedError):
-        SMatrix(
-            potential=fp, energy=200e3, semiangle_cutoff=20.0, plasmons=plasmons()
-        ).build(lazy=False)
+
+def test_plasmons_prism_order_resolved_multiconfig_averages():
+    """Order-resolved PRISM over a frozen-phonon ensemble averages the
+    configurations (the phase-scramble repetitions) while preserving the
+    loss-order axis; eager and lazy agree."""
+    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 5)
+    fp = Potential(
+        FrozenPhonons(atoms, num_configs=3, sigmas=0.0, seed=1),
+        gpts=96, slice_thickness=2.0,
+    )
+    pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    def build(lazy):
+        plasmons = PhaseScramblePlasmons(
+            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+            seed=42, max_loss_order=2,
+        )
+        sma = SMatrix(
+            potential=fp, energy=200e3, semiangle_cutoff=20.0,
+            interpolation=1, downsample=False, plasmons=plasmons,
+        ).build(lazy=lazy)
+        return np.squeeze(
+            _to_numpy(sma.reduce(scan=CustomScan([pos]), detectors=detector).compute().array)
+        )
+
+    eager, lazy = build(False), build(True)
+    # Configurations averaged away -> only (loss order, ny, nx) remains.
+    assert eager.shape[0] == 3
+    assert np.allclose(eager, lazy)

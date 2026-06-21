@@ -1019,16 +1019,32 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 
             array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
 
-            if len(self.waves.shape) > 3:
-                array = xp.moveaxis(array, -3, 0)
+            # Move every leading ensemble axis (loss order and/or frozen-phonon
+            # configuration) back to the front; tensordot left them just before
+            # the grid axes.
+            n_ensemble = len(self.waves.shape) - 3
+            if n_ensemble > 0:
+                array = xp.moveaxis(
+                    array,
+                    tuple(range(-2 - n_ensemble, -2)),
+                    tuple(range(n_ensemble)),
+                )
 
             array = batch_crop_2d(array, corners, self.window_gpts)
 
         else:
             array = xp.tensordot(position_coefficients, array, axes=[-1, -3])
 
-            if len(self.waves.shape) > 3:
-                array = xp.moveaxis(array, -3, 0)
+            # Move every leading ensemble axis (loss order and/or frozen-phonon
+            # configuration) back to the front; tensordot left them just before
+            # the grid axes.
+            n_ensemble = len(self.waves.shape) - 3
+            if n_ensemble > 0:
+                array = xp.moveaxis(
+                    array,
+                    tuple(range(-2 - n_ensemble, -2)),
+                    tuple(range(n_ensemble)),
+                )
 
         return array
 
@@ -1180,6 +1196,17 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                     measurement.array[indices] = detector.detect(waves).array
 
         pbar.close_if_exists()
+
+        if plasmon_renormalize:
+            # Average the frozen-phonon (phase-scramble repetition) ensemble,
+            # which carries the plasmon statistical convergence. This eager path
+            # does not otherwise reduce it; ``reduce_ensemble`` leaves the
+            # non-ensemble-mean loss-order axis intact. (The lazy reduction
+            # performs the equivalent averaging itself.)
+            measurements = [
+                m.reduce_ensemble() if hasattr(m, "reduce_ensemble") else m
+                for m in measurements
+            ]
 
         return tuple(measurements)
 
@@ -1826,24 +1853,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         """
         lazy = validate_lazy(lazy)
 
-        # Order-resolved plasmons add a leading loss-order axis to the S-matrix.
+        # Order-resolved plasmons prepend a leading loss-order axis to the
+        # S-matrix (before any frozen-phonon configuration axis).
         order_resolved = (
             self.plasmons is not None and self.plasmons.max_loss_order is not None
         )
         order_axis = None
         n_orders = 1
         if order_resolved:
-            if lazy:
-                raise NotImplementedError(
-                    "Order-resolved PRISM plasmons are currently only supported "
-                    "with lazy=False."
-                )
-            if self.ensemble_shape:
-                raise NotImplementedError(
-                    "Order-resolved PRISM plasmons currently require a "
-                    "single-configuration (static) potential; the per-loss-order "
-                    "and frozen-phonon axes cannot yet be reduced together."
-                )
             n_orders = self.plasmons.max_loss_order + 1
             order_axis = OrdinalAxis(
                 label="Plasmon order",
@@ -1891,6 +1908,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if self.potential is None or not self.potential.ensemble_shape:
                 symbols = symbols[1:]
 
+            # Order-resolved builds emit a leading loss-order axis (index 4),
+            # a new output axis not present in any input block.
+            new_axes = None
+            if order_resolved:
+                symbols = (4,) + symbols
+                new_axes = {4: n_orders}
+
             pbar = config.get("diagnostics.task_progress", False)
 
             array = da.blockwise(
@@ -1902,6 +1926,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 (0, 1, 2, 3),
                 concatenate=True,
                 adjust_chunks=adjust_chunks,
+                new_axes=new_axes,
                 pbar=pbar,
                 meta=xp.array((), dtype=get_dtype(complex=True)),
             )
@@ -1911,11 +1936,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 wave_vector_chunks, lazy=False
             )
 
-            # Order-resolved adds a leading loss-order axis; otherwise the leading
-            # axes are the (frozen-phonon) ensemble axes.
+            # Leading axes are (loss order, frozen-phonon configuration); either
+            # may be absent. The order axis comes first so renormalization can
+            # always sum over axis 0.
             leading_shape = (
-                (n_orders,) if order_resolved else self.ensemble_shape
-            )
+                (n_orders,) if order_resolved else ()
+            ) + self.ensemble_shape
             zeros = np.zeros if self.store_on_host else xp.zeros
             array = zeros(
                 leading_shape + (len(self),) + self.downsampled_gpts,
@@ -1930,18 +1956,21 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     if self.store_on_host:
                         new_array = xp.asnumpy(new_array)
 
+                    # new_array is (n_orders, beam_block, gy, gx) when
+                    # order-resolved, else (beam_block, gy, gx). A frozen-phonon
+                    # block also carries a singleton configuration axis from the
+                    # multislice; drop it (the build's own loop indexes configs).
+                    items = i + (slice(start, stop),)
                     if order_resolved:
-                        # new_array is (n_orders, beam_block, gpts_y, gpts_x).
-                        array[:, start:stop] = new_array
-                    else:
-                        items = (slice(start, stop),)
-                        if self.ensemble_shape:
-                            items = i + items
-                        array[items] = new_array
+                        new_array = new_array.reshape(
+                            (n_orders,) + new_array.shape[-3:]
+                        )
+                        items = (slice(None),) + items
+                    array[items] = new_array
 
         leading_axes = (
-            [order_axis] if order_resolved else self.ensemble_axes_metadata
-        )
+            [order_axis] if order_resolved else []
+        ) + self.ensemble_axes_metadata
         waves = Waves(
             array,
             energy=self.energy,
