@@ -5,7 +5,10 @@ from utils import gpu
 
 import abtem
 from abtem import FrozenPhonons, PhaseScramblePlasmons, PlaneWave, Potential
-from abtem.inelastic.plasmons import estimate_plasmon_parameters
+from abtem.inelastic.plasmons import (
+    estimate_plasmon_parameters,
+    scale_critical_angle,
+)
 from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
 
@@ -305,3 +308,16 @@ def test_estimate_plasmon_parameters_compound_valence():
         gaas, 200e3, valence_electrons={"Ga": 3, "As": 5}
     )
     assert E_p == pytest.approx(15.7, abs=1.5)
+
+
+def test_scale_critical_angle_voltage():
+    """theta_c scales with electron wavelength (q_c = K theta_c = const), per
+    Mendis (2024) / Barthel (2019): the Si 19.1 mrad at 200 kV corresponds to
+    ~15 mrad at 300 kV (Barthel's fitted value)."""
+    # Higher energy -> shorter wavelength -> smaller angle.
+    at_300 = scale_critical_angle(19.1, 200e3, 300e3)
+    assert at_300 == pytest.approx(15.0, abs=0.2)
+    # Round-trip is exact.
+    assert scale_critical_angle(at_300, 300e3, 200e3) == pytest.approx(19.1, abs=1e-6)
+    # Identity at the same energy.
+    assert scale_critical_angle(19.1, 200e3, 200e3) == pytest.approx(19.1)

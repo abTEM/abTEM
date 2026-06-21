@@ -772,18 +772,18 @@ def estimate_plasmon_parameters(
         *physical* plasmon dispersion cut-off (the Landau angle
         :math:`q_c = \\omega_p / v_F`, :math:`q_c \\approx 1.2`
         :math:`\\mathrm{\\AA^{-1}}` for Si, consistent with tabulated values),
-        which is ~5 mrad at 200 kV. Note that the Lorentzian angular model uses
-        :math:`\\theta_c` merely as the upper truncation of
-        :math:`P(\\theta) \\propto \\theta / (\\theta^2 + \\theta_E^2)`, so
-        published values are often a larger *effective* angle calibrated to the
-        observed angular spread (e.g. Mendis uses 19.1 mrad for Si, implying an
-        unphysical :math:`q_c \\approx 4.8` :math:`\\mathrm{\\AA^{-1}}`, well past
-        the Brillouin-zone boundary). All physical cut-off formulas (Landau,
-        dispersion-merge, :math:`q_c = k_F`, zone boundary) cluster at 2-9 mrad.
-        :math:`\\lambda_p` is likewise an order-of-magnitude estimate (~170 nm
-        for Si vs ~105 nm calibrated). For quantitative work, supply measured
-        :math:`\\theta_c` and :math:`\\lambda_p` via the override arguments of
-        :meth:`PhaseScramblePlasmons.from_atoms`.
+        which is ~5 mrad at 200 kV. In practice :math:`\\theta_c` is **not
+        computed from a formula**: in the Lorentzian model it is the upper
+        truncation of :math:`P(\\theta) \\propto \\theta/(\\theta^2+\\theta_E^2)`
+        and is **fitted to experiment**. Mendis (*Acta Cryst.* **A80**, 2024)
+        uses :math:`\\theta_c = 19.1` mrad for Si at 200 kV (fitted by Barthel
+        *et al.*, 2019, at 300 kV and scaled via :math:`q_c = K\\theta_c =`
+        const — see :func:`scale_critical_angle`), ~4x the free-electron value.
+        Likewise :math:`\\lambda_p` here is an order-of-magnitude estimate
+        (~170 nm for Si); the value used in the literature, 105 nm, is
+        **experimentally measured** by EELS (Mendis, 2019), not computed. For
+        quantitative work, supply these measured values via the override
+        arguments of :meth:`PhaseScramblePlasmons.from_atoms`.
 
     Parameters
     ----------
@@ -845,6 +845,50 @@ def estimate_plasmon_parameters(
         float(excitation_energy),
         float(theta_c * 1e3),  # mrad
         float(mean_free_path * 1e10),  # Å
+    )
+
+
+def scale_critical_angle(
+    critical_angle: float, energy_ref: float, energy: float
+) -> float:
+    """Scale a plasmon critical angle to a different beam energy.
+
+    The plasmon cut-off is a property of the material — a fixed scattering vector
+    :math:`q_c` — so the scattering vector :math:`q_c \\simeq K \\theta_c` is
+    constant with beam energy and the critical *angle* scales with the electron
+    wavelength,
+
+    .. math::
+
+        \\theta_c(E) = \\theta_c(E_\\mathrm{ref})\\,
+        \\frac{\\lambda(E)}{\\lambda(E_\\mathrm{ref})}.
+
+    This is exactly how Mendis (*Acta Cryst.* **A80**, 2024) transfers the Si
+    critical angle fitted by Barthel *et al.* (2019) at 300 kV to 200 kV. Use it
+    to bring a published/calibrated ``critical_angle`` to your own beam energy.
+
+    Parameters
+    ----------
+    critical_angle : float
+        Known critical angle :math:`\\theta_c` [mrad] at ``energy_ref``.
+    energy_ref : float
+        Beam energy [eV] at which ``critical_angle`` was determined.
+    energy : float
+        Target beam energy [eV].
+
+    Returns
+    -------
+    critical_angle : float
+        Critical angle [mrad] scaled to ``energy``.
+
+    Examples
+    --------
+    >>> # Si fit of Barthel et al. (2019): theta_c = 19.1 mrad at 200 kV.
+    >>> scale_critical_angle(19.1, 200e3, 300e3)  # to 300 kV  # doctest: +SKIP
+    15.0
+    """
+    return float(
+        critical_angle * energy2wavelength(energy) / energy2wavelength(energy_ref)
     )
 
 
