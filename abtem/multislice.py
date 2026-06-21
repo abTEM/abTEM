@@ -641,6 +641,7 @@ def multislice_and_detect(
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
     return_backscattered: bool = False,
     plasmons: Optional["PhaseScramblePlasmons"] = None,
+    renormalize_plasmons: bool = True,
     pbar: bool = False,
 ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
     """
@@ -669,8 +670,14 @@ def multislice_and_detect(
         ``num_configs`` (frozen phonons) set to the desired number of repetitions and
         ``ensemble_mean=True`` to obtain the incoherent average. The operator is a
         real-space multiplication at each slice boundary, so it composes with both the
-        ``FourierMultislice`` and ``RealSpaceMultislice`` algorithms (the latter only
-        with ``expansion_scope='propagator'``; backscattering is not supported).
+        ``FourierMultislice`` and ``RealSpaceMultislice`` algorithms (including
+        real-space ``expansion_scope='full'`` backscattering).
+    renormalize_plasmons : bool, optional
+        Whether to renormalize the (non-unitary) plasmon exit wave to conserve the
+        incident electron count before detection (default True). Set to False to defer
+        the renormalization — used by the PRISM S-matrix build, where renormalizing the
+        individual plane-wave beams would distort their relative weights; the recombined
+        probe is renormalized after reduction instead.
 
     """
     waves = waves.ensure_real_space()
@@ -907,7 +914,7 @@ def multislice_and_detect(
                         )
                     else:
                         detect_waves = waves
-                        if plasmon_operator is not None:
+                        if plasmon_operator is not None and renormalize_plasmons:
                             detect_waves = _renormalize_total_intensity(
                                 waves, plasmon_target_norm
                             )
@@ -927,7 +934,7 @@ def multislice_and_detect(
                 for detector in detectors
             ]
         else:
-            if plasmon_operator is not None:
+            if plasmon_operator is not None and renormalize_plasmons:
                 waves = _renormalize_total_intensity(waves, plasmon_target_norm)
             measurements = [
                 detector.detect(waves)[(None,) * len(potential.ensemble_shape)]

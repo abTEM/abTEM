@@ -1088,6 +1088,22 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         else:
             array = self.waves.array
 
+        # Plasmon scattering is non-unitary; the S-matrix beams were left
+        # un-renormalized (renormalizing per beam distorts their relative
+        # weights). Renormalize each recombined probe to the incident-probe
+        # intensity instead — equivalent to the single-probe behaviour by
+        # linearity of the reduction.
+        plasmon_renormalize = self.metadata.get("plasmon_renormalize", False)
+        plasmon_target_norm = None
+        if plasmon_renormalize:
+            incident = dummy_probes.build(lazy=False)
+            incident_intensity = xp.asarray(
+                np.abs(np.asarray(incident.array)) ** 2
+            )
+            plasmon_target_norm = float(
+                incident_intensity.sum(axis=(-2, -1)).max()
+            )
+
         n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
 
         pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
@@ -1128,6 +1144,15 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
                 )
 
                 waves_array = self._reduce_to_waves(array, positions, coefficients)
+
+                if plasmon_renormalize:
+                    current = (
+                        xp.abs(waves_array).astype(xp.float64) ** 2
+                    ).sum(axis=(-2, -1), keepdims=True)
+                    scale = xp.sqrt(plasmon_target_norm / current).astype(
+                        waves_array.dtype
+                    )
+                    waves_array = waves_array * scale
 
                 waves = Waves(
                     waves_array,
@@ -1447,11 +1472,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # tilt: Tuple[float, float] = (0.0, 0.0),
         device: str = None,
         store_on_host: bool = False,
+        plasmons=None,
     ):
         if downsample is True:
             downsample = "cutoff"
 
+        if plasmons is not None and plasmons.max_loss_order is not None:
+            raise NotImplementedError(
+                "Order-resolved plasmon scattering (max_loss_order) is not yet "
+                "supported with PRISM; use a single accumulated channel "
+                "(max_loss_order=None)."
+            )
+
         self._device = validate_device(device)
+        self._plasmons = plasmons
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         if potential is None:
@@ -1578,6 +1612,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def potential(self, potential: BasePotential):
         self._potential = potential
         self._grid = potential.grid
+
+    @property
+    def plasmons(self):
+        """Plasmon energy-loss model applied during the S-matrix build, if any."""
+        return self._plasmons
 
     @property
     def semiangle_cutoff(self) -> float:
@@ -1736,8 +1775,17 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         )
 
         if s_matrix.potential is not None:
+            # Plasmon scattering is applied to each basis beam, but the
+            # non-unitary renormalization is deferred to after probe
+            # recombination (renormalizing per beam would distort their relative
+            # weights — see SMatrixArray._batch_reduce_to_measurements).
             waves = multislice_and_detect(
-                waves, s_matrix.potential, [WavesDetector()], pbar=pbar
+                waves,
+                s_matrix.potential,
+                [WavesDetector()],
+                plasmons=s_matrix.plasmons,
+                renormalize_plasmons=False,
+                pbar=pbar,
             )[0]
 
         if s_matrix.downsampled_gpts != s_matrix.gpts:
@@ -1874,6 +1922,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             waves.metadata["adjusted_antialias_cutoff_gpts"] = _antialias_cutoff_gpts(
                 self.window_gpts, self.sampling
             )
+
+        if self.plasmons is not None:
+            # The S-matrix beams carry un-renormalized plasmon scattering; flag the
+            # reduction to renormalize each recombined probe (conserving the
+            # incident electron count) before detection.
+            waves.metadata["plasmon_renormalize"] = True
 
         s_matrix_array = SMatrixArray._from_waves(
             waves,

@@ -4,7 +4,15 @@ import pytest
 from utils import gpu
 
 import abtem
-from abtem import FrozenPhonons, PhaseScramblePlasmons, PlaneWave, Potential
+from abtem import (
+    CustomScan,
+    FrozenPhonons,
+    PhaseScramblePlasmons,
+    PlaneWave,
+    Potential,
+    Probe,
+    SMatrix,
+)
 from abtem.inelastic.plasmons import (
     estimate_plasmon_parameters,
     scale_critical_angle,
@@ -411,3 +419,58 @@ def test_plasmons_num_repetitions_ignored_with_frozen_phonons():
     )
     with pytest.warns(UserWarning, match="num_repetitions"):
         wave.multislice(potential, detector, plasmons=plasmons).compute()
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_prism_matches_single_probe(device):
+    """PRISM with plasmons reproduces the single-probe multislice with plasmons.
+
+    The plasmon operator is linear, so reducing the (un-renormalized) plasmon
+    S-matrix is identical to a per-probe multislice; the non-unitary
+    renormalization is applied to the recombined probe (issue #296). With
+    interpolation=1 and downsampling disabled the two share a grid and must
+    agree to machine precision for a single static configuration and seed."""
+    atoms = ase.build.bulk("Si", cubic=True) * (3, 3, 6)
+    potential = Potential(atoms, gpts=128, slice_thickness=2.0, device=device)
+    energy, semiangle = 200e3, 20.0
+    pos = (atoms.cell.lengths()[0] / 2, atoms.cell.lengths()[1] / 2)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    def plasmons():
+        return PhaseScramblePlasmons(
+            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+            seed=42,
+        )
+
+    s_matrix = SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=semiangle,
+        interpolation=1, downsample=False, plasmons=plasmons(), device=device,
+    ).build(lazy=False)
+    prism = _to_numpy(
+        s_matrix.reduce(scan=CustomScan([pos]), detectors=detector).compute().array
+    )[0]
+
+    probe = Probe(energy=energy, semiangle_cutoff=semiangle, device=device)
+    probe.grid.match(potential)
+    single = _to_numpy(
+        probe.multislice(
+            potential, scan=CustomScan([pos]), detectors=detector, plasmons=plasmons()
+        ).compute().array
+    )[0]
+
+    assert np.corrcoef(prism.ravel(), single.ravel())[0, 1] > 0.999
+    assert prism.sum() == pytest.approx(single.sum(), rel=1e-3)
+
+
+def test_plasmons_prism_order_resolved_not_supported():
+    """Order-resolved PRISM is not yet implemented and must raise clearly."""
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 4)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0)
+    plasmons = PhaseScramblePlasmons(
+        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+        max_loss_order=2,
+    )
+    with pytest.raises(NotImplementedError):
+        SMatrix(
+            potential=potential, energy=200e3, semiangle_cutoff=20.0, plasmons=plasmons
+        )
