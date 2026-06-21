@@ -983,6 +983,9 @@ class PhaseScramblePlasmons:
         self._seed = seed
         self._max_loss_order = max_loss_order
         self._num_repetitions = num_repetitions
+        # Single-entry cache of the unique-radii decomposition, reused across
+        # configurations sharing the same grid (geometry is config-independent).
+        self._radial_cache = None
 
     @classmethod
     def from_atoms(
@@ -1137,10 +1140,22 @@ class PhaseScramblePlasmons:
             2.0 * theta * reciprocal_step / (theta**2 + theta_E**2) / lorentz_norm
         )
 
-        # Cell-centred real-space radial-distance image [Å].
-        origin = (extent[0] / 2.0, extent[1] / 2.0)
-        x, y = coordinate_grid(extent, gpts, origin=origin, endpoint=False)
-        radial = np.sqrt(x**2 + y**2)
+        # ``J_n(2*pi*k_t*R)`` is radially symmetric, so it takes only as many
+        # distinct values as there are distinct radii — far fewer than the
+        # ``gpts**2`` pixels. Evaluate each (expensive, non-integer-order) Bessel
+        # function on the unique radii and scatter the result back to the grid;
+        # this is the dominant cost of building the operator. The decomposition
+        # depends only on the grid, so it is cached across configurations.
+        cache_key = (tuple(gpts), tuple(extent))
+        if self._radial_cache is not None and self._radial_cache[0] == cache_key:
+            unique_radial, inverse = self._radial_cache[1]
+        else:
+            origin = (extent[0] / 2.0, extent[1] / 2.0)
+            x, y = coordinate_grid(extent, gpts, origin=origin, endpoint=False)
+            radial = np.sqrt(x**2 + y**2)
+            unique_radial, inverse = np.unique(radial.ravel(), return_inverse=True)
+            inverse = inverse.reshape(-1)
+            self._radial_cache = (cache_key, (unique_radial, inverse))
 
         real_dtype = get_dtype(complex=False)
         bessel_stack = np.empty(
@@ -1148,10 +1163,11 @@ class PhaseScramblePlasmons:
         )
         for a in range(self._num_angles):
             kt = k * np.sin(theta[a])
-            argument = 2.0 * np.pi * kt * radial
+            argument = 2.0 * np.pi * kt * unique_radial
             for c in range(self._num_copies):
                 order = self._max_bessel_order * rng.random()
-                bessel_stack[a, c] = jv(order, argument).astype(real_dtype)
+                values = jv(order, argument).astype(real_dtype)
+                bessel_stack[a, c] = values[inverse].reshape(tuple(gpts))
 
         xp = get_array_module(waves.device)
         bessel_stack = xp.asarray(bessel_stack)
