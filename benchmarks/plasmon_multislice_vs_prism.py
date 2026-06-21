@@ -28,7 +28,9 @@ A single cell (prints ``<seconds> <MB>``)::
 
 ``max_loss_order`` is ``elastic`` (no plasmons), ``none`` (unresolved plasmons),
 or an integer. The system (cell, sampling, scan, optics) is set by the options
-below; the defaults give ~0.064 Å sampling, adequate for physical convergence.
+below; the defaults reproduce the table in the pull request (``gpts=128``, a
+coarse ~0.13 Å/pixel chosen so the slow methods stay tractable — pass a larger
+``--gpts`` for production sampling).
 """
 
 from __future__ import annotations
@@ -247,8 +249,8 @@ def main():
         "MLO in {elastic, none, <int>}, ALGO in {fourier, realspace}",
     )
     parser.add_argument("--device", default="cpu", choices=["cpu", "gpu"])
-    parser.add_argument("--gpts", type=int, default=256)
-    parser.add_argument("--cells-z", type=int, default=12, help="Si cells along z")
+    parser.add_argument("--gpts", type=int, default=128)
+    parser.add_argument("--cells-z", type=int, default=15, help="Si cells along z")
     parser.add_argument("--slice-thickness", type=float, default=2.0)
     parser.add_argument("--scan", type=int, default=16, help="scan is SCAN x SCAN")
     parser.add_argument("--semiangle", type=float, default=20.0, help="mrad")
