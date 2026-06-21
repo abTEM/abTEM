@@ -1338,6 +1338,14 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
 
         potential = validate_potential(potential)
 
+        # Static-structure plasmons: when the model requests phase-scramble
+        # repetitions over a potential without frozen phonons, expand it into a
+        # zero-displacement frozen-phonon ensemble so each repetition gets an
+        # independent scramble and the usual ensemble_mean forms the average.
+        plasmons = multislice_func_kwargs.get("plasmons")
+        if plasmons is not None and getattr(plasmons, "num_repetitions", None):
+            potential = plasmons.expand_static_potential(potential)
+
         self._potential = potential
 
         detectors = validate_detectors(detectors)

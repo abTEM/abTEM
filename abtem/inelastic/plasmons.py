@@ -1,4 +1,5 @@
 import itertools
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
@@ -950,6 +951,15 @@ class PhaseScramblePlasmons:
         order-resolved diffraction patterns.  If ``None`` (default), a single wave
         function accumulating all orders is propagated (faster, but only the total
         unfiltered signal is available).
+    num_repetitions : int, optional
+        Number of phase-scramble repetitions to incoherently average when the
+        potential has **no** frozen phonons (a static structure). Each repetition
+        reuses the same static potential with an independent phase scramble; the
+        repetitions are realised as a zero-displacement frozen-phonon ensemble.
+        Ignored when the potential already has frozen phonons, in which case its
+        ``num_configs`` configurations serve as the repetitions. If ``None``
+        (default) and the structure is static, a single repetition is run (no
+        statistical averaging).
     """
 
     def __init__(
@@ -962,6 +972,7 @@ class PhaseScramblePlasmons:
         max_bessel_order: float = 30.0,
         seed: int = None,
         max_loss_order: int = None,
+        num_repetitions: int = None,
     ):
         self._mean_free_path = mean_free_path
         self._excitation_energy = excitation_energy
@@ -971,6 +982,7 @@ class PhaseScramblePlasmons:
         self._max_bessel_order = max_bessel_order
         self._seed = seed
         self._max_loss_order = max_loss_order
+        self._num_repetitions = num_repetitions
 
     @classmethod
     def from_atoms(
@@ -1041,6 +1053,54 @@ class PhaseScramblePlasmons:
     @property
     def max_loss_order(self):
         return self._max_loss_order
+
+    @property
+    def num_repetitions(self):
+        return self._num_repetitions
+
+    def expand_static_potential(self, potential):
+        """Return a potential providing the phase-scramble repetitions.
+
+        The phase-scramble method draws statistical convergence from an ensemble
+        of independent scrambles, normally realised by the potential's
+        frozen-phonon configurations. When the structure is static (no frozen
+        phonons) and ``num_repetitions`` is set, the same static potential is
+        reused for every repetition: it is represented as a zero-displacement
+        frozen-phonon ensemble of ``num_repetitions`` configurations, each
+        seeded independently so it receives its own phase scramble. Potentials
+        that already carry frozen phonons (or do not expose their atoms) are
+        returned unchanged.
+        """
+        if self._num_repetitions is None:
+            return potential
+
+        if potential.num_configurations > 1:
+            warnings.warn(
+                "'num_repetitions' is ignored because the potential already has "
+                "frozen phonons; its configurations serve as the phase-scramble "
+                "repetitions."
+            )
+            return potential
+
+        frozen_phonons = getattr(potential, "frozen_phonons", None)
+        atoms = getattr(frozen_phonons, "atoms", None)
+        if atoms is None:
+            raise ValueError(
+                "'num_repetitions' requires a potential built from atoms (so the "
+                "static structure can be repeated). Pass scattering atoms or a "
+                "frozen-phonon potential instead."
+            )
+
+        from abtem.inelastic.phonons import FrozenPhonons
+
+        repeated = FrozenPhonons(
+            atoms,
+            num_configs=self._num_repetitions,
+            sigmas=0.0,
+            seed=self._seed,
+        )
+        kwargs = potential._copy_kwargs(exclude=("atoms",))
+        return potential.__class__(repeated, **kwargs)
 
     def _build_operator(
         self, waves: "Waves", potential_index=0, config_seed=None

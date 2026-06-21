@@ -321,3 +321,81 @@ def test_scale_critical_angle_voltage():
     assert scale_critical_angle(at_300, 300e3, 200e3) == pytest.approx(19.1, abs=1e-6)
     # Identity at the same energy.
     assert scale_critical_angle(19.1, 200e3, 200e3) == pytest.approx(19.1)
+
+
+def _static_setup(device, nz=10):
+    """A static (no frozen-phonon) potential + plane wave."""
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, nz)
+    potential = Potential(atoms, gpts=64, slice_thickness=2.0, device=device)
+    wave = PlaneWave(energy=200e3, device=device)
+    return wave, potential
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_static_num_repetitions(device):
+    """num_repetitions runs plasmons over a static structure (no frozen phonons)
+    by averaging independent phase scrambles; the output is a single averaged
+    diffraction pattern with conserved intensity."""
+    wave, potential = _static_setup(device)
+    assert potential.num_configurations == 1
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    plasmons = PhaseScramblePlasmons(
+        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+        num_repetitions=6, seed=7,
+    )
+    result = wave.multislice(potential, detector, plasmons=plasmons).compute()
+    arr = _to_numpy(result.array)
+    # Repetitions are averaged away -> a single (ny, nx) pattern.
+    assert arr.ndim == 2
+    assert float(arr.sum()) == pytest.approx(1.0, abs=0.05)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_static_num_repetitions_reproducible(device):
+    """A fixed seed makes the static-structure average reproducible; a different
+    seed changes it."""
+    wave, potential = _static_setup(device)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    def run(seed):
+        pl = PhaseScramblePlasmons(
+            mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+            num_repetitions=5, seed=seed,
+        )
+        return _to_numpy(wave.multislice(potential, detector, plasmons=pl).compute().array)
+
+    assert np.allclose(run(7), run(7))
+    assert not np.allclose(run(7), run(99))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_static_num_repetitions_order_resolved(device):
+    """Static-structure repetitions compose with order-resolved scattering."""
+    wave, potential = _static_setup(device)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    plasmons = PhaseScramblePlasmons(
+        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+        num_repetitions=4, seed=7, max_loss_order=2,
+    )
+    result = wave.multislice(potential, detector, plasmons=plasmons).compute()
+    arr = _to_numpy(result.array)
+    assert arr.shape[0] == 3  # leading plasmon-order axis, repetitions averaged
+
+
+def test_plasmons_num_repetitions_ignored_with_frozen_phonons():
+    """When the potential already has frozen phonons, num_repetitions is ignored
+    (the configs are the repetitions) and a warning is emitted."""
+    atoms = ase.build.bulk("Si", cubic=True) * (2, 2, 6)
+    fp = FrozenPhonons(atoms, num_configs=3, sigmas=0.05, seed=1)
+    potential = Potential(fp, gpts=64, slice_thickness=2.0)
+    wave = PlaneWave(energy=200e3)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    plasmons = PhaseScramblePlasmons(
+        mean_free_path=1050.0, excitation_energy=16.7, critical_angle=19.1,
+        num_repetitions=10, seed=7,
+    )
+    with pytest.warns(UserWarning, match="num_repetitions"):
+        wave.multislice(potential, detector, plasmons=plasmons).compute()
