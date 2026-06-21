@@ -792,12 +792,18 @@ def multislice_and_detect(
             plasmon_operator = None
             plasmon_target_norm = None
 
-        # Initialise per-order wave channels for order-resolved mode.
+        # Initialise per-order wave channels for order-resolved mode. Only the
+        # zero-loss channel starts from the incident wave; the higher orders
+        # start empty, so allocate their zero arrays directly rather than copying
+        # the incident wave and overwriting it.
         if order_resolved:
             xp = get_array_module(waves.device)
-            order_waves = [waves.copy() for _ in range(n_orders)]
-            for n in range(1, n_orders):
-                order_waves[n]._array = xp.zeros_like(waves._array)
+            order_waves = [waves.copy()]
+            empty_kwargs = waves._copy_kwargs(exclude=("array",))
+            for _ in range(1, n_orders):
+                order_waves.append(
+                    waves.__class__(xp.zeros_like(waves._array), **empty_kwargs)
+                )
 
         # Handle entrance plane detection (before first slice)
         if potential.exit_planes[0] == -1:

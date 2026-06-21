@@ -653,15 +653,15 @@ class _PlasmonSliceOperator:
         # float64 scalar times a complex64 array would upcast the (large)
         # intermediates to complex128, defeating ``config['precision']``.
         real_dtype = psi.real.dtype.type
-        psi_dup = psi.copy()
 
-        out = real_dtype(np.sqrt(1.0 - scatter_prob)) * psi_dup
-
+        # ``psi`` is only read below — the scattered wave is accumulated in a
+        # fresh array ``out`` — so no defensive copy of ``psi`` is needed.
+        out = real_dtype(np.sqrt(1.0 - scatter_prob)) * psi
         for a in range(num_angles):
             bessel = self._bessel_stack[a, chosen[a]]
             amplitude = np.sqrt(scatter_prob * self._angle_weights[a])
             coeff = real_dtype(amplitude * self._azimuthal_norm)
-            out = out + coeff * (bessel * psi_dup)
+            out += coeff * (bessel * psi)
 
         waves._array = xp.asarray(out, dtype=psi.dtype)
 
@@ -1154,7 +1154,9 @@ class PhaseScramblePlasmons:
             x, y = coordinate_grid(extent, gpts, origin=origin, endpoint=False)
             radial = np.sqrt(x**2 + y**2)
             unique_radial, inverse = np.unique(radial.ravel(), return_inverse=True)
-            inverse = inverse.reshape(-1)
+            # int32 indices halve the cached map and the per-beam gather traffic
+            # (grids never approach the 2**31-pixel limit).
+            inverse = inverse.reshape(-1).astype(np.int32)
             self._radial_cache = (cache_key, (unique_radial, inverse))
 
         real_dtype = get_dtype(complex=False)
