@@ -355,8 +355,10 @@ def test_lazy_multi_thickness(request, device):
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_diffuse_pattern_shape_and_values(request, device):
-    """``calculate_diffuse_diffraction_pattern`` returns images with the right shape and
-    non-negative finite values."""
+    """``calculate_diffuse_diffraction_pattern`` returns a DiffractionPatterns with the
+    right shape and non-negative finite values."""
+    from abtem.measurements import DiffractionPatterns
+
     si = bulk("Si", "diamond", a=5.43, cubic=True)
     sf = abtem.StructureFactor(si, g_max=12, device=device)
     bw = BlochWaves(sf, energy=200e3, sg_max=0.1, g_max=2.0, device=device)
@@ -365,18 +367,19 @@ def test_diffuse_pattern_shape_and_values(request, device):
         830.0, 17.0, 19.1, num_excitations=1, num_samples=200, ensemble_mean=True,
         seed=7,
     )
-    result = bw.calculate_diffuse_diffraction_pattern(
+    dp = bw.calculate_diffuse_diffraction_pattern(
         thickness=300.0, plasmons=mc, gpts=(128, 128),
     )
-    images = result["images"]
-    orders = result["orders"]
-    weights = result["weights"]
+    assert isinstance(dp, DiffractionPatterns)
+
+    orders = dp.metadata["plasmon_orders"]
+    weights = dp.metadata["plasmon_weights"]
+    images = np.asarray(dp.array)
 
     assert images.shape == (len(orders), 128, 128)
     assert np.isfinite(images).all()
     assert (images >= 0).all()
     assert len(weights) == len(orders)
-    assert result["extent"] is not None
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -392,11 +395,11 @@ def test_diffuse_zero_order_concentrates_at_bragg(request, device):
         830.0, 17.0, 19.1, num_excitations=1, num_samples=100, ensemble_mean=True,
         seed=3,
     )
-    result = bw.calculate_diffuse_diffraction_pattern(
+    dp = bw.calculate_diffuse_diffraction_pattern(
         thickness=300.0, plasmons=mc, gpts=(128, 128),
     )
-    images = result["images"]
-    orders = result["orders"]
+    images = np.asarray(dp.array)
+    orders = list(dp.metadata["plasmon_orders"])
 
     zero_idx = orders.index(0)
     zero_image = images[zero_idx]
@@ -419,11 +422,11 @@ def test_diffuse_higher_order_spreads(request, device):
         830.0, 17.0, 19.1, num_excitations=2, num_samples=500, ensemble_mean=True,
         seed=9,
     )
-    result = bw.calculate_diffuse_diffraction_pattern(
+    dp = bw.calculate_diffuse_diffraction_pattern(
         thickness=500.0, plasmons=mc, gpts=(256, 256),
     )
-    images = result["images"]
-    orders = result["orders"]
+    images = np.asarray(dp.array)
+    orders = list(dp.metadata["plasmon_orders"])
 
     if len(orders) >= 2:
         nz_zero = np.count_nonzero(images[orders.index(0)])

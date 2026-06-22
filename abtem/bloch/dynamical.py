@@ -56,7 +56,7 @@ from abtem.atoms import (
     validate_per_atom_property,
     validate_sigmas,
 )
-from abtem.measurements import IndexedDiffractionPatterns
+from abtem.measurements import DiffractionPatterns, IndexedDiffractionPatterns
 from abtem.parametrizations import Parametrization, validate_parametrization
 from abtem.potentials.iam import PotentialArray
 
@@ -1711,7 +1711,7 @@ class BlochWaves:
         plasmons: "MonteCarloPlasmons",
         gpts: tuple[int, int] = (256, 256),
         extent: tuple[float, float] | None = None,
-    ) -> dict:
+    ) -> "DiffractionPatterns":
         """Render a 2D diffuse-background diffraction pattern (rigid-shift model).
 
         Each Monte-Carlo configuration's exit-wave intensity is placed at
@@ -1735,16 +1735,18 @@ class BlochWaves:
 
         Returns
         -------
-        dict
-            ``"orders"`` — list of excitation orders,
-            ``"images"`` — ndarray ``(num_orders, ny, nx)``,
-            ``"weights"`` — Poisson weights ``P(n)``,
-            ``"extent"`` — the actual ``(ky_max, kx_max)`` used.
+        DiffractionPatterns
+            A ``DiffractionPatterns`` measurement with a leading ordinal axis for
+            the excitation order (``"Zero loss"``, ``"Single plasmon"``, etc.).
+            The Poisson weights ``P(n)`` and excitation orders are stored in the
+            metadata (keys ``"plasmon_weights"`` and ``"plasmon_orders"``).
+            Call ``.show()`` to visualize.
         """
         from abtem.bloch.inelastic import (
             _prepare_bloch_matrices,
             calculate_bloch_diffuse_pattern,
         )
+        from abtem.inelastic.plasmons import ntuples
 
         precomputed = _prepare_bloch_matrices(self)
         events = plasmons._draw_events(thickness=float(thickness), energy=self.energy)
@@ -1754,12 +1756,27 @@ class BlochWaves:
             _precomputed=precomputed,
         )
 
-        return {
-            "orders": orders,
-            "images": images,
-            "weights": weights,
-            "extent": actual_extent,
-        }
+        ny, nx = gpts
+        ky_max, kx_max = actual_extent
+        sampling_x = 2 * kx_max / max(nx - 1, 1)
+        sampling_y = 2 * ky_max / max(ny - 1, 1)
+
+        labels = tuple(ntuples.get(n, f"{n}-plasmon") for n in orders)
+        plasmon_axis = OrdinalAxis(label="energy loss", values=labels)
+
+        return DiffractionPatterns(
+            array=images,
+            sampling=(sampling_x, sampling_y),
+            fftshift=True,
+            ensemble_axes_metadata=[plasmon_axis],
+            metadata={
+                "energy": self.energy,
+                "label": "Intensity",
+                "units": "arb. unit",
+                "plasmon_orders": tuple(orders),
+                "plasmon_weights": weights.tolist(),
+            },
+        )
 
     def calculate_diffraction_patterns(
         self,
