@@ -958,7 +958,7 @@ def calculate_structure_matrix(
 
     Mii = xp.asarray(Mii)
 
-    A *= prefactor * Mii[None] * Mii[:, None]
+    A = A * (prefactor * Mii[None] * Mii[:, None])
 
     set_structure_matrix_diagonal(
         A, g, Mii, energy, beam_direction=beam_direction, use_wave_eq=use_wave_eq
