@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import warnings
 from abc import abstractmethod
 from copy import copy
 from functools import partial
@@ -18,6 +19,7 @@ from abtem.array import stack as stack_array_object
 from abtem.core.axes import (
     AxesMetadataList,
     AxisMetadata,
+    FrozenPhononsAxis,
     OrdinalAxis,
     RealSpaceAxis,
     ReciprocalSpaceAxis,
@@ -295,8 +297,8 @@ def reduce_ensemble(
 ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
     """
     Reduce an ensemble of wave functions or measurements by squeezing or averaging
-    ensemble axes tagged for reduction with the "_squeeze" or "_average" attribute
-    of the axis metadata.
+    ensemble axes tagged for reduction with the "_squeeze" or "_ensemble_mean"
+    attribute of the axis metadata.
 
     Parameters
     ----------
@@ -328,6 +330,15 @@ def reduce_ensemble(
     if isinstance(output, BaseMeasurements):
         reduced_output = output.reduce_ensemble()
     else:
+        if any(
+            isinstance(ax, FrozenPhononsAxis) and not ax._ensemble_mean
+            for ax in output.ensemble_axes_metadata
+        ):
+            warnings.warn(
+                "ensemble_mean=False returns the full frozen-phonon ensemble as "
+                "individual wave functions. Use detectors to obtain averaged "
+                "measurements."
+            )
         reduced_output = output
 
     return reduced_output
@@ -2126,87 +2137,74 @@ class Probe(WavesBuilder):
 
         return reduce_ensemble(measurements)
 
-    # def transition_potential_scan(
-    #     self,
-    #     potential: BasePotential | Atoms,
-    #     transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
-    #     scan: Optional[BaseScan | Sequence] = None,
-    #     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
-    #     sites: Optional[SliceIndexedAtoms | Atoms] = None,
-    #     # detectors_elastic: BaseDetector | list[BaseDetector] = None,
-    #     double_channel: bool = True,
-    #     threshold: float = 1.0,
-    #     max_batch: int | str = "auto",
-    #     lazy: Optional[bool] = None,
-    # ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
-    #     """
-    #     Parameters
-    #     ----------
-    #     potential : BasePotential | Atoms
-    #         The potential to be used for calculating the transition potentials.
-    #         It can be an instance of `BasePotential` or an `Atoms` object.
-    #     transition_potentials : BaseTransitionPotential | list[BaseTransitionPotential]
-    #         The transition potentials to be used for multislice calculations.
-    #         It can be an instance of `BaseTransitionPotential` or a list of
-    #         `BaseTransitionPotential` objects.
-    #     scan : tuple | BaseScan, optional
-    #         The scan parameters. It can be a tuple or an instance of `BaseScan`.
-    #         Defaults to None.
-    #     detectors : BaseDetector | list[BaseDetector], optional
-    #         A detector or a list of detectors defining how the wave functions should be
-    #         converted to measurements after running the multislice algorithm. See
-    #         abtem.measurements.detect for a list of implemented detectors.
-    #         Defaults to None.
-    #     sites : SliceIndexedAtoms | Atoms, optional
-    #         The slice indexed atoms to be used for multislice calculations.
-    #         It can be an instance of `SliceIndexedAtoms` or an `Atoms` object.
-    #         Defaults to None.
-    #     detectors_elastic : BaseDetector | list[BaseDetector], optional
-    #         The elastic detectors to be used for recording the measurements.
-    #         It can be an instance of `BaseDetector` or a list of `BaseDetector` objects.
-    #         Defaults to None.
-    #     double_channel : bool, optional
-    #         A boolean indicating whether to use double channel for recording the
-    #         measurements. Defaults to True.
-    #     max_batch : int | str, optional
-    #         The maximum batch size for parallel processing.
-    #         It can be an integer or the string "auto".
-    #         Defaults to "auto".
-    #     lazy : bool, optional
-    #         A boolean indicating whether to use lazy evaluation for the calculations.
-    #         Defaults to None.
+    def transition_potential_scan(
+        self,
+        potential: BasePotential | Atoms,
+        transition_potentials: BaseTransitionPotential | list[BaseTransitionPotential],
+        scan: Optional[BaseScan | Sequence] = None,
+        detectors: Optional[BaseDetector | list[BaseDetector]] = None,
+        sites: Optional[SliceIndexedAtoms | Atoms] = None,
+        max_batch: int | str = "auto",
+        lazy: Optional[bool] = None,
+        **multislice_func_kwargs,
+    ) -> Waves | BaseMeasurements | list[Waves | BaseMeasurements]:
+        """Run the inelastic multislice algorithm for probe wave functions over the
+        provided scan, using transition potentials to model core-loss excitations.
 
-    #     Returns
-    #     -------
-    #     Waves | BaseMeasurements
-    #         The calculated waves or measurements, depending on the value of `lazy`.
+        Parameters
+        ----------
+        potential : BasePotential or Atoms
+            The scattering potential through which to propagate the probe.
+        transition_potentials : BaseTransitionPotential or list of BaseTransitionPotential
+            The transition potential(s) describing the core-loss excitation(s).
+        scan : array of xy-positions or BaseScan, optional
+            Positions of the probe wave functions. If not given, scans across the entire
+            potential at Nyquist sampling.
+        detectors : BaseDetector or list of BaseDetector, optional
+            A detector or list of detectors defining how the wave functions are
+            converted to measurements. If not given, defaults to
+            :class:`FlexibleAnnularDetector`. See :mod:`abtem.measurements` for the
+            implemented detectors.
+        sites : SliceIndexedAtoms or Atoms, optional
+            The sites at which inelastic scattering events are evaluated. If not given,
+            all atoms of the species matching the transition potential are used.
+        max_batch : int or str, optional
+            The number of probe wave functions in each chunk of the Dask array. If
+            'auto' (default), the batch size is chosen from the abtem configuration
+            (``dask.chunk-size`` / ``dask.chunk-size-gpu``).
+        lazy : bool, optional
+            If True, build measurements lazily; otherwise compute eagerly. Defaults to
+            the value set in the user configuration file.
+        **multislice_func_kwargs
+            Additional keyword arguments forwarded to the inelastic multislice function
+            (e.g. ``double_channel``, ``threshold``).
 
-    #     """
-    #     if scan is None:
-    #         scan = GridScan()
+        Returns
+        -------
+        measurements : BaseMeasurements or Waves or list of BaseMeasurements
+            The detected measurements for each scan position. If multiple transition
+            potentials are given, an additional ensemble axis distinguishes them.
+        """
+        if scan is None:
+            scan = GridScan()
 
-    #     if detectors is None:
-    #         detectors = FlexibleAnnularDetector()
+        if detectors is None:
+            detectors = FlexibleAnnularDetector()
 
-    #     potential = validate_potential(potential)
+        probe = self.copy()
+        potential = validate_potential(potential)
+        if potential is not None:
+            probe.grid.match(potential)
 
-    #     probes = self._validate_and_build(
-    #         scan=scan, max_batch=max_batch, lazy=lazy, potential=potential
-    #     )
+        waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
 
-    #     multislice = MultisliceTransform(
-    #         potential,
-    #         detectors,
-    #         multislice_func=transition_potential_multislice_and_detect,
-    #         transition_potential=transition_potentials,
-    #         sites=sites,
-    #         double_channel=double_channel,
-    #         threshold=threshold,
-    #     )
-
-    #     measurements = probes.apply_transform(multislice)
-
-    #     return reduce_ensemble(measurements)
+        return waves.transition_potential_multislice(
+            potential=potential,
+            transition_potentials=transition_potentials,
+            detectors=detectors,
+            sites=sites,
+            **multislice_func_kwargs,
+        )
 
     def scan(
         self,

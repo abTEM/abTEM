@@ -899,48 +899,6 @@ class MeasurementsEnsemble(BaseMeasurements):
 
         return visualization
 
-    # def show(
-    #     self,
-    #     ax: Axes = None,
-    #     common_scale: bool = True,
-    #     explode: bool | Sequence[int] = None,
-    #     overlay: bool | Sequence[int] = None,
-    #     figsize: tuple[int, int] = None,
-    #     title: str = None,
-    #     units: str = None,
-    #     legend: bool = False,
-    #     interact: bool = False,
-    #     display: bool = True,
-    #     **kwargs,
-    # ):
-    #     # if not interact:
-    #     #     self.compute()
-    #
-    #     visualization = VisualizationLines(
-    #         array=self.array,
-    #         coordinate_axes=self.ensemble_axes_metadata[-1:],
-    #         scale_axis=self._scale_axis_from_metadata(),
-    #         ensemble_axes=self.ensemble_axes_metadata[:-1],
-    #         ax=ax,
-    #         common_scale=common_scale,
-    #         explode=explode,
-    #         overlay=overlay,
-    #         figsize=figsize,
-    #         interact=interact,
-    #         title=title,
-    #         **kwargs,
-    #     )
-    #
-    #     if not display and not interact:
-    #         plt.close()
-    #
-    #     if interact and display:
-    #         from IPython.display import display as ipython_display
-    #
-    #         ipython_display(visualization.layout_widgets())
-    #
-    #     return visualization
-
 
 class _BaseMeasurement2D(BaseMeasurements):
     _base_dims = 2
@@ -1899,7 +1857,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         return LineScan(start=start, end=end, sampling=sampling)
 
-    def _add_to_visualization(self, *args, **kwargs):
+    def _add_to_plot(self, *args, **kwargs):
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
                 "The metadata does not contain the keys 'start' and 'end'"
@@ -1908,7 +1866,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         if "width" in self.metadata:
             kwargs["width"] = self.metadata["width"]
 
-        self._line_scan().add_to_axes(*args, **kwargs)
+        self._line_scan().add_to_plot(*args, **kwargs)
 
     @staticmethod
     def _calculate_widths(array, sampling, height):

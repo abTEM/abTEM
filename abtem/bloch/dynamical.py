@@ -54,7 +54,7 @@ from abtem.core.fft import fft_interpolate
 from abtem.core.grid import Grid
 from abtem.core.utils import CopyMixin, get_dtype
 from abtem.distributions import BaseDistribution, validate_distribution
-from abtem.inelastic.phonons import (
+from abtem.atoms import (
     AtomProperties,
     validate_per_atom_property,
     validate_sigmas,
@@ -73,7 +73,7 @@ if TYPE_CHECKING:
 
 
 def calculate_scattering_factors(
-    g: np.ndarray,
+    g_vec: np.ndarray,
     atoms: Atoms,
     parametrization: str | Parametrization,
     g_max: float,
@@ -85,8 +85,10 @@ def calculate_scattering_factors(
 
     Parameters
     ----------
-    g : np.ndarray
-        The scattering vector lengths [1/Å].
+    g_vec : np.ndarray
+        Scattering vectors [1/Å]. Either Cartesian vectors with shape (N_g, 3), or
+        plain magnitudes with shape (N_g,). Anisotropic Debye-Waller factors require
+        shape (N_g, 3); passing magnitudes with anisotropic sigmas raises an error.
     atoms : Atoms
         Atoms object.
     g_max : float
@@ -96,12 +98,13 @@ def calculate_scattering_factors(
         Parametrization for the scattering factors.
     thermal_sigma : dict
         Standard deviation of the atomic displacements for the Debye-Waller factor [Å].
+        For anisotropic displacements, provide three values per atom or element (σx, σy, σz).
     cutoff : {'taper', 'hard'}
         Cutoff function for the scattering factors. 'taper' is a smooth cutoff, 'hard'
         is a hard cutoff.
     """
 
-    validated_thermal_sigma, _ = validate_sigmas(
+    validated_thermal_sigma, anisotropic = validate_sigmas(
         atoms, thermal_sigma, return_array=True
     )
     validated_occupancy = validate_per_atom_property(
@@ -113,21 +116,43 @@ def calculate_scattering_factors(
 
     parametrization = validate_parametrization(parametrization)
 
+    if g_vec.ndim == 1:
+        if anisotropic:
+            raise ValueError(
+                "Anisotropic Debye-Waller factors require Cartesian g-vectors "
+                "with shape (N_g, 3), not plain magnitudes."
+            )
+        g = g_vec
+        g_vec_3d = None
+    else:
+        g = np.linalg.norm(g_vec, axis=1)
+        g_vec_3d = g_vec
+
     Z_unique = np.unique(atoms.numbers)
 
     scattering_factors = {Z: parametrization.scattering_factor(Z) for Z in Z_unique}
 
     f_e = np.zeros((len(atoms), len(g)), dtype=get_dtype(complex=True))
 
+    two_pi_sq = (2 * np.pi) ** 2
+
     for i in range(len(atoms)):
         Z = atoms.numbers[i]
         s = validated_thermal_sigma[i]
         o = validated_occupancy[i]
 
-        if s != 0.0:
-            DWF = np.exp(-0.5 * s**2 * g**2 * (2 * np.pi) ** 2)
+        if anisotropic:
+            # s has shape (3,); g_vec_3d has shape (N_g, 3)
+            # DWF = exp(-0.5 * (2π)² * Σ_α σ_α² gα²)
+            if np.any(s != 0.0):
+                DWF = np.exp(-0.5 * two_pi_sq * (g_vec_3d**2 @ s**2))
+            else:
+                DWF = 1.0
         else:
-            DWF = 1.0
+            if s != 0.0:
+                DWF = np.exp(-0.5 * s**2 * g**2 * two_pi_sq)
+            else:
+                DWF = 1.0
 
         f_e[i] = scattering_factors[Z](g**2) * DWF * o
 
@@ -185,10 +210,8 @@ def calculate_structure_factors(
     new_cell = atoms.cell.copy().complete()
     positions = np.linalg.solve(new_cell.T, atoms.positions.T).T
 
-    g = np.linalg.norm(calculate_g_vec(hkl, atoms.cell), axis=1)
-
     f_e = calculate_scattering_factors(
-        g=g,
+        g_vec=calculate_g_vec(hkl, atoms.cell),
         atoms=atoms,
         g_max=g_max,
         parametrization=parametrization,
@@ -474,7 +497,7 @@ class StructureFactor(BaseStructureFactor, CopyMixin):
     def calculate_scattering_factors(self) -> np.ndarray:
         """Calculate the scattering factors for each atomic species in the structure."""
         return calculate_scattering_factors(
-            g=self.g_vec_length,
+            g_vec=self.g_vec,
             atoms=self.atoms,
             parametrization=self._parametrization,
             g_max=self.g_max,
@@ -2527,3 +2550,222 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         )
 
         return result
+
+    def _calculate_exit_waves_eager(
+        self,
+        thicknesses: np.ndarray,
+        gpts: tuple[int, int],
+        extent: tuple[float, float],
+        normalization: str,
+        g_max: Optional[float],
+        pbar: bool,
+    ) -> np.ndarray:
+        orientation_matrices = self.get_orientation_matrices()
+
+        shape = orientation_matrices.shape[:-2] + (len(thicknesses),) + gpts
+
+        pbar_obj = TqdmWrapper(
+            enabled=pbar,
+            total=int(np.prod(orientation_matrices.shape[:-2])),
+            leave=False,
+        )
+
+        xp = get_array_module(self.device)
+        array = xp.zeros(shape, dtype=get_dtype(complex=True))
+
+        for i in np.ndindex(orientation_matrices.shape[:-2]):
+            bw = BlochWaves(
+                structure_factor=self._structure_factor,
+                energy=self.energy,
+                sg_max=self.sg_max,
+                g_max=self.g_max,
+                orientation_matrix=orientation_matrices[i],
+                centering=self.centering,
+                device=self.device,
+                use_wave_eq=self._use_wave_eq,
+            )
+
+            waves = bw.calculate_exit_waves(
+                thicknesses=thicknesses,
+                gpts=gpts,
+                extent=extent,
+                normalization=normalization,
+                g_max=g_max,
+                lazy=False,
+            )
+
+            array[i] = waves.array
+            pbar_obj.update_if_exists(1)
+
+        pbar_obj.close_if_exists()
+        return array
+
+    @staticmethod
+    def _run_calculate_exit_waves(
+        block: np.ndarray,
+        thicknesses: np.ndarray,
+        gpts: tuple[int, int],
+        extent: tuple[float, float],
+        normalization: str,
+        g_max: Optional[float],
+        pbar: bool,
+    ) -> np.ndarray:
+        unpacked_block: BlochwaveEnsemble = block.item()
+        return unpacked_block._calculate_exit_waves_eager(
+            thicknesses=thicknesses,
+            gpts=gpts,
+            extent=extent,
+            normalization=normalization,
+            g_max=g_max,
+            pbar=pbar,
+        )
+
+    def _lazy_calculate_exit_waves(
+        self,
+        thicknesses: np.ndarray,
+        gpts: tuple[int, int],
+        extent: tuple[float, float],
+        normalization: str,
+        g_max: Optional[float],
+        pbar: bool,
+    ) -> da.core.Array:
+        blocks = self.ensemble_blocks(1)
+
+        shape = self.ensemble_shape + (len(thicknesses),) + gpts
+        out_ind = tuple(range(len(shape)))
+
+        xp = get_array_module(self.device)
+
+        out = da.blockwise(
+            self._run_calculate_exit_waves,
+            out_ind,
+            blocks,
+            tuple(range(len(self.ensemble_shape))),
+            new_axes={
+                out_ind[-3]: shape[-3],
+                out_ind[-2]: shape[-2],
+                out_ind[-1]: shape[-1],
+            },
+            thicknesses=thicknesses,
+            gpts=gpts,
+            extent=extent,
+            normalization=normalization,
+            g_max=g_max,
+            pbar=pbar,
+            concatenate=True,
+            meta=xp.zeros(shape, dtype=get_dtype(complex=True)),
+        )
+        return out
+
+    def calculate_exit_waves(
+        self,
+        thicknesses: float | Sequence[float] | np.ndarray,
+        gpts: Optional[tuple[int, int]] = None,
+        extent: Optional[tuple[float, float]] = None,
+        normalization: str = "values",
+        g_max: Optional[float] = None,
+        lazy: bool = True,
+        pbar: Optional[bool] = None,
+    ) -> Waves:
+        """Calculate the exit waves for the ensemble for a given set of
+        thicknesses.
+
+        Parameters
+        ----------
+        thicknesses : float or sequence of floats
+            The thicknesses of the sample [Å].
+        gpts : tuple of ints, optional
+            The grid points of the exit waves.
+        extent : tuple of floats, optional
+            The extent of the exit waves [Å].
+        normalization : {'values', 'amplitude'}
+            The normalization of the exit waves.
+        g_max : float, optional
+            Maximum scattering vector length for the plane wave
+            expansion [1/Å].
+        lazy : bool
+            If True, the calculation is done lazily using dask. If False,
+            the calculation is done eagerly.
+        pbar : bool, optional
+            If True, a progress bar is shown. Default is None, which means
+            the value is taken from the configuration.
+
+        Returns
+        -------
+        Waves
+            The exit waves.
+        """
+
+        if pbar is None:
+            pbar = config.get("local_diagnostics.task_level_progress", False)
+
+        if extent is None:
+            base_cell = np.array(self._structure_factor.cell)
+            orientation_matrices = self.get_orientation_matrices()
+            max_extent = np.zeros(2)
+            for i in np.ndindex(orientation_matrices.shape[:-2]):
+                rotated_cell = Cell(np.dot(base_cell, orientation_matrices[i].T))
+                bounds = cell_bounds(rotated_cell)[:2]
+                max_extent = np.maximum(max_extent, bounds)
+            extent = (float(max_extent[0]), float(max_extent[1]))
+
+        if gpts is None:
+            effective_g_max = g_max if g_max is not None else self.g_max
+            sampling = (1 / effective_g_max / 2, 1 / effective_g_max / 2)
+            gpts = (
+                int(np.ceil(extent[0] / sampling[0])),
+                int(np.ceil(extent[1] / sampling[1])),
+            )
+
+        if isinstance(thicknesses, (float, int)):
+            ensemble_axes_metadata: list[AxisMetadata] = []
+        else:
+            ensemble_axes_metadata = [
+                ThicknessAxis(
+                    label="z", units="Å", values=tuple(thicknesses)
+                )
+            ]
+
+        thicknesses = np.array(thicknesses, dtype=get_dtype())
+
+        if thicknesses.ndim == 0:
+            thicknesses = thicknesses[None]
+            squeeze_thickness_dim = True
+        else:
+            squeeze_thickness_dim = False
+
+        array: np.ndarray | da.core.Array
+        if lazy:
+            array = self._lazy_calculate_exit_waves(
+                thicknesses=thicknesses,
+                gpts=gpts,
+                extent=extent,
+                normalization=normalization,
+                g_max=g_max,
+                pbar=pbar,
+            )
+        else:
+            array = self._calculate_exit_waves_eager(
+                thicknesses=thicknesses,
+                gpts=gpts,
+                extent=extent,
+                normalization=normalization,
+                g_max=g_max,
+                pbar=pbar,
+            )
+
+        if squeeze_thickness_dim:
+            array = array[..., 0, :, :]
+
+        waves = Waves(
+            array=array,
+            extent=extent,
+            energy=self.energy,
+            ensemble_axes_metadata=[
+                *self.ensemble_axes_metadata,
+                *ensemble_axes_metadata,
+            ],
+            metadata={"normalization": normalization},
+        )
+
+        return waves

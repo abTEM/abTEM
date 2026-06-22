@@ -454,7 +454,7 @@ def _get_progress_bar(
 
     if progress_bar:
         if progress_bar == "tqdm":
-            progress_bar_obj = TqdmCallback(desc="tasks")
+            progress_bar_obj = TqdmCallback(desc="tasks", delay=0.5)
         else:
             progress_bar_obj = ProgressBar()
     else:
@@ -1917,7 +1917,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
                 align_arrays=False,
                 concatenate=True,
                 dtype=object,
-                meta=xp.array((), object),
+                meta=np.array((), dtype=object),
             )
         else:
             array = self.compute().array

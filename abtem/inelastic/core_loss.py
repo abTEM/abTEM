@@ -59,6 +59,8 @@ azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
 
 
 def config_str_to_config_tuples(config_str):
+    """Parse an electron configuration string (e.g. "1s2 2s2 2p6") into a list of
+    (n, l, occupancy) tuples."""
     config_tuples = []
     for subshell_string in config_str.split(" "):
         config_tuples.append(
@@ -72,6 +74,8 @@ def config_str_to_config_tuples(config_str):
 
 
 def config_tuples_to_config_str(config_tuples):
+    """Convert a list of (n, l, occupancy) tuples back to an electron configuration
+    string (e.g. "1s2 2s2 2p6")."""
     config_str = []
     for n, ell, occ in config_tuples:
         config_str.append(str(n) + azimuthal_letter[ell] + str(occ))
@@ -79,6 +83,8 @@ def config_tuples_to_config_str(config_tuples):
 
 
 def remove_electron_from_config_str(config_str, n, ell):
+    """Remove one electron from the (n, l) subshell in the given configuration string
+    and return the updated configuration string."""
     config_tuples = []
     for shell in config_str_to_config_tuples(config_str):
         if shell[:2] == (n, ell):
@@ -89,6 +95,8 @@ def remove_electron_from_config_str(config_str, n, ell):
 
 
 def check_valid_quantum_number(Z, n, ell):
+    """Validate that the quantum numbers (n, l) correspond to an occupied subshell
+    for element with atomic number Z. Raises RuntimeError if invalid."""
     symbol = chemical_symbols[Z]
     config_tuple = config_str_to_config_tuples(electron_configurations[symbol])
 
@@ -679,35 +687,49 @@ class TransitionPotential(BaseTransitionPotential):
         return self.build().to_images().show(**kwargs)
 
 
-# @njit(fastmath=True)
 def fast_roll(array, shifts):
-    xp = get_array_module(array)
-    output = xp.empty((len(shifts),) + array.shape, dtype=array.dtype)
+    """Batched 2D circular roll: ``out[i] == xp.roll(array, shifts[i], axis=(0, 1))``.
 
+    On CPU the per-site quadrant-copy loop is already very fast — each slice is
+    a memmove — and beats both ``xp.roll`` in a loop and a full advanced-indexing
+    gather. On GPU the advanced-indexing form wins because the per-site loop
+    serialises kernel launches; we dispatch on the backend.
+
+    Shifts are first reduced modulo ``H`` / ``W`` so negative and out-of-range
+    values are handled correctly (the previous version raised RuntimeError on
+    negative shifts).
+    """
+    xp = get_array_module(array)
+    H, W = array.shape[-2:]
+    shifts = shifts.copy()
+    shifts[:, 0] %= H
+    shifts[:, 1] %= W
+
+    if xp is not np:
+        # GPU path: batched gather. CuPy's advanced indexing launches one
+        # kernel for the whole batch instead of one per site.
+        rows = (xp.arange(H)[None, :] - shifts[:, 0:1]) % H
+        cols = (xp.arange(W)[None, :] - shifts[:, 1:2]) % W
+        return array[rows[:, :, None], cols[:, None, :]]
+
+    # CPU path: per-site quadrant copy. Memmove inside each branch is faster
+    # than any vectorised numpy alternative we benchmarked.
+    output = xp.empty((len(shifts),) + array.shape, dtype=array.dtype)
     for i in range(len(shifts)):
-        if np.all(shifts[i] > 0):
-            output[i, : shifts[i, 0], : shifts[i, 1]] = array[
-                -shifts[i, 0] :, -shifts[i, 1] :
-            ]
-            output[i, : shifts[i, 0], shifts[i, 1] :] = array[
-                -shifts[i, 0] :, : -shifts[i, 1]
-            ]
-            output[i, shifts[i, 0] :, : shifts[i, 1]] = array[
-                : -shifts[i, 0], -shifts[i, 1] :
-            ]
-            output[i, shifts[i, 0] :, shifts[i, 1] :] = array[
-                : -shifts[i, 0], : -shifts[i, 1]
-            ]
-        elif shifts[i, 1] > 0:
-            output[i, :, : shifts[i, 1]] = array[:, -shifts[i, 1] :]
-            output[i, :, shifts[i, 1] :] = array[:, : -shifts[i, 1] :]
-        elif shifts[i, 0] > 0:
-            output[i, : shifts[i, 0], :] = array[-shifts[i, 0] :, :]
-            output[i, shifts[i, 0] :, :] = array[: -shifts[i, 0] :, :]
-        elif (shifts[i, 0] == 0) and (shifts[i, 1] == 0):
-            output[i] = array
+        s0, s1 = int(shifts[i, 0]), int(shifts[i, 1])
+        if s0 > 0 and s1 > 0:
+            output[i, :s0, :s1] = array[-s0:, -s1:]
+            output[i, :s0, s1:] = array[-s0:, :-s1]
+            output[i, s0:, :s1] = array[:-s0, -s1:]
+            output[i, s0:, s1:] = array[:-s0, :-s1]
+        elif s1 > 0:
+            output[i, :, :s1] = array[:, -s1:]
+            output[i, :, s1:] = array[:, :-s1]
+        elif s0 > 0:
+            output[i, :s0, :] = array[-s0:, :]
+            output[i, s0:, :] = array[:-s0, :]
         else:
-            raise RuntimeError()
+            output[i] = array
 
     return output
 
@@ -877,20 +899,46 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
             local_potential = copy_to_device(self._local_potential, waves.array)
 
-            shifted_local_potential = fast_roll(local_potential, rounded_sites)
+            # Stream the overlap reduction over sites in chunks. The full
+            # (n_sites, *waves_shape, H, W) tensor that the naive computation
+            # would build can dwarf available memory for big scans / many sites;
+            # by reducing each chunk to a per-site sum before moving on, peak
+            # transient is O(chunk_size) instead of O(n_sites).
+            #
+            # The chunk size targets the same byte budget as the rest of abTEM
+            # (dask.chunk-size / dask.chunk-size-gpu) via validate_chunks, so
+            # users who already tuned that knob for a memory-constrained
+            # workstation get the tighter behaviour here automatically.
+            abs2_waves = abs2(waves.array)
+            n_sites = len(validated_sites)
+            reduce_axes_offset = len(waves.shape) - 2  # broadcast dims per site
 
-            shifted_local_potential = shifted_local_potential.reshape(
-                (len(validated_sites),)
-                + (1,) * (len(waves.shape) - 2)
-                + shifted_local_potential.shape[-2:]
-            )
+            chunks = validate_chunks(
+                shape=(n_sites,) + waves.shape,
+                chunks=("auto",) + (-1,) * len(waves.shape),
+                max_elements="auto",
+                dtype=waves.dtype,
+                device=self.device,
+            )[0]
 
-            overlaps = shifted_local_potential * abs2(waves.array[None])
-            overlaps = overlaps.sum(axis=(-2, -1))
-
-            mask = overlaps > threshold
-
-            mask = mask.any(tuple(range(1, len(overlaps.shape))))
+            mask = xp.zeros(n_sites, dtype=bool)
+            start = 0
+            for chunk_size in chunks:
+                end = start + chunk_size
+                shifted = fast_roll(local_potential, rounded_sites[start:end])
+                shifted = shifted.reshape(
+                    (end - start,)
+                    + (1,) * reduce_axes_offset
+                    + shifted.shape[-2:]
+                )
+                overlaps = (shifted * abs2_waves[None]).sum(axis=(-2, -1))
+                chunk_mask = overlaps > threshold
+                if chunk_mask.ndim > 1:
+                    chunk_mask = chunk_mask.any(
+                        tuple(range(1, chunk_mask.ndim))
+                    )
+                mask[start:end] = chunk_mask
+                start = end
 
             mask = copy_to_device(mask, "cpu")
             # if np.any(mask):
@@ -1015,7 +1063,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         )
 
     def show(self, **kwargs):
-        self.to_images().show(**kwargs)
+        return self.to_images().show(**kwargs)
 
 
 def linear_scaling_transition_multislice(
@@ -1057,7 +1105,7 @@ def linear_scaling_transition_multislice(
         S2_multislice = S2
 
     images = np.zeros(len(positions), dtype=np.float32)
-    for i in tqdm(range(len(potential))):
+    for i in tqdm(range(len(potential)), delay=0.5):
         if stream:
             S1 = S1.streaming_multislice(
                 potential, chunks=chunks, start=max(i - 1, 0), stop=i

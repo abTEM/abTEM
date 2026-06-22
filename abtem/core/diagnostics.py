@@ -39,6 +39,7 @@ class TqdmWrapper:
         self._pbar: Optional[tqdm_asyncio] = None
 
         if tqdm is not None and enabled:
+            kwargs.setdefault("delay", 0.5)
             self._pbar = tqdm(*args, **kwargs)
 
     @property
