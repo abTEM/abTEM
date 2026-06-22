@@ -22,6 +22,11 @@ from abtem.core.energy import energy2wavelength
 from abtem.inelastic.plasmons import MonteCarloPhonons, MonteCarloPlasmons
 
 
+def _to_numpy(a):
+    """Convert an array to NumPy, handling CuPy transparently."""
+    return a.get() if hasattr(a, "get") else np.asarray(a)
+
+
 @pytest.fixture
 def si_bloch(request):
     device = request.param
@@ -104,7 +109,7 @@ def test_zero_events_matches_elastic(request, device):
     t = 200.0
 
     dp_elastic = bw.calculate_diffraction_patterns(t, lazy=False)
-    I_elastic = np.asarray(dp_elastic.array)
+    I_elastic = _to_numpy(dp_elastic.array)
 
     mc = MonteCarloPlasmons(
         830.0, 17.0, 19.1, num_excitations=0, num_samples=1, ensemble_mean=True
@@ -113,7 +118,7 @@ def test_zero_events_matches_elastic(request, device):
     orders, I, weights = calculate_bloch_plasmon_intensities(bw, events, t)
 
     assert orders == [0]
-    np.testing.assert_allclose(np.asarray(I[0]), I_elastic, atol=5e-7)
+    np.testing.assert_allclose(_to_numpy(I[0]), I_elastic, atol=5e-7)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +143,7 @@ def test_intensity_conservation(request, device):
     orders, I, weights = calculate_bloch_plasmon_intensities(bw, events, t)
 
     total = sum(
-        float(weights[i]) * float(np.asarray(I[i]).sum()) for i in range(len(orders))
+        float(weights[i]) * float(_to_numpy(I[i]).sum()) for i in range(len(orders))
     )
 
     # Expected: each order's pattern is normalised (Bloch conserves total intensity),
@@ -173,8 +178,8 @@ def test_calculate_diffraction_patterns_plasmon_api(request, device):
     assert dp.array.shape == (2, len(bw))
     assert "plasmon_orders" in dp.metadata
     assert dp.metadata["plasmon_orders"] == (0, 1)
-    assert all(np.isfinite(np.asarray(dp.array)).ravel())
-    assert all((np.asarray(dp.array) >= 0).ravel())
+    assert all(np.isfinite(_to_numpy(dp.array)).ravel())
+    assert all((_to_numpy(dp.array) >= 0).ravel())
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -194,7 +199,7 @@ def test_000_decreases_with_plasmon_loss(request, device):
     orders, I, _ = calculate_bloch_plasmon_intensities(bw, events, t)
 
     g0 = np.argmin(np.asarray((bw.g_vec ** 2).sum(1)))
-    I_np = np.asarray(I)
+    I_np = _to_numpy(I)
     fracs = [I_np[i, g0] / I_np[i].sum() for i in range(len(orders))]
     assert fracs[0] > fracs[1], (
         f"000 fraction should decrease: zero-loss={fracs[0]:.4f}, "
@@ -266,7 +271,7 @@ def test_ensemble_plasmon_shape(request, device):
     assert dp.array.ndim == 3  # (orientations, orders, beams)
     assert dp.array.shape[0] == 2  # 2 orientations
     assert dp.array.shape[1] == 2  # orders 0 and 1
-    assert np.isfinite(np.asarray(dp.array)).all()
+    assert np.isfinite(_to_numpy(dp.array)).all()
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +305,8 @@ def test_phonon_bloch_integration(request, device):
     )
     dp = bw.calculate_diffraction_patterns(500.0, plasmons=phonons)
     assert dp.array.shape == (2, len(bw))
-    assert np.isfinite(np.asarray(dp.array)).all()
-    assert (np.asarray(dp.array) >= 0).all()
+    assert np.isfinite(_to_numpy(dp.array)).all()
+    assert (_to_numpy(dp.array) >= 0).all()
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +330,8 @@ def test_lazy_plasmon_matches_eager(request, device):
     dp_lazy = bw.calculate_diffraction_patterns(300.0, plasmons=mc, lazy=True)
 
     assert hasattr(dp_lazy.array, "compute"), "lazy result should be a dask array"
-    lazy_array = np.asarray(dp_lazy.array.compute())
-    eager_array = np.asarray(dp_eager.array)
+    lazy_array = _to_numpy(dp_lazy.array.compute())
+    eager_array = _to_numpy(dp_eager.array)
     np.testing.assert_allclose(lazy_array, eager_array, atol=1e-12)
 
 
@@ -343,7 +348,7 @@ def test_lazy_multi_thickness(request, device):
     )
     dp = bw.calculate_diffraction_patterns([200.0, 400.0], plasmons=mc, lazy=True)
     assert hasattr(dp.array, "compute")
-    arr = np.asarray(dp.array.compute())
+    arr = _to_numpy(dp.array.compute())
     assert arr.shape == (2, 2, len(bw))
     assert np.isfinite(arr).all()
 
@@ -374,7 +379,7 @@ def test_diffuse_pattern_shape_and_values(request, device):
 
     orders = dp.metadata["plasmon_orders"]
     weights = dp.metadata["plasmon_weights"]
-    images = np.asarray(dp.array)
+    images = _to_numpy(dp.array)
 
     assert images.shape == (len(orders), 128, 128)
     assert np.isfinite(images).all()
@@ -398,7 +403,7 @@ def test_diffuse_zero_order_concentrates_at_bragg(request, device):
     dp = bw.calculate_diffuse_diffraction_pattern(
         thickness=300.0, plasmons=mc, gpts=(128, 128),
     )
-    images = np.asarray(dp.array)
+    images = _to_numpy(dp.array)
     orders = list(dp.metadata["plasmon_orders"])
 
     zero_idx = orders.index(0)
@@ -425,7 +430,7 @@ def test_diffuse_higher_order_spreads(request, device):
     dp = bw.calculate_diffuse_diffraction_pattern(
         thickness=500.0, plasmons=mc, gpts=(256, 256),
     )
-    images = np.asarray(dp.array)
+    images = _to_numpy(dp.array)
     orders = list(dp.metadata["plasmon_orders"])
 
     if len(orders) >= 2:

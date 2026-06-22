@@ -26,7 +26,7 @@ from abtem.bloch.dynamical import (
     set_structure_matrix_diagonal,
 )
 from abtem.bloch.utils import calculate_g_vec
-from abtem.core.backend import get_array_module
+from abtem.core.backend import asnumpy, get_array_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 
@@ -325,7 +325,7 @@ def calculate_bloch_diffuse_pattern(
 
     untilted_eig = _precompute_untilted_eig(A_base, g, Mii, energy, use_wave_eq, xp)
 
-    g_np = np.asarray(g)
+    g_np = asnumpy(g)
     g_xy = g_np[:, :2]
 
     if extent is None:
@@ -368,7 +368,7 @@ def calculate_bloch_diffuse_pattern(
             azimuthal_angles=azimuthal,
             _untilted_eig=untilted_eig,
         )
-        intensities = np.asarray(abs2(phi))
+        intensities = asnumpy(abs2(phi))
 
         if beam_dir is None:
             dk_xy = np.array([0.0, 0.0])

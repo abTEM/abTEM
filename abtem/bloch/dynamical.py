@@ -40,7 +40,7 @@ from abtem.bloch.utils import (
 )
 from abtem.core import config
 from abtem.core.axes import AxisMetadata, NonLinearAxis, OrdinalAxis, ThicknessAxis
-from abtem.core.backend import cp, get_array_module, validate_device
+from abtem.core.backend import asnumpy, cp, get_array_module, validate_device
 from abtem.core.chunks import Chunks, equal_sized_chunks, validate_chunks
 from abtem.core.complex import abs2, complex_exponential
 from abtem.core.constants import kappa
@@ -1667,7 +1667,7 @@ class BlochWaves:
 
         def _compute():
             result = self._calculate_plasmon_eager(thicknesses, plasmons)
-            return np.asarray(result.array)
+            return asnumpy(result.array)
 
         array = da.from_delayed(
             dask.delayed(_compute)(),
@@ -2518,7 +2518,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
 
         for idx, (bw, dp) in all_results.items():
             dp_orders = dp.metadata["plasmon_orders"]
-            dp_array = np.asarray(dp.array)
+            dp_array = xp.asarray(dp.array)
             for j, n in enumerate(dp_orders):
                 i = order_index[n]
                 if scalar_thickness:
