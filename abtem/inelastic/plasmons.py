@@ -753,6 +753,7 @@ def estimate_plasmon_parameters(
     atoms,
     energy: float,
     valence_electrons: "int | dict | None" = None,
+    method: str = "egerton",
 ) -> tuple[float, float, float]:
     """Estimate free-electron plasmon parameters for a material.
 
@@ -764,8 +765,23 @@ def estimate_plasmon_parameters(
       This is accurate (≈1 %) for free-electron-like materials.
     - **Critical angle** from the Landau cut-off wavevector
       :math:`q_c = \\omega_p / v_F`, as :math:`\\theta_c = q_c / k_0`.
-    - **Mean free path** from Egerton's free-electron expression
-      :math:`\\lambda_p = 2 a_0 / [\\gamma\\,\\theta_E \\ln(1 + \\theta_c^2/\\theta_E^2)]`.
+    - **Mean free path** — two methods are available (selected by *method*):
+
+      ``"egerton"`` (default)
+          Egerton's free-electron expression
+          :math:`\\lambda_p = 2 a_0 / [\\gamma\\,\\theta_E \\ln(1 + \\theta_c^2/\\theta_E^2)]`.
+          This is a pure plasmon MFP derived from the Kramers-Kronig sum rule.
+
+      ``"malis"``
+          The semi-empirical parameterization of Malis *et al.* (1988), Eq. 7:
+          :math:`\\lambda = 106\\,F\\,E_0 / [E_m \\ln(2\\,\\beta\\,E_0 / E_m)]`
+          with :math:`F = (1+E_0/1022)/(1+E_0/511)^2`,
+          :math:`E_m = 7.6\\,Z_{\\mathrm{eff}}^{0.36}` eV, and
+          :math:`\\beta = \\theta_c` (the critical angle returned by this
+          function, in mrad). This is a *total* inelastic MFP fitted to
+          measurements on 11 materials; for free-electron-like metals where
+          plasmons dominate it gives values closer to experiment (~112 nm vs
+          105 nm for Si at 200 kV) than the Egerton formula (~171 nm).
 
     .. warning::
 
@@ -780,10 +796,13 @@ def estimate_plasmon_parameters(
         uses :math:`\\theta_c = 19.1` mrad for Si at 200 kV (fitted by Barthel
         *et al.*, 2019, at 300 kV and scaled via :math:`q_c = K\\theta_c =`
         const — see :func:`scale_critical_angle`), ~4x the free-electron value.
-        Likewise :math:`\\lambda_p` here is an order-of-magnitude estimate
-        (~170 nm for Si); the value used in the literature, 105 nm, is
-        **experimentally measured** by EELS (Mendis, 2019), not computed. For
-        quantitative work, supply these measured values via the override
+        Likewise :math:`\\lambda_p` here is an order-of-magnitude estimate;
+        the value used in the literature, 105 nm, is **experimentally measured**
+        by EELS (Mendis, 2019), not computed. The ``"malis"`` method is closer
+        for light/medium-Z materials where plasmons dominate, but it is a
+        *total* inelastic MFP and will overestimate the plasmon scattering rate
+        for heavy elements with strong core-loss contributions. For
+        quantitative work, supply EELS-measured values via the override
         arguments of :meth:`PhaseScramblePlasmons.from_atoms`.
 
     Parameters
@@ -797,6 +816,10 @@ def estimate_plasmon_parameters(
         Valence electrons per atom (int, applied to every atom) or a
         ``{chemical_symbol: count}`` mapping. If ``None`` (default), looked up
         per species via the optional ``mendeleev`` package.
+    method : str, optional
+        ``"egerton"`` (default) for the free-electron plasmon MFP, or
+        ``"malis"`` for the Malis *et al.* (1988) semi-empirical total
+        inelastic MFP.
 
     Returns
     -------
@@ -807,6 +830,11 @@ def estimate_plasmon_parameters(
     mean_free_path : float
         Plasmon mean free path :math:`\\lambda_p` [Å].
     """
+    if method not in ("egerton", "malis"):
+        raise ValueError(
+            f"method must be 'egerton' or 'malis', got {method!r}"
+        )
+
     # Physical constants (SI).
     hbar = 1.054571817e-34
     m_e = 9.1093837015e-31
@@ -838,9 +866,24 @@ def estimate_plasmon_parameters(
 
     theta_c = (omega_p / v_F) / k0  # rad
     theta_E = excitation_energy * e / (gamma * m_e * v**2)  # rad
-    mean_free_path = 2.0 * a0 / (
-        gamma * theta_E * np.log(1.0 + (theta_c / theta_E) ** 2)
-    )  # m
+
+    if method == "egerton":
+        mean_free_path = 2.0 * a0 / (
+            gamma * theta_E * np.log(1.0 + (theta_c / theta_E) ** 2)
+        )  # m
+    else:
+        # Malis et al. (1988) Eq. 7 — semi-empirical total inelastic MFP.
+        # Z_eff from Eq. 4: Σ f_i Z_i^(1+r) / Σ f_i Z_i^r, r ≈ 0.3.
+        E0_keV = energy / 1e3
+        F_rel = (1.0 + E0_keV / 1022.0) / (1.0 + E0_keV / 511.0) ** 2
+        Z = np.array(atoms.get_atomic_numbers(), dtype=float)
+        f = np.ones(len(Z)) / len(Z)
+        z_eff = float(np.sum(f * Z**1.3) / np.sum(f * Z**0.3))
+        E_m = 7.6 * z_eff**0.36  # eV
+        beta = theta_c * 1e3  # mrad (use the computed critical angle)
+        mean_free_path = (
+            106.0 * F_rel * E0_keV / (E_m * np.log(2.0 * beta * E0_keV / E_m))
+        ) * 1e-9  # nm -> m
 
     return (
         float(excitation_energy),
@@ -996,6 +1039,7 @@ class PhaseScramblePlasmons:
         excitation_energy: float = None,
         critical_angle: float = None,
         mean_free_path: float = None,
+        method: str = "egerton",
         **kwargs,
     ) -> "PhaseScramblePlasmons":
         """Construct a model with parameters estimated from a free-electron model.
@@ -1021,12 +1065,15 @@ class PhaseScramblePlasmons:
         excitation_energy, critical_angle, mean_free_path : float, optional
             Explicit overrides ([eV], [mrad], [Å]). Any left as ``None`` is taken
             from the free-electron estimate.
+        method : str, optional
+            ``"egerton"`` (default) or ``"malis"`` — forwarded to
+            :func:`estimate_plasmon_parameters` to select the MFP formula.
         kwargs
             Forwarded to :class:`PhaseScramblePlasmons` (``num_angles``,
             ``num_copies``, ``max_bessel_order``, ``seed``, ``max_loss_order``).
         """
         est_energy, est_angle, est_mfp = estimate_plasmon_parameters(
-            atoms, energy, valence_electrons
+            atoms, energy, valence_electrons, method=method
         )
         return cls(
             mean_free_path=est_mfp if mean_free_path is None else mean_free_path,
