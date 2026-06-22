@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import warnings
 from bisect import bisect_left
 from dataclasses import dataclass
 from functools import partial
@@ -49,31 +50,70 @@ def _fresnel_propagator_array(
     sampling: tuple[float, float],
     energy: float,
     device: str,
-    order: int = 1,
+    order: Literal[1, 2, "exact"] = "exact",
 ):
-    if order > 2:
-        raise ValueError(
-            """
-            Only orders 1 and 2 are supported in Fourier space.
-            For higher orders, use the realspace multislice instead.
-            """
-        )
 
     xp = get_array_module(device)
     wavelength = energy2wavelength(energy)
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
     kx, ky = kx[:, None], ky[None]
+    k2 = kx**2 + ky**2
 
-    f = complex_exponential(
-        -(kx**2) * np.pi * thickness * wavelength
-    ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+    # Split into propagating and evanescent waves
+    x = wavelength**2 * k2
+    propagating = x <= 1.0
+    evanescent = x > 1.0
 
-    # Propagator corrected in Fourier-space, only valid for order=2
-    # Eq. (4) from Microscopy and Microanalysis (2020), 26, 1147-1157
-    if order == 2:
-        f = f * complex_exponential(
-            (-np.pi * thickness * wavelength**3) / 4.0 * (kx**4 + ky**4)
+    if order == "exact":
+        phase = xp.empty_like(x, dtype=xp.complex128)
+
+        x_prop = x[propagating]
+        x_evan = x[evanescent]
+
+        # Evaluate √(1-x) - 1 numerically stable as - x /(√(1-x) + 1)
+        phase[propagating] = (2.0 * np.pi * thickness / wavelength) * (
+            -x_prop / (xp.sqrt(1.0 - x_prop) + 1.0)
         )
+        # Evaluate imaginary part of √(1-x) as i √(x-1)
+        phase[evanescent] = (2.0 * np.pi * thickness / wavelength) * (
+            1.0j * xp.sqrt(x_evan - 1.0) - 1.0
+        )
+
+        f = xp.exp(1j * phase)
+
+    else:
+        exact = xp.sqrt(1.0 - x[propagating])
+
+        f = complex_exponential(
+            -(kx**2) * np.pi * thickness * wavelength
+        ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+
+        if order == 1:
+            approx = 1.0 - x[propagating] / 2.0
+        elif order == 2:
+            f = f * complex_exponential(
+                (-np.pi * thickness * wavelength**3) / 4.0 * k2**2
+            )
+            approx = 1.0 - x[propagating] / 2.0 - x[propagating] ** 2 / 8.0
+        else:
+            raise ValueError(
+                """
+                Only order 1, 2, and 'exact' are supported in Fourier space.
+                For higher orders, use the realspace multislice instead.
+                """
+            )
+
+        phase_error = (2.0 * np.pi * thickness / wavelength) * xp.abs(exact - approx)
+
+        max_phase_error = float(phase_error.max())
+
+        if max_phase_error > 1e-2:
+            warnings.warn(
+                f"Maximum propagator phase error is "
+                f"{max_phase_error:.3e} rad. "
+                f"Consider using order='exact'."
+            )
+
     return f
 
 
@@ -121,7 +161,12 @@ class FresnelPropagator:
         self._key = None
         self._cached_fftw_convolution = CachedFFTWConvolution()
 
-    def get_array(self, waves: Waves, thickness: float, order: int = 1) -> np.ndarray:
+    def get_array(
+        self,
+        waves: Waves,
+        thickness: float,
+        order: Literal[1, 2, "exact"] = "exact",
+    ) -> np.ndarray:
         """
         Get the Fresnel propagator as an array for the given wave functions and
         thickness.
@@ -160,7 +205,11 @@ class FresnelPropagator:
         return self._array
 
     @staticmethod
-    def _calculate_array(waves: Waves, thickness: float, order: int = 1) -> np.ndarray:
+    def _calculate_array(
+        waves: Waves,
+        thickness: float,
+        order: Literal[1, 2, "exact"] = "exact",
+    ) -> np.ndarray:
         array = _fresnel_propagator_array(
             thickness=thickness,
             gpts=waves._valid_gpts,
@@ -206,7 +255,11 @@ class FresnelPropagator:
         return array
 
     def propagate(
-        self, waves: Waves, thickness: float, in_place: bool = False, order: int = 1
+        self,
+        waves: Waves,
+        thickness: float,
+        in_place: bool = False,
+        order: Literal[1, 2, "exact"] = "exact",
     ) -> Waves:
         """
         Propagate wave functions through free space.
@@ -274,12 +327,14 @@ def allocate_measurement(
     axes_metadata = detector._out_axes_metadata(waves)[0]
 
     shape = detector._out_shape(waves)[0]
-    #
+
     if extra_ensemble_axes_shape is not None:
-        if len(extra_ensemble_axes_shape) != len(extra_ensemble_axes_metadata):
+        shape_len = len(extra_ensemble_axes_shape)
+        meta_len = len(extra_ensemble_axes_metadata)
+        if shape_len != meta_len:
             raise ValueError(
-                f"extra_ensemble_axes_shape length ({len(extra_ensemble_axes_shape)}) "
-                f"!= extra_ensemble_axes_metadata length ({len(extra_ensemble_axes_metadata)})"
+                f"extra_ensemble_axes_shape length ({shape_len}) "
+                f"!= extra_ensemble_axes_metadata length ({meta_len})"
             )
         shape = extra_ensemble_axes_shape + shape
         axes_metadata = extra_ensemble_axes_metadata + axes_metadata
@@ -359,7 +414,7 @@ def conventional_multislice_step(
     antialias_aperture: AntialiasAperture,
     conjugate: bool = False,
     transpose: bool = False,
-    order: int = 1,
+    order: Literal[1, 2, "exact"] = "exact",
 ) -> Waves:
     """
     Calculate one step of the multislice algorithm for the given batch of wave functions
@@ -500,7 +555,7 @@ class FourierMultislice:
     Parameters
     ----------
     order : int, optional
-        Propagator order, one of 1 or 2 (default 1)
+        Propagator order, one of 1, 2, or 'exact' (default 'exact')
     expansion_scope: str
         Specified for compatibility. Must be "propagator" (default "propagator")
     conjugate : bool, optional
@@ -509,7 +564,7 @@ class FourierMultislice:
         If True, reverse the order of propagation and transmission (default is False)
     """
 
-    order: Literal[1, 2] = 1
+    order: Literal[1, 2, "exact"] = "exact"
     expansion_scope: Literal["propagator"] = "propagator"
     conjugate: bool = False
     transpose: bool = False
@@ -975,9 +1030,7 @@ def transition_potential_multislice_and_detect(
                     cached = tx_dedup.get(key)
                     if cached is None:
                         cached = antialias_aperture.bandlimit(
-                            slice_obj.transmission_function(
-                                energy=waves._valid_energy
-                            ),
+                            slice_obj.transmission_function(energy=waves._valid_energy),
                             in_place=False,
                         )
                         tx_dedup[key] = cached
@@ -1037,7 +1090,7 @@ def transition_potential_multislice_and_detect(
                         continue
 
                     for inner_offset, inner_potential_slice in enumerate(
-                        slice_cache[scatter_index + 1:]
+                        slice_cache[scatter_index + 1 :]
                     ):
                         scattered_waves = multislice_step(
                             scattered_waves,
