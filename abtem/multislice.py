@@ -105,7 +105,14 @@ def _fresnel_propagator_array(
             )
 
         phase_error = (2.0 * np.pi * thickness / wavelength) * xp.abs(exact - approx)
-        max_phase_error = float(phase_error.max())
+
+        aperture = antialias_aperture(
+            gpts,
+            sampling,
+            get_array_module(device),
+        )[propagating]
+
+        max_phase_error = float((phase_error * aperture).max())
 
         if max_phase_error > 1e-2:
             warnings.warn(
