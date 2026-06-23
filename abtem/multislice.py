@@ -23,7 +23,7 @@ from abtem.core.energy import energy2wavelength
 from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
 from abtem.core.fft import CachedFFTWConvolution, fft2_convolve
 from abtem.core.grid import spatial_frequencies
-from abtem.core.utils import expand_dims_to_broadcast
+from abtem.core.utils import expand_dims_to_broadcast, get_dtype
 from abtem.detectors import BaseDetector, WavesDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator
 from abtem.finite_difference import multislice_step as realspace_multislice_step
@@ -66,7 +66,7 @@ def _fresnel_propagator_array(
     evanescent = x > 1.0
 
     if order == "exact":
-        phase = xp.empty_like(x, dtype=xp.complex64)
+        phase = xp.empty_like(x, dtype=get_dtype(complex=True))
 
         x_prop = x[propagating]
         x_evan = x[evanescent]
