@@ -1778,6 +1778,107 @@ class BlochWaves:
             },
         )
 
+    def calculate_diffuse_dp_deterministic(
+        self,
+        thickness: float,
+        plasmons: "MonteCarloPlasmons",
+        num_slices: int = 19,
+        dp_full: float = 150.0,
+        dp_step: float = 0.5,
+        dp_max: float | None = None,
+    ) -> "DiffractionPatterns":
+        """Deterministic depth-slice diffuse diffraction pattern.
+
+        Implements the algorithm of Mendis's ``Bloch_plasmon_DP.m`` /
+        ``Bloch_phonon_DP.m``.  The specimen is divided into depth slices and
+        for every scattering-angle pixel the beam is deflected, the structure
+        matrix is re-diagonalised, and the electron is propagated to the exit
+        surface.  This produces smooth, noise-free diffuse patterns (unlike the
+        MC rigid-shift approach).
+
+        Parameters
+        ----------
+        thickness : float
+            Specimen thickness [Å].
+        plasmons : MonteCarloPlasmons or MonteCarloPhonons
+            The inelastic scattering parameters.
+        num_slices : int
+            Number of depth slices (default 19).
+        dp_full : float
+            Half-extent of the output DP [mrad] (default 150).
+        dp_step : float
+            Angular pixel size [mrad] (default 0.5).
+        dp_max : float, optional
+            Maximum scattering angle [mrad].  Defaults to ``θ_c`` for plasmons
+            or ``θ_max`` for phonons.
+
+        Returns
+        -------
+        DiffractionPatterns
+        """
+        from abtem.bloch.inelastic import (
+            _phonon_probability_grid,
+            _plasmon_probability_grid,
+            _prepare_bloch_matrices,
+            calculate_deterministic_diffuse_dp,
+        )
+        from abtem.inelastic.plasmons import MonteCarloPhonons, MonteCarloPlasmons
+
+        dp_full_rad = dp_full / 1000
+        dp_step_rad = dp_step / 1000
+        dp_range = np.arange(-dp_full_rad, dp_full_rad + dp_step_rad * 0.5, dp_step_rad)
+        nDP = len(dp_range)
+
+        precomputed = _prepare_bloch_matrices(self)
+
+        if isinstance(plasmons, MonteCarloPhonons):
+            if dp_max is None:
+                dp_max = plasmons._theta_max * 1000
+            dp_max_rad = dp_max / 1000
+
+            f_func = plasmons._get_scattering_factor_func()
+            P, theta, phi, sigma_total = _phonon_probability_grid(
+                dp_range, dp_step_rad, dp_max_rad,
+                f_func, plasmons.debye_waller_factor, self.energy,
+            )
+            mfp = plasmons.mean_free_path(self.energy)
+        else:
+            theta_E_rad = plasmons.characteristic_angle(self.energy) / 1000
+            theta_c_rad = plasmons._critical_angle / 1000
+            if dp_max is None:
+                dp_max = plasmons._critical_angle
+            dp_max_rad = dp_max / 1000
+
+            P, theta, phi = _plasmon_probability_grid(
+                dp_range, dp_step_rad, theta_E_rad, theta_c_rad,
+            )
+            mfp = plasmons.mean_free_path
+
+        dp_total = calculate_deterministic_diffuse_dp(
+            self, thickness, mfp, P, theta, phi,
+            dp_range, dp_step_rad, num_slices=num_slices,
+            _precomputed=precomputed,
+        )
+
+        wavelength = energy2wavelength(self.energy)
+        K = 1.0 / wavelength
+        pixel_size_inv_A = K * dp_step_rad
+        sampling = (pixel_size_inv_A, pixel_size_inv_A)
+
+        return DiffractionPatterns(
+            array=dp_total[None],
+            sampling=sampling,
+            fftshift=True,
+            ensemble_axes_metadata=[
+                OrdinalAxis(label="energy loss", values=("Single scattering",)),
+            ],
+            metadata={
+                "energy": self.energy,
+                "label": "Intensity",
+                "units": "arb. unit",
+            },
+        )
+
     def calculate_diffraction_patterns(
         self,
         thicknesses: float | Sequence[float] | np.ndarray,
