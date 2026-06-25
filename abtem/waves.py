@@ -830,11 +830,11 @@ class Waves(BaseWaves, ArrayObject):
         array = images.array
 
         if projection_axis == "y":
-            sum_axis = -2
+            sum_axis = -1
             spatial_sampling = self.sampling[0]
             spatial_gpts = self.gpts[0]
         else:
-            sum_axis = -1
+            sum_axis = -2
             spatial_sampling = self.sampling[1]
             spatial_gpts = self.gpts[1]
 
