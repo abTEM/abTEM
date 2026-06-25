@@ -252,14 +252,22 @@ def _batched_eigh_propagate(
     diags_all = (2.0 / wavelength) * sg_all * Mii[None, :]
 
     if xp is np:
-        A_batch = np.broadcast_to(A_base[None], (B, N, N)).copy()
-        idx = np.arange(N)
-        A_batch[:, idx, idx] = diags_all
-
-        A_batch = np.ascontiguousarray(A_batch, dtype=np.complex128)
         psi_np = np.ascontiguousarray(psi_in, dtype=np.complex128)
         Mii_np = np.ascontiguousarray(Mii, dtype=np.float64)
-        return _numba_eigh_propagate(A_batch, Mii_np, wavelength, dz, psi_np)
+        all_intensities = np.empty((B, N))
+        idx = np.arange(N)
+
+        for start in range(0, B, batch_size):
+            end = min(start + batch_size, B)
+            bs = end - start
+            A_chunk = np.broadcast_to(A_base[None], (bs, N, N)).copy()
+            A_chunk[:, idx, idx] = diags_all[start:end]
+            A_chunk = np.ascontiguousarray(A_chunk, dtype=np.complex128)
+            all_intensities[start:end] = _numba_eigh_propagate(
+                A_chunk, Mii_np, wavelength, dz, psi_np,
+            )
+
+        return all_intensities
 
     psi = psi_in / Mii
     all_intensities = xp.empty((B, N), dtype=A_base.real.dtype)
@@ -374,7 +382,7 @@ def calculate_bloch_diffuse_pattern(
     gpts: tuple[int, int],
     extent: tuple[float, float] | None = None,
     _precomputed: tuple | None = None,
-) -> tuple[list[int], np.ndarray, np.ndarray]:
+) -> tuple[list[int], np.ndarray, np.ndarray, tuple[float, float]]:
     """Render a 2D diffuse-background diffraction pattern using the rigid-shift model.
 
     For each Monte-Carlo configuration the exit Bloch amplitudes are computed
@@ -410,6 +418,8 @@ def calculate_bloch_diffuse_pattern(
         The rendered 2D images, shape ``(len(orders), gpts[0], gpts[1])``.
     weights : np.ndarray
         The Poisson weight ``P(n)`` of each order, shape ``(len(orders),)``.
+    extent : tuple of float
+        The actual reciprocal-space half-extent ``(ky_max, kx_max)`` [1/Å].
     """
     xp = get_array_module(bloch_waves.device)
 
@@ -664,7 +674,7 @@ def calculate_deterministic_diffuse_dp(
     dp_total : np.ndarray, shape (nDP, nDP)
         The accumulated diffuse diffraction pattern.
     """
-    import sys
+    from abtem.core.diagnostics import TqdmWrapper
 
     xp = get_array_module(bloch_waves.device)
 
@@ -723,8 +733,8 @@ def calculate_deterministic_diffuse_dp(
         psi = C @ (phase * (C.conj().T @ psi))
         return Mii * psi
 
-    total_iters = num_slices * n_active
-    done = 0
+    pbar = TqdmWrapper(enabled=None, total=num_slices, desc="Depth slices", leave=False)
+
     for a in range(num_slices):
         depth = (a + 0.5) * slice_thickness
         remaining = thickness - depth
@@ -749,15 +759,9 @@ def calculate_deterministic_diffuse_dp(
                 weight * intensities_np[b, valid],
             )
 
-        done += n_active
-        pct = 100 * done / total_iters
-        sys.stderr.write(
-            f"\r  slice {a + 1}/{num_slices}  "
-            f"({done}/{total_iters} eigh, {pct:.0f}%)"
-        )
-        sys.stderr.flush()
+        pbar.update_if_exists(1)
 
-    sys.stderr.write("\n")
+    pbar.close_if_exists()
     return dp_total
 
 
