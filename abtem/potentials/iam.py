@@ -220,6 +220,179 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
 
             return self.to_images().show(**kwargs)
 
+    def depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+    ) -> Images:
+        """Create a depth profile by projecting the potential along a spatial axis.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+
+        Returns
+        -------
+        depth_profile : Images
+            2D image(s) with the remaining spatial axis horizontal and depth
+            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved.
+        """
+        return self.build().depth_profile(
+            projection_axis=projection_axis,
+            depth=depth,
+        )
+
+    def show_depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+        z_scale: float = 1.0,
+        slice_lines: bool = True,
+        ax=None,
+        cbar: bool = False,
+        cmap: Optional[str] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        power: float = 1.0,
+        common_color_scale: bool = False,
+        explode: bool | Sequence[int] = (),
+        figsize: Optional[tuple[int, int]] = None,
+        title: bool | str = True,
+        **kwargs,
+    ):
+        """Show a depth cross-section of the potential.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+        z_scale : float
+            Scaling factor for the z-axis relative to the spatial axis.
+            Values less than 1 compress the z-axis, making panels of thick
+            specimens more compact. Default is 1.0 (equal scaling).
+        slice_lines : bool
+            If True (default), draw horizontal lines at slice boundaries.
+        ax : matplotlib.axes.Axes, optional
+            If given the plot is added to the axis.
+        cbar : bool, optional
+            Add a colorbar to the plot. Default is False.
+        cmap : str, optional
+            Matplotlib colormap name.
+        vmin : float, optional
+            Minimum of the color scale.
+        vmax : float, optional
+            Maximum of the color scale.
+        power : float
+            Show image on a power scale.
+        common_color_scale : bool, optional
+            If True, all images in a grid share the same color scale.
+        explode : bool or sequence of int, optional
+            If True, create a grid of images for ensemble items.
+        figsize : two int, optional
+            Figure size as (width, height) in inches.
+        title : bool or str, optional
+            Column title for the images.
+        **kwargs
+            Additional keyword arguments passed to the show method.
+
+        Returns
+        -------
+        visualization : Visualization
+        """
+        from abtem.visualize import Visualization
+
+        profile = self.depth_profile(
+            projection_axis=projection_axis,
+            depth=depth,
+        )
+
+        if figsize is None and ax is None:
+            spatial_extent = profile.extent[0]
+            z_extent = profile.extent[1]
+
+            if explode is True or (isinstance(explode, Sequence) and explode):
+                n_panels = (
+                    profile.ensemble_shape[0] if profile.ensemble_shape else 1
+                )
+            else:
+                n_panels = 1
+
+            visual_ratio = (z_extent * z_scale) / spatial_extent
+            panel_width = 3.0
+            panel_height = panel_width * visual_ratio
+            if panel_height < 1.0:
+                panel_width = min(5.0, 1.0 / visual_ratio)
+                panel_height = panel_width * visual_ratio
+            elif panel_height > 8.0:
+                panel_height = 8.0
+                panel_width = panel_height / visual_ratio
+
+            figsize = (
+                panel_width * n_panels + 1.0 * n_panels + 0.5,
+                max(2.5, panel_height + 1.5),
+            )
+
+        visualization = Visualization(
+            measurement=profile,
+            ax=ax,
+            common_scale=common_color_scale,
+            figsize=figsize,
+            title=title,
+            aspect=False,
+            share_x=True,
+            share_y=True,
+            explode=explode,
+            overlay=(),
+            interactive=True,
+            value_limits=(vmin, vmax),
+            power=power,
+            cmap=cmap,
+            cbar=cbar,
+            **kwargs,
+        )
+
+        spatial_label = "x" if projection_axis == "y" else "y"
+        visualization.set_xlabel(f"{spatial_label} [Å]")
+        visualization.set_ylabel("z [Å]")
+
+        z_sampling = profile.sampling[1]
+        for idx in np.ndindex(visualization.axes.shape):
+            artist = visualization.artists[idx]
+            xlim = artist.get_xlim()
+            ylim = artist.get_ylim()
+            artist.set_extent(
+                (xlim[0], xlim[1], ylim[0] + z_sampling / 2, ylim[1] + z_sampling / 2)
+            )
+
+        visualization.adjust_coordinate_limits_to_artists()
+
+        for idx in np.ndindex(visualization.axes.shape):
+            visualization.axes[idx].set_aspect(z_scale)
+
+        if slice_lines:
+            limits = self.slice_limits
+            z_boundaries = sorted({z for lo, hi in limits for z in (lo, hi)})
+            for idx in np.ndindex(visualization.axes.shape):
+                for z in z_boundaries:
+                    visualization.axes[idx].axhline(
+                        z, color="white", linewidth=0.5, alpha=0.5
+                    )
+
+        return visualization
+
 
 class BasePotential(BaseField, metaclass=ABCMeta):
     """Base class of all potentials. Documented in the subclasses."""
@@ -1085,6 +1258,76 @@ class FieldArray(BaseField, ArrayObject):
             sampling=(self.sampling[0], self.sampling[1]),
             metadata=self.metadata,
             ensemble_axes_metadata=self.axes_metadata[:-2],
+        )
+
+    def depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+    ) -> Images:
+        """Create a depth profile by projecting the potential along a spatial axis.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+
+        Returns
+        -------
+        depth_profile : Images
+            2D image(s) with the remaining spatial axis horizontal and depth
+            (z) vertical.
+        """
+        from copy import copy
+
+        if projection_axis not in ("x", "y"):
+            raise ValueError("projection_axis must be 'x' or 'y'.")
+
+        array = self.array
+
+        if projection_axis == "y":
+            sum_axis = -2
+            spatial_sampling = self.sampling[0]
+        else:
+            sum_axis = -1
+            spatial_sampling = self.sampling[1]
+
+        if depth is not None:
+            proj_sampling = (
+                self.sampling[1] if projection_axis == "y" else self.sampling[0]
+            )
+            proj_gpts = self.gpts[1] if projection_axis == "y" else self.gpts[0]
+            n = max(1, min(proj_gpts, round(depth / proj_sampling)))
+            start = (proj_gpts - n) // 2
+            slices = [slice(None)] * len(array.shape)
+            slices[sum_axis] = slice(start, start + n)
+            array = array[tuple(slices)]
+
+        array = array.sum(axis=sum_axis)
+
+        xp = get_array_module(array)
+        if hasattr(array, "rechunk"):
+            array = da.moveaxis(array, -2, -1)
+        else:
+            array = xp.moveaxis(array, -2, -1)
+
+        n_z = self.num_slices
+        z_extent = self.thickness
+        z_sampling = z_extent / n_z if n_z > 0 else 1.0
+
+        metadata = copy(self.metadata)
+
+        return Images(
+            array,
+            sampling=(spatial_sampling, z_sampling),
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
         )
 
     def project(self) -> Images:
