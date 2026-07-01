@@ -969,7 +969,7 @@ class TemporalEnvelope(BaseTransferFunction):
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return self._get_axes_metadata_from_distributions(
-            focal_spread={"units": "mrad"}
+            focal_spread={"units": "Å"}
         )
 
     def _evaluate_from_angular_grid(
