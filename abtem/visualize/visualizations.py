@@ -403,6 +403,9 @@ class Visualization:
     def set_power(self, power: float = 1.0):
         self.set_artists("power", power=power)
 
+    def set_logscale(self, logscale: bool = False):
+        self.set_artists("logscale", logscale=logscale)
+
     def set_common_value_limits(self, value_limits=(None, None)):
         value_limits = _get_value_limits(
             self._measurement.array, value_limits=value_limits

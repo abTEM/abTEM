@@ -1191,6 +1191,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         explode: bool | Sequence[int] = (),
         overlay: bool | Sequence[int] = (),
@@ -1222,7 +1223,10 @@ class _BaseMeasurement2D(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show image on a power scale.
+            Show image on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show image on a logarithmic intensity scale. Cannot be used
+            together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -1272,6 +1276,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             interactive=not interact and display,
             value_limits=(vmin, vmax),
             power=power,
+            logscale=logscale,
             cmap=cmap,
             cbar=cbar,
             units=units,
@@ -4143,6 +4148,7 @@ class PolarMeasurements(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         explode: bool | Sequence[bool] = (),
         overlay: bool | Sequence[int] = (),
@@ -4176,7 +4182,10 @@ class PolarMeasurements(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show image on a power scale.
+            Show image on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show image on a logarithmic intensity scale. Cannot be used
+            together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -4223,6 +4232,7 @@ class PolarMeasurements(BaseMeasurements):
             vmin=vmin,
             vmax=vmax,
             power=power,
+            logscale=logscale,
             common_color_scale=common_color_scale,
             explode=explode,
             overlay=overlay,
@@ -4788,6 +4798,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         scale: float = 0.5,
         explode: bool | Sequence[bool] = (),
@@ -4820,7 +4831,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show diffraction spots intensities on a power scale.
+            Show diffraction spots intensities on a power scale. Cannot be used
+            together with ``logscale``.
+        logscale : bool
+            If True, show diffraction spots on a logarithmic intensity scale.
+            Cannot be used together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -4878,6 +4893,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             interactive=not interact and display,
             value_limits=(vmin, vmax),
             power=power,
+            logscale=logscale,
             cmap=cmap,
             cbar=cbar,
             scale=scale,

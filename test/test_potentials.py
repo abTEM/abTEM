@@ -1,4 +1,5 @@
 import hypothesis.strategies as st
+import numpy as np
 import pytest
 import strategies as abtem_st
 from hypothesis import given
@@ -310,3 +311,75 @@ def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
 #
 #     potential1 = potential1.build(lazy=False)
 #     potential2 = potential2.build(lazy=False)
+
+
+# --- depth_profile tests ---
+
+
+@pytest.fixture
+def si_potential():
+    """Build a Si 2x2x5 potential for depth profile tests."""
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True) * (2, 2, 5)
+    return Potential(atoms, slice_thickness=1.0, gpts=(32, 32))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_potential_depth_profile_shape(si_potential, device):
+    pot = si_potential.build().compute()
+    profile = pot.depth_profile()
+    n_x = pot.gpts[0]
+    n_z = pot.num_slices
+    assert profile.shape == (n_x, n_z)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_potential_depth_profile_x_projection(si_potential, device):
+    pot = si_potential.build().compute()
+    profile = pot.depth_profile(projection_axis="x")
+    n_y = pot.gpts[1]
+    n_z = pot.num_slices
+    assert profile.shape == (n_y, n_z)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_potential_depth_profile_sampling(si_potential, device):
+    pot = si_potential.build().compute()
+    profile = pot.depth_profile()
+
+    assert np.isclose(profile.sampling[0], pot.sampling[0])
+
+    expected_z_sampling = pot.thickness / pot.num_slices
+    assert np.isclose(profile.sampling[1], expected_z_sampling)
+
+
+def test_potential_depth_profile_invalid_axis(si_potential):
+    pot = si_potential.build().compute()
+    with pytest.raises(ValueError, match="projection_axis"):
+        pot.depth_profile(projection_axis="z")
+
+
+def test_potential_depth_profile_finite_depth(si_potential):
+    pot = si_potential.build().compute()
+    full = pot.depth_profile()
+    partial = pot.depth_profile(depth=3.0)
+    assert full.shape == partial.shape
+    assert partial.array.sum() < full.array.sum()
+
+
+def test_potential_depth_profile_lazy_delegation(si_potential):
+    profile_lazy = si_potential.depth_profile()
+    profile_built = si_potential.build().compute().depth_profile()
+    assert profile_lazy.shape == profile_built.shape
+    assert np.allclose(profile_lazy.array, profile_built.array)
+
+
+def test_potential_show_depth_profile(si_potential):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from abtem.visualize import Visualization
+
+    viz = si_potential.show_depth_profile()
+    assert isinstance(viz, Visualization)
