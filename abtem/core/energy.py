@@ -194,6 +194,13 @@ class Accelerator(EqualityMixin, CopyMixin):
         other: Accelerator object
             The accelerator that should be checked.
         """
+        # Use accelerator.energy directly for HasAcceleratorMixin subclasses that may
+        # override .energy to return non-scalar types (e.g. EnergyEnsemble).
+        other_energy = (
+            other.energy
+            if isinstance(other, Accelerator)
+            else other.accelerator.energy
+        )
         if (
             (self.energy is not None)
             and (other.energy is not None)
@@ -219,11 +226,22 @@ class Accelerator(EqualityMixin, CopyMixin):
         if check_match:
             self.check_match(other)
 
-        if other.energy is None:
-            other.energy = self.energy
+        # Use accelerator.energy directly for HasAcceleratorMixin subclasses that may
+        # override .energy to return non-scalar types (e.g. EnergyEnsemble).
+        other_energy = (
+            other.energy
+            if isinstance(other, Accelerator)
+            else other.accelerator.energy
+        )
 
-        elif self.energy != other.energy:
-            self.energy = other.energy
+        if other_energy is None:
+            if isinstance(other, Accelerator):
+                other.energy = self.energy
+            else:
+                other.accelerator.energy = self.energy
+
+        elif self.energy != other_energy:
+            self.energy = other_energy
 
 
 class HasAcceleratorMixin:

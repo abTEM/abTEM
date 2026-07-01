@@ -111,6 +111,7 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
     assert exit_waves.gpts == potential.gpts
 
 
+@pytest.mark.slow
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -128,7 +129,6 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 @pytest.mark.parametrize(
     "scan",
     [abtem_st.grid_scan, abtem_st.line_scan, abtem_st.custom_scan],
-    # [abtem_st.line_scan],
 )
 @pytest.mark.parametrize(
     "waves_builder",
