@@ -36,9 +36,13 @@ def _get_norm(vmin=None, vmax=None, power=1.0, logscale=False):
     elif (power != 1.0) and (logscale is False):
         norm = colors.PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
     elif (power == 1.0) and (logscale is True):
+        if vmin is not None and vmin <= 0:
+            vmin = None
         norm = colors.LogNorm(vmin=vmin, vmax=vmax)
     else:
-        raise ValueError("")
+        raise ValueError(
+            "Cannot use both power != 1.0 and logscale=True simultaneously."
+        )
 
     return norm
 
@@ -360,13 +364,19 @@ class Artist2D(Artist):
         norm.vmax = vmax
 
     @staticmethod
-    def _update_norm(old_norm, power, artist):
-        if (power != 1.0) and isinstance(old_norm, colors.PowerNorm):
+    def _update_norm(old_norm, power, artist, logscale=False):
+        if (
+            not logscale
+            and (power != 1.0)
+            and isinstance(old_norm, colors.PowerNorm)
+        ):
             old_norm.gamma = power
             artist.norm = old_norm
             old_norm._changed()
         else:
-            norm = _get_norm(vmin=old_norm.vmin, vmax=old_norm.vmax, power=power)
+            norm = _get_norm(
+                vmin=old_norm.vmin, vmax=old_norm.vmax, power=power, logscale=logscale
+            )
             artist.norm = norm
 
     @staticmethod
@@ -548,6 +558,10 @@ class ImageArtist(Artist2D):
 
     def set_power(self, power: float = 1.0):
         self._update_norm(self.norm, power, self.axes_image)
+
+    def set_logscale(self, logscale: bool = False):
+        power = self.get_power()
+        self._update_norm(self.norm, power, self.axes_image, logscale=logscale)
 
     def set_value_limits(self, value_limits: tuple[float, float] = None):
         self._set_vmin_vmax(self.norm, *value_limits)
@@ -953,6 +967,10 @@ class ScatterArtist(Artist2D):
 
     def set_power(self, power: float = 1.0):
         self._update_norm(self.norm, power, self._circles)
+
+    def set_logscale(self, logscale: bool = False):
+        power = self.get_power()
+        self._update_norm(self.norm, power, self._circles, logscale=logscale)
 
 
 class DomainColoringArtist(Artist2D):
