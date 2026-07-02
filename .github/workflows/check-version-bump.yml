@@ -1,0 +1,39 @@
+# Pull requests to main are releases: the version in abtem/_version.py must
+# have been bumped past the version currently on main.
+
+name: Check version bump
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare version with main
+        run: |
+          PR_VERSION=$(grep '^__version__' abtem/_version.py | grep -oE '"[^"]+"' | tr -d '"')
+          MAIN_VERSION=$(git show origin/main:abtem/_version.py | grep '^__version__' | grep -oE '"[^"]+"' | tr -d '"')
+
+          echo "main: ${MAIN_VERSION}, this PR: ${PR_VERSION}"
+
+          if [ "${PR_VERSION}" = "${MAIN_VERSION}" ]; then
+            echo "Version has not been bumped: abtem/_version.py still says ${MAIN_VERSION}."
+            exit 1
+          fi
+
+          # The bumped version must sort strictly after the released one.
+          HIGHEST=$(printf '%s\n%s\n' "${MAIN_VERSION}" "${PR_VERSION}" | sort -V | tail -1)
+          if [ "${HIGHEST}" != "${PR_VERSION}" ]; then
+            echo "Version ${PR_VERSION} is lower than the released ${MAIN_VERSION}."
+            exit 1
+          fi
