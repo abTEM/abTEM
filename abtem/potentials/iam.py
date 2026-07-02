@@ -44,6 +44,7 @@ from abtem.inelastic.phonons import (
     AtomsEnsemble,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
+    FrozenPhonons,
     validate_seeds,
 )
 from abtem.integrals import (
@@ -628,9 +629,8 @@ class _FieldBuilder(BaseField):
             )
 
             if self.ensemble_shape:
-                for _, _, potential_wrapped in self.generate_blocks(1):
+                for i, _, potential_wrapped in self.generate_blocks(1):
                     potential = potential_wrapped.item()
-                    i = np.unravel_index(0, self.ensemble_shape)
 
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
@@ -1579,10 +1579,21 @@ class CrystalPotential(_PotentialBuilder):
     unit. This may allow calculations to be performed with lower computational cost by
     calculating the potential unit once and repeating it.
 
-    If the repeating unit is a potential with frozen phonons it is treated as an
-    ensemble from which each repeating unit along the `z`-direction is randomly drawn.
-    If `num_frozen_phonons` an ensemble of crystal potentials are created each with a
-    random seed for choosing potential units.
+    If the repeating unit is a potential with frozen phonons, it is treated as a
+    pool of displaced configurations: every repetition of the unit (each lateral
+    tile of every `z`-repetition) draws a configuration from the pool. Draws are
+    balanced over the whole crystal, so reuse of a configuration is the minimum
+    the pool size allows -- no two tiles within a layer are identical whenever
+    the pool permits, and a pool of at least
+    ``repetitions[0] * repetitions[1] * repetitions[2]`` configurations gives
+    every repeated unit a distinct configuration (statistically equivalent to
+    tiling the displaced atoms directly). If `num_frozen_phonons` is set, an
+    ensemble of crystal potentials is created; each member independently
+    rebuilds its own pool of atomic displacement snapshots (reseeded from
+    that member's own seed) rather than sharing one fixed pool across the
+    ensemble, so members are genuinely independent thermal realisations --
+    there is no need to size the pool for the ensemble, only for a single
+    crystal (see above).
 
     Parameters
     ----------
@@ -1591,7 +1602,9 @@ class CrystalPotential(_PotentialBuilder):
     repetitions : three int
         The repetitions of the potential in `x`, `y` and `z`.
     num_frozen_phonons : int, optional
-        Number of frozen phonon configurations assembled from the potential units.
+        Number of crystal realisations in the frozen-phonon ensemble; each
+        realisation independently rebuilds its own pool of atomic
+        displacement snapshots.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
@@ -1634,12 +1647,6 @@ class CrystalPotential(_PotentialBuilder):
             warnings.warn(
                 "'num_frozen_phonons' is greater than one, but the potential unit does"
                 " not have frozen phonons"
-            )
-
-        if (potential_unit.num_configurations > 1) and (num_frozen_phonons is not None):
-            warnings.warn(
-                "the potential unit has frozen phonons, but 'num_frozen_phonons' is not"
-                " set"
             )
 
         gpts = (
@@ -1869,6 +1876,72 @@ class CrystalPotential(_PotentialBuilder):
 
         return (array,)
 
+    @property
+    def _n_lateral_tiles(self) -> int:
+        return self.repetitions[0] * self.repetitions[1]
+
+    def _pool_unit_for_member(self, member_seed: Optional[int]) -> BasePotential:
+        """Return the unit potential to draw pool configurations from for one
+        ensemble member (``member_seed`` is that member's seed), or for the
+        single default builder (``member_seed`` is None).
+
+        Two independent adjustments are made when the unit carries frozen
+        phonons; a precomputed ``PotentialArray`` unit has a fixed pool and is
+        always returned unchanged.
+
+        1. **Enlarge to the tile count.** A frozen-phonon ``CrystalPotential``
+           assembles each slice as a mosaic: every lateral tile draws an
+           independent pool configuration. If the pool holds fewer
+           configurations than there are lateral tiles
+           (``repetitions[0] * repetitions[1]``), some tiles must reuse a
+           configuration -- reintroducing the artificial in-plane periodicity
+           the mosaic is meant to remove. The pool is transparently enlarged
+           to the tile count (warning).
+
+        2. **Reseed per ensemble member.** Every ensemble member is built from
+           the *same* ``potential_unit`` object, so without reseeding every
+           member would draw from an identical, fixed pool of configurations
+           -- differing only in how those same snapshots are arranged across
+           the crystal, not in which atomic displacements exist. That is a
+           much weaker form of independence than a frozen-phonon ensemble is
+           supposed to provide, and sizing the pool cannot fix it (drawing
+           from a bigger *shared* pool still shares it). Instead, when this
+           call belongs to an ensemble (``member_seed`` is not None), the pool
+           is quietly rebuilt with ``member_seed`` as its root seed, so each
+           member gets its own independent set of atomic snapshots. This adds
+           no cost: the pool was already rebuilt once per member.
+        """
+        unit = self.potential_unit
+        n_tiles = self._n_lateral_tiles
+        fp = getattr(unit, "frozen_phonons", None)
+        if not isinstance(fp, FrozenPhonons) or fp.num_configs <= 1:
+            return unit
+
+        enlarge = fp.num_configs < n_tiles
+        reseed = member_seed is not None
+        if not enlarge and not reseed:
+            return unit
+
+        if enlarge:
+            warnings.warn(
+                f"frozen-phonon pool ({fp.num_configs}) is smaller than the "
+                f"number of lateral tiles ({n_tiles}); enlarging the pool to "
+                f"{n_tiles} so each tile draws a distinct configuration and no "
+                "lateral duplication occurs. Pass a unit with "
+                f"num_configs >= {n_tiles} to silence this."
+            )
+
+        new_fp = FrozenPhonons(
+            fp.atoms,
+            num_configs=n_tiles if enlarge else fp.num_configs,
+            sigmas=fp.sigmas,
+            directions=fp.directions,
+            ensemble_mean=fp.ensemble_mean,
+            seed=int(member_seed) if reseed else int(fp.seed[0]),
+        )
+        kwargs = unit._copy_kwargs(exclude=("atoms",))
+        return type(unit)(new_fp, **kwargs)
+
     def generate_slices(
         self,
         first_slice: int = 0,
@@ -1894,20 +1967,19 @@ class CrystalPotential(_PotentialBuilder):
         """
         # if hasattr(self.potential_unit, "array")
         #    potentials = self.potential_unit
-        if not isinstance(self.potential_unit, PotentialArray):
-            potentials = self.potential_unit.build(lazy=False)
+        member_seed = None if self.seeds is None else int(self.seeds[0])
+        pool_unit = self._pool_unit_for_member(member_seed)
+        if not isinstance(pool_unit, PotentialArray):
+            potentials = pool_unit.build(lazy=False)
         else:
-            potentials = self.potential_unit
+            potentials = pool_unit
 
         assert isinstance(potentials, PotentialArray)
 
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
-        if self.seeds is None:
-            rng = np.random.default_rng(self.seeds)
-        else:
-            rng = np.random.default_rng(self.seeds[0])
+        rng = np.random.default_rng(member_seed)
 
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
@@ -1927,6 +1999,18 @@ class CrystalPotential(_PotentialBuilder):
         unit_generators: dict[int, object] = {}
         tile_xy = self.repetitions[:2]
 
+        n_configs = potentials.shape[0]
+
+        # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
+        # per-tile access into the pool, so materialise the (small unit-cell)
+        # pool array once. A lazily-built PotentialArray unit carries a dask
+        # array here; compute it so per-tile fancy indexing works and stays on
+        # the target device.
+        xp = get_array_module(self.device)
+        _pool_array = potentials.array
+        if n_configs > 1 and hasattr(_pool_array, "compute"):
+            _pool_array = _pool_array.compute()
+
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)
             cached = tiled_cache.get(key)
@@ -1940,11 +2024,87 @@ class CrystalPotential(_PotentialBuilder):
             tiled_cache[key] = slic
             return slic
 
+        def _mosaic_slice(config_tiles: np.ndarray, j: int) -> PotentialArray:
+            # Assemble sub-slice ``j`` of the lateral supercell by placing an
+            # *independently drawn* pool configuration at every lateral
+            # repetition (a mosaic), rather than replicating a single displaced
+            # unit across all tiles. This is what reproduces genuine lateral
+            # (in-plane) thermal disorder: with plain ``.tile()`` every one of
+            # the ``repetitions[0] * repetitions[1]`` tiles is a bit-identical
+            # copy, so there is no in-plane disorder at all and no diffuse
+            # (Kikuchi) scattering can form. ``config_tiles`` holds one pool
+            # index per lateral tile, shaped ``repetitions[:2]``.
+            sub = _pool_array[:, j]  # (n_configs, uy, ux)
+            uy, ux = sub.shape[-2], sub.shape[-1]
+            mosaic = sub[xp.asarray(config_tiles)]  # (rep0, rep1, uy, ux)
+            # Interleave to match ``PotentialArray.tile`` block layout, which
+            # tiles the row axis by repetitions[0] and the col axis by
+            # repetitions[1] (np.tile(array, (rep2, rep0, rep1))).
+            mosaic = mosaic.transpose(0, 2, 1, 3).reshape(
+                tile_xy[0] * uy, tile_xy[1] * ux
+            )
+            return potentials.__class__(
+                mosaic[None],
+                potentials.slice_thickness[j : j + 1],
+                extent=self.extent,
+            )
+
+        n_tiles = tile_xy[0] * tile_xy[1]
+
+        # Balanced global drawing: every pool configuration receives a total
+        # usage budget of floor/ceil(total_slots / n_configs) over the whole
+        # crystal (all lateral tiles x all z-repetitions), and each z-layer
+        # draws the ``n_tiles`` configurations with the most budget remaining
+        # (random tie-breaking keeps assignments uniform). Drawing each layer
+        # independently instead (i.e. with replacement across z) lets the
+        # same configuration recur in many layers even when the pool is large
+        # enough to avoid it, correlating slices along z and measurably
+        # inflating thermal-diffuse statistics above the tiled-atoms ground
+        # truth. With budgets, reuse is the minimum the pool size allows and
+        # is spread evenly: once ``n_configs >= n_tiles * repetitions[2]``
+        # every unit cell in the crystal receives a distinct configuration --
+        # statistically identical to tiling the displaced atoms directly.
+        # Within a layer draws remain distinct whenever the pool allows (no
+        # in-plane duplication), as before.
+        if n_configs > 1:
+            total_slots = n_tiles * self.repetitions[2]
+            base, extra = divmod(total_slots, n_configs)
+            budgets = np.full(n_configs, base, dtype=np.int64)
+            if extra:
+                budgets[rng.permutation(n_configs)[:extra]] += 1
+
+        def _draw_config_tiles() -> np.ndarray:
+            if n_configs >= n_tiles:
+                # The ``n_tiles`` most-underused configurations, in random
+                # order (permute first; the stable sort then orders by budget
+                # only, keeping ties shuffled).
+                order = rng.permutation(n_configs)
+                chosen = order[np.argsort(-budgets[order], kind="stable")[:n_tiles]]
+            else:
+                # Pool smaller than a single layer: in-plane repeats are
+                # unavoidable; cycle freshly shuffled permutations to spread
+                # them as evenly as possible.
+                n_perms = -(-n_tiles // n_configs)  # ceil
+                chosen = np.concatenate(
+                    [rng.permutation(n_configs) for _ in range(n_perms)]
+                )[:n_tiles]
+            np.subtract.at(budgets, chosen, 1)
+            return chosen.reshape(tile_xy)
+
         for i in range(self.repetitions[2]):
-            config_idx = int(rng.integers(0, potentials.shape[0]))
+            # Draw an independent displaced realisation per unit cell in the x,
+            # y and z supercell directions. For a single-config pool this
+            # collapses to the cheap cached ``.tile()`` path below.
+            if n_configs > 1:
+                config_tiles = _draw_config_tiles()
+            else:
+                config_tiles = None
 
             for j in range(len(self.potential_unit)):
-                slic = _tiled_slice(config_idx, j)
+                if config_tiles is None:
+                    slic = _tiled_slice(0, j)
+                else:
+                    slic = _mosaic_slice(config_tiles, j)
 
                 exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
 
