@@ -1579,10 +1579,17 @@ class CrystalPotential(_PotentialBuilder):
     unit. This may allow calculations to be performed with lower computational cost by
     calculating the potential unit once and repeating it.
 
-    If the repeating unit is a potential with frozen phonons it is treated as an
-    ensemble from which each repeating unit along the `z`-direction is randomly drawn.
-    If `num_frozen_phonons` an ensemble of crystal potentials are created each with a
-    random seed for choosing potential units.
+    If the repeating unit is a potential with frozen phonons, it is treated as a
+    pool of displaced configurations: every repetition of the unit (each lateral
+    tile of every `z`-repetition) draws a configuration from the pool. Draws are
+    balanced over the whole crystal, so reuse of a configuration is the minimum
+    the pool size allows -- no two tiles within a layer are identical whenever
+    the pool permits, and a pool of at least
+    ``repetitions[0] * repetitions[1] * repetitions[2]`` configurations gives
+    every repeated unit a distinct configuration (statistically equivalent to
+    tiling the displaced atoms directly). If `num_frozen_phonons` is set, an
+    ensemble of crystal potentials is created, each drawing its own random
+    arrangement of pool configurations.
 
     Parameters
     ----------
@@ -1591,7 +1598,8 @@ class CrystalPotential(_PotentialBuilder):
     repetitions : three int
         The repetitions of the potential in `x`, `y` and `z`.
     num_frozen_phonons : int, optional
-        Number of frozen phonon configurations assembled from the potential units.
+        Number of crystal realisations in the frozen-phonon ensemble; each
+        realisation draws its own random arrangement of pool configurations.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
@@ -1634,12 +1642,6 @@ class CrystalPotential(_PotentialBuilder):
             warnings.warn(
                 "'num_frozen_phonons' is greater than one, but the potential unit does"
                 " not have frozen phonons"
-            )
-
-        if (potential_unit.num_configurations > 1) and (num_frozen_phonons is not None):
-            warnings.warn(
-                "the potential unit has frozen phonons, but 'num_frozen_phonons' is not"
-                " set"
             )
 
         gpts = (
@@ -2022,21 +2024,45 @@ class CrystalPotential(_PotentialBuilder):
 
         n_tiles = tile_xy[0] * tile_xy[1]
 
+        # Balanced global drawing: every pool configuration receives a total
+        # usage budget of floor/ceil(total_slots / n_configs) over the whole
+        # crystal (all lateral tiles x all z-repetitions), and each z-layer
+        # draws the ``n_tiles`` configurations with the most budget remaining
+        # (random tie-breaking keeps assignments uniform). Drawing each layer
+        # independently instead (i.e. with replacement across z) lets the
+        # same configuration recur in many layers even when the pool is large
+        # enough to avoid it, correlating slices along z and measurably
+        # inflating thermal-diffuse statistics above the tiled-atoms ground
+        # truth. With budgets, reuse is the minimum the pool size allows and
+        # is spread evenly: once ``n_configs >= n_tiles * repetitions[2]``
+        # every unit cell in the crystal receives a distinct configuration --
+        # statistically identical to tiling the displaced atoms directly.
+        # Within a layer draws remain distinct whenever the pool allows (no
+        # in-plane duplication), as before.
+        if n_configs > 1:
+            total_slots = n_tiles * self.repetitions[2]
+            base, extra = divmod(total_slots, n_configs)
+            budgets = np.full(n_configs, base, dtype=np.int64)
+            if extra:
+                budgets[rng.permutation(n_configs)[:extra]] += 1
+
         def _draw_config_tiles() -> np.ndarray:
-            # One pool configuration per lateral tile, drawn *without
-            # replacement* so no two tiles in a layer share a configuration
-            # (no in-plane duplication). When the pool is at least as large as
-            # the number of tiles this is a plain permutation; a smaller pool
-            # cycles through freshly shuffled permutations, spreading the
-            # unavoidable repeats as evenly as possible.
             if n_configs >= n_tiles:
-                draw = rng.permutation(n_configs)[:n_tiles]
+                # The ``n_tiles`` most-underused configurations, in random
+                # order (permute first; the stable sort then orders by budget
+                # only, keeping ties shuffled).
+                order = rng.permutation(n_configs)
+                chosen = order[np.argsort(-budgets[order], kind="stable")[:n_tiles]]
             else:
+                # Pool smaller than a single layer: in-plane repeats are
+                # unavoidable; cycle freshly shuffled permutations to spread
+                # them as evenly as possible.
                 n_perms = -(-n_tiles // n_configs)  # ceil
-                draw = np.concatenate(
+                chosen = np.concatenate(
                     [rng.permutation(n_configs) for _ in range(n_perms)]
                 )[:n_tiles]
-            return draw.reshape(tile_xy)
+            np.subtract.at(budgets, chosen, 1)
+            return chosen.reshape(tile_xy)
 
         for i in range(self.repetitions[2]):
             # Draw an independent displaced realisation per unit cell in the x,

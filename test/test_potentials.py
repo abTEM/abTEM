@@ -181,7 +181,7 @@ def test_crystal_potential_get_sliced_atoms_frozen_phonons_equilibrium():
     fp = abtem.FrozenPhonons(unit_atoms, num_configs=3, sigmas=0.1, seed=7)
     unit_pot = Potential(fp, gpts=(32, 32), slice_thickness=5.43)
     # The unit already carries frozen phonons; CrystalPotential draws one of its
-    # configs per z-rep. Do not also pass num_frozen_phonons (that warns).
+    # configs per repeated unit, so there is no single displaced realisation.
     cryst = CrystalPotential(unit_pot, repetitions=(2, 2, 2))
 
     sa = cryst.get_sliced_atoms()
@@ -327,6 +327,64 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     assert len({t.round(6).tobytes() for t in tiles_big.reshape(n_tiles, ug, ug)}) == (
         n_tiles
     )
+
+
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+def test_crystal_potential_balanced_pool_drawing(device):
+    """Pool configurations are drawn without replacement over the WHOLE
+    crystal (balanced budgets), not just within a z-layer: a pool matching
+    the total number of unit-cell slots gives every slot a distinct
+    configuration (statistically identical to tiling displaced atoms), and a
+    smaller pool spreads reuse exactly evenly."""
+    from collections import Counter
+
+    import ase
+
+    import abtem
+    from abtem.core.backend import asnumpy
+
+    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    ug = 16
+
+    # z-only pool (full-lateral pattern): pool == nz -> every z-rep distinct
+    nz = 6
+    fp = abtem.FrozenPhonons(si, num_configs=nz, sigmas=0.1, seed=1)
+    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    cryst = CrystalPotential(unit, repetitions=(1, 1, nz), seeds=(3,))
+    slices = [asnumpy(s.array)[0] for s in cryst.generate_slices()]
+    n_sub = len(slices) // nz
+    reps = {slices[i * n_sub].round(6).tobytes() for i in range(nz)}
+    assert len(reps) == nz
+
+    # mosaic: pool == n_tiles * nz -> every (tile, z) slot distinct
+    tile_reps = (3, 2, 2)
+    n_tiles = tile_reps[0] * tile_reps[1]
+    total_slots = n_tiles * tile_reps[2]
+    fp2 = abtem.FrozenPhonons(si, num_configs=total_slots, sigmas=0.1, seed=1)
+    unit2 = Potential(fp2, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    cryst2 = CrystalPotential(unit2, repetitions=tile_reps, seeds=(3,))
+    slices2 = [asnumpy(s.array)[0] for s in cryst2.generate_slices()]
+    slots = set()
+    for i in range(tile_reps[2]):
+        layer = slices2[i * n_sub]
+        tiles = layer.reshape(tile_reps[0], ug, tile_reps[1], ug).transpose(0, 2, 1, 3)
+        slots.update(t.round(6).tobytes() for t in tiles.reshape(n_tiles, ug, ug))
+    assert len(slots) == total_slots
+
+    # pool == n_tiles: usage perfectly balanced (each config used exactly nz
+    # times over the crystal) and still distinct within every layer
+    fp3 = abtem.FrozenPhonons(si, num_configs=n_tiles, sigmas=0.1, seed=1)
+    unit3 = Potential(fp3, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    cryst3 = CrystalPotential(unit3, repetitions=tile_reps, seeds=(3,))
+    slices3 = [asnumpy(s.array)[0] for s in cryst3.generate_slices()]
+    counts = Counter()
+    for i in range(tile_reps[2]):
+        layer = slices3[i * n_sub]
+        tiles = layer.reshape(tile_reps[0], ug, tile_reps[1], ug).transpose(0, 2, 1, 3)
+        layer_keys = [t.round(6).tobytes() for t in tiles.reshape(n_tiles, ug, ug)]
+        assert len(set(layer_keys)) == n_tiles  # in-plane distinctness kept
+        counts.update(layer_keys)
+    assert set(counts.values()) == {tile_reps[2]}
 
 
 def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
