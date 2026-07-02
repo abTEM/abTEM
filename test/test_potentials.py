@@ -203,6 +203,7 @@ def test_eager_build_populates_all_frozen_phonon_configs(device):
     import numpy as np
 
     import abtem
+    from abtem.core.backend import asnumpy
 
     unit_atoms = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
     num_configs = 4
@@ -215,8 +216,8 @@ def test_eager_build_populates_all_frozen_phonon_configs(device):
 
     eager = potential.build(lazy=False).array
     lazy = potential.build(lazy=True).compute().array
-    eager = np.asarray(eager)
-    lazy = np.asarray(lazy)
+    eager = asnumpy(eager)
+    lazy = asnumpy(lazy)
 
     assert eager.shape[0] == num_configs
     # every config carries real (non-vacuum) potential (total mass is ~conserved
@@ -232,8 +233,9 @@ def test_eager_build_populates_all_frozen_phonon_configs(device):
     assert np.allclose(eager, lazy)
 
 
+@pytest.mark.parametrize("device", [gpu, "cpu"])
 @pytest.mark.parametrize("lazy", [True, False])
-def test_crystal_potential_frozen_phonons_lateral_disorder(lazy):
+def test_crystal_potential_frozen_phonons_lateral_disorder(lazy, device):
     """A frozen-phonon CrystalPotential must reproduce *lateral* (in-plane)
     disorder: each lateral repetition draws an independent configuration from
     the pool (a mosaic), so the tiles differ from one another. Regression for
@@ -244,18 +246,19 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy):
     import numpy as np
 
     import abtem
+    from abtem.core.backend import asnumpy
 
     si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
     reps = (2, 3, 2)  # asymmetric to catch tile-axis-order mistakes
     ug = 32
     fp = abtem.FrozenPhonons(si, num_configs=20, sigmas=0.1, seed=2)
-    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
     if lazy:
         unit = unit.build(lazy=True)
 
     cryst = CrystalPotential(unit, repetitions=reps)
     slic = next(cryst.generate_slices())
-    arr = np.asarray(slic.array)[0]  # (reps[0]*ug, reps[1]*ug)
+    arr = asnumpy(slic.array)[0]  # (reps[0]*ug, reps[1]*ug)
     assert arr.shape == (reps[0] * ug, reps[1] * ug)
 
     # reshape into the reps[0] x reps[1] lateral tiles and measure how much the
@@ -267,11 +270,11 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy):
     # copies (up to float rounding), which fixes the disorder floor to compare
     # against
     fp1 = abtem.FrozenPhonons(si, num_configs=1, sigmas=0.1, seed=2)
-    unit1 = Potential(fp1, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    unit1 = Potential(fp1, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
     if lazy:
         unit1 = unit1.build(lazy=True)
     slic1 = next(CrystalPotential(unit1, repetitions=reps).generate_slices())
-    arr1 = np.asarray(slic1.array)[0]
+    arr1 = asnumpy(slic1.array)[0]
     tiles1 = arr1.reshape(reps[0], ug, reps[1], ug)
     single_config_floor = float(tiles1.std(axis=(0, 2)).mean())
 
@@ -281,7 +284,8 @@ def test_crystal_potential_frozen_phonons_lateral_disorder(lazy):
     assert inter_tile_std > 100 * single_config_floor
 
 
-def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication():
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     """When the frozen-phonon pool is smaller than the number of lateral tiles,
     CrystalPotential enlarges it (warning) so every tile draws a distinct
     configuration and no two tiles in a layer are identical."""
@@ -289,6 +293,7 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication():
     import numpy as np
 
     import abtem
+    from abtem.core.backend import asnumpy
 
     si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
     reps = (5, 4, 2)  # 20 lateral tiles
@@ -296,13 +301,13 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication():
     n_tiles = reps[0] * reps[1]
 
     fp = abtem.FrozenPhonons(si, num_configs=6, sigmas=0.1, seed=0)  # pool < tiles
-    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
     cryst = CrystalPotential(unit, repetitions=reps)
 
     with pytest.warns(UserWarning, match="smaller than the number of lateral"):
         slic = next(cryst.generate_slices())
 
-    arr = np.asarray(slic.array)[0]
+    arr = asnumpy(slic.array)[0]
     tiles = arr.reshape(reps[0], ug, reps[1], ug).transpose(0, 2, 1, 3)
     tiles = tiles.reshape(n_tiles, ug, ug)
     # every lateral tile is a distinct realisation -> no duplication
@@ -311,13 +316,13 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication():
 
     # a pool already >= n_tiles is left untouched (no warning)
     fp_big = abtem.FrozenPhonons(si, num_configs=n_tiles, sigmas=0.1, seed=0)
-    unit_big = Potential(fp_big, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    unit_big = Potential(fp_big, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any pool warning would fail here
         big = next(
             CrystalPotential(unit_big, repetitions=reps).generate_slices()
         )
-    arr_big = np.asarray(big.array)[0]
+    arr_big = asnumpy(big.array)[0]
     tiles_big = arr_big.reshape(reps[0], ug, reps[1], ug).transpose(0, 2, 1, 3)
     assert len({t.round(6).tobytes() for t in tiles_big.reshape(n_tiles, ug, ug)}) == (
         n_tiles
