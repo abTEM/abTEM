@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
 from ase import Atoms
 from ase.data import chemical_symbols
-from numba import jit  # type: ignore
+from numba import jit, prange  # type: ignore
 from scipy import integrate  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import brentq  # type: ignore
@@ -504,11 +504,12 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         return array
 
 
-@jit(nopython=True, nogil=True)
+@jit(nopython=True, nogil=True, parallel=True)
 def interpolate_radial_functions(
     array: np.ndarray,
     positions: np.ndarray,
     disk_indices: np.ndarray,
+    disk_counts: np.ndarray,
     sampling: tuple[float, float],
     radial_gpts: np.ndarray,
     radial_functions: np.ndarray,
@@ -521,7 +522,11 @@ def interpolate_radial_functions(
         px = int(round(positions[i, 0] / sampling[0]))
         py = int(round(positions[i, 1] / sampling[1]))
 
-        for j in range(disk_indices.shape[0]):
+        # The disk indices are sorted by radial distance and each pixel of an
+        # atom's disk writes to a distinct array element, so the inner loop is
+        # race-free and may only run over the first disk_counts[i] pixels
+        # (those within the lateral cutoff of atom i for the current slice).
+        for j in prange(disk_counts[i]):
             k = px + disk_indices[j, 0]
             m = py + disk_indices[j, 1]
 
@@ -815,9 +820,30 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             shifted_a = a - positions[:, 2]
             shifted_b = b - positions[:, 2]
 
-            disk_indices = xp.asarray(
-                disk_meshgrid(int(np.ceil(table.radial_gpts[-1] / np.min(sampling))))
+            cutoff = table.radial_gpts[-1]
+            disk = disk_meshgrid(int(np.ceil(cutoff / np.min(sampling))))
+            # Sort the disk pixels by physical radial distance so that the
+            # interpolation can stop at each atom's lateral cutoff.
+            disk_radii = np.hypot(disk[:, 0] * sampling[0], disk[:, 1] * sampling[1])
+            order = np.argsort(disk_radii)
+            disk = disk[order]
+            disk_radii = disk_radii[order]
+
+            # A pixel at lateral distance r only receives contributions from
+            # the part of the radial potential at 3D distance
+            # sqrt(r ** 2 + dz ** 2), with dz the distance from the atom to the
+            # slice interval. Beyond r = sqrt(cutoff ** 2 - dz ** 2) the
+            # potential is below the cutoff tolerance, so those pixels are
+            # skipped. The margin accounts for the atom position rounding to
+            # the nearest pixel.
+            dz = np.maximum(np.maximum(shifted_a, -shifted_b), 0.0)
+            lateral_cutoff = np.sqrt(np.maximum(cutoff**2 - dz**2, 0.0))
+            margin = np.hypot(sampling[0], sampling[1]) / 2
+            disk_counts = np.searchsorted(
+                disk_radii, lateral_cutoff + margin, side="right"
             )
+
+            disk_indices = xp.asarray(disk)
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
 
             positions = xp.asarray(positions, dtype=get_dtype(complex=False))
@@ -847,6 +873,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     array=temp,
                     positions=positions,
                     disk_indices=disk_indices,
+                    disk_counts=disk_counts,
                     sampling=sampling,
                     radial_gpts=table.radial_gpts,
                     radial_functions=radial_potential,
