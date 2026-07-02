@@ -1588,8 +1588,12 @@ class CrystalPotential(_PotentialBuilder):
     ``repetitions[0] * repetitions[1] * repetitions[2]`` configurations gives
     every repeated unit a distinct configuration (statistically equivalent to
     tiling the displaced atoms directly). If `num_frozen_phonons` is set, an
-    ensemble of crystal potentials is created, each drawing its own random
-    arrangement of pool configurations.
+    ensemble of crystal potentials is created; each member independently
+    rebuilds its own pool of atomic displacement snapshots (reseeded from
+    that member's own seed) rather than sharing one fixed pool across the
+    ensemble, so members are genuinely independent thermal realisations --
+    there is no need to size the pool for the ensemble, only for a single
+    crystal (see above).
 
     Parameters
     ----------
@@ -1599,7 +1603,8 @@ class CrystalPotential(_PotentialBuilder):
         The repetitions of the potential in `x`, `y` and `z`.
     num_frozen_phonons : int, optional
         Number of crystal realisations in the frozen-phonon ensemble; each
-        realisation draws its own random arrangement of pool configurations.
+        realisation independently rebuilds its own pool of atomic
+        displacement snapshots.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
@@ -1875,34 +1880,49 @@ class CrystalPotential(_PotentialBuilder):
     def _n_lateral_tiles(self) -> int:
         return self.repetitions[0] * self.repetitions[1]
 
-    def _pool_unit_for_tiling(self) -> BasePotential:
-        """Return the unit potential whose frozen-phonon pool is large enough
-        that every lateral tile can draw a *distinct* configuration.
+    def _pool_unit_for_member(self, member_seed: Optional[int]) -> BasePotential:
+        """Return the unit potential to draw pool configurations from for one
+        ensemble member (``member_seed`` is that member's seed), or for the
+        single default builder (``member_seed`` is None).
 
-        A frozen-phonon ``CrystalPotential`` assembles each slice as a mosaic:
-        every lateral tile draws an independent pool configuration. If the pool
-        holds fewer configurations than there are lateral tiles
-        (``repetitions[0] * repetitions[1]``), some tiles must reuse a
-        configuration -- reintroducing the artificial in-plane periodicity the
-        mosaic is meant to remove. When the unit carries frozen phonons we can
-        transparently enlarge the pool to the number of tiles; a precomputed
-        ``PotentialArray`` unit has a fixed pool and is returned unchanged (the
-        draw then cycles without replacement to spread the unavoidable
-        repeats).
+        Two independent adjustments are made when the unit carries frozen
+        phonons; a precomputed ``PotentialArray`` unit has a fixed pool and is
+        always returned unchanged.
+
+        1. **Enlarge to the tile count.** A frozen-phonon ``CrystalPotential``
+           assembles each slice as a mosaic: every lateral tile draws an
+           independent pool configuration. If the pool holds fewer
+           configurations than there are lateral tiles
+           (``repetitions[0] * repetitions[1]``), some tiles must reuse a
+           configuration -- reintroducing the artificial in-plane periodicity
+           the mosaic is meant to remove. The pool is transparently enlarged
+           to the tile count (warning).
+
+        2. **Reseed per ensemble member.** Every ensemble member is built from
+           the *same* ``potential_unit`` object, so without reseeding every
+           member would draw from an identical, fixed pool of configurations
+           -- differing only in how those same snapshots are arranged across
+           the crystal, not in which atomic displacements exist. That is a
+           much weaker form of independence than a frozen-phonon ensemble is
+           supposed to provide, and sizing the pool cannot fix it (drawing
+           from a bigger *shared* pool still shares it). Instead, when this
+           call belongs to an ensemble (``member_seed`` is not None), the pool
+           is quietly rebuilt with ``member_seed`` as its root seed, so each
+           member gets its own independent set of atomic snapshots. This adds
+           no cost: the pool was already rebuilt once per member.
         """
         unit = self.potential_unit
         n_tiles = self._n_lateral_tiles
         fp = getattr(unit, "frozen_phonons", None)
-        if isinstance(fp, FrozenPhonons) and 1 < fp.num_configs < n_tiles:
-            enlarged = FrozenPhonons(
-                fp.atoms,
-                num_configs=n_tiles,
-                sigmas=fp.sigmas,
-                directions=fp.directions,
-                ensemble_mean=fp.ensemble_mean,
-                seed=int(fp.seed[0]),
-            )
-            kwargs = unit._copy_kwargs(exclude=("atoms",))
+        if not isinstance(fp, FrozenPhonons) or fp.num_configs <= 1:
+            return unit
+
+        enlarge = fp.num_configs < n_tiles
+        reseed = member_seed is not None
+        if not enlarge and not reseed:
+            return unit
+
+        if enlarge:
             warnings.warn(
                 f"frozen-phonon pool ({fp.num_configs}) is smaller than the "
                 f"number of lateral tiles ({n_tiles}); enlarging the pool to "
@@ -1910,8 +1930,17 @@ class CrystalPotential(_PotentialBuilder):
                 "lateral duplication occurs. Pass a unit with "
                 f"num_configs >= {n_tiles} to silence this."
             )
-            unit = type(unit)(enlarged, **kwargs)
-        return unit
+
+        new_fp = FrozenPhonons(
+            fp.atoms,
+            num_configs=n_tiles if enlarge else fp.num_configs,
+            sigmas=fp.sigmas,
+            directions=fp.directions,
+            ensemble_mean=fp.ensemble_mean,
+            seed=int(member_seed) if reseed else int(fp.seed[0]),
+        )
+        kwargs = unit._copy_kwargs(exclude=("atoms",))
+        return type(unit)(new_fp, **kwargs)
 
     def generate_slices(
         self,
@@ -1938,7 +1967,8 @@ class CrystalPotential(_PotentialBuilder):
         """
         # if hasattr(self.potential_unit, "array")
         #    potentials = self.potential_unit
-        pool_unit = self._pool_unit_for_tiling()
+        member_seed = None if self.seeds is None else int(self.seeds[0])
+        pool_unit = self._pool_unit_for_member(member_seed)
         if not isinstance(pool_unit, PotentialArray):
             potentials = pool_unit.build(lazy=False)
         else:
@@ -1949,10 +1979,7 @@ class CrystalPotential(_PotentialBuilder):
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
-        if self.seeds is None:
-            rng = np.random.default_rng(self.seeds)
-        else:
-            rng = np.random.default_rng(self.seeds[0])
+        rng = np.random.default_rng(member_seed)
 
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)

@@ -387,6 +387,43 @@ def test_crystal_potential_balanced_pool_drawing(device):
     assert set(counts.values()) == {tile_reps[2]}
 
 
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+def test_crystal_potential_ensemble_members_have_independent_pools(device):
+    """Ensemble members (num_frozen_phonons / seeds) all share the same
+    ``potential_unit`` object, so without reseeding they would rebuild the
+    identical, fixed pool of atomic snapshots and differ only in how those
+    same snapshots are arranged -- not in which displacements exist. Each
+    member's pool must instead be independently reseeded from that member's
+    own seed, even when the pool is already at (or above) the size needed for
+    a single crystal to be exact, so the ensemble does not need to be sized
+    for the number of members."""
+    import ase
+
+    import abtem
+    from abtem.core.backend import asnumpy
+
+    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    ug = 16
+    nz = 6  # pool == nz: already exact for one member (see test above)
+
+    fp = abtem.FrozenPhonons(si, num_configs=nz, sigmas=0.1, seed=1)
+    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
+    cryst = CrystalPotential(unit, repetitions=(1, 1, nz), num_frozen_phonons=3)
+    built = cryst.build(lazy=False)
+    members = [asnumpy(built.array[i]) for i in range(3)]
+    for i in range(3):
+        for j in range(i + 1, 3):
+            assert not np.allclose(members[i], members[j])
+
+    # same seeds -> bit-reproducible
+    cryst_again = CrystalPotential(unit, repetitions=(1, 1, nz), seeds=cryst.seeds)
+    built_again = cryst_again.build(lazy=False)
+    for i in range(3):
+        np.testing.assert_allclose(
+            members[i], asnumpy(built_again.array[i])
+        )
+
+
 def test_crystal_potential_get_sliced_atoms_raises_for_array_unit():
     """A precomputed PotentialArray unit has no atoms, so get_sliced_atoms must
     raise an actionable error rather than failing obscurely downstream."""
