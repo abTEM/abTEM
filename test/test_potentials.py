@@ -1,3 +1,5 @@
+import warnings
+
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -186,6 +188,139 @@ def test_crystal_potential_get_sliced_atoms_frozen_phonons_equilibrium():
     expected = (unit_atoms * (2, 2, 2)).positions
     assert np.allclose(
         np.sort(sa.atoms.positions, axis=0), np.sort(expected, axis=0)
+    )
+
+
+@pytest.mark.parametrize("device", [gpu, "cpu"])
+def test_eager_build_populates_all_frozen_phonon_configs(device):
+    """Eager ``build(lazy=False)`` of a multi-config frozen-phonon potential must
+    populate *every* ensemble member, not just the first. Regression for a bug
+    where the ensemble write index was hardcoded to 0, so all configs
+    overwrote config 0 and configs 1..N-1 were left as zeros -- which in turn
+    made CrystalPotential (it builds its pool eagerly) reshuffle a pool of one
+    real config plus N-1 vacuum slices."""
+    import ase
+    import numpy as np
+
+    import abtem
+
+    unit_atoms = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    num_configs = 4
+    fp = abtem.FrozenPhonons(
+        unit_atoms, num_configs=num_configs, sigmas=0.1, seed=7
+    )
+    potential = Potential(
+        fp, gpts=(32, 32), slice_thickness=5.43 / 4, device=device
+    )
+
+    eager = potential.build(lazy=False).array
+    lazy = potential.build(lazy=True).compute().array
+    eager = np.asarray(eager)
+    lazy = np.asarray(lazy)
+
+    assert eager.shape[0] == num_configs
+    # every config carries real (non-vacuum) potential (total mass is ~conserved
+    # under displacement, so a positive sum is what distinguishes real from the
+    # zero-filled vacuum slices the bug produced)
+    per_config_sums = eager.reshape(num_configs, -1).sum(axis=1)
+    assert np.all(per_config_sums > 0)
+    # configs are genuinely distinct realisations (independent displacements) --
+    # every config differs pixel-wise from config 0 (sums alone are conserved)
+    for c in range(1, num_configs):
+        assert np.abs(eager[c] - eager[0]).max() > 0
+    # eager and lazy builds agree config-for-config
+    assert np.allclose(eager, lazy)
+
+
+@pytest.mark.parametrize("lazy", [True, False])
+def test_crystal_potential_frozen_phonons_lateral_disorder(lazy):
+    """A frozen-phonon CrystalPotential must reproduce *lateral* (in-plane)
+    disorder: each lateral repetition draws an independent configuration from
+    the pool (a mosaic), so the tiles differ from one another. Regression for
+    the original ``.tile()`` behaviour that replicated a single displaced unit
+    across every tile -- giving zero in-plane disorder (and hence no diffuse /
+    Kikuchi scattering)."""
+    import ase
+    import numpy as np
+
+    import abtem
+
+    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    reps = (2, 3, 2)  # asymmetric to catch tile-axis-order mistakes
+    ug = 32
+    fp = abtem.FrozenPhonons(si, num_configs=20, sigmas=0.1, seed=2)
+    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    if lazy:
+        unit = unit.build(lazy=True)
+
+    cryst = CrystalPotential(unit, repetitions=reps)
+    slic = next(cryst.generate_slices())
+    arr = np.asarray(slic.array)[0]  # (reps[0]*ug, reps[1]*ug)
+    assert arr.shape == (reps[0] * ug, reps[1] * ug)
+
+    # reshape into the reps[0] x reps[1] lateral tiles and measure how much the
+    # tiles differ at matched within-tile pixels
+    tiles = arr.reshape(reps[0], ug, reps[1], ug)
+    inter_tile_std = float(tiles.std(axis=(0, 2)).mean())
+
+    # a single-config pool has no disorder to reproduce -> tiles are identical
+    # copies (up to float rounding), which fixes the disorder floor to compare
+    # against
+    fp1 = abtem.FrozenPhonons(si, num_configs=1, sigmas=0.1, seed=2)
+    unit1 = Potential(fp1, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    if lazy:
+        unit1 = unit1.build(lazy=True)
+    slic1 = next(CrystalPotential(unit1, repetitions=reps).generate_slices())
+    arr1 = np.asarray(slic1.array)[0]
+    tiles1 = arr1.reshape(reps[0], ug, reps[1], ug)
+    single_config_floor = float(tiles1.std(axis=(0, 2)).mean())
+
+    # the multi-config mosaic must show real lateral disorder, orders of
+    # magnitude above the single-config (identical-tiles) rounding floor
+    assert single_config_floor < 1e-2
+    assert inter_tile_std > 100 * single_config_floor
+
+
+def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication():
+    """When the frozen-phonon pool is smaller than the number of lateral tiles,
+    CrystalPotential enlarges it (warning) so every tile draws a distinct
+    configuration and no two tiles in a layer are identical."""
+    import ase
+    import numpy as np
+
+    import abtem
+
+    si = ase.build.bulk("Si", crystalstructure="diamond", a=5.43, cubic=True)
+    reps = (5, 4, 2)  # 20 lateral tiles
+    ug = 24
+    n_tiles = reps[0] * reps[1]
+
+    fp = abtem.FrozenPhonons(si, num_configs=6, sigmas=0.1, seed=0)  # pool < tiles
+    unit = Potential(fp, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    cryst = CrystalPotential(unit, repetitions=reps)
+
+    with pytest.warns(UserWarning, match="smaller than the number of lateral"):
+        slic = next(cryst.generate_slices())
+
+    arr = np.asarray(slic.array)[0]
+    tiles = arr.reshape(reps[0], ug, reps[1], ug).transpose(0, 2, 1, 3)
+    tiles = tiles.reshape(n_tiles, ug, ug)
+    # every lateral tile is a distinct realisation -> no duplication
+    keys = {t.round(6).tobytes() for t in tiles}
+    assert len(keys) == n_tiles
+
+    # a pool already >= n_tiles is left untouched (no warning)
+    fp_big = abtem.FrozenPhonons(si, num_configs=n_tiles, sigmas=0.1, seed=0)
+    unit_big = Potential(fp_big, gpts=(ug, ug), slice_thickness=5.43 / 4)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any pool warning would fail here
+        big = next(
+            CrystalPotential(unit_big, repetitions=reps).generate_slices()
+        )
+    arr_big = np.asarray(big.array)[0]
+    tiles_big = arr_big.reshape(reps[0], ug, reps[1], ug).transpose(0, 2, 1, 3)
+    assert len({t.round(6).tobytes() for t in tiles_big.reshape(n_tiles, ug, ug)}) == (
+        n_tiles
     )
 
 

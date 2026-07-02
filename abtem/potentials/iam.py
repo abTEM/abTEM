@@ -44,6 +44,7 @@ from abtem.inelastic.phonons import (
     AtomsEnsemble,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
+    FrozenPhonons,
     validate_seeds,
 )
 from abtem.integrals import (
@@ -628,9 +629,8 @@ class _FieldBuilder(BaseField):
             )
 
             if self.ensemble_shape:
-                for _, _, potential_wrapped in self.generate_blocks(1):
+                for i, _, potential_wrapped in self.generate_blocks(1):
                     potential = potential_wrapped.item()
-                    i = np.unravel_index(0, self.ensemble_shape)
 
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
@@ -1869,6 +1869,48 @@ class CrystalPotential(_PotentialBuilder):
 
         return (array,)
 
+    @property
+    def _n_lateral_tiles(self) -> int:
+        return self.repetitions[0] * self.repetitions[1]
+
+    def _pool_unit_for_tiling(self) -> BasePotential:
+        """Return the unit potential whose frozen-phonon pool is large enough
+        that every lateral tile can draw a *distinct* configuration.
+
+        A frozen-phonon ``CrystalPotential`` assembles each slice as a mosaic:
+        every lateral tile draws an independent pool configuration. If the pool
+        holds fewer configurations than there are lateral tiles
+        (``repetitions[0] * repetitions[1]``), some tiles must reuse a
+        configuration -- reintroducing the artificial in-plane periodicity the
+        mosaic is meant to remove. When the unit carries frozen phonons we can
+        transparently enlarge the pool to the number of tiles; a precomputed
+        ``PotentialArray`` unit has a fixed pool and is returned unchanged (the
+        draw then cycles without replacement to spread the unavoidable
+        repeats).
+        """
+        unit = self.potential_unit
+        n_tiles = self._n_lateral_tiles
+        fp = getattr(unit, "frozen_phonons", None)
+        if isinstance(fp, FrozenPhonons) and 1 < fp.num_configs < n_tiles:
+            enlarged = FrozenPhonons(
+                fp.atoms,
+                num_configs=n_tiles,
+                sigmas=fp.sigmas,
+                directions=fp.directions,
+                ensemble_mean=fp.ensemble_mean,
+                seed=int(fp.seed[0]),
+            )
+            kwargs = unit._copy_kwargs(exclude=("atoms",))
+            warnings.warn(
+                f"frozen-phonon pool ({fp.num_configs}) is smaller than the "
+                f"number of lateral tiles ({n_tiles}); enlarging the pool to "
+                f"{n_tiles} so each tile draws a distinct configuration and no "
+                "lateral duplication occurs. Pass a unit with "
+                f"num_configs >= {n_tiles} to silence this."
+            )
+            unit = type(unit)(enlarged, **kwargs)
+        return unit
+
     def generate_slices(
         self,
         first_slice: int = 0,
@@ -1894,10 +1936,11 @@ class CrystalPotential(_PotentialBuilder):
         """
         # if hasattr(self.potential_unit, "array")
         #    potentials = self.potential_unit
-        if not isinstance(self.potential_unit, PotentialArray):
-            potentials = self.potential_unit.build(lazy=False)
+        pool_unit = self._pool_unit_for_tiling()
+        if not isinstance(pool_unit, PotentialArray):
+            potentials = pool_unit.build(lazy=False)
         else:
-            potentials = self.potential_unit
+            potentials = pool_unit
 
         assert isinstance(potentials, PotentialArray)
 
@@ -1927,6 +1970,18 @@ class CrystalPotential(_PotentialBuilder):
         unit_generators: dict[int, object] = {}
         tile_xy = self.repetitions[:2]
 
+        n_configs = potentials.shape[0]
+
+        # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
+        # per-tile access into the pool, so materialise the (small unit-cell)
+        # pool array once. A lazily-built PotentialArray unit carries a dask
+        # array here; compute it so per-tile fancy indexing works and stays on
+        # the target device.
+        xp = get_array_module(self.device)
+        _pool_array = potentials.array
+        if n_configs > 1 and hasattr(_pool_array, "compute"):
+            _pool_array = _pool_array.compute()
+
         def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
             key = (config_idx, j)
             cached = tiled_cache.get(key)
@@ -1940,11 +1995,63 @@ class CrystalPotential(_PotentialBuilder):
             tiled_cache[key] = slic
             return slic
 
+        def _mosaic_slice(config_tiles: np.ndarray, j: int) -> PotentialArray:
+            # Assemble sub-slice ``j`` of the lateral supercell by placing an
+            # *independently drawn* pool configuration at every lateral
+            # repetition (a mosaic), rather than replicating a single displaced
+            # unit across all tiles. This is what reproduces genuine lateral
+            # (in-plane) thermal disorder: with plain ``.tile()`` every one of
+            # the ``repetitions[0] * repetitions[1]`` tiles is a bit-identical
+            # copy, so there is no in-plane disorder at all and no diffuse
+            # (Kikuchi) scattering can form. ``config_tiles`` holds one pool
+            # index per lateral tile, shaped ``repetitions[:2]``.
+            sub = _pool_array[:, j]  # (n_configs, uy, ux)
+            uy, ux = sub.shape[-2], sub.shape[-1]
+            mosaic = sub[xp.asarray(config_tiles)]  # (rep0, rep1, uy, ux)
+            # Interleave to match ``PotentialArray.tile`` block layout, which
+            # tiles the row axis by repetitions[0] and the col axis by
+            # repetitions[1] (np.tile(array, (rep2, rep0, rep1))).
+            mosaic = mosaic.transpose(0, 2, 1, 3).reshape(
+                tile_xy[0] * uy, tile_xy[1] * ux
+            )
+            return potentials.__class__(
+                mosaic[None],
+                potentials.slice_thickness[j : j + 1],
+                extent=self.extent,
+            )
+
+        n_tiles = tile_xy[0] * tile_xy[1]
+
+        def _draw_config_tiles() -> np.ndarray:
+            # One pool configuration per lateral tile, drawn *without
+            # replacement* so no two tiles in a layer share a configuration
+            # (no in-plane duplication). When the pool is at least as large as
+            # the number of tiles this is a plain permutation; a smaller pool
+            # cycles through freshly shuffled permutations, spreading the
+            # unavoidable repeats as evenly as possible.
+            if n_configs >= n_tiles:
+                draw = rng.permutation(n_configs)[:n_tiles]
+            else:
+                n_perms = -(-n_tiles // n_configs)  # ceil
+                draw = np.concatenate(
+                    [rng.permutation(n_configs) for _ in range(n_perms)]
+                )[:n_tiles]
+            return draw.reshape(tile_xy)
+
         for i in range(self.repetitions[2]):
-            config_idx = int(rng.integers(0, potentials.shape[0]))
+            # Draw an independent displaced realisation per unit cell in the x,
+            # y and z supercell directions. For a single-config pool this
+            # collapses to the cheap cached ``.tile()`` path below.
+            if n_configs > 1:
+                config_tiles = _draw_config_tiles()
+            else:
+                config_tiles = None
 
             for j in range(len(self.potential_unit)):
-                slic = _tiled_slice(config_idx, j)
+                if config_tiles is None:
+                    slic = _tiled_slice(0, j)
+                else:
+                    slic = _mosaic_slice(config_tiles, j)
 
                 exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
 
