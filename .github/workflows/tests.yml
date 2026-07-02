@@ -8,10 +8,19 @@ on:
   pull_request:
   push:
     branches: [main, dev]
+  schedule:
+    # Weekly run against fresh dependency resolutions (no lock file), so
+    # breakage from new upstream releases surfaces even between PRs.
+    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Cancel superseded runs when a branch is force-pushed or updated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   tests:
