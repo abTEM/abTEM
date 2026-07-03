@@ -13,3 +13,7 @@ CLAUDE.md
 *.zarr/**
 build
 dist
+
+# uv (no lock file: abTEM is a library, CI resolves fresh)
+uv.lock
+.venv/

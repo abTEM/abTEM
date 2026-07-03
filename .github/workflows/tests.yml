@@ -1,0 +1,53 @@
+# Run the test suite with uv on every pull request and on pushes to dev/main.
+# Dependencies are resolved fresh (no lock file), so breakage from new upstream
+# releases surfaces here at PR time, matching what users get from pip/uv.
+
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+  schedule:
+    # Weekly run against fresh dependency resolutions (no lock file), so
+    # breakage from new upstream releases surfaces even between PRs.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs when a branch is force-pushed or updated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} / python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Full OS matrix only for release PRs (base = main)
+        os: ${{ github.base_ref == 'main' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and set python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --group test
+
+      - name: Run tests
+        run: uv run pytest test
