@@ -40,7 +40,6 @@ dependencies = [
     "ipywidgets",
     "ipympl",
     "tqdm",
-    "rich", # Required for supporting Zarr zip storage
 ]
 dynamic = ["version"]
 
