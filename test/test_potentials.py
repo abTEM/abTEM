@@ -4,9 +4,16 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 import strategies as abtem_st
+from ase import Atoms
 from hypothesis import given
 from utils import gpu
 
+from abtem.core.grid import disk_meshgrid
+from abtem.integrals import (
+    QuadratureProjectionIntegrals,
+    _threaded_interpolate_radial_functions,
+    interpolate_radial_functions,
+)
 from abtem.potentials.iam import CrystalPotential, Potential
 
 # @given(atoms=abtem_st.atoms(),
@@ -618,6 +625,160 @@ def test_potential_show_depth_profile(si_potential):
 
     viz = si_potential.show_depth_profile()
     assert isinstance(viz, Visualization)
+
+
+@pytest.mark.parametrize(
+    "position",
+    [
+        (0.0, 0.0),  # atom sits exactly on a grid point
+        (0.31, 0.47),  # atom offset by a sub-pixel amount in both directions
+        (1.9, -1.9),  # atom offset near the edge of the truncated disk
+    ],
+)
+def test_interpolate_radial_functions_disk_truncation_matches_full_disk(position):
+    # The lateral disk-truncation optimization in QuadratureProjectionIntegrals
+    # relies on interpolate_radial_functions correctly stopping at
+    # disk_counts[i] once the disk is sorted by radial distance. Verify this
+    # directly against calling it with the untruncated (full) disk, which is
+    # the behavior prior to the optimization.
+    sampling = (0.1, 0.1)
+    radial_gpts = np.geomspace(0.05, 3.0, 64)
+    radial_functions = np.exp(-radial_gpts)[None].astype(np.float64)
+    radial_derivative = np.zeros_like(radial_functions)
+    radial_derivative[:, :-1] = np.diff(radial_functions, axis=1) / np.diff(radial_gpts)
+
+    positions = np.array([position], dtype=np.float64)
+
+    # Deliberately oversized disk (as if this atom's slice offset were 0 but
+    # a sibling atom in the same call needed a much larger disk radius), so
+    # that disk_counts genuinely truncates away real, non-empty pixels rather
+    # than just the ceiling-rounding pad at the disk's own edge.
+    disk = disk_meshgrid(int(np.ceil(2 * radial_gpts[-1] / min(sampling))))
+    disk_radii = np.hypot(disk[:, 0] * sampling[0], disk[:, 1] * sampling[1])
+    order = np.argsort(disk_radii)
+    disk = disk[order]
+    disk_radii = disk_radii[order]
+
+    margin = np.hypot(sampling[0], sampling[1]) / 2
+    disk_counts_truncated = np.searchsorted(
+        disk_radii, radial_gpts[-1] + margin, side="right"
+    )
+    disk_counts_full = np.array([disk.shape[0]])
+
+    gpts = (64, 64)
+    array_truncated = np.zeros(gpts, dtype=np.float64)
+    array_full = np.zeros(gpts, dtype=np.float64)
+
+    interpolate_radial_functions(
+        array=array_truncated,
+        positions=positions,
+        disk_indices=disk,
+        disk_counts=np.array([disk_counts_truncated]),
+        sampling=sampling,
+        radial_gpts=radial_gpts,
+        radial_functions=radial_functions,
+        radial_derivative=radial_derivative,
+    )
+    interpolate_radial_functions(
+        array=array_full,
+        positions=positions,
+        disk_indices=disk,
+        disk_counts=disk_counts_full,
+        sampling=sampling,
+        radial_gpts=radial_gpts,
+        radial_functions=radial_functions,
+        radial_derivative=radial_derivative,
+    )
+
+    assert disk_counts_truncated < disk.shape[0]
+    np.testing.assert_allclose(array_truncated, array_full, atol=1e-12)
+
+
+def test_threaded_interpolation_matches_serial_kernel():
+    # The thread-pool wrapper deals atoms round-robin to per-thread buffers
+    # and sums them; up to float summation reordering this must match calling
+    # the serial kernel directly with all atoms.
+    rng = np.random.default_rng(7)
+    sampling = (0.1, 0.12)
+    gpts = (96, 80)
+    n_atoms = 37  # deliberately not divisible by typical thread counts
+
+    radial_gpts = np.geomspace(0.05, 3.0, 64)
+    radial_functions = (
+        np.exp(-radial_gpts)[None] * rng.uniform(0.5, 2.0, (n_atoms, 1))
+    ).astype(np.float64)
+    radial_derivative = np.zeros_like(radial_functions)
+    radial_derivative[:, :-1] = np.diff(radial_functions, axis=1) / np.diff(radial_gpts)
+
+    positions = np.zeros((n_atoms, 3))
+    positions[:, 0] = rng.uniform(-1.0, gpts[0] * sampling[0] + 1.0, n_atoms)
+    positions[:, 1] = rng.uniform(-1.0, gpts[1] * sampling[1] + 1.0, n_atoms)
+
+    disk = disk_meshgrid(int(np.ceil(radial_gpts[-1] / min(sampling))))
+    disk_radii = np.hypot(disk[:, 0] * sampling[0], disk[:, 1] * sampling[1])
+    order = np.argsort(disk_radii)
+    disk = np.ascontiguousarray(disk[order])
+    disk_radii = disk_radii[order]
+    disk_counts = np.searchsorted(
+        disk_radii, rng.uniform(1.0, 3.0, n_atoms), side="right"
+    )
+
+    array_serial = np.zeros(gpts, dtype=np.float64)
+    interpolate_radial_functions(
+        array_serial,
+        positions,
+        disk,
+        disk_counts,
+        sampling,
+        radial_gpts,
+        radial_functions,
+        radial_derivative,
+    )
+
+    array_threaded = np.zeros(gpts, dtype=np.float64)
+    _threaded_interpolate_radial_functions(
+        array_threaded,
+        positions,
+        disk,
+        disk_counts,
+        sampling,
+        radial_gpts,
+        radial_functions,
+        radial_derivative,
+    )
+
+    np.testing.assert_allclose(array_threaded, array_serial, rtol=1e-12, atol=1e-12)
+
+
+def test_finite_projection_tolerance_matches_tight_reference():
+    # Regression test for the lateral disk-truncation optimization in
+    # QuadratureProjectionIntegrals.integrate_on_grid: build a potential with
+    # atoms deliberately placed at a slice boundary (dz=0, the edge case for
+    # the truncation formula) and off it, and check that the default
+    # cutoff_tolerance still agrees closely with a much tighter tolerance.
+    atoms = Atoms(
+        "Au2",
+        positions=[(3.0, 3.0, 2.0), (3.0, 3.0, 5.0)],
+        cell=(6.0, 6.0, 6.0),
+        pbc=True,
+    )
+
+    def build(tol):
+        integrator = QuadratureProjectionIntegrals(cutoff_tolerance=tol)
+        potential = Potential(
+            atoms,
+            sampling=0.1,
+            slice_thickness=2.0,
+            projection="finite",
+            integrator=integrator,
+        )
+        return potential.build(lazy=False).array
+
+    tight = build(1e-6)
+    default = build(1e-4)
+
+    max_dev = np.abs(default - tight).max() / tight.max()
+    assert max_dev < 1e-2
 
 
 @pytest.mark.parametrize("device", [gpu])

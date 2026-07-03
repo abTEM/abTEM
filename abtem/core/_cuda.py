@@ -59,6 +59,7 @@ def _interpolate_radial_functions(
     array,
     positions,
     disk_indices,
+    disk_counts,
     sampling,
     radial_gpts,
     radial_functions,
@@ -67,7 +68,14 @@ def _interpolate_radial_functions(
 ):
     i, j = cuda.grid(2)
 
-    if (i < positions.shape[0]) & (j < disk_indices.shape[0]):
+    # disk_indices is sorted by physical radius (see
+    # QuadratureProjectionIntegrals.integrate_on_grid), and disk_counts[i]
+    # is where atom i's contribution to the current slice drops below
+    # cutoff_tolerance (a pixel at lateral distance r only receives a
+    # non-negligible contribution if r <= sqrt(cutoff**2 - dz**2), with dz
+    # the atom's distance to the slice). Stopping at disk_counts[i] instead
+    # of the full disk mirrors the CPU kernel's truncation exactly.
+    if (i < positions.shape[0]) & (j < disk_counts[i]):
         k = round(positions[i, 0] / sampling[0]) + disk_indices[j, 0]
         m = round(positions[i, 1] / sampling[1]) + disk_indices[j, 1]
 
@@ -105,17 +113,30 @@ def interpolate_radial_functions(
     array,
     positions,
     disk_indices,
+    disk_counts,
     sampling,
     radial_gpts,
     radial_functions,
     radial_derivative,
+    max_disk_count=None,
 ):
     if len(positions) == 0:
         return array
 
+    # max_disk_count lets the caller pass a cheap host-side reduction (it
+    # already computed disk_counts via a plain NumPy searchsorted) so sizing
+    # the grid doesn't force a device-to-host sync here. Falls back to a
+    # device reduction (an implicit sync via int()) if not given.
+    if max_disk_count is None:
+        max_disk_count = int(disk_counts.max()) if len(disk_counts) else 0
+
     threadsperblock = (1, 256)
     blockspergrid_x = int(math.ceil(positions.shape[0] / threadsperblock[0]))
-    blockspergrid_y = int(math.ceil(disk_indices.shape[0] / threadsperblock[1]))
+    # Size the grid to the largest per-atom disk_counts entry actually
+    # needed rather than the full (untruncated) disk -- slices where every
+    # atom's contribution is cut off well before the disk's outer edge (e.g.
+    # far from that atom's nearest z boundary) launch far fewer threads.
+    blockspergrid_y = int(math.ceil(max(max_disk_count, 1) / threadsperblock[1]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
     dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
@@ -124,6 +145,7 @@ def interpolate_radial_functions(
         array,
         positions,
         disk_indices,
+        disk_counts,
         sampling,
         radial_gpts,
         radial_functions,
