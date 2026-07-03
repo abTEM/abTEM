@@ -14,9 +14,14 @@ CPU only, larger crystal, double precision::
 
     python benchmarks/benchmark_finite_projection.py --device cpu --reps 8 --precision float64
 
-Sweep the cutoff tolerance (compares against a tight 1e-6 reference)::
+Sweep the cutoff tolerance on both devices (compares against a tight 1e-6
+CPU reference)::
 
     python benchmarks/benchmark_finite_projection.py --tolerance-sweep
+
+Sweep the cutoff tolerance on GPU only::
+
+    python benchmarks/benchmark_finite_projection.py --tolerance-sweep --device gpu
 """
 
 import argparse
@@ -93,7 +98,10 @@ def main():
     parser.add_argument(
         "--tolerance-sweep",
         action="store_true",
-        help="sweep cutoff_tolerance on CPU and report deviation vs a 1e-6 reference",
+        help=(
+            "sweep cutoff_tolerance on the device(s) selected by --device and "
+            "report deviation vs a 1e-6 CPU reference"
+        ),
     )
     args = parser.parse_args()
 
@@ -126,17 +134,24 @@ def main():
     )
 
     if args.tolerance_sweep:
+        # Reference is always CPU/tight-tolerance: cutoff_tolerance is a
+        # spatial-truncation property of the potential, independent of
+        # device, so a single ground truth is enough for both devices.
         reference = to_numpy(
             build(atoms, "cpu", args.sampling, args.slice_thickness, 1e-6)
         )
-        print(f"\n{'tolerance':>10s} {'time':>8s} {'max rel dev vs tol=1e-6':>24s}")
-        for tolerance in (1e-4, 1e-3, 1e-2):
-            elapsed, array = time_build(
-                atoms, "cpu", args.sampling, args.slice_thickness, tolerance,
-                args.repeats,
-            )
-            deviation = np.abs(to_numpy(array) - reference).max() / reference.max()
-            print(f"{tolerance:10.0e} {elapsed:7.2f}s {deviation:24.3e}")
+        print(
+            f"\n{'device':>8s} {'tolerance':>10s} {'time':>8s} "
+            f"{'max rel dev vs tol=1e-6':>24s}"
+        )
+        for device in devices:
+            for tolerance in (1e-4, 1e-3, 1e-2):
+                elapsed, array = time_build(
+                    atoms, device, args.sampling, args.slice_thickness, tolerance,
+                    args.repeats,
+                )
+                deviation = np.abs(to_numpy(array) - reference).max() / reference.max()
+                print(f"{device:>8s} {tolerance:10.0e} {elapsed:7.2f}s {deviation:24.3e}")
         return
 
     results = {}
