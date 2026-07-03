@@ -9,7 +9,11 @@ from hypothesis import given
 from utils import gpu
 
 from abtem.core.grid import disk_meshgrid
-from abtem.integrals import QuadratureProjectionIntegrals, interpolate_radial_functions
+from abtem.integrals import (
+    QuadratureProjectionIntegrals,
+    _threaded_interpolate_radial_functions,
+    interpolate_radial_functions,
+)
 from abtem.potentials.iam import CrystalPotential, Potential
 
 # @given(atoms=abtem_st.atoms(),
@@ -688,6 +692,62 @@ def test_interpolate_radial_functions_disk_truncation_matches_full_disk(position
 
     assert disk_counts_truncated < disk.shape[0]
     np.testing.assert_allclose(array_truncated, array_full, atol=1e-12)
+
+
+def test_threaded_interpolation_matches_serial_kernel():
+    # The thread-pool wrapper deals atoms round-robin to per-thread buffers
+    # and sums them; up to float summation reordering this must match calling
+    # the serial kernel directly with all atoms.
+    rng = np.random.default_rng(7)
+    sampling = (0.1, 0.12)
+    gpts = (96, 80)
+    n_atoms = 37  # deliberately not divisible by typical thread counts
+
+    radial_gpts = np.geomspace(0.05, 3.0, 64)
+    radial_functions = (
+        np.exp(-radial_gpts)[None] * rng.uniform(0.5, 2.0, (n_atoms, 1))
+    ).astype(np.float64)
+    radial_derivative = np.zeros_like(radial_functions)
+    radial_derivative[:, :-1] = np.diff(radial_functions, axis=1) / np.diff(radial_gpts)
+
+    positions = np.zeros((n_atoms, 3))
+    positions[:, 0] = rng.uniform(-1.0, gpts[0] * sampling[0] + 1.0, n_atoms)
+    positions[:, 1] = rng.uniform(-1.0, gpts[1] * sampling[1] + 1.0, n_atoms)
+
+    disk = disk_meshgrid(int(np.ceil(radial_gpts[-1] / min(sampling))))
+    disk_radii = np.hypot(disk[:, 0] * sampling[0], disk[:, 1] * sampling[1])
+    order = np.argsort(disk_radii)
+    disk = np.ascontiguousarray(disk[order])
+    disk_radii = disk_radii[order]
+    disk_counts = np.searchsorted(
+        disk_radii, rng.uniform(1.0, 3.0, n_atoms), side="right"
+    )
+
+    array_serial = np.zeros(gpts, dtype=np.float64)
+    interpolate_radial_functions(
+        array_serial,
+        positions,
+        disk,
+        disk_counts,
+        sampling,
+        radial_gpts,
+        radial_functions,
+        radial_derivative,
+    )
+
+    array_threaded = np.zeros(gpts, dtype=np.float64)
+    _threaded_interpolate_radial_functions(
+        array_threaded,
+        positions,
+        disk,
+        disk_counts,
+        sampling,
+        radial_gpts,
+        radial_functions,
+        radial_derivative,
+    )
+
+    np.testing.assert_allclose(array_threaded, array_serial, rtol=1e-12, atol=1e-12)
 
 
 def test_finite_projection_tolerance_matches_tight_reference():
