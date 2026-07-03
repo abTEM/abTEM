@@ -77,7 +77,17 @@ def _interpolate_radial_functions(
                 + (m * sampling[1] - positions[i, 1]) ** 2
             )
 
-            idx = int(math.log(r_interp / radial_gpts[0] + 1e-12) / dt)
+            # floor (not plain truncation) matches the CPU kernel
+            # (abtem/integrals.py:interpolate_radial_functions): for pixels
+            # inside the table's innermost radius the ratio is < 1 so the log
+            # is negative, and int() truncates toward zero rather than
+            # flooring. That mismatch flips the sign of idx for values in
+            # (-1, 0) -- e.g. -0.2 floors to -1 (correctly hits the idx < 0
+            # branch, clamping to the innermost tabulated value) but
+            # truncates to 0 (incorrectly falls into the interpolation
+            # branch below, extrapolating from the innermost table point
+            # instead of clamping to it).
+            idx = int(math.floor(math.log(r_interp / radial_gpts[0] + 1e-12) / dt))
 
             if idx < 0:
                 cuda.atomic.add(array, (k, m), radial_functions[i, 0])

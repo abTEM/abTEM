@@ -618,3 +618,45 @@ def test_potential_show_depth_profile(si_potential):
 
     viz = si_potential.show_depth_profile()
     assert isinstance(viz, Visualization)
+
+
+@pytest.mark.parametrize("device", [gpu])
+def test_finite_projection_gpu_matches_cpu_near_atom_core(device):
+    """Regression for a GPU/CPU mismatch in the radial-table index lookup
+    inside interpolate_radial_functions (abtem/core/_cuda.py): the CUDA
+    kernel used int() to derive the log-spaced table index, which truncates
+    toward zero, while the CPU kernel uses int(floor(...)). For pixels just
+    inside the table's innermost tabulated radius the argument is a small
+    negative number, and the two roundings disagree in sign for values in
+    (-1, 0) -- e.g. int(floor(-0.2)) == -1 (correctly clamps to the innermost
+    tabulated value) but int(-0.2) == 0 (incorrectly extrapolates from the
+    innermost table point instead). This only misfires for atoms whose
+    fractional pixel offset happens to place a disk pixel in that razor-thin
+    annulus, so a generic small structure may not trigger it; SrTiO3 (highly
+    symmetric fractional coordinates) reliably does.
+    """
+    from ase.spacegroup import crystal
+
+    sto = crystal(
+        ("Sr", "Ti", "O"),
+        basis=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0)],
+        spacegroup=221,
+        cellpar=[3.905, 3.905, 3.905, 90, 90, 90],
+    )
+    atoms = sto * (2, 2, 2)
+
+    def build(dev):
+        pot = Potential(
+            atoms, sampling=0.05, slice_thickness=1.0, projection="finite",
+            device=dev,
+        )
+        array = pot.build(lazy=False).array
+        if hasattr(array, "get"):
+            array = array.get()
+        return np.asarray(array, dtype=np.float64)
+
+    cpu = build("cpu")
+    gpu_array = build(device)
+
+    max_dev = np.abs(gpu_array - cpu).max() / cpu.max()
+    assert max_dev < 1e-4, f"GPU vs CPU max relative deviation {max_dev:.3e}"
