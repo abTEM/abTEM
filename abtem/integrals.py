@@ -951,6 +951,9 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             disk_counts = np.searchsorted(
                 disk_radii, lateral_cutoff + margin, side="right"
             )
+            # Cheap host-side reduction so the GPU kernel launcher doesn't
+            # need a device sync just to size its grid; unused on CPU.
+            max_disk_count = int(disk_counts.max()) if len(disk_counts) else 0
 
             disk_indices = xp.asarray(disk)
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
@@ -972,10 +975,12 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     array=temp,
                     positions=positions,
                     disk_indices=disk_indices,
+                    disk_counts=xp.asarray(disk_counts),
                     sampling=sampling,
                     radial_gpts=xp.asarray(table.radial_gpts),
                     radial_functions=radial_potential,
                     radial_derivative=radial_potential_derivative,
+                    max_disk_count=max_disk_count,
                 )
             else:
                 _threaded_interpolate_radial_functions(
