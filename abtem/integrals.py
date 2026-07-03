@@ -769,6 +769,14 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self._sorted_disks: dict[
             tuple[str, tuple[float, float]], tuple[np.ndarray, np.ndarray]
         ] = {}
+        # Device-resident copies of disk_indices/radial_gpts, keyed by
+        # (symbol, sampling, device). Both are invariant per (symbol,
+        # sampling) across all slices, but integrate_on_grid is called once
+        # per slice per species; without this cache each call re-uploads
+        # them to the GPU from scratch, which measurably dominated GPU
+        # build time (see PR #309 discussion) despite the arrays never
+        # changing between calls.
+        self._device_arrays: dict[tuple[str, tuple[float, float], str], tuple] = {}
 
         super().__init__(periodic=False, finite=True)
 
@@ -955,14 +963,27 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             # need a device sync just to size its grid; unused on CPU.
             max_disk_count = int(disk_counts.max()) if len(disk_counts) else 0
 
-            disk_indices = xp.asarray(disk)
+            if xp is cp:
+                device_key = disk_key + (device,)
+                cached_device_arrays = self._device_arrays.get(device_key)
+                if cached_device_arrays is None:
+                    cached_device_arrays = (
+                        xp.asarray(disk),
+                        xp.asarray(table.radial_gpts),
+                    )
+                    self._device_arrays[device_key] = cached_device_arrays
+                disk_indices, radial_gpts_xp = cached_device_arrays
+            else:
+                disk_indices = xp.asarray(disk)
+                radial_gpts_xp = table.radial_gpts
+
             radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
 
             positions = xp.asarray(positions, dtype=get_dtype(complex=False))
 
             radial_potential_derivative = xp.zeros_like(radial_potential)
             radial_potential_derivative[:, :-1] = (
-                xp.diff(radial_potential, axis=1) / xp.diff(table.radial_gpts)[None]
+                xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_xp)[None]
             )
 
             if len(self._parametrization.sigmas):
@@ -977,7 +998,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     disk_indices=disk_indices,
                     disk_counts=xp.asarray(disk_counts),
                     sampling=sampling,
-                    radial_gpts=xp.asarray(table.radial_gpts),
+                    radial_gpts=radial_gpts_xp,
                     radial_functions=radial_potential,
                     radial_derivative=radial_potential_derivative,
                     max_disk_count=max_disk_count,
@@ -989,7 +1010,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     disk_indices=disk_indices,
                     disk_counts=disk_counts,
                     sampling=sampling,
-                    radial_gpts=table.radial_gpts,
+                    radial_gpts=radial_gpts_xp,
                     radial_functions=radial_potential,
                     radial_derivative=radial_potential_derivative,
                 )
