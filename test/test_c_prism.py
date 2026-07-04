@@ -277,3 +277,41 @@ def test_c_prism_downsampled_gpts_independent_of_interpolation():
         downsampled_gpts.add(c_prism.downsampled_gpts)
 
     assert len(downsampled_gpts) == 1
+
+
+def test_c_prism_aberrated_ctf_matches_probe():
+    # the azimuthal angle convention of the reduction coefficients must match
+    # polar_spatial_frequencies, ie. arctan2(ky, kx); the real-space intensity
+    # of an aberrated probe is sensitive to the convention
+    ctf = abtem.CTF(
+        energy=100e3,
+        semiangle_cutoff=20,
+        defocus=50,
+        astigmatism=40,
+        astigmatism_angle=0.5236,
+        coma=3e3,
+        coma_angle=1.0,
+    )
+
+    c_prism = CPRISM(
+        extent=20,
+        gpts=128,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=(2, 2),
+        tolerance=1e-6,
+    )
+    c_prism_array = c_prism.build(lazy=False)
+
+    probe = Probe._from_ctf(
+        extent=20, gpts=c_prism_array.gpts, ctf=ctf, energy=100e3
+    )
+    probe_intensity = probe.build(lazy=False).intensity().array
+
+    c_prism_intensity = c_prism_array.reduce(ctf=ctf).intensity().array
+
+    assert np.allclose(
+        np.squeeze(c_prism_intensity),
+        np.squeeze(probe_intensity),
+        atol=1e-3 * probe_intensity.max(),
+    )
