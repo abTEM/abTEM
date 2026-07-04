@@ -1850,6 +1850,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     dtype=np.complex64,
                 )
 
+            pbar = config.get("diagnostics.task_progress", False)
+
             for i, _, s_matrix in self.generate_blocks(1):
                 s_matrix = s_matrix.item()
                 for start, stop in wave_vector_blocks:
@@ -1857,7 +1859,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     if self.ensemble_shape:
                         items = i + items
 
-                    new_array = self._build_s_matrix(s_matrix, slice(start, stop))
+                    new_array = self._build_s_matrix(
+                        s_matrix, slice(start, stop), pbar=pbar
+                    )
 
                     if self.store_on_host:
                         new_array = xp.asnumpy(new_array)
