@@ -296,14 +296,35 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
         )
 
         # The gathered rows of the transposed left singular vectors are contiguous
-        # in the mode index, making the reduction memory efficient. The positions
+        # in the mode index, making the reduction memory efficient. The contraction
+        # over the modes is expressed as a batched matrix product. The positions
         # are chunked to bound the memory of the gathered windows.
-        max_batch = max(1, int(64e6 / (num_window_gpts * self.rank * 8)))
-        for start in range(0, len(snapped_pixels), max_batch):
-            chunk = slice(start, start + max_batch)
-            waves[chunk] = (
-                u_transposed[flat_indices[chunk]] * kernel_transposed[None]
-            ).sum(-1)
+        kernel_column = kernel_transposed[None, :, :, None]
+
+        def reduce_chunk(chunk):
+            gathered = u_transposed[flat_indices[chunk]]
+            waves[chunk] = xp.matmul(gathered[:, :, None, :], kernel_column)[
+                :, :, 0, 0
+            ]
+
+        max_batch = max(1, int(32e6 / (num_window_gpts * self.rank * 8)))
+        chunks = [
+            slice(start, start + max_batch)
+            for start in range(0, len(snapped_pixels), max_batch)
+        ]
+
+        num_threads = int(config.get("fftw.threads", 1)) if xp is np else 1
+
+        if num_threads > 1 and len(chunks) > 1:
+            # the reduction of each chunk releases the GIL for its large array
+            # operations; the chunks write to disjoint slices
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(num_threads) as executor:
+                list(executor.map(reduce_chunk, chunks))
+        else:
+            for chunk in chunks:
+                reduce_chunk(chunk)
 
         return waves.reshape((len(snapped_pixels),) + window_gpts)
 
