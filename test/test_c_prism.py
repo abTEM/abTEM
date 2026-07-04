@@ -303,9 +303,7 @@ def test_c_prism_aberrated_ctf_matches_probe():
     )
     c_prism_array = c_prism.build(lazy=False)
 
-    probe = Probe._from_ctf(
-        extent=20, gpts=c_prism_array.gpts, ctf=ctf, energy=100e3
-    )
+    probe = Probe._from_ctf(extent=20, gpts=c_prism_array.gpts, ctf=ctf, energy=100e3)
     probe_intensity = probe.build(lazy=False).intensity().array
 
     c_prism_intensity = c_prism_array.reduce(ctf=ctf).intensity().array
@@ -315,3 +313,22 @@ def test_c_prism_aberrated_ctf_matches_probe():
         np.squeeze(probe_intensity),
         atol=1e-3 * probe_intensity.max(),
     )
+
+
+def test_c_prism_identical_to_prism_without_interpolation():
+    # at an interpolation factor of (1, 1) the plane-wave expansion is complete
+    # and no compression is performed, hence C-PRISM is identical to PRISM
+    potential = _small_potential()
+
+    detector = abtem.AnnularDetector(inner=40, outer=100)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 3))
+
+    prism_measurement = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=1
+    ).scan(scan=scan, detectors=detector, lazy=False)
+
+    c_prism_measurement = CPRISM(
+        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=1
+    ).scan(scan=scan, detectors=detector, lazy=False)
+
+    assert np.allclose(c_prism_measurement.array, prism_measurement.array)

@@ -303,9 +303,7 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         def reduce_chunk(chunk):
             gathered = u_transposed[flat_indices[chunk]]
-            waves[chunk] = xp.matmul(gathered[:, :, None, :], kernel_column)[
-                :, :, 0, 0
-            ]
+            waves[chunk] = xp.matmul(gathered[:, :, None, :], kernel_column)[:, :, 0, 0]
 
         max_batch = max(1, int(32e6 / (num_window_gpts * self.rank * 8)))
         chunks = [
@@ -744,9 +742,14 @@ class CPRISM(SMatrix):
     @property
     def wave_vectors(self) -> np.ndarray:
         """The wave vectors of the coarse plane-wave expansion. The expansion is
-        padded to the bounding rectangle of the aperture plus a one-cell buffer."""
+        padded to the bounding rectangle of the aperture plus a one-cell buffer.
+        At an interpolation factor of (1, 1) the expansion is complete, hence no
+        padding is applied."""
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+
+        if self.interpolation == (1, 1):
+            return super().wave_vectors
 
         bounds = self._coarse_bounds()
 
@@ -834,21 +837,37 @@ class CPRISM(SMatrix):
         if self._max_rank is not None:
             n_components = min(self._max_rank, len(array))
         else:
-            n_components = min(max(192, len(array) // 4), len(array))
+            # the number of probed modes must exceed the adaptively retained rank;
+            # thick, strongly channeling specimens may retain most of the modes
+            n_components = min(max(384, len(array) // 2), len(array))
 
         u, sigma, vh = _randomized_svd(matrix, n_components, xp)
 
-        rank = int((sigma >= self._tolerance * sigma[0]).sum())
-        rank = max(1, rank)
+        def _adaptive_rank(sigma):
+            return max(1, int((sigma >= self._tolerance * sigma[0]).sum()))
+
+        rank = _adaptive_rank(sigma)
 
         if self._max_rank is not None:
             rank = min(rank, self._max_rank)
         elif rank == len(sigma) and rank < len(array):
-            warnings.warn(
-                "The adaptive rank of the C-PRISM expansion reached the maximum "
-                "number of probed modes; the tolerance may not be met. Provide "
-                "'max_rank' to increase the number of probed modes."
-            )
+            # the adaptive rank reached the number of probed modes, hence the
+            # tolerance is not certified; escalate to a complete decomposition
+            if len(array) <= 2048:
+                n_components = len(array)
+            else:
+                n_components = min(2 * n_components, len(array))
+
+            u, sigma, vh = _randomized_svd(matrix, n_components, xp)
+            rank = _adaptive_rank(sigma)
+
+            if rank == len(sigma) and rank < len(array):
+                warnings.warn(
+                    "The adaptive rank of the C-PRISM expansion reached the "
+                    "maximum number of probed modes; the tolerance may not be "
+                    "met. Provide 'max_rank' to increase the number of probed "
+                    "modes."
+                )
 
         u = xp.ascontiguousarray(u[:, :rank].T).reshape((rank,) + tuple(gpts))
         sigma = sigma[:rank]
@@ -875,6 +894,11 @@ class CPRISM(SMatrix):
         requires the scattering matrix in memory, hence the returned
         :class:`.CPRISMArray` is always computed.
 
+        At an interpolation factor of (1, 1) the plane-wave expansion is complete,
+        hence the compression provides no benefit and the uncompressed
+        :class:`.SMatrixArray` is returned; the reduction is then identical to the
+        PRISM algorithm.
+
         Parameters
         ----------
         lazy : bool, optional
@@ -889,6 +913,9 @@ class CPRISM(SMatrix):
         c_prism_array : CPRISMArray
             The compressed scattering matrix.
         """
+        if self.interpolation == (1, 1):
+            return super().build(lazy=lazy, max_batch=max_batch, bound=bound)
+
         if np.prod(self.ensemble_shape) > 1:
             raise NotImplementedError(
                 "CPRISM.build does not support ensemble potentials; use "
@@ -1036,6 +1063,18 @@ class CPRISM(SMatrix):
         measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
         """
         from abtem.array import validate_lazy
+
+        if self.interpolation == (1, 1):
+            # the plane-wave expansion is complete, hence the compression provides
+            # no benefit and the reduction is identical to the PRISM algorithm
+            return super().reduce(
+                scan=scan,
+                detectors=detectors,
+                ctf=ctf,
+                max_batch_multislice=max_batch_multislice,
+                max_batch_reduction=max_batch_reduction,
+                lazy=lazy,
+            )
 
         detectors = validate_detectors(detectors, self.dummy_probes())
 
