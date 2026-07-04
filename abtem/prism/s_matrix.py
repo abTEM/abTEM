@@ -1061,7 +1061,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         )
         phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
         array = ctf._evaluate_from_angular_grid(alpha, phi)
-        array = array / xp.sqrt((array**2).sum(axis=-1, keepdims=True))
+        # the coefficients may be complex when the ctf includes aberrations, hence
+        # the normalization must use the absolute square
+        array = array / xp.sqrt((xp.abs(array) ** 2).sum(axis=-1, keepdims=True))
         return array
 
     def _batch_reduce_to_measurements(
@@ -1380,7 +1382,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             ctf=ctf,
             detectors=detectors,
             max_batch_reduction=max_batch_reduction,
-            rechunk=rechunk,
+            reduction_scheme=rechunk,
         )
 
 
@@ -1478,8 +1480,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             warnings.warn(
-                "The interpolation factor does not exactly divide 'gpts', normalization"
-                "may not be exactly preserved."
+                "The interpolation factor does not exactly divide 'gpts', "
+                "normalization may not be exactly preserved."
             )
 
     @property

@@ -70,7 +70,7 @@ def remove_tilt(
     wavelength = energy2wavelength(energy)
 
     alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * wavelength
-    phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+    phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
 
     ctf_coefficients = CTF(defocus=accumulated_defocus, energy=energy).evaluate(
         alpha, phi
@@ -95,7 +95,7 @@ def interpolate_full(
     alpha = np.sqrt(
         wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2
     ) * energy2wavelength(energy)
-    phi = np.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+    phi = np.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
 
     interpolated_array *= CTF(defocus=-defocus, energy=energy).evaluate(alpha, phi)[
         :, None, None
