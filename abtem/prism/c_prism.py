@@ -305,8 +305,12 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         return waves.reshape((len(snapped_pixels),) + window_gpts)
 
-    def _group_by_fractional_offset(self, pixel_positions, decimals: int = 6):
-        """Group probe positions by their fractional pixel offset."""
+    def _group_by_fractional_offset(self, pixel_positions, decimals: int = 4):
+        """Group probe positions by their fractional pixel offset.
+
+        The offsets are rounded to ``10**-decimals`` pixels, which is well below
+        the numerical precision of the probe positions.
+        """
         xp = get_array_module(pixel_positions)
 
         snapped = xp.rint(pixel_positions).astype(int)
@@ -321,6 +325,7 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
             )
 
         rounded = np.round(fractional, decimals=decimals)
+        rounded += 0.0  # remove negative zero
         unique, inverse = np.unique(rounded, axis=0, return_inverse=True)
         return snapped, unique, inverse
 
@@ -370,7 +375,7 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 scan_shape = positions.shape[:-1]
                 positions = positions.reshape((-1, 2))
 
-                pixel_positions = positions / sampling
+                pixel_positions = positions.astype(np.float64) / sampling
 
                 snapped, unique_offsets, inverse = self._group_by_fractional_offset(
                     pixel_positions
