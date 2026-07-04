@@ -241,6 +241,37 @@ def test_to_zarr_from_zarr_zip(data, has_array, url, lazy, device):
     assert has_array_from_zarr.to_cpu() == has_array.to_cpu()
 
 
+@given(data=st.data(), url=abtem_st.temporary_path(allow_none=False))
+@pytest.mark.parametrize(
+    "has_array",
+    [
+        abtem_st.images,
+        abtem_st.diffraction_patterns,
+        abtem_st.waves,
+        abtem_st.potential_array,
+    ],
+)
+def test_from_zarr_legacy_format(data, has_array, url):
+    # Files written by abTEM <= 1.0.9 store per-object "kwargs{i}"/"type{i}"
+    # attributes instead of the canonical "metadata{i}"; they may hold any
+    # ArrayObject subclass (e.g. Waves, PotentialArray), not just measurements.
+    import zarr
+
+    from abtem.array import from_zarr
+
+    has_array = data.draw(has_array(lazy=False, device="cpu"))
+
+    root = zarr.open(url, mode="w")
+    root.create_array(name="array0", data=has_array.array, chunks=has_array.shape)
+    root.attrs["kwargs0"] = has_array._pack_kwargs(
+        has_array._copy_kwargs(exclude=("array",))
+    )
+    root.attrs["type0"] = has_array.__class__.__name__
+
+    has_array_from_zarr = from_zarr(url).compute()
+    assert has_array_from_zarr == has_array
+
+
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])

@@ -64,15 +64,15 @@ def _fresnel_propagator_array(
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
     kx, ky = kx[:, None], ky[None]
 
-    f = complex_exponential(
-        -(kx**2) * np.pi * thickness * wavelength
-    ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+    k2 = kx**2 + ky**2
+
+    f = complex_exponential(-k2 * np.pi * thickness * wavelength)
 
     # Propagator corrected in Fourier-space, only valid for order=2
     # Eq. (4) from Microscopy and Microanalysis (2020), 26, 1147-1157
     if order == 2:
         f = f * complex_exponential(
-            (-np.pi * thickness * wavelength**3) / 4.0 * (kx**4 + ky**4)
+            (-np.pi * thickness * wavelength**3) / 4.0 * k2**2
         )
     return f
 
@@ -636,9 +636,12 @@ def multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
+    waves_input = waves.copy()
+
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
     ):
+        waves = waves_input.copy()
         exit_plane_index = 0
 
         # Handle entrance plane detection (before first slice)
@@ -799,6 +802,7 @@ def transition_potential_multislice_and_detect(
     threshold: float = 1.0,
     sites: Optional[SliceIndexedAtoms | Atoms] = None,
     algorithm: FourierMultislice | RealSpaceMultislice = FourierMultislice(),
+    scatter_max_batch: int | str = 1,
     pbar: bool = False,
 ) -> list[BaseMeasurements | Waves] | BaseMeasurements | Waves:
     """
@@ -893,6 +897,9 @@ def transition_potential_multislice_and_detect(
 
     transition_potential = transition_potential.copy_to_device(waves.device)
 
+    # CrystalPotential implements get_sliced_atoms by tiling its unit, so the
+    # first branch covers repeating-unit potentials too (see
+    # CrystalPotential.get_sliced_atoms).
     if sites is None and hasattr(potential, "get_sliced_atoms"):
         sites = potential.get_sliced_atoms()
     elif sites is None and hasattr(potential, "atoms"):
@@ -901,7 +908,11 @@ def transition_potential_multislice_and_detect(
     if isinstance(sites, Atoms):
         sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
     elif not isinstance(sites, SliceIndexedAtoms):
-        raise ValueError()
+        raise ValueError(
+            "Could not derive scattering sites from the potential "
+            f"({type(potential).__name__}). Pass ``sites=`` explicitly as an "
+            "ase.Atoms or SliceIndexedAtoms covering the full simulation cell."
+        )
 
     n_sites = np.sum(sites.atoms.numbers == transition_potential.Z)
 
@@ -922,20 +933,66 @@ def transition_potential_multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
+    waves_input = waves.copy()
+
     for (
         potential_index,
         potential_configuration,
     ) in _generate_potential_configurations(potential):
+        waves = waves_input.copy()
         if potential.exit_planes[0] == -1:
             measurement_index = _validate_potential_ensemble_indices(
                 potential_index, 0, potential
             )
             _update_measurements(waves, detectors, measurements, measurement_index)
 
+        # The double-channel inner multislice re-visits slices [scatter_index+1 …]
+        # once per site batch; pre-building (and bandlimiting) the transmission
+        # functions saves N_sites rebuilds per outer step in that case (for
+        # FourierMultislice the cache short-circuits the rebuild inside
+        # conventional_multislice_step, see iam.py:1300-1302). Single-channel
+        # visits each slice exactly once, so caching is pure memory overhead and
+        # we stream slices instead.
+        if double_channel:
+            if isinstance(algorithm, FourierMultislice):
+                # Dedup transmissions across z-repetitions. CrystalPotential's
+                # tile cache (iam.py CrystalPotential.generate_slices) yields the
+                # *same* PotentialArray object for every z-repetition of a unit
+                # slice in the no-frozen-phonon case, so id(slice_obj) collapses
+                # to one entry per unique unit slice. The bandlimit FFT then
+                # runs O(n_unique) times instead of O(n_outer), and the
+                # transmission cache footprint drops by repetitions[2].
+                # For SrTiO3 reps=(4,4,25): 50 transmissions -> 2 unique
+                # (-24 MB cache, -48 bandlimit FFTs per configuration).
+                # The EELS driver reads exit_planes off ``potential`` globally,
+                # never off the slice (compare standard_multislice_and_detect
+                # at multislice.py:672), so sharing TransmissionFunction
+                # instances across slice indices is safe here.
+                tx_dedup: dict[int, TransmissionFunction] = {}
+                slice_cache = []
+                for slice_obj in potential_configuration.generate_slices():
+                    key = id(slice_obj)
+                    cached = tx_dedup.get(key)
+                    if cached is None:
+                        cached = antialias_aperture.bandlimit(
+                            slice_obj.transmission_function(
+                                energy=waves._valid_energy
+                            ),
+                            in_place=False,
+                        )
+                        tx_dedup[key] = cached
+                    slice_cache.append(cached)
+            else:
+                slice_cache = list(potential_configuration.generate_slices())
+            n_outer = len(slice_cache)
+            outer_iter = enumerate(slice_cache)
+        else:
+            slice_cache = None
+            n_outer = None
+            outer_iter = enumerate(potential_configuration.generate_slices())
+
         depth = 0.0
-        for scatter_index, potential_slice in enumerate(
-            potential_configuration.generate_slices()
-        ):
+        for scatter_index, potential_slice in outer_iter:
             waves = multislice_step(
                 waves,
                 potential_slice,
@@ -957,7 +1014,10 @@ def transition_potential_multislice_and_detect(
                 included_sites,
                 scattered_waves,
             ) in transition_potential.generate_scattered_waves(
-                waves, sites_slice, max_batch=1, threshold=absolute_threshold
+                waves,
+                sites_slice,
+                max_batch=scatter_max_batch,
+                threshold=absolute_threshold,
             ):
                 if len(scattered_waves) == 0:
                     continue
@@ -972,13 +1032,12 @@ def transition_potential_multislice_and_detect(
                         potential_index,
                     )
 
-                    # if scatter_index + 1 == len(potential):
-                    #    break
+                    # Nothing left to propagate through on the final outer slice.
+                    if scatter_index + 1 == n_outer:
+                        continue
 
-                    for inner_slice_index, inner_potential_slice in enumerate(
-                        potential_configuration.generate_slices(
-                            first_slice=scatter_index + 1
-                        )
+                    for inner_offset, inner_potential_slice in enumerate(
+                        slice_cache[scatter_index + 1:]
                     ):
                         scattered_waves = multislice_step(
                             scattered_waves,
@@ -992,7 +1051,7 @@ def transition_potential_multislice_and_detect(
                             scattered_waves,
                             detectors,
                             potential,
-                            inner_slice_index + scatter_index + 1,
+                            scatter_index + 1 + inner_offset,
                             potential_index,
                         )
 
