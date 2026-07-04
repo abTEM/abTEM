@@ -114,6 +114,10 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
     window_gpts : two int
         The number of grid points describing the cropping window of the reduced
         wave functions.
+    position_quantization : int, optional
+        If given, the fractional part of the probe positions is quantized to this
+        number of fractions of a pixel. The default is None, ie. the positions are
+        not quantized.
     device : str
         The device used for the reduction ('cpu' or 'gpu').
     metadata : dict
@@ -283,9 +287,7 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
             len(snapped_pixels), -1
         )
 
-        kernel_transposed = xp.ascontiguousarray(
-            kernel.reshape(self.rank, -1).T
-        )
+        kernel_transposed = xp.ascontiguousarray(kernel.reshape(self.rank, -1).T)
 
         num_window_gpts = int(np.prod(window_gpts))
 
@@ -353,9 +355,7 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
         )
 
         n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
-        pbar = TqdmWrapper(
-            enabled=pbar, total=n_positions, leave=False, desc="reduce"
-        )
+        pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
 
         sampling = xp.asarray(self.sampling)
 
@@ -393,9 +393,7 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     )
 
                 waves_array = waves_array.reshape(
-                    (1,) * len(sub_ctf.ensemble_shape)
-                    + scan_shape
-                    + self.window_gpts
+                    (1,) * len(sub_ctf.ensemble_shape) + scan_shape + self.window_gpts
                 )
 
                 ensemble_axes_metadata = [
@@ -574,6 +572,12 @@ class CPRISM(SMatrix):
         cropped. Unlike PRISM, the window is decoupled from the interpolation
         factor; a window a few times larger than the scattered probe may be used to
         speed up the reduction at any interpolation factor.
+    position_quantization : int, optional
+        If given, the fractional part of the probe positions is quantized to this
+        number of fractions of a pixel, limiting the number of reduction kernels
+        calculated for scans that are incommensurate with the grid of the
+        scattering matrix. The maximum position error is half a quantization step.
+        The default is None, ie. the positions are not quantized.
     downsample : {'cutoff', 'valid'} or float or bool
         Controls whether to downsample the scattering matrix after running the
         multislice algorithm (default is 'cutoff'). See :class:`.SMatrix`.
@@ -755,7 +759,9 @@ class CPRISM(SMatrix):
         for i, (bound, length) in enumerate(zip(bounds, shape)):
             frequencies = xp.fft.fftfreq(length, d=1 / length).astype(int)
             dense_coordinate = (
-                xp.arange(-bound * self.interpolation[i], bound * self.interpolation[i] + 1)
+                xp.arange(
+                    -bound * self.interpolation[i], bound * self.interpolation[i] + 1
+                )
                 / self.interpolation[i]
             )
             kernels += (
@@ -830,7 +836,12 @@ class CPRISM(SMatrix):
         dense_indices = self._dense_indices()
         vh_dense = self._interpolate_vh_dense(vh, xp.asarray(dense_indices))
 
-        return u, sigma.astype(get_dtype(complex=False)), vh_dense.astype(dtype), dense_indices
+        return (
+            u,
+            sigma.astype(get_dtype(complex=False)),
+            vh_dense.astype(dtype),
+            dense_indices,
+        )
 
     def build(
         self, lazy: bool = None, max_batch: int | str = "auto", bound=None

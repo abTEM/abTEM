@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-from ase import Atoms
 from ase.build import bulk
 
 import abtem
@@ -13,9 +12,10 @@ def _small_potential(gpts=96, repetitions=(2, 2, 3)):
 
 
 def _relative_error(measurement, reference):
-    return np.sqrt(
-        ((measurement.array - reference.array) ** 2).mean()
-    ) / reference.array.mean()
+    return (
+        np.sqrt(((measurement.array - reference.array) ** 2).mean())
+        / reference.array.mean()
+    )
 
 
 @pytest.mark.parametrize("interpolation", [(1, 1), (2, 2), (2, 4)])
@@ -76,9 +76,9 @@ def test_c_prism_matches_multislice_no_interpolation():
         max_rank=10_000,
     )
 
-    diffraction_patterns = c_prism.reduce(
-        scan=scan, lazy=False
-    ).diffraction_patterns(max_angle=50)
+    diffraction_patterns = c_prism.reduce(scan=scan, lazy=False).diffraction_patterns(
+        max_angle=50
+    )
 
     assert np.allclose(
         diffraction_patterns.array, probe_diffraction_patterns.array, atol=1e-5
@@ -135,9 +135,9 @@ def test_c_prism_off_grid_positions():
         max_rank=10_000,
     )
 
-    diffraction_patterns = c_prism.reduce(
-        scan=scan, lazy=False
-    ).diffraction_patterns(max_angle=50)
+    diffraction_patterns = c_prism.reduce(scan=scan, lazy=False).diffraction_patterns(
+        max_angle=50
+    )
 
     assert np.allclose(
         diffraction_patterns.array, probe_diffraction_patterns.array, atol=1e-5
