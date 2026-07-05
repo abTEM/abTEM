@@ -22,6 +22,7 @@ from abtem.multislice import allocate_multislice_measurements
 from abtem.prism.s_matrix import (
     BaseSMatrix,
     SMatrix,
+    SMatrixArray,
     _finalize_lazy_measurements,
     _wrap_measurements,
 )
@@ -337,6 +338,58 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
         unique, inverse = np.unique(rounded, axis=0, return_inverse=True)
         return snapped, unique, inverse
 
+    def _expanded_s_matrix_array(self) -> SMatrixArray:
+        """Expand the compressed factorization to the interpolated scattering
+        matrix at interpolation (1, 1).
+
+        The expansion is one matrix product over the modes followed by the
+        reattachment of the plane-wave phases. The expanded matrix has the same
+        memory footprint as a PRISM scattering matrix at interpolation (1, 1);
+        provide `window_gpts` to reduce from the compressed modes instead.
+        """
+        if getattr(self, "_s_matrix_array", None) is not None:
+            return self._s_matrix_array
+
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        gpts = self.gpts
+        extent = self.extent
+
+        values = xp.asarray(self._sigma[:, None] * self._vh_dense, dtype=dtype)
+        u = xp.asarray(self._u).reshape(self.rank, -1)
+        array = xp.ascontiguousarray((values.T @ u).reshape((-1,) + tuple(gpts)))
+
+        wave_vectors = xp.asarray(self.wave_vectors)
+        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
+        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+
+        max_batch = max(1, int(256**3 / np.prod(gpts)))
+        for start in range(0, len(array), max_batch):
+            chunk = slice(start, start + max_batch)
+            phase = complex_exponential(
+                2.0 * xp.pi * wave_vectors[chunk, 0, None, None] * x[:, None]
+            ) * complex_exponential(
+                2.0 * xp.pi * wave_vectors[chunk, 1, None, None] * y[None, :]
+            )
+            array[chunk] *= phase
+
+        self._s_matrix_array = SMatrixArray(
+            array,
+            wave_vectors=np.asarray(self.wave_vectors, dtype=np.float64),
+            semiangle_cutoff=self.semiangle_cutoff,
+            energy=self.energy,
+            interpolation=(1, 1),
+            sampling=tuple(self.sampling),
+            window_gpts=tuple(gpts),
+            window_offset=(0, 0),
+            periodic=(True, True),
+            device=self._device,
+            ensemble_axes_metadata=[],
+            metadata=dict(self.metadata),
+        )
+        return self._s_matrix_array
+
     def _batch_reduce_to_measurements(
         self,
         scan: BaseScan,
@@ -456,6 +509,17 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
         measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
         """
         self.accelerator.check_is_defined()
+
+        if tuple(self.window_gpts) == tuple(self.gpts):
+            # the reduction of the expanded scattering matrix is a large matrix
+            # product with high arithmetic intensity, which is much faster than
+            # contracting the compressed modes at every probe position
+            return self._expanded_s_matrix_array().reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+            )
 
         if ctf is None:
             ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)
