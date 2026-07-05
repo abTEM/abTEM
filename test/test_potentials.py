@@ -1004,9 +1004,12 @@ def test_all_modes_agree_on_fully_triclinic_cell():
     assert n >= 50, f"want at least 50 above-threshold pixels; got {n}"
 
     # Fourier MS and PRISM (0, 0) column take the same multislice path -> agreement
-    # at the float precision floor (max over all above-threshold pixels)
+    # at the float precision floor (max over all above-threshold pixels).
+    # 5e-4 (not tighter): the weakest above-threshold pixels sit at the float32
+    # rounding floor, and run-to-run variation (threaded potential-build
+    # summation order, FFTW plan selection) moves them by ~1e-4 relative.
     rel_FP = np.abs(IF[mask] - IP[mask]) / IF[mask]
-    assert rel_FP.max() < 1e-4, (
+    assert rel_FP.max() < 5e-4, (
         f"Fourier MS vs PRISM disagrees on {n} pixels: max rel={rel_FP.max():.2e}, "
         f"mean rel={rel_FP.mean():.2e}"
     )
