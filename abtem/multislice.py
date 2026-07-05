@@ -64,15 +64,15 @@ def _fresnel_propagator_array(
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
     kx, ky = kx[:, None], ky[None]
 
-    f = complex_exponential(
-        -(kx**2) * np.pi * thickness * wavelength
-    ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+    k2 = kx**2 + ky**2
+
+    f = complex_exponential(-k2 * np.pi * thickness * wavelength)
 
     # Propagator corrected in Fourier-space, only valid for order=2
     # Eq. (4) from Microscopy and Microanalysis (2020), 26, 1147-1157
     if order == 2:
         f = f * complex_exponential(
-            (-np.pi * thickness * wavelength**3) / 4.0 * (kx**4 + ky**4)
+            (-np.pi * thickness * wavelength**3) / 4.0 * k2**2
         )
     return f
 

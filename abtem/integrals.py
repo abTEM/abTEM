@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from abc import ABCMeta, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
@@ -10,7 +12,6 @@ from ase import Atoms
 from ase.data import chemical_symbols
 from numba import jit  # type: ignore
 from scipy import integrate  # type: ignore
-from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 from scipy.special import erf  # type: ignore
 
@@ -24,7 +25,6 @@ from abtem.core.backend import (
 from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import (
     disk_meshgrid,
-    disk_meshgrid_iter,
     polar_spatial_frequencies,
     spatial_frequencies,
 )
@@ -518,11 +518,19 @@ class ScatteringFactorProjectionIntegrals(FieldIntegrator):
         return array
 
 
+# Deliberately not numba parallel=True: the workqueue threading layer (the
+# fallback when neither TBB nor OpenMP is available) hard-aborts the process
+# when parallel kernels are launched concurrently from multiple Python
+# threads, which is exactly what happens when dask tasks build potential
+# slices in a threaded scheduler. Since the kernel is nogil, thread-level
+# parallelism is instead applied by the caller (see
+# _threaded_interpolate_radial_functions), which is safe under any layer.
 @jit(nopython=True, nogil=True)
 def interpolate_radial_functions(
     array: np.ndarray,
     positions: np.ndarray,
     disk_indices: np.ndarray,
+    disk_counts: np.ndarray,
     sampling: tuple[float, float],
     radial_gpts: np.ndarray,
     radial_functions: np.ndarray,
@@ -535,7 +543,10 @@ def interpolate_radial_functions(
         px = int(round(positions[i, 0] / sampling[0]))
         py = int(round(positions[i, 1] / sampling[1]))
 
-        for j in range(disk_indices.shape[0]):
+        # The disk indices are sorted by radial distance, so the loop may stop
+        # after the first disk_counts[i] pixels (those within the lateral
+        # cutoff of atom i for the current slice).
+        for j in range(disk_counts[i]):
             k = px + disk_indices[j, 0]
             m = py + disk_indices[j, 1]
 
@@ -556,6 +567,82 @@ def interpolate_radial_functions(
                     )
 
 
+_interpolation_pool: Optional[ThreadPoolExecutor] = None
+
+# Upper bound on the temporary per-thread accumulation buffers used by
+# _threaded_interpolate_radial_functions. For very large grids the thread
+# count is reduced so the buffers stay below this size, degrading gracefully
+# to the serial kernel.
+_INTERPOLATION_BUFFER_BUDGET = 256 * 1024**2
+
+
+def _get_interpolation_pool() -> ThreadPoolExecutor:
+    global _interpolation_pool
+    if _interpolation_pool is None:
+        _interpolation_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
+    return _interpolation_pool
+
+
+def _threaded_interpolate_radial_functions(
+    array: np.ndarray,
+    positions: np.ndarray,
+    disk_indices: np.ndarray,
+    disk_counts: np.ndarray,
+    sampling: tuple[float, float],
+    radial_gpts: np.ndarray,
+    radial_functions: np.ndarray,
+    radial_derivative: np.ndarray,
+):
+    """Run the (nogil) interpolation kernel across a thread pool.
+
+    The atoms are dealt round-robin to per-thread accumulation buffers so no
+    two threads ever write to the same array; the buffers are summed into
+    ``array`` afterwards. Since the kernel releases the GIL, plain Python
+    threads give full parallelism without involving numba's threading layer
+    (whose workqueue backend aborts on concurrent launches, e.g. from dask).
+    """
+    num_chunks = min(
+        os.cpu_count() or 1,
+        len(positions),
+        max(int(_INTERPOLATION_BUFFER_BUDGET // max(array.nbytes, 1)), 1),
+    )
+
+    if num_chunks <= 1:
+        interpolate_radial_functions(
+            array,
+            positions,
+            disk_indices,
+            disk_counts,
+            sampling,
+            radial_gpts,
+            radial_functions,
+            radial_derivative,
+        )
+        return
+
+    buffers = np.zeros((num_chunks,) + array.shape, dtype=array.dtype)
+
+    def run_chunk(chunk: int):
+        # Round-robin selection balances the load when disk sizes vary along
+        # the atom order (e.g. sorted by z relative to the slice).
+        selection = slice(chunk, None, num_chunks)
+        interpolate_radial_functions(
+            buffers[chunk],
+            np.ascontiguousarray(positions[selection]),
+            disk_indices,
+            np.ascontiguousarray(disk_counts[selection]),
+            sampling,
+            radial_gpts,
+            np.ascontiguousarray(radial_functions[selection]),
+            np.ascontiguousarray(radial_derivative[selection]),
+        )
+
+    pool = _get_interpolation_pool()
+    futures = [pool.submit(run_chunk, chunk) for chunk in range(num_chunks)]
+    for future in futures:
+        future.result()
+
+    array += buffers.sum(axis=0)
 
 
 class ProjectionIntegralTable:
@@ -595,32 +682,25 @@ class ProjectionIntegralTable:
     def values(self) -> np.ndarray:
         return self._values
 
-    def _interp_at(self, z: np.ndarray) -> np.ndarray:
-        """Vectorised linear interpolation of the table along the limits axis.
-
-        Uses searchsorted + manual lerp instead of constructing a new
-        ``scipy.interpolate.interp1d`` object on every call, which is the
-        dominant per-slice overhead for large atom counts.
-        """
-        limits = self._limits
-        values = self._values
-        n = len(limits)
-
-        # Clamp indices so we can extrapolate linearly at the boundaries.
-        idx = np.searchsorted(limits, z, side="right") - 1
-        idx = np.clip(idx, 0, n - 2)
-
-        # Fractional position between limits[idx] and limits[idx+1].
-        dz = limits[idx + 1] - limits[idx]
-        t = (z - limits[idx]) / dz
-
-        # values shape: (n_limits, n_radial) → index with (n_atoms,) → (n_atoms, n_radial)
-        v0 = values[idx]       # (n_atoms, n_radial)
-        v1 = values[idx + 1]   # (n_atoms, n_radial)
-        return v0 + t[:, None] * (v1 - v0)
+    def _interpolate(self, x: np.ndarray) -> np.ndarray:
+        # Piecewise-linear interpolation along the limits axis with linear
+        # extrapolation from the end segments; equivalent to
+        # scipy.interpolate.interp1d(limits, values, axis=0, kind="linear",
+        # fill_value="extrapolate"), but without rebuilding an interpolator
+        # for every slice.
+        idx = np.searchsorted(self._limits, x, side="right") - 1
+        idx = np.clip(idx, 0, len(self._limits) - 2)
+        x0 = self._limits[idx]
+        x1 = self._limits[idx + 1]
+        weights = (x - x0) / (x1 - x0)
+        return self._values[idx] + weights[..., None] * (
+            self._values[idx + 1] - self._values[idx]
+        )
 
     def integrate(self, a: float | np.ndarray, b: float | np.ndarray) -> np.ndarray:
-        return self._interp_at(b) - self._interp_at(a)
+        a = np.atleast_1d(np.asarray(a, dtype=self._limits.dtype))
+        b = np.atleast_1d(np.asarray(b, dtype=self._limits.dtype))
+        return self._interpolate(b) - self._interpolate(a)
 
 
 def optimize_cutoff(func: Callable, tolerance: float, a: float, b: float) -> float:
@@ -699,6 +779,19 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self._inner_cutoff_factor = inner_cutoff_factor
         self._integration_step = integration_step
         self._tables: dict[str, ProjectionIntegralTable] = {}
+        self._sorted_disks: dict[
+            tuple[str, tuple[float, float]], tuple[np.ndarray, np.ndarray]
+        ] = {}
+        # Device-resident copy of the sorted disk, keyed by
+        # (symbol, sampling, device). The disk is invariant per (symbol,
+        # sampling) across all slices, but integrate_on_grid is called once
+        # per slice per species; without this cache each call re-uploads
+        # it to the GPU from scratch, which measurably dominated GPU
+        # build time (see PR #309 discussion) despite the array never
+        # changing between calls. Only disks small enough to fit within
+        # the chunked-transfer bound are cached; larger disks are streamed
+        # in memory-bounded chunks instead (see integrate_on_grid).
+        self._device_arrays: dict[tuple[str, tuple[float, float], str], object] = {}
 
         super().__init__(periodic=False, finite=True)
 
@@ -852,9 +945,40 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             shifted_a = a - positions[:, 2]
             shifted_b = b - positions[:, 2]
 
-            disk_radius = int(np.ceil(table.radial_gpts[-1] / np.min(sampling)))
-
             fp_dtype = get_dtype(complex=False)
+
+            cutoff = table.radial_gpts[-1]
+            disk_key = (chemical_symbols[number], tuple(sampling))
+            if disk_key in self._sorted_disks:
+                disk, disk_radii = self._sorted_disks[disk_key]
+            else:
+                disk = disk_meshgrid(int(np.ceil(cutoff / np.min(sampling))))
+                # Sort the disk pixels by physical radial distance so that the
+                # interpolation can stop at each atom's lateral cutoff.
+                disk_radii = np.hypot(
+                    disk[:, 0] * sampling[0], disk[:, 1] * sampling[1]
+                )
+                order = np.argsort(disk_radii)
+                disk = np.ascontiguousarray(disk[order])
+                disk_radii = disk_radii[order]
+                self._sorted_disks[disk_key] = (disk, disk_radii)
+
+            # A pixel at lateral distance r only receives contributions from
+            # the part of the radial potential at 3D distance
+            # sqrt(r ** 2 + dz ** 2), with dz the distance from the atom to the
+            # slice interval. Beyond r = sqrt(cutoff ** 2 - dz ** 2) the
+            # potential is below the cutoff tolerance, so those pixels are
+            # skipped. The margin accounts for the atom position rounding to
+            # the nearest pixel.
+            dz = np.maximum(np.maximum(shifted_a, -shifted_b), 0.0)
+            lateral_cutoff = np.sqrt(np.maximum(cutoff**2 - dz**2, 0.0))
+            margin = np.hypot(sampling[0], sampling[1]) / 2
+            disk_counts = np.searchsorted(
+                disk_radii, lateral_cutoff + margin, side="right"
+            )
+            # Cheap host-side reduction: the largest per-atom truncation index
+            # bounds how much of the sorted disk the kernels need at all.
+            max_disk_count = int(disk_counts.max()) if len(disk_counts) else 0
 
             # Transfer the integral table and radial grid to the compute dtype
             # (float32 or float64 according to the precision config) so that all
@@ -886,29 +1010,57 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             if xp is cp:
                 # radial_gpts_device already has the correct dtype (computed
                 # above); reuse it directly instead of re-converting.
-                # Process disk indices in chunks to avoid allocating the
-                # full array on the GPU.  For very fine sampling the disk
-                # can contain hundreds of millions of pixels (>5 GB) which
-                # would exceed device memory.  The CUDA kernel accumulates
-                # via atomic adds, so multiple calls produce the same result.
-                for disk_chunk_cpu in disk_meshgrid_iter(disk_radius):
-                    disk_chunk = cp.asarray(disk_chunk_cpu)
+                # The kernel truncates per atom at disk_counts (with the
+                # chunk's global offset), so at most the max_disk_count prefix
+                # of the radius-sorted disk is ever scanned.
+                disk_counts_device = cp.asarray(disk_counts)
+                chunk_size = 2_000_000
+                if len(disk) <= chunk_size:
+                    # Common case: the disk fits comfortably on device, so keep
+                    # a cached copy -- re-uploading it every slice measurably
+                    # dominated GPU build time (see PR #309 discussion).
+                    device_key = disk_key + (device,)
+                    disk_device = self._device_arrays.get(device_key)
+                    if disk_device is None:
+                        disk_device = cp.asarray(disk)
+                        self._device_arrays[device_key] = disk_device
                     interpolate_radial_functions_cuda(
                         array=temp,
                         positions=positions,
-                        disk_indices=disk_chunk,
+                        disk_indices=disk_device[:max_disk_count],
+                        disk_counts=disk_counts_device,
                         sampling=sampling,
                         radial_gpts=radial_gpts_device,
                         radial_functions=radial_potential,
                         radial_derivative=radial_potential_derivative,
                     )
-                    del disk_chunk
+                else:
+                    # For very fine sampling the disk can contain hundreds of
+                    # millions of pixels (>5 GB) which would exceed device
+                    # memory: stream the needed prefix in bounded chunks so the
+                    # full disk never resides on the GPU.  The CUDA kernel
+                    # accumulates via atomic adds, so multiple calls produce
+                    # the same result.
+                    for start in range(0, max_disk_count, chunk_size):
+                        disk_chunk = cp.asarray(disk[start : start + chunk_size])
+                        interpolate_radial_functions_cuda(
+                            array=temp,
+                            positions=positions,
+                            disk_indices=disk_chunk,
+                            disk_counts=disk_counts_device,
+                            sampling=sampling,
+                            radial_gpts=radial_gpts_device,
+                            radial_functions=radial_potential,
+                            radial_derivative=radial_potential_derivative,
+                            chunk_offset=start,
+                        )
+                        del disk_chunk
             else:
-                disk_indices = disk_meshgrid(disk_radius)
-                interpolate_radial_functions(
+                _threaded_interpolate_radial_functions(
                     array=temp,
                     positions=positions,
-                    disk_indices=disk_indices,
+                    disk_indices=disk,
+                    disk_counts=disk_counts,
                     sampling=sampling,
                     radial_gpts=np.asarray(table.radial_gpts, dtype=fp_dtype),
                     radial_functions=radial_potential,

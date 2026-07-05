@@ -130,6 +130,7 @@ __device__ __forceinline__ void interpolate_radial_impl(
     T* __restrict__ array,
     const T* __restrict__ positions,   // (n_atoms, 2) row-major -- (x, y) per atom
     const int* __restrict__ disk_indices,  // (n_disk, 2)  row-major
+    const int* __restrict__ disk_counts,   // (n_atoms,) per-atom disk truncation
     const T sampling_0,
     const T sampling_1,
     const T* __restrict__ radial_gpts, // (n_radial,)
@@ -141,13 +142,24 @@ __device__ __forceinline__ void interpolate_radial_impl(
     const int n_disk,
     const int n_atoms,
     const int rows,
-    const int cols
+    const int cols,
+    const int chunk_offset
 ) {
     // x-dim: disk index,  y-dim: atom index
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (i >= n_atoms || j >= n_disk) return;
+
+    // disk_indices is sorted by physical radius (see
+    // QuadratureProjectionIntegrals.integrate_on_grid) and may be a chunk of
+    // the sorted disk starting at global offset chunk_offset. disk_counts[i]
+    // is where atom i's contribution to the current slice drops below
+    // cutoff_tolerance (a pixel at lateral distance r only receives a
+    // non-negligible contribution if r <= sqrt(cutoff**2 - dz**2), with dz
+    // the atom's distance to the slice). Stopping at disk_counts[i] instead
+    // of the full disk mirrors the CPU kernel's truncation exactly.
+    if (chunk_offset + j >= disk_counts[i]) return;
 
     T px = positions[i * 2];
     T py = positions[i * 2 + 1];
@@ -179,29 +191,31 @@ __device__ __forceinline__ void interpolate_radial_impl(
 
 extern "C" __global__ void interpolate_radial_f32(
     float* array, const float* positions, const int* disk_indices,
+    const int* disk_counts,
     float sampling_0, float sampling_1,
     const float* radial_gpts, const float* radial_funcs, const float* radial_deriv,
     float dt, float r0,
-    int n_radial, int n_disk, int n_atoms, int rows, int cols
+    int n_radial, int n_disk, int n_atoms, int rows, int cols, int chunk_offset
 ) {
     interpolate_radial_impl<float>(
-        array, positions, disk_indices,
+        array, positions, disk_indices, disk_counts,
         sampling_0, sampling_1, radial_gpts, radial_funcs, radial_deriv,
-        dt, r0, n_radial, n_disk, n_atoms, rows, cols
+        dt, r0, n_radial, n_disk, n_atoms, rows, cols, chunk_offset
     );
 }
 
 extern "C" __global__ void interpolate_radial_f64(
     double* array, const double* positions, const int* disk_indices,
+    const int* disk_counts,
     double sampling_0, double sampling_1,
     const double* radial_gpts, const double* radial_funcs, const double* radial_deriv,
     double dt, double r0,
-    int n_radial, int n_disk, int n_atoms, int rows, int cols
+    int n_radial, int n_disk, int n_atoms, int rows, int cols, int chunk_offset
 ) {
     interpolate_radial_impl<double>(
-        array, positions, disk_indices,
+        array, positions, disk_indices, disk_counts,
         sampling_0, sampling_1, radial_gpts, radial_funcs, radial_deriv,
-        dt, r0, n_radial, n_disk, n_atoms, rows, cols
+        dt, r0, n_radial, n_disk, n_atoms, rows, cols, chunk_offset
     );
 }
 """
@@ -222,11 +236,22 @@ def interpolate_radial_functions(
     array,
     positions,
     disk_indices,
+    disk_counts,
     sampling,
     radial_gpts,
     radial_functions,
     radial_derivative,
+    chunk_offset=0,
 ):
+    """Launch the radial-interpolation CUDA kernel.
+
+    ``disk_indices`` may be a chunk of the radius-sorted disk starting at
+    global index ``chunk_offset`` (see integrate_on_grid in integrals.py,
+    which iterates memory-bounded chunks). ``disk_counts`` gives the
+    per-atom global truncation index into the sorted disk; threads with
+    ``chunk_offset + j >= disk_counts[i]`` exit immediately, mirroring the
+    CPU kernel's per-atom lateral-cutoff truncation.
+    """
     if len(positions) == 0:
         return array
 
@@ -264,18 +289,19 @@ def interpolate_radial_functions(
     # which the caller should pre-convert — see integrate_on_grid in integrals.py).
     positions_xy = cp.ascontiguousarray(positions[:, :2].astype(fp, copy=False))
     disk_i32 = cp.ascontiguousarray(disk_indices.astype(cp.int32, copy=False))
+    counts_i32 = cp.ascontiguousarray(disk_counts.astype(cp.int32, copy=False))
     rg = cp.ascontiguousarray(radial_gpts.astype(fp, copy=False))
     rf = cp.ascontiguousarray(radial_functions.astype(fp, copy=False))
     rd = cp.ascontiguousarray(radial_derivative.astype(fp, copy=False))
 
     kernel(
         grid, block,
-        (array, positions_xy, disk_i32,
+        (array, positions_xy, disk_i32, counts_i32,
          fp(sampling[0]), fp(sampling[1]),
          rg, rf, rd,
          fp(dt), fp(r0),
          np.int32(n_radial), np.int32(n_disk), np.int32(n_atoms),
-         np.int32(rows), np.int32(cols)),
+         np.int32(rows), np.int32(cols), np.int32(chunk_offset)),
     )
 
 
