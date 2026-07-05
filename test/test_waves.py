@@ -447,3 +447,86 @@ def test_skew_stem_scan_runs():
     images = probe.scan(pot, scan=scan, detectors=abtem.AnnularDetector(20, 80)).compute()
     assert images.array.shape == (5, 5)
     assert np.all(np.isfinite(images.array))
+
+@pytest.fixture
+def exit_plane_waves():
+    """Create Waves with a ThicknessAxis for depth_profile tests."""
+    import abtem
+    import ase
+
+    silicon = ase.build.bulk("Si", cubic=True)
+    atoms = silicon * (2, 2, 5)
+    atoms.center(axis=2)
+
+    potential = abtem.Potential(
+        atoms, slice_thickness=2.0, gpts=(32, 32), exit_planes=1
+    )
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=10)
+    probe.match_grid(potential)
+
+    pos = atoms.positions[0][:2]
+    scan = abtem.CustomScan([pos])
+    return probe.multislice(potential, scan).compute()
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_depth_profile_shape(exit_plane_waves, device):
+    profile = exit_plane_waves.depth_profile()
+    n_z = exit_plane_waves.shape[0]
+    n_x = exit_plane_waves.shape[-1]
+    assert profile.shape == (1, n_x, n_z)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_depth_profile_projection_axis_x(exit_plane_waves, device):
+    profile = exit_plane_waves.depth_profile(projection_axis="x")
+    n_z = exit_plane_waves.shape[0]
+    n_y = exit_plane_waves.shape[-2]
+    assert profile.shape == (1, n_y, n_z)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_depth_profile_sampling(exit_plane_waves, device):
+    from abtem.core.axes import ThicknessAxis
+
+    profile = exit_plane_waves.depth_profile()
+
+    thickness_ax = None
+    for ax in exit_plane_waves.ensemble_axes_metadata:
+        if isinstance(ax, ThicknessAxis):
+            thickness_ax = ax
+            break
+
+    z_extent = max(thickness_ax.values)
+    n_z = len(thickness_ax.values)
+    expected_z_sampling = z_extent / n_z
+
+    assert np.isclose(profile.sampling[0], exit_plane_waves.sampling[0])
+    assert np.isclose(profile.sampling[1], expected_z_sampling)
+
+
+def test_depth_profile_no_thickness_axis_raises():
+    import abtem
+
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=10, extent=10, gpts=32)
+    waves = probe.build([5.0, 5.0])
+    with pytest.raises(ValueError, match="ThicknessAxis"):
+        waves.depth_profile()
+
+
+def test_depth_profile_invalid_axis_raises(exit_plane_waves):
+    with pytest.raises(ValueError, match="projection_axis"):
+        exit_plane_waves.depth_profile(projection_axis="z")
+
+
+def test_depth_profile_finite_depth(exit_plane_waves):
+    full = exit_plane_waves.depth_profile()
+    partial = exit_plane_waves.depth_profile(depth=3.0)
+    assert full.shape == partial.shape
+    assert partial.array.sum() < full.array.sum()
+
+
+@pytest.mark.parametrize("convert_complex", ["intensity", "phase", "real", "imag"])
+def test_depth_profile_convert_complex(exit_plane_waves, convert_complex):
+    profile = exit_plane_waves.depth_profile(convert_complex=convert_complex)
+    assert profile.array.shape[-2:] == (exit_plane_waves.shape[-1], exit_plane_waves.shape[0])
