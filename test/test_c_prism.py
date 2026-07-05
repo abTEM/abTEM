@@ -336,3 +336,24 @@ def test_c_prism_identical_to_prism_without_interpolation():
     ).scan(scan=scan, detectors=detector, lazy=False)
 
     assert np.allclose(c_prism_measurement.array, prism_measurement.array)
+
+
+def test_c_prism_defocus_phase():
+    # the propagation phase is factored out before the interpolation and added
+    # back on the dense plane waves; it is a pure phase, unity for a
+    # zero-thickness (vacuum) expansion and non-trivial for a real potential.
+    # the exact round-trip is pinned by the vacuum and aberrated-ctf tests
+    vacuum = CPRISM(
+        extent=20, gpts=64, energy=100e3, semiangle_cutoff=20, interpolation=2
+    )
+    assert np.allclose(vacuum._defocus_phase(vacuum.wave_vectors), 1.0)
+
+    thick = CPRISM(
+        potential=_small_potential(),
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+    )
+    phase = thick._defocus_phase(thick.wave_vectors)
+    assert np.allclose(np.abs(phase), 1.0)
+    assert not np.allclose(phase, 1.0)

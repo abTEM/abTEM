@@ -941,14 +941,38 @@ class CPRISM(SMatrix):
             :, dense_indices[:, 0] + offset[0], dense_indices[:, 1] + offset[1]
         ]
 
+    def _defocus_phase(self, wave_vectors) -> np.ndarray:
+        """The propagation (defocus) phase :math:`\\exp(-i \\pi \\lambda t |k|^2)`
+        accumulated by each plane wave propagating through the cell of thickness
+        :math:`t`.
+
+        Factoring this phase out of the scattering matrix before the
+        interpolation (and adding it back on the dense plane waves) references the
+        beams to the entrance surface, where the probe is focused. It flattens the
+        quadratic phase variation of the phase-removed scattering matrix across
+        the aperture, which the coarse interpolation would otherwise have to
+        capture, improving the accuracy at no additional cost. In vacuum, or for a
+        zero-thickness potential, the phase is unity and the compression is
+        unchanged.
+        """
+        thickness = self.potential.thickness if self.potential is not None else 0.0
+        wavelength = self.wavelength
+        squared_wave_vectors = wave_vectors[..., 0] ** 2 + wave_vectors[..., 1] ** 2
+        return complex_exponential(
+            -np.pi * wavelength * thickness * squared_wave_vectors
+        )
+
     def _compress(self, array) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Phase removal, interpolation to the dense plane-wave expansion and
         exact truncated SVD of the interpolated operator.
 
-        The phase-removed scattering matrix is factored as :math:`T = L Q` with
-        orthonormal :math:`Q`; the interpolation acts on the small beam-side
-        factor :math:`L`, hence the singular value decomposition of the
-        interpolated operator is obtained exactly without ever forming it.
+        The plane-wave tilt phase and the propagation (defocus) phase are factored
+        out of each beam before the interpolation, then added back on the dense
+        plane waves (see :meth:`_defocus_phase`). The phase-removed scattering
+        matrix is factored as :math:`T = L Q` with orthonormal :math:`Q`; the
+        interpolation acts on the small beam-side factor :math:`L`, hence the
+        singular value decomposition of the interpolated operator is obtained
+        exactly without ever forming it.
         """
         xp = get_array_module(array)
         dtype = get_dtype(complex=True)
@@ -962,6 +986,10 @@ class CPRISM(SMatrix):
 
         array = array.reshape((-1,) + tuple(gpts))
 
+        # the conjugate of the propagation phase flattens the quadratic phase
+        # variation of the phase-removed matrix; it is added back below
+        defocus_phase = self._defocus_phase(wave_vectors).conj()
+
         normalization = np.prod(self.interpolation).astype(np.float32)
         max_batch = max(1, int(256**3 / np.prod(gpts)))
         for start in range(0, len(array), max_batch):
@@ -971,7 +999,7 @@ class CPRISM(SMatrix):
             ) * complex_exponential(
                 -2.0 * xp.pi * wave_vectors[chunk, 1, None, None] * y[None, :]
             )
-            array[chunk] *= phase / normalization
+            array[chunk] *= phase * defocus_phase[chunk, None, None] / normalization
 
         matrix = array.reshape((len(array), -1))
 
@@ -996,6 +1024,13 @@ class CPRISM(SMatrix):
 
         u = (wh[:rank] @ q.T.conj()).reshape((rank,) + tuple(gpts))
         vh_dense = xp.ascontiguousarray(u_dense[:, :rank].T)
+
+        # add the propagation phase back on the dense plane waves
+        dense_wave_vectors = xp.asarray(dense_indices, dtype=np.float32)
+        dense_wave_vectors = dense_wave_vectors / xp.asarray(extent, dtype=np.float32)
+        vh_dense = vh_dense * self._defocus_phase(dense_wave_vectors)[None].astype(
+            dtype
+        )
 
         return (
             u,
