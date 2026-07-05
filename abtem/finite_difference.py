@@ -135,37 +135,48 @@ fd_coefficients = {
 }
 
 
-def _build_matrix(offsets: list[int]):
-    import sympy  # type: ignore
-
-    """Constructs the equation system matrix for the finite difference coefficients"""
-    A = [([1 for _ in offsets])]
-    for i in range(1, len(offsets)):
-        A.append([j**i for j in offsets])
-    return sympy.Matrix(A)
-
-
-def _build_rhs(offsets: list[int], deriv: int):
-    import sympy  # type: ignore
-
-    """The right hand side of the equation system matrix"""
-    b = [0 for _ in offsets]
-    b[deriv] = math.factorial(deriv)
-    return sympy.Matrix(b)
-
-
 def _calculate_finite_difference_coefficient(derivative: int, accuracy: int = 2):
-    import sympy  # type: ignore
+    """Central finite-difference coefficients for the given derivative order.
+
+    Solves the Vandermonde system ``sum_j offsets[j]**i * c[j] = i! *
+    delta(i, derivative)`` exactly with stdlib rational arithmetic
+    (``fractions.Fraction``), so no computer-algebra dependency is needed
+    and the result is identical to a symbolic solve.
+    """
+    from fractions import Fraction
 
     num_central = 2 * math.floor((derivative + 1) / 2) - 1 + accuracy
     num_side = num_central // 2
     offsets = list(range(-num_side, num_side + 1))
+    n = len(offsets)
 
-    matrix = _build_matrix(offsets)
-    rhs = _build_rhs(offsets, derivative)
-    coefs = sympy.linsolve((matrix, rhs))
-    coefs = np.array([float(coef) for coef in tuple(coefs)[0]])
-    return coefs
+    matrix = [[Fraction(offset) ** i for offset in offsets] for i in range(n)]
+    rhs = [
+        Fraction(math.factorial(derivative)) if i == derivative else Fraction(0)
+        for i in range(n)
+    ]
+
+    # Gaussian elimination with partial pivoting; exact in rational arithmetic
+    # (pivoting only guards against a zero pivot, not rounding).
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(matrix[r][col]))
+        matrix[col], matrix[pivot] = matrix[pivot], matrix[col]
+        rhs[col], rhs[pivot] = rhs[pivot], rhs[col]
+        for row in range(col + 1, n):
+            factor = matrix[row][col] / matrix[col][col]
+            if factor:
+                for c in range(col, n):
+                    matrix[row][c] -= factor * matrix[col][c]
+                rhs[row] -= factor * rhs[col]
+
+    coefs = [Fraction(0)] * n
+    for row in range(n - 1, -1, -1):
+        residual = rhs[row] - sum(
+            matrix[row][c] * coefs[c] for c in range(row + 1, n)
+        )
+        coefs[row] = residual / matrix[row][row]
+
+    return np.array([float(coef) for coef in coefs])
 
 
 def finite_difference_coefficients(derivative: int, accuracy: int = 2):
