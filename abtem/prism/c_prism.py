@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 
 from functools import partial
@@ -56,40 +54,14 @@ def _dense_wave_vector_indices(
     return np.stack([n, m], axis=-1).astype(int)
 
 
-def _randomized_svd(
-    a, n_components: int, xp, n_oversamples: int = 16, n_iter: int = 2, seed: int = 13
-):
-    """Randomized truncated SVD (Halko et al.) with QR-stabilized power iterations.
-
-    Works for numpy and cupy arrays.
-    """
-    n = a.shape[1]
-    q = min(n, n_components + n_oversamples)
-
-    random_state = xp.random.RandomState(seed)
-    dtype = get_dtype(complex=True)
-    projection = (
-        random_state.standard_normal((n, q))
-        + 1.0j * random_state.standard_normal((n, q))
-    ).astype(dtype)
-
-    Q, _ = xp.linalg.qr(a @ projection)
-    for _ in range(n_iter):
-        Z, _ = xp.linalg.qr(a.conj().T @ Q)
-        Q, _ = xp.linalg.qr(a @ Z)
-
-    B = Q.conj().T @ a
-    U_B, s, Vh = xp.linalg.svd(B, full_matrices=False)
-    return Q @ U_B, s, Vh
-
-
 class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
     """
     A compressed scattering matrix defined by its truncated singular value
-    decomposition. The phase-removed scattering matrix is factored as
+    decomposition. The coarse phase-removed scattering matrix is interpolated to
+    the plane waves of the aperture at interpolation (1, 1) and factored as
     :math:`T \\approx U \\Sigma V^H`, where the left singular vectors :math:`U` are
-    real-space images and the right singular vectors are interpolated to the plane
-    waves of the aperture at interpolation (1, 1).
+    real-space images and the right singular vectors hold the plane-wave
+    coefficients of each mode.
 
     Parameters
     ----------
@@ -268,63 +240,78 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
         iy = (xp.arange(window_gpts[1]) - window_gpts[1] // 2) % gpts[1]
         return kernel[:, ix[:, None], iy[None, :]]
 
-    def _reduce_to_waves(self, u_transposed, snapped_pixels, kernel):
+    def _reduce_to_waves(self, u_windows, snapped_pixels, kernel):
         """Reduce the compressed scattering matrix to wave functions at the given
-        snapped pixel positions."""
+        snapped pixel positions.
+
+        Parameters
+        ----------
+        u_windows : array
+            Left singular vectors with the mode axis last, of shape
+            (gpts_x, gpts_y, K).
+        snapped_pixels : array of int
+            Whole-pixel probe positions of shape (n, 2).
+        kernel : array
+            Reduction kernel with the mode axis last, of shape
+            (window_gpts_x, window_gpts_y, K).
+        """
         xp = get_array_module(self._device)
 
         gpts = self.gpts
         window_gpts = self.window_gpts
 
-        ix = (
-            snapped_pixels[:, 0, None] + xp.arange(window_gpts[0]) - window_gpts[0] // 2
-        ) % gpts[0]
-        iy = (
-            snapped_pixels[:, 1, None] + xp.arange(window_gpts[1]) - window_gpts[1] // 2
-        ) % gpts[1]
-
-        flat_indices = (ix[:, :, None] * gpts[1] + iy[:, None, :]).reshape(
-            len(snapped_pixels), -1
-        )
-
-        kernel_transposed = xp.ascontiguousarray(kernel.reshape(self.rank, -1).T)
-
-        num_window_gpts = int(np.prod(window_gpts))
+        corners = (
+            snapped_pixels
+            - xp.asarray((window_gpts[0] // 2, window_gpts[1] // 2))[None]
+        ) % xp.asarray(gpts)[None]
+        corners = corners if xp is np else corners.get()
 
         waves = xp.zeros(
-            (len(snapped_pixels), num_window_gpts), dtype=get_dtype(complex=True)
+            (len(snapped_pixels),) + window_gpts, dtype=get_dtype(complex=True)
         )
 
-        # The gathered rows of the transposed left singular vectors are contiguous
-        # in the mode index, making the reduction memory efficient. The contraction
-        # over the modes is expressed as a batched matrix product. The positions
-        # are chunked to bound the memory of the gathered windows.
-        kernel_column = kernel_transposed[None, :, :, None]
+        # Each window is at most four contiguous blocks of the scattering matrix
+        # (due to the periodic wrap-around), hence the contraction over the modes
+        # is evaluated on views without gathering; the mode axis is contiguous in
+        # both operands.
+        def reduce_position(n):
+            cx, cy = int(corners[n, 0]), int(corners[n, 1])
+            x_split = min(gpts[0] - cx, window_gpts[0])
+            y_split = min(gpts[1] - cy, window_gpts[1])
+            for wx0, wx1, sx in ((0, x_split, cx), (x_split, window_gpts[0], 0)):
+                if wx0 == wx1:
+                    continue
+                for wy0, wy1, sy in ((0, y_split, cy), (y_split, window_gpts[1], 0)):
+                    if wy0 == wy1:
+                        continue
+                    waves[n, wx0:wx1, wy0:wy1] = xp.einsum(
+                        "ijk,ijk->ij",
+                        u_windows[sx : sx + wx1 - wx0, sy : sy + wy1 - wy0],
+                        kernel[wx0:wx1, wy0:wy1],
+                    )
 
         def reduce_chunk(chunk):
-            gathered = u_transposed[flat_indices[chunk]]
-            waves[chunk] = xp.matmul(gathered[:, :, None, :], kernel_column)[:, :, 0, 0]
-
-        max_batch = max(1, int(32e6 / (num_window_gpts * self.rank * 8)))
-        chunks = [
-            slice(start, start + max_batch)
-            for start in range(0, len(snapped_pixels), max_batch)
-        ]
+            for n in range(chunk.start, min(chunk.stop, len(snapped_pixels))):
+                reduce_position(n)
 
         num_threads = int(config.get("fftw.threads", 1)) if xp is np else 1
 
-        if num_threads > 1 and len(chunks) > 1:
-            # the reduction of each chunk releases the GIL for its large array
-            # operations; the chunks write to disjoint slices
+        if num_threads > 1 and len(snapped_pixels) > 1:
+            # the contraction of each position releases the GIL for its large
+            # array operations; the positions write to disjoint slices
             from concurrent.futures import ThreadPoolExecutor
 
+            max_batch = -(len(snapped_pixels) // -(num_threads * 4))
+            chunks = [
+                slice(start, start + max_batch)
+                for start in range(0, len(snapped_pixels), max_batch)
+            ]
             with ThreadPoolExecutor(num_threads) as executor:
                 list(executor.map(reduce_chunk, chunks))
         else:
-            for chunk in chunks:
-                reduce_chunk(chunk)
+            reduce_chunk(slice(0, len(snapped_pixels)))
 
-        return waves.reshape((len(snapped_pixels),) + window_gpts)
+        return waves
 
     def _group_by_fractional_offset(self, pixel_positions, decimals: int = 4):
         """Group probe positions by their fractional pixel offset.
@@ -369,9 +356,7 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         xp = get_array_module(self._device)
 
-        u_transposed = xp.ascontiguousarray(
-            xp.asarray(self._u).reshape(self.rank, -1).T
-        )
+        u_windows = xp.ascontiguousarray(xp.asarray(self._u).transpose(1, 2, 0))
 
         n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
         pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
@@ -405,10 +390,12 @@ class CPRISMArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     dtype=get_dtype(complex=True),
                 )
                 for i, offset in enumerate(unique_offsets):
-                    kernel = self._window_kernel(values, offset)
+                    kernel = xp.ascontiguousarray(
+                        self._window_kernel(values, offset).transpose(1, 2, 0)
+                    )
                     mask = xp.asarray(inverse == i)
                     waves_array[mask] = self._reduce_to_waves(
-                        u_transposed, snapped[mask], kernel
+                        u_windows, snapped[mask], kernel
                     )
 
                 waves_array = waves_array.reshape(
@@ -538,12 +525,12 @@ class CPRISM(SMatrix):
     C-PRISM builds a PRISM scattering matrix from a coarse plane-wave expansion
     given by the interpolation factors. The rapidly oscillating plane-wave phase is
     factored out of each of the propagated waves, exposing their smooth variation
-    with the wave vector. The resulting phase-removed scattering matrix is
-    compressed by an adaptive truncated singular value decomposition, and the right
-    singular vectors are interpolated back to the full plane-wave expansion of the
-    aperture. Every probe is then reduced from the full expansion, avoiding the
-    real-space cropping and coarsened aperture sampling errors of PRISM at the same
-    interpolation factor.
+    with the wave vector. The phase-removed scattering matrix is interpolated
+    (trigonometrically over the coarse grid of plane waves) to the full plane-wave
+    expansion of the aperture, and the interpolated operator is compressed by an
+    exact adaptive truncated singular value decomposition. Every probe is then
+    reduced from the full expansion, avoiding the real-space cropping and coarsened
+    aperture sampling errors of PRISM at the same interpolation factor.
 
     The coarse plane-wave expansion is padded to the bounding rectangle of the
     aperture (plus a one-cell buffer), so that the interpolation of the right
@@ -579,9 +566,9 @@ class CPRISM(SMatrix):
         the scattering matrix.
     tolerance : float, optional
         Relative singular value threshold of the adaptive truncation. All modes with
-        singular values within this factor of the largest singular value are
-        retained (default is 1e-3). Decrease for higher accuracy at increased cost
-        of the reduction.
+        singular values within this factor of the largest singular value of the
+        interpolated scattering matrix are retained (default is 1e-3). Decrease for
+        higher accuracy at increased cost of the reduction.
     max_rank : int, optional
         Maximum number of retained modes. If None (default), the rank is set
         adaptively by the tolerance.
@@ -766,18 +753,27 @@ class CPRISM(SMatrix):
         xp = get_array_module(self.device)
         return xp.asarray([kx.ravel(), ky.ravel()]).T
 
-    def _interpolate_vh_dense(self, vh, dense_indices) -> np.ndarray:
-        """Trigonometric interpolation of the right singular vectors from the coarse
-        rectangle of plane waves to the dense plane-wave expansion."""
-        xp = get_array_module(vh)
+    def _interpolate_beam_functions(self, functions, dense_indices) -> np.ndarray:
+        """Trigonometric interpolation of functions of the coarse plane waves
+        (given as rows over the coarse rectangle) to the dense plane-wave
+        expansion.
+
+        The trigonometric interpolant is band limited: it does not alias the
+        interpolation error to displaced copies of the probe. A local (spline)
+        interpolant leaks such attenuated ghost probes displaced by
+        extent/interpolation, which an annular detector integrates as a large
+        error even when the interpolant is more accurate in the mean-square
+        sense.
+        """
+        xp = get_array_module(functions)
         dtype = get_dtype(complex=True)
 
         bounds = self._coarse_bounds()
         shape = (2 * bounds[0] + 1, 2 * bounds[1] + 1)
 
-        vh = vh.reshape((-1,) + shape)
+        functions = functions.reshape((-1,) + shape)
 
-        coefficients = xp.fft.fft2(vh, axes=(-2, -1)) / np.prod(shape)
+        coefficients = xp.fft.fft2(functions, axes=(-2, -1)) / np.prod(shape)
 
         kernels = ()
         for i, (bound, length) in enumerate(zip(bounds, shape)):
@@ -807,8 +803,14 @@ class CPRISM(SMatrix):
         ]
 
     def _compress(self, array) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Phase removal, adaptive truncated SVD and interpolation of the right
-        singular vectors to the dense plane-wave expansion."""
+        """Phase removal, interpolation to the dense plane-wave expansion and
+        exact truncated SVD of the interpolated operator.
+
+        The phase-removed scattering matrix is factored as :math:`T = L Q` with
+        orthonormal :math:`Q`; the interpolation acts on the small beam-side
+        factor :math:`L`, hence the singular value decomposition of the
+        interpolated operator is obtained exactly without ever forming it.
+        """
         xp = get_array_module(array)
         dtype = get_dtype(complex=True)
 
@@ -832,53 +834,33 @@ class CPRISM(SMatrix):
             )
             array[chunk] *= phase / normalization
 
-        matrix = array.reshape((len(array), -1)).T
+        matrix = array.reshape((len(array), -1))
 
-        if self._max_rank is not None:
-            n_components = min(self._max_rank, len(array))
-        else:
-            # the number of probed modes must exceed the adaptively retained rank;
-            # thick, strongly channeling specimens may retain most of the modes
-            n_components = min(max(384, len(array) // 2), len(array))
-
-        u, sigma, vh = _randomized_svd(matrix, n_components, xp)
-
-        def _adaptive_rank(sigma):
-            return max(1, int((sigma >= self._tolerance * sigma[0]).sum()))
-
-        rank = _adaptive_rank(sigma)
-
-        if self._max_rank is not None:
-            rank = min(rank, self._max_rank)
-        elif rank == len(sigma) and rank < len(array):
-            # the adaptive rank reached the number of probed modes, hence the
-            # tolerance is not certified; escalate to a complete decomposition
-            if len(array) <= 2048:
-                n_components = len(array)
-            else:
-                n_components = min(2 * n_components, len(array))
-
-            u, sigma, vh = _randomized_svd(matrix, n_components, xp)
-            rank = _adaptive_rank(sigma)
-
-            if rank == len(sigma) and rank < len(array):
-                warnings.warn(
-                    "The adaptive rank of the C-PRISM expansion reached the "
-                    "maximum number of probed modes; the tolerance may not be "
-                    "met. Provide 'max_rank' to increase the number of probed "
-                    "modes."
-                )
-
-        u = xp.ascontiguousarray(u[:, :rank].T).reshape((rank,) + tuple(gpts))
-        sigma = sigma[:rank]
-        vh = vh[:rank]
+        # T = L Q with the rows of Q orthonormal
+        q, r = xp.linalg.qr(matrix.T.conj())
+        beam_factor = r.T.conj()
 
         dense_indices = self._dense_indices()
-        vh_dense = self._interpolate_vh_dense(vh, xp.asarray(dense_indices))
+
+        # the interpolated operator T_dense = (P L) Q shares the pixel-side
+        # factor Q, hence its exact SVD follows from the small matrix P L,
+        # obtained by interpolating the columns of L over the coarse plane waves
+        projected = self._interpolate_beam_functions(
+            xp.ascontiguousarray(beam_factor.T), xp.asarray(dense_indices)
+        ).T
+        projected = xp.ascontiguousarray(projected.astype(dtype))
+        u_dense, sigma, wh = xp.linalg.svd(projected, full_matrices=False)
+
+        rank = max(1, int((sigma >= self._tolerance * sigma[0]).sum()))
+        if self._max_rank is not None:
+            rank = min(rank, self._max_rank)
+
+        u = (wh[:rank] @ q.T.conj()).reshape((rank,) + tuple(gpts))
+        vh_dense = xp.ascontiguousarray(u_dense[:, :rank].T)
 
         return (
             u,
-            sigma.astype(get_dtype(complex=False)),
+            sigma[:rank].astype(get_dtype(complex=False)),
             vh_dense.astype(dtype),
             dense_indices,
         )

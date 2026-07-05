@@ -112,6 +112,10 @@ def test_c_prism_beats_prism_at_same_interpolation():
     c_prism_error = _relative_error(c_prism_measurement, reference)
 
     assert c_prism_error < prism_error
+    # the annular detector integrates any aliased ghost probes of the
+    # interpolation as error; the band-limited interpolant must keep the
+    # absolute error small, not just smaller than PRISM
+    assert c_prism_error < 0.05
 
 
 def test_c_prism_off_grid_positions():
