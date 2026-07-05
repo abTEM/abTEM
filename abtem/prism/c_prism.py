@@ -30,6 +30,13 @@ from abtem.scan import BaseScan, GridScan, validate_scan
 from abtem.transfer import CTF
 from abtem.waves import Probe, Waves
 
+# the coarse plane-wave expansion is built on a disk around the aperture: every
+# beam within this normalized radius (unity at the aperture edge) of the
+# aperture, or one coarse cell, whichever is larger. The far corners of the
+# bounding rectangle are dropped, which reduces the number of multislice runs at
+# large interpolation factors without affecting the accuracy of the reduction.
+_COARSE_SUPPORT_MARGIN = 0.45
+
 
 def _dense_wave_vector_indices(
     extent: tuple[float, float],
@@ -596,10 +603,12 @@ class CPRISM(SMatrix):
     reduced from the full expansion, avoiding the real-space cropping and coarsened
     aperture sampling errors of PRISM at the same interpolation factor.
 
-    The coarse plane-wave expansion is padded to the bounding rectangle of the
-    aperture (plus a one-cell buffer), so that the interpolation of the right
-    singular vectors is supported on all sides. The padded plane waves are assigned
-    zero weight in the reduction.
+    The coarse plane-wave expansion spans a disk around the aperture, padded by a
+    support margin so that the interpolation of the right singular vectors is
+    supported on all sides. The far corners of the bounding rectangle are dropped,
+    which reduces the number of multislice runs, most strongly at large
+    interpolation factors. The padded plane waves are assigned zero weight in the
+    reduction.
 
     Parameters
     ----------
@@ -790,12 +799,68 @@ class CPRISM(SMatrix):
             bounds += (-(n_max // -self.interpolation[i]) + 1,)
         return bounds
 
+    def _coarse_mask(self) -> np.ndarray:
+        """Boolean mask over the raveled coarse bounding rectangle selecting the
+        beams that are built (run through the multislice algorithm).
+
+        Only the beams within a support disk around the aperture are kept: those
+        with a normalized radius (unity at the aperture edge) within one coarse
+        cell, or a fixed margin, of the aperture. The far corners of the bounding
+        rectangle are dropped. At a coarse interpolation the grid under-samples
+        the scattering matrix at those corners, and including them makes the
+        trigonometric interpolation overfit; dropping them both reduces the
+        number of multislice runs and improves the interpolation, most strongly
+        at large interpolation factors where the corners dominate the rectangle.
+        """
+        bounds = self._coarse_bounds()
+        dense_indices = self._dense_indices()
+        n_max = [max(1, int(np.abs(dense_indices[:, i]).max())) for i in range(2)]
+
+        n = np.arange(-bounds[0], bounds[0] + 1)
+        m = np.arange(-bounds[1], bounds[1] + 1)
+
+        radius_x = (n[:, None] * self.interpolation[0]) / n_max[0]
+        radius_y = (m[None, :] * self.interpolation[1]) / n_max[1]
+        radius = np.sqrt(radius_x**2 + radius_y**2)
+
+        cell = max(self.interpolation[0] / n_max[0], self.interpolation[1] / n_max[1])
+        keep_radius = 1.0 + max(cell, _COARSE_SUPPORT_MARGIN)
+        return (radius <= keep_radius).ravel()
+
+    def _coarse_fill_indices(self) -> np.ndarray:
+        """For every position of the coarse bounding rectangle, the index (into
+        the built, disk-masked beams) of the nearest built beam.
+
+        The dropped corners of the rectangle are filled by the nearest built beam
+        rather than by zeros, so that the trigonometric interpolation extends the
+        scattering matrix smoothly into the corners instead of dropping a
+        discontinuity there. In particular a rank-one (vacuum) scattering matrix,
+        constant over the built beams, is filled to a constant and reconstructed
+        exactly.
+        """
+        from scipy import ndimage
+
+        bounds = self._coarse_bounds()
+        shape = (2 * bounds[0] + 1, 2 * bounds[1] + 1)
+        kept = self._coarse_mask().reshape(shape)
+
+        nearest = ndimage.distance_transform_edt(
+            ~kept, return_distances=False, return_indices=True
+        )
+        nearest_flat = (nearest[0] * shape[1] + nearest[1]).ravel()
+
+        # map a flat rectangle index to its position in the built (kept) order
+        rectangle_to_kept = np.full(int(np.prod(shape)), -1, dtype=int)
+        rectangle_to_kept[np.flatnonzero(kept.ravel())] = np.arange(int(kept.sum()))
+        return rectangle_to_kept[nearest_flat]
+
     @property
     def wave_vectors(self) -> np.ndarray:
-        """The wave vectors of the coarse plane-wave expansion. The expansion is
-        padded to the bounding rectangle of the aperture plus a one-cell buffer.
-        At an interpolation factor of (1, 1) the expansion is complete, hence no
-        padding is applied."""
+        """The wave vectors of the coarse plane-wave expansion. The expansion
+        spans a disk around the aperture (see :meth:`_coarse_mask`), padding it
+        by a support margin so that the interpolation of the compressed modes is
+        supported on all sides. At an interpolation factor of (1, 1) the
+        expansion is complete, hence no padding is applied."""
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
@@ -814,8 +879,9 @@ class CPRISM(SMatrix):
 
         kx, ky = np.meshgrid(kx, ky, indexing="ij")
 
+        mask = self._coarse_mask()
         xp = get_array_module(self.device)
-        return xp.asarray([kx.ravel(), ky.ravel()]).T
+        return xp.asarray([kx.ravel()[mask], ky.ravel()[mask]]).T
 
     def _interpolate_beam_functions(self, functions, dense_indices) -> np.ndarray:
         """Trigonometric interpolation of functions of the coarse plane waves
@@ -834,6 +900,15 @@ class CPRISM(SMatrix):
 
         bounds = self._coarse_bounds()
         shape = (2 * bounds[0] + 1, 2 * bounds[1] + 1)
+
+        # the built beams span a disk, not the full rectangle; extend them into
+        # the rectangle expected by the (rectangular) fft by filling the dropped
+        # corners with the nearest built beam (smooth, and exact for a rank-one
+        # scattering matrix) rather than with zeros
+        num_rectangle = int(np.prod(shape))
+        if functions.shape[-1] != num_rectangle:
+            fill_indices = xp.asarray(self._coarse_fill_indices())
+            functions = functions[..., fill_indices]
 
         functions = functions.reshape((-1,) + shape)
 
