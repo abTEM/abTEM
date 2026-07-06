@@ -668,6 +668,7 @@ def integrate_disc(
     border : str
         Specify how to treat integration regions that cross the image border. The valid
         values and their behaviours are:
+
         'wrap'
             The measurement is extended by wrapping around to the opposite edge.
         'raise'

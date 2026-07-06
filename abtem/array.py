@@ -232,6 +232,7 @@ class ComputableList(list):
         **kwargs: Any,
     ):
         """Write data to a zarr file.
+
         Parameters
         ----------
         url : str
@@ -1297,7 +1298,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         resource_profiler: bool = False,
         **kwargs,
     ) -> Self | tuple[Self, tuple]:
-        """Turn a lazy *ab*TEM object into its in-memory equivalent.
+        """Turn a lazy abTEM object into its in-memory equivalent.
 
         Parameters
         ----------
