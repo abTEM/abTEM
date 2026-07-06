@@ -85,9 +85,7 @@ def _fresnel_propagator_array(
     else:
         exact = xp.sqrt(1.0 - x[propagating])
 
-        f = complex_exponential(
-            -(kx**2) * np.pi * thickness * wavelength
-        ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
+        f = complex_exponential(-k2 * np.pi * thickness * wavelength)
 
         if order == 1:
             approx = 1.0 - x[propagating] / 2.0

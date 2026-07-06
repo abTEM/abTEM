@@ -1,0 +1,25 @@
+# The main branch holds releases only: pull requests to main must come from
+# dev (or a release/hotfix branch).
+
+name: Ensure PR to main is from dev
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check source branch
+        run: |
+          if [[ "${GITHUB_HEAD_REF}" != "dev" ]] \
+            && ! [[ "${GITHUB_HEAD_REF}" =~ ^release/ ]] \
+            && ! [[ "${GITHUB_HEAD_REF}" =~ ^hotfix/ ]]; then
+            echo "Pull requests to 'main' must come from 'dev' or a 'release/'/'hotfix/' branch."
+            exit 1
+          fi
