@@ -571,7 +571,14 @@ class TransitionPotential(BaseTransitionPotential):
         return interp1d(radial_grid, integral)(k)
 
     def _calculate_form_factor(self, bound, excited, k, phi, theta):
-        from sympy.physics.wigner import wigner_3j
+        try:
+            from sympy.physics.wigner import wigner_3j
+        except ImportError as e:
+            raise ImportError(
+                "Calculating core-loss EELS form factors requires sympy. "
+                "Install it with `pip install abtem[core-loss]` or "
+                "`pip install sympy`."
+            ) from e
 
         Hn0 = np.zeros_like(k, dtype=complex)
         l = bound.l

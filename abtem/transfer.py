@@ -459,16 +459,35 @@ class Bullseye(BaseAperture):
     """
     Bullseye aperture.
 
+    The aperture is divided radially into `num_rings` periods, each consisting of an
+    open annulus followed by an opaque gap; `ring_width` is the open fraction of each
+    period. The open annulus width is
+    ``ds = semiangle_cutoff * ring_width / (ring_width + num_rings - 1)``, and a
+    `ring_width` of 1 gives a fully open disk. Opaque spokes cross all rings except
+    the central disk; each spoke is a straight bar of constant linear width
+    ``spoke_width * ds`` (in the same reciprocal-angle units as `ds`), not a wedge of
+    constant angular width. Consequently `spoke_width` has no meaningful upper bound
+    of 1 the way `ring_width` does: a fixed `spoke_width` blocks a larger angular
+    fraction of rings closer to the center than rings farther out, so increasing it
+    reduces transmission monotonically but not linearly, with rings saturating to
+    fully blocked from the center outward. The central disk is never affected by
+    spokes, so transmission approaches (but never reaches) "central disk only" as
+    `spoke_width` grows.
+
     Parameters
     ----------
     num_spokes : int
         Number of spokes.
     spoke_width : float
-        Width of spokes [deg].
+        Width of the opaque spokes, as a multiple of the open annulus width `ds`
+        (see above) rather than an angular fraction. Must be non-negative; unlike
+        `ring_width`, values greater than 1 are valid and simply widen the spokes
+        further.
     num_rings : int
         Number of rings.
     ring_width : float
-        Width of rings [mrad].
+        Open fraction of each radial ring period. Must be in the interval (0, 1],
+        where 1 gives a fully open disk.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad].
     energy : float, optional
@@ -501,6 +520,10 @@ class Bullseye(BaseAperture):
         edge_softness: float = 0.0,
         corner_radius: float = 0.0,
     ):
+        if not 0.0 < ring_width <= 1.0:
+            raise ValueError("ring_width must be in the interval (0, 1]")
+        if spoke_width < 0.0:
+            raise ValueError("spoke_width must be non-negative")
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
         self._num_rings = num_rings
@@ -515,7 +538,7 @@ class Bullseye(BaseAperture):
             gpts=gpts,
             sampling=sampling,
         )
-    
+
     @property
     def soft(self) -> bool:
         """True if the aperture has a soft edge"""
@@ -528,7 +551,7 @@ class Bullseye(BaseAperture):
 
     @property
     def spoke_width(self) -> float:
-        """Width of spokes [deg]."""
+        """Width of the opaque spokes as a multiple of the open annulus width."""
         return self._spoke_width
 
     @property
@@ -538,8 +561,9 @@ class Bullseye(BaseAperture):
 
     @property
     def ring_width(self) -> float:
-        """Width of rings [mrad]."""
+        """Open fraction of each radial ring period."""
         return self._ring_width
+
     @property
     def edge_softness(self) -> float:
         """Edge softness [mrads]"""

@@ -50,6 +50,9 @@ extra = [
     "dask-labextension",
     "bokeh",
 ]
+core-loss = [
+    "sympy",
+]
 
 [dependency-groups]
 dev = [
@@ -74,6 +77,7 @@ test = [
     "py>=1.11.0",
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.8.0",
+    "sympy",
     "tox>=4.34.1",
 ]
 
