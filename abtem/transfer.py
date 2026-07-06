@@ -416,17 +416,27 @@ class Bullseye(BaseAperture):
     The aperture is divided radially into `num_rings` periods, each consisting of an
     open annulus followed by an opaque gap; `ring_width` is the open fraction of each
     period. The open annulus width is
-    ``semiangle_cutoff * ring_width / (ring_width + num_rings - 1)``, and a
-    `ring_width` of 1 gives a fully open disk. Opaque spokes of width
-    ``spoke_width * open annulus width`` cross all rings except the central disk.
+    ``ds = semiangle_cutoff * ring_width / (ring_width + num_rings - 1)``, and a
+    `ring_width` of 1 gives a fully open disk. Opaque spokes cross all rings except
+    the central disk; each spoke is a straight bar of constant linear width
+    ``spoke_width * ds`` (in the same reciprocal-angle units as `ds`), not a wedge of
+    constant angular width. Consequently `spoke_width` has no meaningful upper bound
+    of 1 the way `ring_width` does: a fixed `spoke_width` blocks a larger angular
+    fraction of rings closer to the center than rings farther out, so increasing it
+    reduces transmission monotonically but not linearly, with rings saturating to
+    fully blocked from the center outward. The central disk is never affected by
+    spokes, so transmission approaches (but never reaches) "central disk only" as
+    `spoke_width` grows.
 
     Parameters
     ----------
     num_spokes : int
         Number of spokes.
     spoke_width : float
-        Width of the opaque spokes as a fraction of the open ring width. Must be
-        non-negative.
+        Width of the opaque spokes, as a multiple of the open annulus width `ds`
+        (see above) rather than an angular fraction. Must be non-negative; unlike
+        `ring_width`, values greater than 1 are valid and simply widen the spokes
+        further.
     num_rings : int
         Number of rings.
     ring_width : float
@@ -495,7 +505,7 @@ class Bullseye(BaseAperture):
 
     @property
     def spoke_width(self) -> float:
-        """Width of the opaque spokes as a fraction of the open ring width."""
+        """Width of the opaque spokes as a multiple of the open annulus width."""
         return self._spoke_width
 
     @property
