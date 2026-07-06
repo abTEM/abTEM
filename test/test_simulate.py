@@ -1,10 +1,13 @@
 import hypothesis.strategies as st
+import numpy as np
 import pytest
 import strategies as abtem_st
+from ase import Atoms
 from hypothesis import given
 from utils import gpu
 
-from abtem import AnnularDetector, PixelatedDetector
+from abtem import AnnularDetector, PixelatedDetector, PlaneWave
+from abtem.inelastic.phonons import FrozenPhonons
 from abtem.scan import CustomScan
 
 
@@ -219,3 +222,24 @@ def test_probe_scan(data, waves_builder, detector, scan, device, frozen_phonons,
 # #     measurements.compute()
 # #
 # #     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan=scan)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("ensemble_mean", [True, False])
+def test_frozen_phonon_lazy_vs_eager(device, ensemble_mean):
+    atoms = Atoms("Si", positions=[(0, 0, 1)], cell=(5, 5, 2), pbc=True)
+    frozen_phonons = FrozenPhonons(
+        atoms, num_configs=2, sigmas=0.1, ensemble_mean=ensemble_mean, seed=42
+    )
+
+    waves = PlaneWave(energy=100e3, gpts=(32, 32), device=device)
+    detector = PixelatedDetector(max_angle=None)
+
+    result_lazy = waves.multislice(frozen_phonons, detectors=detector, lazy=True)
+    result_lazy = result_lazy.compute()
+
+    result_eager = waves.multislice(frozen_phonons, detectors=detector, lazy=False)
+
+    np.testing.assert_allclose(
+        result_eager.array, result_lazy.array, rtol=1e-5, atol=1e-7
+    )

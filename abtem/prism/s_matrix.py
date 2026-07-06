@@ -1975,10 +1975,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             self.ensemble_shape, self.ensemble_axes_metadata
         ):
             extra_ensemble_axes_metadata += [axis_metadata]
-            extra_ensemble_axes_shape += (shape,)
-
             if axis_metadata._ensemble_mean:
-                extra_ensemble_axes_shape = (1,) + extra_ensemble_axes_shape[1:]
+                extra_ensemble_axes_shape += (1,)
+            else:
+                extra_ensemble_axes_shape += (shape,)
 
         if self.potential is not None and len(self.potential.exit_planes) > 1:
             extra_ensemble_axes_shape = extra_ensemble_axes_shape + (
@@ -2000,6 +2000,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         else:
             measurements = None
 
+        num_blocks = 0
         for i, _, s_matrix in self.generate_blocks(1):
             s_matrix = s_matrix.item()
             s_matrix_array = s_matrix.build(lazy=False)
@@ -2019,14 +2020,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     else:
                         measurement.array[i] = new_measurement.array
 
+            num_blocks += 1
+
         # measurements = list(measurements.values())
 
         for i, measurement in enumerate(measurements):
-            if (
-                hasattr(measurement.axes_metadata[0], "_ensemble_mean")
-                and measurement.axes_metadata[0]._ensemble_mean
-            ) and squeeze:
-                measurements[i] = measurement.squeeze((0,))
+            if measurement.axes_metadata[0]._ensemble_mean:
+                if num_blocks > 1:
+                    measurement.array[:] /= num_blocks
+                if squeeze:
+                    measurements[i] = measurement.squeeze((0,))
 
         return measurements
 

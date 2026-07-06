@@ -58,6 +58,9 @@ def energy2wavelength(energy: float) -> float:
         Relativistic de Broglie wavelength [Å].
     """
 
+    if energy <= 0:
+        raise ValueError(f"Electron energy must be positive, got {energy} eV")
+
     return float(
         units._hplanck
         * units._c
@@ -193,8 +196,8 @@ class Accelerator(EqualityMixin, CopyMixin):
         """
         if (
             (self.energy is not None)
-            & (other.energy is not None)
-            & (self.energy != other.energy)
+            and (other.energy is not None)
+            and (self.energy != other.energy)
         ):
             raise RuntimeError("Inconsistent energies")
 

@@ -1,7 +1,8 @@
 import numpy as np
 
 from abtem import distributions
-from abtem.waves import Probe
+from abtem.transfer import CTF
+from abtem.waves import PlaneWave, Probe
 
 
 def test_gaussian_distribution_normalized():
@@ -10,3 +11,70 @@ def test_gaussian_distribution_normalized():
     assert np.allclose(
         wave.build().diffraction_patterns().reduce_ensemble().array.sum().compute(), 1.0
     )
+
+
+def test_focal_series_with_incoherent_spread():
+    # Answers https://github.com/abTEM/abTEM/issues/168: a focal series (kept as
+    # its own axis) where each defocus step is itself an incoherent
+    # (temporal-coherence) average. Composing two apply_ctf() calls works because
+    # the defocus phase term is linear in defocus, so applying CTF twice with
+    # independent defocus distributions equals a single application with summed
+    # defocus.
+    #
+    # Both distributions use ensemble_mean=False and the incoherent spread axis is
+    # reduced with a plain .sum(): abTEM pre-multiplies the wave amplitude by the
+    # L2-normalized distribution weight (so I_i = w_i**2 * I(x_i) with sum w_i**2 =
+    # 1), which makes .sum() the correct incoherent average. This is the same
+    # reduction the partial-coherence tutorial performs by hand.
+    import ase
+
+    atoms = ase.build.mx2(vacuum=2)
+    exit_wave = PlaneWave(energy=80e3, sampling=0.1).multislice(atoms).compute()
+
+    focal_series_values = np.array([-100.0, 0.0, 100.0])
+    focal_series = distributions.from_values(
+        focal_series_values, ensemble_mean=False
+    )
+    spread = distributions.gaussian(
+        20.0, num_samples=7, sampling_limit=2, ensemble_mean=False
+    )
+
+    images = (
+        exit_wave.apply_ctf(CTF(energy=80e3, defocus=focal_series))
+        .apply_ctf(CTF(energy=80e3, defocus=spread))
+        .intensity()
+        .compute()
+    )
+
+    # locate the spread (7 values) and series (3 values) axes and reduce the spread
+    spread_axis = next(
+        i
+        for i, ax in enumerate(images.axes_metadata)
+        if getattr(ax, "values", None) is not None and len(ax.values) == 7
+    )
+    result = images.sum(spread_axis)
+    series_axis = next(
+        i
+        for i, ax in enumerate(result.axes_metadata)
+        if getattr(ax, "values", None) is not None and len(ax.values) == 3
+    )
+    reduced = np.moveaxis(result.array, series_axis, 0)
+
+    # brute-force reference: per focus step, weighted incoherent average over the
+    # spread (weights pre-multiplied as w_i**2, matching abTEM's convention)
+    raw = distributions.gaussian(20.0, num_samples=7, sampling_limit=2)
+    deltas, weights = np.array(raw.values), np.array(raw.weights)
+    ref = np.zeros((len(focal_series_values),) + exit_wave.array.shape)
+    for i, series_val in enumerate(focal_series_values):
+        acc = np.zeros(exit_wave.array.shape)
+        for delta, w in zip(deltas, weights):
+            acc += (w**2) * (
+                exit_wave.apply_ctf(CTF(energy=80e3, defocus=series_val + delta))
+                .intensity()
+                .compute()
+                .array
+            )
+        ref[i] = acc
+
+    assert reduced.shape[0] == 3  # focal series axis survives
+    assert np.allclose(reduced, ref, atol=1e-4)

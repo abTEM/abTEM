@@ -571,41 +571,6 @@ class MonteCarloPlasmons:
         azimuthal_angles = list(itertools.chain(*azimuthal_angles))
         weights = list(itertools.chain(*weights))
 
-        # depths = tuple(
-        #     depths
-        #     for n in self._num_excitations
-        #     for depths in draw_scattering_depths(
-        #         mean_free_path=self._mean_free_path,
-        #         num_depths=n,
-        #         max_depth=depth,
-        #         num_samples=self.num_samples,
-        #         rng=rng,
-        #     )
-        # )
-        #
-        # radial_angles = tuple(
-        #     tuple(
-        #         draw_radial_scattering_angle(
-        #             self._critical_angle, self.characteristic_angle(energy), rng=rng
-        #         )
-        #         for _ in range(n)
-        #     )
-        #     for n in self._num_excitations
-        #     for _ in range(self.num_samples)
-        # )
-        #
-        # azimuthal_angles = tuple(
-        #     tuple(draw_azimuthal_angle(rng=rng) for _ in range(n))
-        #     for n in self._num_excitations
-        #     for _ in range(self.num_samples)
-        # )
-        #
-        # weights = tuple(
-        #     excitations_weights(n, depth, self._mean_free_path)
-        #     for n in self._num_excitations
-        #     for _ in range(self.num_samples)
-        # )
-
         return PlasmonScatteringEvents(
             depths,
             radial_angles,

@@ -595,6 +595,10 @@ class AnnularDetector(_AbstractRadialDetector):
 
     @property
     def radial_sampling(self) -> float:
+        if self._outer is None:
+            raise RuntimeError(
+                "radial_sampling is not defined when outer angle is None"
+            )
         return self._outer - self._inner
 
     @property
@@ -915,17 +919,18 @@ class PixelatedDetector(BaseDetector):
     max_angle : float or {'cutoff', 'valid', 'full'}
         The diffraction patterns will be detected up to this angle [mrad].
         If str, it must be one of:
-            ``cutoff`` :
-                The maximum scattering angle will be the cutoff of the antialiasing
-                aperture.
-            ``valid`` :
-                The maximum scattering angle will be the largest rectangle that fits
-                inside the circular antialiasing aperture (default).
-            ``full`` :
-                Diffraction patterns will not be cropped and will include angles outside
-                the antialiasing aperture.
+
+        ``cutoff``
+            The maximum scattering angle will be the cutoff of the antialiasing
+            aperture.
+        ``valid``
+            The maximum scattering angle will be the largest rectangle that fits
+            inside the circular antialiasing aperture (default).
+        ``full``
+            Diffraction patterns will not be cropped and will include angles outside
+            the antialiasing aperture.
     resample : str or False
-        If 'uniform', the diffraction patterns from rectangular cells will be ¨
+        If 'uniform', the diffraction patterns from rectangular cells will be
         downsampled to a uniform angular sampling.
     reciprocal_space : bool, optional
         If True (default), the diffraction pattern intensities are detected, otherwise

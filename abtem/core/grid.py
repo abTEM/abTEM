@@ -373,13 +373,13 @@ class Grid(CopyMixin, EqualityMixin):
         if self.extent is not None and other.extent is not None:
             if not np.all(np.isclose(self.extent, other.extent)):
                 raise RuntimeError(
-                    "Inconsistent grid extent ({self.extent} != {other.extent})"
+                    f"Inconsistent grid extent ({self.extent} != {other.extent})"
                 )
 
         if self.gpts is not None and other.gpts is not None:
             if not np.all(self.gpts == other.gpts):
                 raise RuntimeError(
-                    "Inconsistent grid gpts ({self.gpts} != {other.gpts})"
+                    f"Inconsistent grid gpts ({self.gpts} != {other.gpts})"
                 )
 
     def round_to_power(

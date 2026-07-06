@@ -668,6 +668,7 @@ def integrate_disc(
     border : str
         Specify how to treat integration regions that cross the image border. The valid
         values and their behaviours are:
+
         'wrap'
             The measurement is extended by wrapping around to the opposite edge.
         'raise'
@@ -877,48 +878,6 @@ class MeasurementsEnsemble(BaseMeasurements):
             visualization.axes.set_sizes(padding=0.8)
 
         return visualization
-
-    # def show(
-    #     self,
-    #     ax: Axes = None,
-    #     common_scale: bool = True,
-    #     explode: bool | Sequence[int] = None,
-    #     overlay: bool | Sequence[int] = None,
-    #     figsize: tuple[int, int] = None,
-    #     title: str = None,
-    #     units: str = None,
-    #     legend: bool = False,
-    #     interact: bool = False,
-    #     display: bool = True,
-    #     **kwargs,
-    # ):
-    #     # if not interact:
-    #     #     self.compute()
-    #
-    #     visualization = VisualizationLines(
-    #         array=self.array,
-    #         coordinate_axes=self.ensemble_axes_metadata[-1:],
-    #         scale_axis=self._scale_axis_from_metadata(),
-    #         ensemble_axes=self.ensemble_axes_metadata[:-1],
-    #         ax=ax,
-    #         common_scale=common_scale,
-    #         explode=explode,
-    #         overlay=overlay,
-    #         figsize=figsize,
-    #         interact=interact,
-    #         title=title,
-    #         **kwargs,
-    #     )
-    #
-    #     if not display and not interact:
-    #         plt.close()
-    #
-    #     if interact and display:
-    #         from IPython.display import display as ipython_display
-    #
-    #         ipython_display(visualization.layout_widgets())
-    #
-    #     return visualization
 
 
 class _BaseMeasurement2D(BaseMeasurements):
@@ -1233,6 +1192,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         explode: bool | Sequence[int] = (),
         overlay: bool | Sequence[int] = (),
@@ -1264,7 +1224,10 @@ class _BaseMeasurement2D(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show image on a power scale.
+            Show image on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show image on a logarithmic intensity scale. Cannot be used
+            together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -1314,6 +1277,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             interactive=not interact and display,
             value_limits=(vmin, vmax),
             power=power,
+            logscale=logscale,
             cmap=cmap,
             cbar=cbar,
             units=units,
@@ -1878,7 +1842,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         return LineScan(start=start, end=end, sampling=sampling)
 
-    def _add_to_visualization(self, *args, **kwargs):
+    def _add_to_plot(self, *args, **kwargs):
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
                 "The metadata does not contain the keys 'start' and 'end'"
@@ -1887,7 +1851,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         if "width" in self.metadata:
             kwargs["width"] = self.metadata["width"]
 
-        self._line_scan().add_to_axes(*args, **kwargs)
+        self._line_scan().add_to_plot(*args, **kwargs)
 
     @staticmethod
     def _calculate_widths(array, sampling, height):
@@ -4185,6 +4149,7 @@ class PolarMeasurements(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         explode: bool | Sequence[bool] = (),
         overlay: bool | Sequence[int] = (),
@@ -4218,7 +4183,10 @@ class PolarMeasurements(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show image on a power scale.
+            Show image on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show image on a logarithmic intensity scale. Cannot be used
+            together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -4265,6 +4233,7 @@ class PolarMeasurements(BaseMeasurements):
             vmin=vmin,
             vmax=vmax,
             power=power,
+            logscale=logscale,
             common_color_scale=common_color_scale,
             explode=explode,
             overlay=overlay,
@@ -4830,6 +4799,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         scale: float = 0.5,
         explode: bool | Sequence[bool] = (),
@@ -4862,7 +4832,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show diffraction spots intensities on a power scale.
+            Show diffraction spots intensities on a power scale. Cannot be used
+            together with ``logscale``.
+        logscale : bool
+            If True, show diffraction spots on a logarithmic intensity scale.
+            Cannot be used together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -4920,6 +4894,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             interactive=not interact and display,
             value_limits=(vmin, vmax),
             power=power,
+            logscale=logscale,
             cmap=cmap,
             cbar=cbar,
             scale=scale,

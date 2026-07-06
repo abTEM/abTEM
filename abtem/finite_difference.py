@@ -428,7 +428,7 @@ def _multislice_exponential_series(
         if temp_amplitude / initial_amplitude <= tolerance:
             break
 
-        if temp_amplitude > initial_amplitude:
+        if not xp.all(xp.isfinite(temp)) or temp_amplitude > initial_amplitude:
             raise DivergedError()
     else:
         raise NotConvergedError(
@@ -592,7 +592,13 @@ def multislice_step(
         fully_corrected,
     )
 
-    # Backward scattering contributions
+    # Bandlimit before the correction term to suppress high-k content that
+    # would be amplified by repeated conventional_operator applications at
+    # low energies (large 1/K0) or after many slices (channeling build-up).
+    aperture = AntialiasAperture()
+    waves = aperture.bandlimit(waves)
+
+    # Correction-term contributions
     backscatter = xp.zeros_like(waves._array)
 
     if fully_corrected and next_slice is not None:
@@ -647,14 +653,18 @@ def multislice_step(
             )
         )
 
+        if not xp.all(xp.isfinite(backscatter)):
+            raise DivergedError(
+                "overflow in correction-term computation; try using a smaller "
+                "slice_thickness or a lower expansion order"
+            )
+
         # Eq.10 in Micron 190 (2025) 103778.
         waves._array = waves._array - backscatter
 
-    # Bandlimit to compare with Fourier CMS
-    aperture = AntialiasAperture()
     if fully_corrected:
         kwargs = waves._copy_kwargs(exclude=("array",))
         backscatter_waves = waves.__class__(backscatter, **kwargs)
-        return aperture.bandlimit(waves), aperture.bandlimit(backscatter_waves)
+        return waves, aperture.bandlimit(backscatter_waves)
 
-    return aperture.bandlimit(waves)
+    return waves
