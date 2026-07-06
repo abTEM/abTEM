@@ -5249,7 +5249,7 @@ def phonon_loss_diffraction_patterns(
         I_incoherent = Σ_j |FT(psi_j)|² / N     (total)
         I_tds        = I_incoherent - I_coherent  (inelastic / phonon loss)
 
-    The returned ``DiffractionPatterns`` retain the ``EnergyAxis`` but the
+    The returned ``DiffractionPatterns`` retain the ``EnergyLossAxis`` but the
     ``FrozenPhononsAxis`` is collapsed.  Apply an offset ``AnnularDetector``
     or ``SlitDetector`` to integrate over desired q points.
 
@@ -5258,8 +5258,8 @@ def phonon_loss_diffraction_patterns(
     exit_waves : Waves
         Complex exit waves from a multislice simulation with an
         ``EnergyResolvedAtomsEnsemble`` (``ensemble_mean=False``).
-        Must contain both a ``FrozenPhononsAxis`` and an ``EnergyAxis``
-        (label ``"energy loss"``) in its ensemble axes.
+        Must contain both a ``FrozenPhononsAxis`` and an ``EnergyLossAxis``
+        in its ensemble axes.
     component : {'tds', 'coherent', 'incoherent', 'all'}
         Which component to return.  ``'all'`` stacks the three along a
         new leading ``OrdinalAxis(label='component')``.
@@ -5276,9 +5276,9 @@ def phonon_loss_diffraction_patterns(
     -------
     DiffractionPatterns
         Intensity patterns with the ``FrozenPhononsAxis`` removed and the
-        ``EnergyAxis`` preserved.
+        ``EnergyLossAxis`` preserved.
     """
-    from abtem.core.axes import EnergyAxis, FrozenPhononsAxis, OrdinalAxis
+    from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
 
     # --- validate ensemble axes ---
     fp_axis_idx = None
@@ -5286,7 +5286,7 @@ def phonon_loss_diffraction_patterns(
     for i, ax in enumerate(exit_waves.ensemble_axes_metadata):
         if isinstance(ax, FrozenPhononsAxis):
             fp_axis_idx = i
-        if isinstance(ax, EnergyAxis) and "loss" in ax.label.lower():
+        if isinstance(ax, EnergyLossAxis):
             energy_axis_idx = i
 
     if fp_axis_idx is None:
@@ -5296,8 +5296,7 @@ def phonon_loss_diffraction_patterns(
         )
     if energy_axis_idx is None:
         raise ValueError(
-            "exit_waves must have an EnergyAxis with label containing 'loss' "
-            "in ensemble_axes_metadata."
+            "exit_waves must have an EnergyLossAxis in ensemble_axes_metadata."
         )
 
     if not np.iscomplexobj(exit_waves.array):
@@ -5400,7 +5399,7 @@ def momentum_resolved_spectrum(
     tds_diffraction_patterns : DiffractionPatterns
         Energy-resolved TDS diffraction patterns as returned by
         :func:`phonon_loss_diffraction_patterns`.  Must have an
-        ``EnergyAxis`` (label containing ``'loss'``) in its ensemble axes.
+        ``EnergyLossAxis`` in its ensemble axes.
     detector : SpectralAnnularDetector or SpectralSlitDetector
         Detector that controls the integration strategy and q-range.
 
@@ -5408,7 +5407,7 @@ def momentum_resolved_spectrum(
     -------
     MomentumResolvedSpectrum
     """
-    from abtem.core.axes import EnergyAxis, OrdinalAxis
+    from abtem.core.axes import EnergyLossAxis, OrdinalAxis
     from abtem.core.energy import energy2wavelength
     from abtem.detectors import SpectralAnnularDetector, SpectralSlitDetector
 
@@ -5429,13 +5428,13 @@ def momentum_resolved_spectrum(
     # --- find the energy axis ---
     energy_axis_idx = None
     for i, ax in enumerate(dp.ensemble_axes_metadata):
-        if isinstance(ax, EnergyAxis) and "loss" in ax.label.lower():
+        if isinstance(ax, EnergyLossAxis):
             energy_axis_idx = i
             break
     if energy_axis_idx is None:
         raise ValueError(
-            "tds_diffraction_patterns must have an EnergyAxis with label "
-            "containing 'loss'.  Use phonon_loss_diffraction_patterns first."
+            "tds_diffraction_patterns must have an EnergyLossAxis in "
+            "ensemble_axes_metadata.  Use phonon_loss_diffraction_patterns first."
         )
 
     energy_axis = dp.ensemble_axes_metadata[energy_axis_idx]
@@ -5447,7 +5446,7 @@ def momentum_resolved_spectrum(
     n_e_axis = len(e_values)
     if n_e_array != n_e_axis:
         raise ValueError(
-            f"EnergyAxis at position {energy_axis_idx} has {n_e_axis} values "
+            f"EnergyLossAxis at position {energy_axis_idx} has {n_e_axis} values "
             f"but dp.array has size {n_e_array} along that axis.  "
             f"Make sure the input was produced by phonon_loss_diffraction_patterns "
             f"with all FrozenPhonons axes collapsed."

@@ -439,34 +439,51 @@ class EnergyAxis(NonLinearAxis):
     units: str = "eV"
 
     def item_metadata(self, item, metadata=None):
-        # Use a key derived from the label so that energy-loss axes
-        # ("energy loss") do not overwrite the electron energy ("energy")
-        # stored in measurement metadata.
-        key = self.label.lower().replace(" ", "_")
-        return {key: self.values[item]}
+        # Use the lowercase "energy" key to match the metadata convention used
+        # everywhere else in the codebase (metadata["energy"]).  The inherited
+        # OrdinalAxis implementation would use self.label ("Energy") which would
+        # silently miss all lookups that check for "energy".
+        return {"energy": self.values[item]}
 
     def format_title(
         self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
     ) -> str:
-        """Format title displaying energy in keV, or meV for energy loss."""
-        if self.label == "energy loss":
-            if formatting is None:
-                formatting = ".3g"
-            value_meV = self.values[0] * 1000.0
-            formatted = f"{value_meV:>{formatting}}"
-            if include_label:
-                return f"{self.label} = {formatted} meV"
-            else:
-                return f"{formatted} meV"
+        """Format title displaying energy in keV regardless of stored eV units."""
+        if formatting is None:
+            formatting = ".3g"
+        value_kev = self.values[0] / 1000.0
+        formatted = f"{value_kev:>{formatting}}"
+        if include_label:
+            return f"{self.label} = {formatted} keV"
         else:
-            if formatting is None:
-                formatting = ".3g"
-            value_kev = self.values[0] / 1000.0
-            formatted = f"{value_kev:>{formatting}}"
-            if include_label:
-                return f"{self.label} = {formatted} keV"
-            else:
-                return f"{formatted} keV"
+            return f"{formatted} keV"
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class EnergyLossAxis(NonLinearAxis):
+    """Ensemble axis for energy loss (e.g. phonon/TDS or EELS), distinct from
+    the accelerating beam :class:`.EnergyAxis` so the two never collide in
+    metadata or in code that pattern-matches on ``isinstance(ax, EnergyAxis)``.
+    """
+
+    label: str = "energy loss"
+    units: str = "eV"
+
+    def item_metadata(self, item, metadata=None):
+        return {"energy_loss": self.values[item]}
+
+    def format_title(
+        self, formatting: Optional[str] = None, include_label: bool = True, **kwargs
+    ) -> str:
+        """Format title displaying energy loss in meV."""
+        if formatting is None:
+            formatting = ".3g"
+        value_meV = self.values[0] * 1000.0
+        formatted = f"{value_meV:>{formatting}}"
+        if include_label:
+            return f"{self.label} = {formatted} meV"
+        else:
+            return f"{formatted} meV"
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)

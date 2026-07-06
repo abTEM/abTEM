@@ -9,14 +9,14 @@ from abtem.measurements import DiffractionPatterns, momentum_resolved_spectrum
 
 
 def _make_dp(n_energies=3, gpts=64, sampling=1.0, energy=300e3):
-    """Create a simple DiffractionPatterns with an EnergyAxis for testing."""
-    from abtem.core.axes import EnergyAxis, OrdinalAxis
+    """Create a simple DiffractionPatterns with an EnergyLossAxis for testing."""
+    from abtem.core.axes import EnergyLossAxis, OrdinalAxis
 
     rng = np.random.default_rng(42)
     e_values = np.array([0.02, 0.05, 0.10])  # eV
     array = rng.random((n_energies, gpts, gpts)).astype(np.float32)
 
-    energy_axis = EnergyAxis(values=e_values, units="eV", label="energy loss")
+    energy_axis = EnergyLossAxis(values=e_values, units="eV")
     metadata = {"energy": energy, "label": "intensity", "units": "arb. unit"}
 
     return DiffractionPatterns(

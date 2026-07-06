@@ -22,7 +22,12 @@ from ase.io import read
 from ase.io.trajectory import read_atoms
 from dask.delayed import Delayed
 
-from abtem.core.axes import AxisMetadata, EnergyAxis, FrozenPhononsAxis, UnknownAxis
+from abtem.core.axes import (
+    AxisMetadata,
+    EnergyLossAxis,
+    FrozenPhononsAxis,
+    UnknownAxis,
+)
 from abtem.core.chunks import Chunks, chunk_ranges, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.utils import CopyMixin, EqualityMixin, itemset
@@ -651,7 +656,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
     Energy-resolved ensemble of frozen-phonon configurations.
 
     Wraps a 2D array of Atoms objects ``(n_energies, n_configs)`` with an
-    :class:`~abtem.core.axes.EnergyAxis` and
+    :class:`~abtem.core.axes.EnergyLossAxis` and
     :class:`~abtem.core.axes.FrozenPhononsAxis` as ensemble axes.  The energy
     values typically come from external phonon calculations.
 
@@ -715,8 +720,7 @@ class EnergyResolvedAtomsEnsemble(BaseFrozenPhonons):
             self._ensemble_axes_metadata = ensemble_axes_metadata
         else:
             self._ensemble_axes_metadata = [
-                EnergyAxis(
-                    label="energy loss",
+                EnergyLossAxis(
                     values=tuple(float(e) for e in energies),
                     units="eV",
                 ),
