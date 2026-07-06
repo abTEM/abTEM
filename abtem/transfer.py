@@ -413,16 +413,25 @@ class Bullseye(BaseAperture):
     """
     Bullseye aperture.
 
+    The aperture is divided radially into `num_rings` periods, each consisting of an
+    open annulus followed by an opaque gap; `ring_width` is the open fraction of each
+    period. The open annulus width is
+    ``semiangle_cutoff * ring_width / (ring_width + num_rings - 1)``, and a
+    `ring_width` of 1 gives a fully open disk. Opaque spokes of width
+    ``spoke_width * open annulus width`` cross all rings except the central disk.
+
     Parameters
     ----------
     num_spokes : int
         Number of spokes.
     spoke_width : float
-        Width of spokes [deg].
+        Width of the opaque spokes as a fraction of the open ring width. Must be
+        non-negative.
     num_rings : int
         Number of rings.
     ring_width : float
-        Width of rings [mrad].
+        Open fraction of each radial ring period. Must be in the interval (0, 1],
+        where 1 gives a fully open disk.
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad].
     energy : float, optional
@@ -455,6 +464,10 @@ class Bullseye(BaseAperture):
         edge_softness: float = 0.0,
         corner_radius: float = 0.0,
     ):
+        if not 0.0 < ring_width <= 1.0:
+            raise ValueError("ring_width must be in the interval (0, 1]")
+        if spoke_width < 0.0:
+            raise ValueError("spoke_width must be non-negative")
         self._spoke_num = num_spokes
         self._spoke_width = spoke_width
         self._num_rings = num_rings
@@ -469,7 +482,7 @@ class Bullseye(BaseAperture):
             gpts=gpts,
             sampling=sampling,
         )
-    
+
     @property
     def soft(self) -> bool:
         """True if the aperture has a soft edge"""
@@ -482,7 +495,7 @@ class Bullseye(BaseAperture):
 
     @property
     def spoke_width(self) -> float:
-        """Width of spokes [deg]."""
+        """Width of the opaque spokes as a fraction of the open ring width."""
         return self._spoke_width
 
     @property
@@ -492,8 +505,9 @@ class Bullseye(BaseAperture):
 
     @property
     def ring_width(self) -> float:
-        """Width of rings [mrad]."""
+        """Open fraction of each radial ring period."""
         return self._ring_width
+
     @property
     def edge_softness(self) -> float:
         """Edge softness [mrads]"""
