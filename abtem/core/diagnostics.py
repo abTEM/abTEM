@@ -20,7 +20,7 @@ class TqdmWrapper:
     ----------
     enabled : bool, optional
         A flag indicating if the wrapper is enabled. If None, the value from the
-        configuration key "local_diagnostics.task_level_progress" is used.
+        configuration key "diagnostics.task_progress" is used.
     *args
         Variable length argument list for tqdm.
     **kwargs
@@ -34,7 +34,7 @@ class TqdmWrapper:
 
     def __init__(self, *args, enabled: Optional[bool] = None, **kwargs: Any):
         if enabled is None:
-            enabled = config.get("local_diagnostics.task_level_progress", False)
+            enabled = config.get("diagnostics.task_progress", False)
 
         self._pbar: Optional[tqdm_asyncio] = None
 
