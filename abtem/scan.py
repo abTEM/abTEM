@@ -364,6 +364,26 @@ class CustomScan(BaseScan):
     def get_positions(self) -> np.ndarray:
         return self._positions
 
+    def add_to_plot(self, ax, **kwargs):
+        """
+        Add a visualization of the scan positions to a matplotlib plot.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes or Visualization
+            The axes of the matplotlib plot the visualization should be added to.
+        kwargs :
+            Additional options for matplotlib.pyplot.scatter as keyword arguments.
+        """
+        if isinstance(ax, Visualization):
+            for ax in np.array(ax.axes).ravel():
+                self.add_to_plot(ax, **kwargs)
+            return
+
+        kwargs.setdefault("color", "r")
+        kwargs.setdefault("s", 10)
+        return ax.scatter(self.positions[:, 0], self.positions[:, 1], **kwargs)
+
 
 def validate_coordinate(
     coordinate: float | tuple[float, float] | Atom | None,
@@ -766,30 +786,42 @@ class LineScan(BaseScan):
         )
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
-    def add_to_axes(self, ax: Axes, width: float = 0.0, **kwargs):
+    def add_to_plot(self, ax, width: float = 0.0, **kwargs):
         """
         Add a visualization of a scan line to a matplotlib plot.
 
         Parameters
         ----------
-        ax : matplotlib Axes
+        ax : matplotlib Axes or Visualization
             The axes of the matplotlib plot the visualization should be added to.
         width : float, optional
             Width of line [Å].
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-        assert isinstance(self.start, tuple)
-        assert isinstance(self.end, tuple)
-        assert isinstance(self.extent, float)
+        if isinstance(ax, Visualization):
+            for ax in np.array(ax.axes).ravel():
+                self.add_to_plot(ax, width=width, **kwargs)
+            return
+
+        if self.start is None or self.end is None:
+            raise RuntimeError(
+                "start or end is not defined, pass explicit 'start' and 'end' "
+                "when creating the LineScan"
+            )
 
         if width:
             rect = Rectangle(self.start, self.extent, width, angle=self.angle, **kwargs)
             ax.add_patch(rect)
+            return rect
         else:
-            ax.plot(
+            return ax.plot(
                 [self.start[0], self.end[0]], [self.start[1], self.end[1]], **kwargs
             )
+
+    def add_to_axes(self, *args, **kwargs):
+        """Deprecated: use :meth:`add_to_plot` instead."""
+        return self.add_to_plot(*args, **kwargs)
 
 
 class GridScan(HasGrid2DMixin, BaseScan):
@@ -842,6 +874,10 @@ class GridScan(HasGrid2DMixin, BaseScan):
         self._end = validate_coordinate(
             coordinate=end, potential=potential, fractional=fractional
         )
+
+        if self._end is None and potential is not None:
+            validated = validate_potential(potential)
+            self._end = validated._valid_extent
 
         if self._start is not None and self._end is not None:
             extent = (self._end[0] - self._start[0], self._end[1] - self._start[1])
@@ -1093,9 +1129,13 @@ class GridScan(HasGrid2DMixin, BaseScan):
                 self.add_to_plot(
                     ax, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor, **kwargs
                 )
+            return
 
         if self.start is None or self.extent is None:
-            raise RuntimeError("start or extent is not defined")
+            raise RuntimeError(
+                "start or extent is not defined, pass 'potential' or explicit "
+                "'start'/'end' when creating the GridScan"
+            )
 
         rect = Rectangle(
             xy=self.start,
@@ -1107,3 +1147,4 @@ class GridScan(HasGrid2DMixin, BaseScan):
             **kwargs,
         )
         ax.add_patch(rect)
+        return rect

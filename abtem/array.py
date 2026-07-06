@@ -232,6 +232,7 @@ class ComputableList(list):
         **kwargs: Any,
     ):
         """Write data to a zarr file.
+
         Parameters
         ----------
         url : str
@@ -1297,7 +1298,7 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         resource_profiler: bool = False,
         **kwargs,
     ) -> Self | tuple[Self, tuple]:
-        """Turn a lazy *ab*TEM object into its in-memory equivalent.
+        """Turn a lazy abTEM object into its in-memory equivalent.
 
         Parameters
         ----------
@@ -2106,7 +2107,10 @@ def _from_zarr_legacy(root, chunks, decode_types):
         i += 1
 
     for i, cls_name in enumerate(types):
-        cls = getattr(abtem.measurements, cls_name)
+        # Legacy files (written by abTEM <= 1.0.9) may hold any ArrayObject
+        # subclass, e.g. Waves or PotentialArray, not just measurements; all
+        # of them are exported from the top-level abtem namespace.
+        cls = getattr(abtem, cls_name)
 
         packed_kwargs = decode_types(root.attrs[f"kwargs{i}"])
         kwargs = cls._unpack_kwargs(packed_kwargs)
