@@ -89,6 +89,21 @@ def get_magnetic_field_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
     return B
 
 
+def _check_unsupported_ensemble_params(frozen_phonons, repetitions):
+    if frozen_phonons is not None:
+        raise NotImplementedError(
+            "frozen_phonons is not supported for magnetic fields/vector "
+            "potentials; build the field from a single calculator and combine "
+            "it with an electrostatic FrozenPhonons ensemble instead."
+        )
+    if tuple(repetitions) != (1, 1, 1):
+        raise NotImplementedError(
+            "repetitions is not supported for magnetic fields/vector "
+            "potentials; build the field for a single unit cell and call "
+            ".tile() on the resulting array instead."
+        )
+
+
 @runtime_checkable
 class GPAW(Protocol):
     @property
@@ -123,6 +138,8 @@ class _GPAWMagnetics(_FieldBuilder):
     ):
         if not assume_colinear:
             raise NotImplementedError("Non-collinear calculations not supported.")
+
+        _check_unsupported_ensemble_params(frozen_phonons, repetitions)
 
         self.gridrefinement = gridrefinement
 
@@ -282,6 +299,8 @@ class GPAWMagneticField(_GPAWMagnetics, BaseMagneticField):
         projection: str = "fft",
         device: Optional[str] = None,
     ):
+        _check_unsupported_ensemble_params(frozen_phonons, repetitions)
+
         super().__init__(
             calculators=calculators,
             array_object=MagneticFieldArray,
@@ -320,6 +339,8 @@ class GPAWVectorPotential(_GPAWMagnetics, BaseVectorPotential):
         projection: str = "fft",
         device: Optional[str] = None,
     ):
+        _check_unsupported_ensemble_params(frozen_phonons, repetitions)
+
         super().__init__(
             calculators=calculators,
             array_object=VectorPotentialArray,
