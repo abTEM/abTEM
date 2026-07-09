@@ -31,6 +31,17 @@ def calculate_constant_magnetic_field():
     pass
 
 
+def _apply_rotation_matrix(
+    vector_field: np.ndarray, rotation_matrix: np.ndarray
+) -> np.ndarray:
+    shape = vector_field.shape[1:]
+    vector_field_reshaped = vector_field.reshape(3, -1)
+
+    rotated_field_reshaped = rotation_matrix @ vector_field_reshaped
+
+    return rotated_field_reshaped.reshape((3,) + shape)
+
+
 def rotate_vector_field(
     vector_field: np.ndarray, euler_angles: tuple[float, float, float]
 ) -> np.ndarray:
@@ -49,17 +60,8 @@ def rotate_vector_field(
     rotated_field : np.ndarray
         Rotated 3D vector field.
     """
-    rotation = R.from_euler("xyz", euler_angles)
-    rotation_matrix = rotation.as_matrix()
-
-    shape = vector_field.shape[1:]
-    vector_field_reshaped = vector_field.reshape(3, -1)
-
-    rotated_field_reshaped = rotation_matrix @ vector_field_reshaped
-
-    rotated_field = rotated_field_reshaped.reshape((3,) + shape)
-
-    return rotated_field
+    rotation_matrix = R.from_euler("xyz", euler_angles).as_matrix()
+    return _apply_rotation_matrix(vector_field, rotation_matrix)
 
 
 def calculate_magnetic_vector_potential(spin_density, cell):
@@ -87,6 +89,58 @@ def get_magnetic_field_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
     A = get_vector_potential_from_gpaw(calc, gridrefinement=gridrefinement)
     B = curl_fourier(A, calc.atoms.cell)
     return B
+
+
+#: Sentinel default for `rotate_field`: automatically rotate the
+#: largest-magnitude in-plane component into z (see
+#: `_auto_rotation_matrix_for_vector_field`). Pass an explicit Euler-angle
+#: tuple to pick a specific orientation, or `None` to disable rotation and
+#: see the raw (Az == 0) output.
+_AUTO_ROTATE_FIELD = "auto"
+
+#: Fallback rotation matrix used only when the raw field is exactly zero in
+#: the xy-plane too (e.g. no magnetic moment), where "largest component" is
+#: undefined. Equivalent to Euler angles (0, pi/2, 0).
+_DEFAULT_COLLINEAR_ROTATION_MATRIX = R.from_euler(
+    "xyz", (0.0, np.pi / 2, 0.0)
+).as_matrix()
+
+
+def _auto_rotation_matrix_for_vector_field(vector_field: np.ndarray) -> np.ndarray:
+    """
+    Rotation matrix that rotates the in-plane (x, y) component of
+    `vector_field` with the largest aggregate magnitude into z.
+
+    `calculate_magnetic_vector_potential` always builds the magnetization as
+    m = (0, 0, rho) -- collinear spin has no real-space direction, so GPAW's
+    internal spin axis is arbitrary. Because curl(m) and the subsequent
+    Poisson solve are applied component-wise, this makes the z-component of
+    `vector_field` (and hence the only component `adjust_coulomb_potential`
+    uses) identically zero for every collinear calculation, not just some.
+    Any in-plane axis is an equally valid choice to swap into z absent
+    additional information about the real magnetization direction, so this
+    picks the one that maximises the resulting z-component (in an
+    aggregate, least-squares sense) rather than an arbitrary fixed axis.
+    """
+    Ax = vector_field[0].astype(np.float64, copy=False)
+    Ay = vector_field[1].astype(np.float64, copy=False)
+
+    Sxx = float(np.sum(Ax * Ax))
+    Syy = float(np.sum(Ay * Ay))
+    Sxy = float(np.sum(Ax * Ay))
+
+    if Sxx == 0.0 and Syy == 0.0:
+        return _DEFAULT_COLLINEAR_ROTATION_MATRIX
+
+    # Angle maximising cos(t)^2 * Sxx + sin(t)^2 * Syy + sin(2t) * Sxy.
+    theta = 0.5 * np.arctan2(2 * Sxy, Sxx - Syy)
+
+    dominant = np.array([np.cos(theta), np.sin(theta), 0.0])
+    perpendicular = np.array([-np.sin(theta), np.cos(theta), 0.0])
+    original_z = np.array([0.0, 0.0, 1.0])
+
+    # Right-handed frame mapping the dominant in-plane direction to z.
+    return np.stack([perpendicular, original_z, dominant])
 
 
 def _check_unsupported_ensemble_params(frozen_phonons, repetitions):
@@ -126,7 +180,7 @@ class _GPAWMagnetics(_FieldBuilder):
         slice_thickness: float | tuple[float, ...] = 1.0,
         exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: str = "xy",
-        rotate_field: Optional[tuple[float, float, float]] = None,
+        rotate_field: Optional[tuple[float, float, float]] | str = _AUTO_ROTATE_FIELD,
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
@@ -203,24 +257,31 @@ class _GPAWMagnetics(_FieldBuilder):
         if last_slice is None:
             last_slice = self.num_slices
 
+        vector_potential = get_vector_potential_from_gpaw(
+            self._calculators, gridrefinement=self.gridrefinement
+        )
+
         if self._quantity == "vector_potential":
-            array = get_vector_potential_from_gpaw(
-                self._calculators, gridrefinement=self.gridrefinement
-            )
+            array = vector_potential
         elif self._quantity == "magnetic_field":
-            array = get_magnetic_field_from_gpaw(
-                self._calculators, gridrefinement=self.gridrefinement
-            )
+            array = curl_fourier(vector_potential, self._calculators.atoms.cell)
         else:
             raise ValueError(f"Unknown quantity: {self._quantity}")
 
         if self.plane != "xy":
             axes = plane_to_axes(self.plane)
-            array = np.moveaxis(array, (axes[0] + 1, axes[1] + 1), (1, 2))
-            array = array[axes, ...]
+            moved_axes = (axes[0] + 1, axes[1] + 1)
+            array = np.moveaxis(array, moved_axes, (1, 2))[axes, ...]
+            vector_potential = np.moveaxis(vector_potential, moved_axes, (1, 2))[
+                axes, ...
+            ]
 
-        if self._rotate_field:
-            array = rotate_vector_field(array, self._rotate_field)
+        rotate_field = self._rotate_field
+        if isinstance(rotate_field, str) and rotate_field == _AUTO_ROTATE_FIELD:
+            rotation_matrix = _auto_rotation_matrix_for_vector_field(vector_potential)
+            array = _apply_rotation_matrix(array, rotation_matrix)
+        elif rotate_field:
+            array = rotate_vector_field(array, rotate_field)
 
         slice_thicknesses = np.array(self.slice_thickness)
         slice_shape = (3,) + self._valid_gpts
@@ -289,7 +350,7 @@ class GPAWMagneticField(_GPAWMagnetics, BaseMagneticField):
         slice_thickness: float | tuple[float, ...] = 1.0,
         exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: str = "xy",
-        rotate_field: Optional[tuple[float, float, float]] = None,
+        rotate_field: Optional[tuple[float, float, float]] | str = _AUTO_ROTATE_FIELD,
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
@@ -329,7 +390,7 @@ class GPAWVectorPotential(_GPAWMagnetics, BaseVectorPotential):
         slice_thickness: float | tuple[float, ...] = 1.0,
         exit_planes: Optional[int | tuple[int, ...]] = None,
         plane: str = "xy",
-        rotate_field: Optional[tuple[float, float, float]] = None,
+        rotate_field: Optional[tuple[float, float, float]] | str = _AUTO_ROTATE_FIELD,
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
