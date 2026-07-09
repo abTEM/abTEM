@@ -98,49 +98,39 @@ def get_magnetic_field_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
 #: see the raw (Az == 0) output.
 _AUTO_ROTATE_FIELD = "auto"
 
-#: Fallback rotation matrix used only when the raw field is exactly zero in
-#: the xy-plane too (e.g. no magnetic moment), where "largest component" is
-#: undefined. Equivalent to Euler angles (0, pi/2, 0).
-_DEFAULT_COLLINEAR_ROTATION_MATRIX = R.from_euler(
-    "xyz", (0.0, np.pi / 2, 0.0)
-).as_matrix()
+#: Swaps x into z: (Ax, Ay, 0) -> (0, Ay, -Ax). Euler angles (0, pi/2, 0).
+_ROTATION_X_INTO_Z = R.from_euler("xyz", (0.0, np.pi / 2, 0.0)).as_matrix()
+
+#: Swaps y into z: (Ax, Ay, 0) -> (Ax, 0, Ay). Euler angles (pi/2, 0, 0).
+_ROTATION_Y_INTO_Z = R.from_euler("xyz", (np.pi / 2, 0.0, 0.0)).as_matrix()
 
 
 def _auto_rotation_matrix_for_vector_field(vector_field: np.ndarray) -> np.ndarray:
     """
-    Rotation matrix that rotates the in-plane (x, y) component of
-    `vector_field` with the largest aggregate magnitude into z.
+    Rotation matrix that swaps whichever of the in-plane (x, y) components
+    of `vector_field` has the larger aggregate magnitude into z.
 
     `calculate_magnetic_vector_potential` always builds the magnetization as
-    m = (0, 0, rho) -- collinear spin has no real-space direction, so GPAW's
+    m = (0, 0, rho): collinear spin has no real-space direction, so GPAW's
     internal spin axis is arbitrary. Because curl(m) and the subsequent
     Poisson solve are applied component-wise, this makes the z-component of
     `vector_field` (and hence the only component `adjust_coulomb_potential`
     uses) identically zero for every collinear calculation, not just some.
-    Any in-plane axis is an equally valid choice to swap into z absent
-    additional information about the real magnetization direction, so this
-    picks the one that maximises the resulting z-component (in an
-    aggregate, least-squares sense) rather than an arbitrary fixed axis.
+
+    Only the two 90-degree swaps (x into z, or y into z) are considered,
+    not an arbitrary in-plane rotation angle: x, y and z are the only
+    directions with a physical meaning here (the orthogonal axes of the
+    simulation cell), so a continuous "optimal" blend of Ax and Ay has no
+    real-space interpretation as a magnetization direction -- it would just
+    fit whatever numerical asymmetry happens to be in the grid.
     """
     Ax = vector_field[0].astype(np.float64, copy=False)
     Ay = vector_field[1].astype(np.float64, copy=False)
 
     Sxx = float(np.sum(Ax * Ax))
     Syy = float(np.sum(Ay * Ay))
-    Sxy = float(np.sum(Ax * Ay))
 
-    if Sxx == 0.0 and Syy == 0.0:
-        return _DEFAULT_COLLINEAR_ROTATION_MATRIX
-
-    # Angle maximising cos(t)^2 * Sxx + sin(t)^2 * Syy + sin(2t) * Sxy.
-    theta = 0.5 * np.arctan2(2 * Sxy, Sxx - Syy)
-
-    dominant = np.array([np.cos(theta), np.sin(theta), 0.0])
-    perpendicular = np.array([-np.sin(theta), np.cos(theta), 0.0])
-    original_z = np.array([0.0, 0.0, 1.0])
-
-    # Right-handed frame mapping the dominant in-plane direction to z.
-    return np.stack([perpendicular, original_z, dominant])
+    return _ROTATION_X_INTO_Z if Sxx >= Syy else _ROTATION_Y_INTO_Z
 
 
 def _check_unsupported_ensemble_params(frozen_phonons, repetitions):
