@@ -564,6 +564,7 @@ class GPAWPotential(_PotentialBuilder):
 
         if args["frozen_phonons"] is not None:
             frozen_phonons = frozen_phonons_partial(args["frozen_phonons"])
+            frozen_phonons = frozen_phonons.item()
         else:
             frozen_phonons = None
 
@@ -600,9 +601,16 @@ class GPAWPotential(_PotentialBuilder):
 
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)
-            for i, fp in enumerate(
-                self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
-            ):
+            partitioned = self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
+
+            # Iterating a dask array yields per-element dask array slices;
+            # passing those into dask.delayed() and wrapping the result with
+            # another from_delayed()/concatenate() confuses dask's shape
+            # inference (IndexError deep in dask.array.core during compute).
+            # Delayed objects from to_delayed() compose correctly instead.
+            fp_chunks = partitioned.to_delayed().ravel() if lazy else partitioned
+
+            for i, fp in enumerate(fp_chunks):
                 if lazy:
                     block = dask.delayed(frozen_phonons)(calculators, fp)
 
