@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from typing import Optional, Protocol, runtime_checkable
 
 import numpy as np
@@ -18,7 +19,8 @@ from abtem.magnetism.iam import (
 )
 from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
 from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
-from abtem.potentials.iam import _FieldBuilder
+from abtem.potentials.gpaw import GPAWPotential
+from abtem.potentials.iam import PotentialArray, _FieldBuilder
 
 
 def _calculate_non_periodic_magnetic_vector_potential():
@@ -409,6 +411,213 @@ class GPAWVectorPotential(_GPAWMagnetics, BaseVectorPotential):
             projection=projection,
             periodic=periodic,
         )
+
+
+@dataclass
+class GPAWMagneticFields:
+    """
+    Bundles the electrostatic potential, magnetic vector potential and
+    (optionally) magnetic field built from the same GPAW calculator(s) by
+    `gpaw_magnetic_fields`.
+
+    `potential` may carry a frozen-phonon ensemble axis (or, after tiling,
+    come from a `CrystalPotential` build); `vector_potential` and
+    `magnetic_field` are always for a single, rigid configuration -- see
+    `_check_unsupported_ensemble_params`. Use `.tile()` to bring the
+    magnetic components up to a repeated crystal's size, and
+    `.combined_potential()` to fold the vector potential into an
+    electrostatic potential via `adjust_coulomb_potential`.
+    """
+
+    potential: PotentialArray
+    vector_potential: VectorPotentialArray
+    magnetic_field: Optional[MagneticFieldArray] = None
+
+    def tile(
+        self, repetitions: tuple[int, int] | tuple[int, int, int]
+    ) -> "GPAWMagneticFields":
+        """
+        Tile `vector_potential` (and `magnetic_field`, if present) to match
+        a separately tiled/repeated electrostatic potential, e.g. built via
+        `abtem.CrystalPotential`.
+
+        `potential` is left untouched here -- tile or rebuild it separately
+        (e.g. `CrystalPotential(electrostatic_ensemble, repetitions=...)`)
+        before calling `combined_potential`.
+        """
+        return replace(
+            self,
+            vector_potential=self.vector_potential.tile(repetitions),
+            magnetic_field=(
+                self.magnetic_field.tile(repetitions)
+                if self.magnetic_field is not None
+                else None
+            ),
+        )
+
+    def combined_potential(
+        self, energy: float, potential: Optional[PotentialArray] = None
+    ) -> PotentialArray:
+        """
+        Combine an electrostatic potential with `vector_potential` via
+        `VectorPotentialArray.adjust_coulomb_potential`.
+
+        Parameters
+        ----------
+        energy : float
+            Electron energy [eV].
+        potential : PotentialArray, optional
+            The electrostatic potential to combine with `vector_potential`.
+            Defaults to `self.potential`; pass a separately
+            tiled/ensembled potential (e.g. a `CrystalPotential` build)
+            after calling `.tile()` for the frozen-phonon workflow.
+
+        Returns
+        -------
+        PotentialArray
+        """
+        if potential is None:
+            potential = self.potential
+        return self.vector_potential.adjust_coulomb_potential(potential, energy=energy)
+
+
+def gpaw_magnetic_fields(
+    calculators: GPAW | list[GPAW] | list[str] | str,
+    gpts: Optional[int | tuple[int, int]] = None,
+    sampling: Optional[float | tuple[float, float]] = None,
+    slice_thickness: float | tuple[float, ...] = 1.0,
+    exit_planes: Optional[int | tuple[int, ...]] = None,
+    plane: str = "xy",
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    box: Optional[tuple[float, float, float]] = None,
+    periodic: bool = True,
+    frozen_phonons: Optional[BaseFrozenPhonons] = None,
+    rotate_field: Optional[tuple[float, float, float]] | str = _AUTO_ROTATE_FIELD,
+    include_magnetic_field: bool = False,
+    magnetic_calculator: Optional[GPAW] = None,
+    device: Optional[str] = None,
+    lazy: Optional[bool] = None,
+    potential_kwargs: Optional[dict] = None,
+    field_kwargs: Optional[dict] = None,
+) -> GPAWMagneticFields:
+    """
+    Build the electrostatic potential, magnetic vector potential and
+    (optionally) magnetic field from the same GPAW calculator(s) in one
+    call.
+
+    `frozen_phonons` (an ensemble of atomic-displacement configurations) is
+    only supported for the electrostatic `potential` -- the magnetic
+    components come from a single, rigid ab initio calculation and cannot
+    vary per configuration. Tile the returned object with `.tile()` to
+    match a separately built, possibly-ensembled electrostatic potential
+    (e.g. from `abtem.CrystalPotential`), then combine with
+    `.combined_potential()`.
+
+    Parameters
+    ----------
+    calculators : (list of) gpaw.calculator.GPAW or (list of) str
+        One or more converged GPAW calculators (or paths to `.gpw` files).
+        Forwarded to `GPAWPotential`. If a list (a frozen-phonon ensemble),
+        `magnetic_calculator` must be given explicitly, since
+        `GPAWVectorPotential`/`GPAWMagneticField` only support a single
+        calculator.
+    gpts, sampling, slice_thickness, exit_planes, plane, origin, box,
+    periodic, device : see `GPAWPotential`, `GPAWVectorPotential`
+        Forwarded to all built components.
+    frozen_phonons : BaseFrozenPhonons, optional
+        Forwarded to `GPAWPotential` only.
+    rotate_field : tuple of three float, "auto", or None
+        Forwarded to `GPAWVectorPotential`/`GPAWMagneticField`. Defaults to
+        `"auto"`: automatically swap the larger-magnitude in-plane
+        component into z (see `_auto_rotation_matrix_for_vector_field`).
+    include_magnetic_field : bool
+        If True, also build the magnetic field `B` (not used by
+        `combined_potential`, only for inspection/visualization). Roughly
+        doubles the GPAW-side cost of the magnetic part, so it is off by
+        default.
+    magnetic_calculator : gpaw.calculator.GPAW, optional
+        The single calculator representing the (rigid) magnetic
+        contribution. Defaults to `calculators` when that is a single
+        calculator; required when `calculators` is a list.
+    lazy : bool, optional
+        Passed to the electrostatic potential's `.build()`. The magnetic
+        components are always built eagerly, since
+        `GPAWVectorPotential`/`GPAWMagneticField` do not support lazy
+        building.
+    potential_kwargs, field_kwargs : dict, optional
+        Extra keyword arguments forwarded only to `GPAWPotential`, or only
+        to `GPAWVectorPotential`/`GPAWMagneticField`, respectively (e.g.
+        their differing `gridrefinement` defaults).
+
+    Returns
+    -------
+    GPAWMagneticFields
+    """
+    if isinstance(calculators, (list, tuple)):
+        if magnetic_calculator is None:
+            raise ValueError(
+                "calculators is a list (a frozen-phonon ensemble); "
+                "GPAWVectorPotential/GPAWMagneticField only support a "
+                "single calculator. Pass magnetic_calculator explicitly to "
+                "pick which one represents the (rigid) magnetic "
+                "contribution."
+            )
+    elif magnetic_calculator is None:
+        magnetic_calculator = calculators
+
+    potential_kwargs = dict(potential_kwargs or {})
+    field_kwargs = dict(field_kwargs or {})
+
+    shared = dict(
+        gpts=gpts,
+        sampling=sampling,
+        slice_thickness=slice_thickness,
+        exit_planes=exit_planes,
+        plane=plane,
+        origin=origin,
+        box=box,
+        periodic=periodic,
+        device=device,
+    )
+
+    potential = GPAWPotential(
+        calculators,
+        frozen_phonons=frozen_phonons,
+        **shared,
+        **potential_kwargs,
+    ).build(lazy=lazy)
+    if not lazy:
+        potential = potential.compute()
+
+    vector_potential = (
+        GPAWVectorPotential(
+            magnetic_calculator,
+            rotate_field=rotate_field,
+            **shared,
+            **field_kwargs,
+        )
+        .build()
+        .compute()
+    )
+
+    magnetic_field = None
+    if include_magnetic_field:
+        magnetic_field = (
+            GPAWMagneticField(
+                magnetic_calculator,
+                rotate_field=rotate_field,
+                **shared,
+                **field_kwargs,
+            )
+            .build()
+            .compute()
+        )
+
+    return GPAWMagneticFields(
+        potential=potential,
+        vector_potential=vector_potential,
+        magnetic_field=magnetic_field,
+    )
 
 
 class SpinDensityMagneticField:
