@@ -480,6 +480,71 @@ class GPAWMagneticFields:
             potential = self.potential
         return self.vector_potential.adjust_coulomb_potential(potential, energy=energy)
 
+    def show(
+        self,
+        tile: tuple[int, int] = (1, 1),
+        figsize: tuple[int, int] = (8, 8),
+    ):
+        """
+        Show side-by-side projections of the electrostatic potential and
+        the x and z components of the vector potential -- and, if built,
+        the magnetic field. `Az`/`Bz` are the components that matter for
+        `combined_potential`; `Ax`/`Bx` are shown alongside for a sanity
+        check that the in-plane and z-swapped components look sensible
+        relative to each other.
+
+        Parameters
+        ----------
+        tile : two int, optional
+            Tile the projected images before plotting, e.g. to preview the
+            periodicity of a repeated unit cell.
+        figsize : two int, optional
+            Figure size passed to `matplotlib.pyplot.figure`.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.axes_grid1 import ImageGrid
+
+        panels = [
+            (self.potential.project(), "$V$", "$Å^{-3}$"),
+            (self.vector_potential.project()[0], "$A_x$", "ÅT"),
+            (self.vector_potential.project()[2], "$A_z$", "ÅT"),
+        ]
+        if self.magnetic_field is not None:
+            panels += [
+                (self.magnetic_field.project()[0], "$B_x$", "T"),
+                (self.magnetic_field.project()[2], "$B_z$", "T"),
+            ]
+
+        fig = plt.figure(figsize=figsize)
+        grid = ImageGrid(
+            fig,
+            111,
+            nrows_ncols=(1, len(panels)),
+            cbar_mode="edge",
+            cbar_location="bottom",
+            cbar_pad=0.1,
+            cbar_size=0.1,
+            axes_pad=0.1,
+        )
+
+        for ax, (image, name, unit) in zip(grid, panels):
+            array = np.asarray(image.tile(tile).array)
+            if np.abs(array).max() < 1e-5:
+                vmin, vmax = -1e-5, 1e-5
+            else:
+                vmin, vmax = None, None
+            im = ax.imshow(array.T, vmin=vmin, vmax=vmax, origin="lower")
+            ax.set_title(name)
+            ax.cax.colorbar(im, label=unit)
+            ax.xaxis.set_visible(False)
+            ax.yaxis.set_visible(False)
+
+        return fig
+
 
 def gpaw_magnetic_fields(
     calculators: GPAW | list[GPAW] | list[str] | str,
