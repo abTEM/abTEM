@@ -519,29 +519,34 @@ class GPAWMagneticFields:
                 (self.magnetic_field.project()[2], "$B_z$", "T"),
             ]
 
-        fig = plt.figure(figsize=figsize)
-        grid = ImageGrid(
-            fig,
-            111,
-            nrows_ncols=(1, len(panels)),
-            cbar_mode="edge",
-            cbar_location="bottom",
-            cbar_pad=0.1,
-            cbar_size=0.1,
-            axes_pad=0.1,
-        )
+        # Create the figure with pyplot's interactive auto-display off, then
+        # return it: otherwise Jupyter's inline backend renders it once from
+        # the auto-display hook and a second time from the returned value,
+        # showing the same plot twice.
+        with plt.ioff():
+            fig = plt.figure(figsize=figsize)
+            grid = ImageGrid(
+                fig,
+                111,
+                nrows_ncols=(1, len(panels)),
+                cbar_mode="edge",
+                cbar_location="bottom",
+                cbar_pad=0.1,
+                cbar_size=0.1,
+                axes_pad=0.1,
+            )
 
-        for ax, (image, name, unit) in zip(grid, panels):
-            array = np.asarray(image.tile(tile).array)
-            if np.abs(array).max() < 1e-5:
-                vmin, vmax = -1e-5, 1e-5
-            else:
-                vmin, vmax = None, None
-            im = ax.imshow(array.T, vmin=vmin, vmax=vmax, origin="lower")
-            ax.set_title(name)
-            ax.cax.colorbar(im, label=unit)
-            ax.xaxis.set_visible(False)
-            ax.yaxis.set_visible(False)
+            for ax, (image, name, unit) in zip(grid, panels):
+                array = np.asarray(image.tile(tile).array)
+                if np.abs(array).max() < 1e-5:
+                    vmin, vmax = -1e-5, 1e-5
+                else:
+                    vmin, vmax = None, None
+                im = ax.imshow(array.T, vmin=vmin, vmax=vmax, origin="lower")
+                ax.set_title(name)
+                ax.cax.colorbar(im, label=unit)
+                ax.xaxis.set_visible(False)
+                ax.yaxis.set_visible(False)
 
         return fig
 
