@@ -447,6 +447,23 @@ def _plasmon_total_intensity(waves: Waves):
     return xp.sum(arr**2, axis=(-2, -1), keepdims=True)
 
 
+def _renormalize_wave_inplace(waves: Waves) -> None:
+    """Rescale ``waves`` in place to unit total intensity per member.
+
+    Used with phase-scramble mixing where the combined transmission function
+    is unnormalized (|T| > 1), causing per-slice wavefunction growth.
+    Renormalizing per slice prevents overflow in any floating-point precision
+    while preserving the spatial modulation that generates TDS.  The final DP
+    is always normalized, so this is physics-preserving.
+    """
+    xp = get_array_module(waves.device)
+    arr = xp.abs(waves._array).astype(xp.float64)
+    norm_sq = xp.sum(arr**2, axis=(-2, -1), keepdims=True)
+    norm_sq = xp.maximum(norm_sq, xp.finfo(xp.float64).tiny)
+    scale = (1.0 / xp.sqrt(norm_sq)).astype(waves._array.dtype)
+    waves._array = waves._array * scale
+
+
 def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
     """Return a copy of ``waves`` rescaled to the given per-member total intensity.
 
@@ -457,7 +474,11 @@ def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
     xp = get_array_module(waves.device)
     arr = xp.abs(waves._array).astype(xp.float64)
     current = xp.sum(arr**2, axis=(-2, -1), keepdims=True)
-    scale = xp.sqrt(target_norm / current).astype(waves._array.dtype)
+    current = xp.maximum(current, xp.finfo(xp.float64).tiny)
+    scale = xp.sqrt(target_norm / current)
+    max_scale = xp.finfo(waves._array.dtype).max
+    scale = xp.minimum(scale, max_scale)
+    scale = scale.astype(waves._array.dtype)
     kwargs = waves._copy_kwargs(exclude=("array",))
     kwargs["array"] = waves._array * scale
     return waves.__class__(**kwargs)
@@ -476,7 +497,11 @@ def _renormalize_order_waves(order_waves: list, target_norm) -> None:
         )
         for w in order_waves
     )
-    scale = xp.sqrt(target_norm / total).astype(order_waves[0]._array.dtype)
+    total = xp.maximum(total, xp.finfo(xp.float64).tiny)
+    scale = xp.sqrt(target_norm / total)
+    max_scale = xp.finfo(order_waves[0]._array.dtype).max
+    scale = xp.minimum(scale, max_scale)
+    scale = scale.astype(order_waves[0]._array.dtype)
     for w in order_waves:
         w._array = w._array * scale
 
@@ -818,8 +843,19 @@ def multislice_and_detect(
 
         depth = 0.0
 
+        _gs_kwargs = {}
+        _phase_scramble = (
+            hasattr(potential_configuration, "mixing")
+            and potential_configuration.mixing == "phase_scramble"
+        )
+        if _phase_scramble:
+            _gs_kwargs["energy"] = waves._valid_energy
+            _psa_incident_norm = _plasmon_total_intensity(waves)
+        else:
+            _psa_incident_norm = None
+
         for potential_slice, next_slice in lookahead(
-            potential_configuration.generate_slices()
+            potential_configuration.generate_slices(**_gs_kwargs)
         ):
             if order_resolved:
                 # Build a single slice operand shared across all loss-order
@@ -854,12 +890,18 @@ def multislice_and_detect(
                         order_waves[n], order_backscatter[n] = stepped
                     else:
                         order_waves[n] = stepped
+
             elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(
                     waves, potential_slice, next_slice=next_slice
                 )
+                if _phase_scramble:
+                    _renormalize_wave_inplace(waves)
             else:
                 waves = multislice_step(waves, potential_slice, next_slice=None)
+                if _phase_scramble:
+                    _renormalize_wave_inplace(waves)
+
             tqdm_pbar.update_if_exists(int(n_waves))
 
             slice_thickness = potential_slice.axes_metadata[0].values[0]
@@ -920,6 +962,10 @@ def multislice_and_detect(
                         )
                     else:
                         detect_waves = waves
+                        if _phase_scramble and _psa_incident_norm is not None:
+                            detect_waves = _renormalize_total_intensity(
+                                waves, _psa_incident_norm
+                            )
                         if plasmon_operator is not None and renormalize_plasmons:
                             detect_waves = _renormalize_total_intensity(
                                 waves, plasmon_target_norm
@@ -940,6 +986,8 @@ def multislice_and_detect(
                 for detector in detectors
             ]
         else:
+            if _phase_scramble and _psa_incident_norm is not None:
+                waves = _renormalize_total_intensity(waves, _psa_incident_norm)
             if plasmon_operator is not None and renormalize_plasmons:
                 waves = _renormalize_total_intensity(waves, plasmon_target_norm)
             measurements = [
@@ -1218,6 +1266,11 @@ def transition_potential_multislice_and_detect(
 
     waves_input = waves.copy()
 
+    def _gs_kwargs_for(config):
+        if hasattr(config, "mixing") and config.mixing == "phase_scramble":
+            return {"energy": waves_input._valid_energy}
+        return {}
+
     for (
         potential_index,
         potential_configuration,
@@ -1228,6 +1281,8 @@ def transition_potential_multislice_and_detect(
                 potential_index, 0, potential
             )
             _update_measurements(waves, detectors, measurements, measurement_index)
+
+        _eels_gs = _gs_kwargs_for(potential_configuration)
 
         # The double-channel inner multislice re-visits slices [scatter_index+1 …]
         # once per site batch; pre-building (and bandlimiting) the transmission
@@ -1253,7 +1308,7 @@ def transition_potential_multislice_and_detect(
                 # instances across slice indices is safe here.
                 tx_dedup: dict[int, TransmissionFunction] = {}
                 slice_cache = []
-                for slice_obj in potential_configuration.generate_slices():
+                for slice_obj in potential_configuration.generate_slices(**_eels_gs):
                     key = id(slice_obj)
                     cached = tx_dedup.get(key)
                     if cached is None:
@@ -1264,13 +1319,13 @@ def transition_potential_multislice_and_detect(
                         tx_dedup[key] = cached
                     slice_cache.append(cached)
             else:
-                slice_cache = list(potential_configuration.generate_slices())
+                slice_cache = list(potential_configuration.generate_slices(**_eels_gs))
             n_outer = len(slice_cache)
             outer_iter = enumerate(slice_cache)
         else:
             slice_cache = None
             n_outer = None
-            outer_iter = enumerate(potential_configuration.generate_slices())
+            outer_iter = enumerate(potential_configuration.generate_slices(**_eels_gs))
 
         depth = 0.0
         for scatter_index, potential_slice in outer_iter:
