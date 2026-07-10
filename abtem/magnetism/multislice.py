@@ -466,6 +466,14 @@ def pauli_multislice(
         constant Zeeman field. Since A_np is non-periodic, results are
         only physical while the wave function has negligible amplitude at
         the supercell boundary.
+
+        For a beam significantly wider than the unit cell (e.g. a
+        large-OAM vortex probe), the interaction with this uniform field
+        dominates the orbital (L.B) coupling — the periodic field alone
+        gives a near-vanishing, misleadingly small orbital signal for a
+        ferromagnet. Omit `average_field` only for compensated textures
+        (e.g. antiferromagnets, where B_avg = 0) or when deliberately
+        isolating the periodic-field contribution.
     derivative_accuracy : int, optional
         Finite-difference accuracy for the Laplace and gradient operators
         (default 6).
