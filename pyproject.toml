@@ -53,6 +53,9 @@ extra = [
 core-loss = [
     "sympy",
 ]
+gpaw = [
+    "hankel",
+]
 
 [dependency-groups]
 dev = [
