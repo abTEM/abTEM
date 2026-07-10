@@ -423,6 +423,21 @@ class TiltAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class SpinAxis(OrdinalAxis):
+    """
+    Labeled axis holding the two components of a spinor wave function.
+
+    The two components are mixed by the Pauli multislice solver, unlike
+    ordinary ensemble axes whose members evolve independently, so this
+    axis must never be split across dask chunks. Locate it by isinstance,
+    never by position.
+    """
+
+    label: str = "spin"
+    values: tuple = ("up", "down")
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class ThicknessAxis(NonLinearAxis):
     label: str = "thickness"
     units: str = "Å"
