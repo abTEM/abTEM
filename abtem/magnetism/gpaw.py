@@ -23,14 +23,84 @@ from abtem.potentials.gpaw import GPAWPotential
 from abtem.potentials.iam import PotentialArray, _FieldBuilder
 
 
-def _calculate_non_periodic_magnetic_vector_potential():
-    # A_np = mu_0 * M x r
-    pass
+def calculate_constant_magnetic_field(magnetization: np.ndarray) -> np.ndarray:
+    """
+    Uniform part of the magnetic field, B_avg = mu_0 * mu_B * <m> [T].
+
+    A periodic vector potential can only represent a magnetic field with
+    zero cell average [PRB 94, 174414 (2016), Appendix], so the field of a
+    magnetic solid decomposes as B = B_p + B_avg, where B_p (zero average)
+    comes from the periodic vector potential and B_avg = mu_0 * M is the
+    volume average of the field, with M the magnetization of the material.
+    B_avg vanishes for antiferromagnets and other compensated textures.
+
+    Parameters
+    ----------
+    magnetization : np.ndarray
+        Magnetization density of shape (3,) + (nx, ny, nz) in units of
+        Bohr magnetons per cubic Ångström.
+
+    Returns
+    -------
+    average_field : np.ndarray
+        The uniform magnetic field as a vector of shape (3,) [T].
+    """
+    magnetization = np.asarray(magnetization)
+    average_magnetization = magnetization.reshape(3, -1).mean(axis=1)
+    return vacuum_permeability * bohr_magneton * average_magnetization
 
 
-def calculate_constant_magnetic_field():
-    # B_avg = mu_0 * M
-    pass
+def calculate_non_periodic_magnetic_vector_potential(
+    average_field: np.ndarray,
+    cell,
+    gpts: tuple[int, int, int],
+    origin: str | tuple[float, float, float] = "center",
+) -> np.ndarray:
+    """
+    Non-periodic vector potential of a uniform magnetic field on a 3D grid.
+
+    In the Coulomb gauge, A_np(r) = 1/2 * B_avg x (r - r0) represents the
+    uniform field component B_avg = curl(A_np) that a periodic vector
+    potential cannot carry [PRB 94, 174414 (2016), Appendix]. A_np grows
+    linearly with distance from `origin` and is *not* periodic: simulations
+    including it are only physical while the wave function has negligible
+    amplitude at the supercell boundary, so use a laterally large supercell
+    (in the reference calculations of PRB 94, 174414 this was 48x48 to
+    60x60 unit cells).
+
+    Parameters
+    ----------
+    average_field : np.ndarray
+        The uniform magnetic field as a vector of shape (3,) [T], e.g. from
+        `calculate_constant_magnetic_field`.
+    cell : ase.cell.Cell or np.ndarray
+        Cell defining the region of space the grid spans.
+    gpts : tuple of three int
+        Number of grid points along each cell vector.
+    origin : "center" or tuple of three float
+        Gauge origin r0 [Å]. Defaults to the cell center, which minimizes
+        |A_np| over the cell.
+
+    Returns
+    -------
+    vector_potential : np.ndarray
+        The non-periodic vector potential of shape (3,) + gpts [ÅT].
+    """
+    average_field = np.asarray(average_field, dtype=float)
+    cell = np.asarray(cell, dtype=float)
+
+    fractional = np.stack(
+        np.meshgrid(*(np.arange(n) / n for n in gpts), indexing="ij"), axis=-1
+    )
+    r = fractional @ cell
+
+    if isinstance(origin, str) and origin == "center":
+        r0 = cell.sum(axis=0) / 2
+    else:
+        r0 = np.asarray(origin, dtype=float)
+
+    A = 0.5 * np.cross(average_field, r - r0)
+    return np.moveaxis(A, -1, 0)
 
 
 def _apply_rotation_matrix(
@@ -66,28 +136,123 @@ def rotate_vector_field(
     return _apply_rotation_matrix(vector_field, rotation_matrix)
 
 
-def calculate_magnetic_vector_potential(spin_density, cell):
-    m = np.stack(
-        [np.zeros_like(spin_density), np.zeros_like(spin_density), spin_density]
-    )
+def calculate_vector_potential_from_magnetization(
+    magnetization: np.ndarray, cell
+) -> np.ndarray:
+    """
+    Periodic part of the magnetic vector potential from a magnetization
+    density.
 
-    j = bohr_magneton * curl_fourier(m, cell)
+    The spin current density j = curl(mu_B * m) sources the periodic vector
+    potential through the Poisson equation laplace(A_p) = -mu_0 * j, solved
+    here in Fourier space (Coulomb gauge) [PRB 94, 174414 (2016), Sec. II D].
+
+    A periodic vector potential can only represent a magnetic field with
+    zero cell average, so for a ferromagnet the uniform remainder must be
+    added separately; see `calculate_constant_magnetic_field` and
+    `calculate_non_periodic_magnetic_vector_potential`.
+
+    Parameters
+    ----------
+    magnetization : np.ndarray
+        Magnetization density of shape (3,) + (nx, ny, nz) in units of
+        Bohr magnetons per cubic Ångström.
+    cell : ase.cell.Cell
+        ASE `Cell` object defining the region of space where the
+        magnetization is defined.
+
+    Returns
+    -------
+    vector_potential : np.ndarray
+        The periodic vector potential of shape (3,) + (nx, ny, nz) [ÅT].
+    """
+    j = bohr_magneton * curl_fourier(magnetization, cell)
     A = -vacuum_permeability * integrate_gradient_fourier(j, cell)
     return A
 
 
-def get_vector_potential_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
-    if not assume_colinear:
-        raise NotImplementedError("Non-collinear calculations not supported.")
-    n = calc.get_all_electron_density(spin=True, gridrefinement=gridrefinement)
-    rho = n[0][0] - n[0][1]
-    A = calculate_magnetic_vector_potential(rho, calc.atoms.cell)
-    return A
+def calculate_magnetic_vector_potential(spin_density, cell):
+    """
+    Periodic vector potential [ÅT] of a collinear spin density (m along z).
+
+    See `calculate_vector_potential_from_magnetization` for the general
+    (non-collinear) form.
+    """
+    m = np.stack(
+        [np.zeros_like(spin_density), np.zeros_like(spin_density), spin_density]
+    )
+    return calculate_vector_potential_from_magnetization(m, cell)
 
 
-def get_magnetic_field_from_gpaw(calc, gridrefinement=2, assume_colinear=True):
-    if not assume_colinear:
-        raise NotImplementedError("Non-collinear calculations not supported.")
+def get_magnetization_from_gpaw(calc, gridrefinement: int = 2):
+    """
+    Extract the all-electron magnetization density from a converged GPAW
+    calculation.
+
+    Supports collinear spin-polarized calculations (two spin channels; the
+    magnetization is placed along z by convention, since collinear spin has
+    no real-space direction) and non-collinear calculations (four density
+    components n, mx, my, mz; requires GPAW's new-style calculator with
+    plane-wave mode, ``symmetry='off'`` and ``magmoms`` given as an (N, 3)
+    array).
+
+    Parameters
+    ----------
+    calc : gpaw.new.ase_interface.ASECalculator or gpaw.calculator.GPAW
+        Converged GPAW calculator. Non-collinear extraction requires the
+        new-style calculator (GPAW >= 25).
+    gridrefinement : int
+        Grid refinement factor for the all-electron density.
+
+    Returns
+    -------
+    magnetization : np.ndarray
+        Magnetization density of shape (3,) + (nx, ny, nz) in units of
+        Bohr magnetons per cubic Ångström.
+    collinear : bool
+        True when extracted from a collinear calculation, where the spin
+        axis is arbitrary (represented along z); False for genuinely
+        directional non-collinear magnetization.
+    """
+    dft = getattr(calc, "dft", None)
+
+    if dft is not None:
+        n = dft.densities().all_electron_densities(grid_refinement=gridrefinement)
+        density = n.gather(broadcast=True).data
+
+        if density.shape[0] == 1:
+            raise ValueError(
+                "The GPAW calculation is spin-paired and has no magnetization; "
+                "run a spin-polarized (or non-collinear) calculation."
+            )
+        elif density.shape[0] == 2:
+            rho = density[0] - density[1]
+            zeros = np.zeros_like(rho)
+            return np.stack([zeros, zeros, rho]), True
+        else:
+            assert density.shape[0] == 4  # (n, mx, my, mz)
+            return np.ascontiguousarray(density[1:]), False
+
+    # Legacy calculator API: only collinear calculations are supported.
+    n_up = calc.get_all_electron_density(spin=0, gridrefinement=gridrefinement)
+    n_down = calc.get_all_electron_density(spin=1, gridrefinement=gridrefinement)
+    rho = n_up - n_down
+    zeros = np.zeros_like(rho)
+    return np.stack([zeros, zeros, rho]), True
+
+
+def get_vector_potential_from_gpaw(calc, gridrefinement=2):
+    """Periodic vector potential [ÅT] from a converged GPAW calculation."""
+    magnetization, _ = get_magnetization_from_gpaw(
+        calc, gridrefinement=gridrefinement
+    )
+    return calculate_vector_potential_from_magnetization(
+        magnetization, calc.atoms.cell
+    )
+
+
+def get_magnetic_field_from_gpaw(calc, gridrefinement=2):
+    """Periodic magnetic field [T] from a converged GPAW calculation."""
     A = get_vector_potential_from_gpaw(calc, gridrefinement=gridrefinement)
     B = curl_fourier(A, calc.atoms.cell)
     return B
@@ -160,11 +325,19 @@ class GPAW(Protocol):
         ...
 
 
-class _GPAWMagnetics(_FieldBuilder):
+class _MagnetizationMagnetics(_FieldBuilder):
+    """
+    Base builder for sliced magnetic fields/vector potentials computed from
+    a magnetization density. Subclasses provide `_get_magnetization`,
+    returning the (3,) + (nx, ny, nz) magnetization [μB/Å³] and a flag
+    marking it as collinear (arbitrary spin axis, represented along z).
+    """
+
     def __init__(
         self,
-        calculators: GPAW | list[GPAW] | list[str] | str,
         array_object,
+        cell,
+        n_grid_points_z: int,
         quantity: str = "magnetic_field",
         projection: str = "fft",
         gpts: Optional[int | tuple[int, int]] = None,
@@ -176,38 +349,20 @@ class _GPAWMagnetics(_FieldBuilder):
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
-        frozen_phonons: Optional[BaseFrozenPhonons] = None,
-        repetitions: tuple[int, int, int] = (1, 1, 1),
-        gridrefinement: int = 4,
         device: Optional[str] = None,
-        assume_colinear: bool = True,
     ):
-        if not assume_colinear:
-            raise NotImplementedError("Non-collinear calculations not supported.")
-
-        _check_unsupported_ensemble_params(frozen_phonons, repetitions)
-
-        self.gridrefinement = gridrefinement
-
-        assert isinstance(calculators, GPAW)
-        self._calculators = calculators
-
-        atoms = calculators.atoms
-
-        cell = atoms.cell
+        self._cell3d = cell
 
         self._rotate_field = rotate_field
 
         if projection == "real_space" and isinstance(slice_thickness, (float, int)):
-            n_z = calculators.get_number_of_grid_points()[2] * gridrefinement
-
             slice_thickness = float(slice_thickness)
 
             axes = plane_to_axes(plane)
             depth = np.diag(cell)[axes[2]]
 
             slice_thickness, n_per_slice = equal_slice_thicknesses(
-                n_z, slice_thickness, depth=depth
+                n_grid_points_z, slice_thickness, depth=depth
             )
         elif projection == "real_space":
             raise NotImplementedError(
@@ -232,6 +387,9 @@ class _GPAWMagnetics(_FieldBuilder):
             periodic=periodic,
         )
 
+    def _get_magnetization(self) -> tuple[np.ndarray, bool]:
+        raise NotImplementedError
+
     @property
     def num_configurations(self):
         return 1
@@ -249,14 +407,16 @@ class _GPAWMagnetics(_FieldBuilder):
         if last_slice is None:
             last_slice = self.num_slices
 
-        vector_potential = get_vector_potential_from_gpaw(
-            self._calculators, gridrefinement=self.gridrefinement
+        magnetization, collinear = self._get_magnetization()
+
+        vector_potential = calculate_vector_potential_from_magnetization(
+            magnetization, self._cell3d
         )
 
         if self._quantity == "vector_potential":
             array = vector_potential
         elif self._quantity == "magnetic_field":
-            array = curl_fourier(vector_potential, self._calculators.atoms.cell)
+            array = curl_fourier(vector_potential, self._cell3d)
         else:
             raise ValueError(f"Unknown quantity: {self._quantity}")
 
@@ -270,8 +430,14 @@ class _GPAWMagnetics(_FieldBuilder):
 
         rotate_field = self._rotate_field
         if isinstance(rotate_field, str) and rotate_field == _AUTO_ROTATE_FIELD:
-            rotation_matrix = _auto_rotation_matrix_for_vector_field(vector_potential)
-            array = _apply_rotation_matrix(array, rotation_matrix)
+            # The auto swap exists because collinear spin has no real-space
+            # direction; a non-collinear magnetization is genuinely
+            # directional, so it is never auto-rotated.
+            if collinear:
+                rotation_matrix = _auto_rotation_matrix_for_vector_field(
+                    vector_potential
+                )
+                array = _apply_rotation_matrix(array, rotation_matrix)
         elif rotate_field:
             array = rotate_vector_field(array, rotate_field)
 
@@ -279,7 +445,7 @@ class _GPAWMagnetics(_FieldBuilder):
         slice_shape = (3,) + self._valid_gpts
 
         if self._projection == "real_space":
-            depth = self._calculators.atoms.cell[2, 2]
+            depth = self._cell3d[2, 2]
             pixels_per_slice = (slice_thicknesses / depth * array.shape[-1]).astype(int)
 
             dz = slice_thicknesses.sum() / array.shape[-1]
@@ -330,6 +496,259 @@ class _GPAWMagnetics(_FieldBuilder):
             last_slice=last_slice,
             max_batch=max_batch,
             lazy=False,
+        )
+
+
+class _GPAWMagnetics(_MagnetizationMagnetics):
+    def __init__(
+        self,
+        calculators: GPAW | list[GPAW] | list[str] | str,
+        array_object,
+        quantity: str = "magnetic_field",
+        projection: str = "fft",
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        slice_thickness: float | tuple[float, ...] = 1.0,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        plane: str = "xy",
+        rotate_field: Optional[tuple[float, float, float]] | str = _AUTO_ROTATE_FIELD,
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: Optional[tuple[float, float, float]] = None,
+        periodic: bool = True,
+        frozen_phonons: Optional[BaseFrozenPhonons] = None,
+        repetitions: tuple[int, int, int] = (1, 1, 1),
+        gridrefinement: int = 4,
+        device: Optional[str] = None,
+    ):
+        _check_unsupported_ensemble_params(frozen_phonons, repetitions)
+
+        self.gridrefinement = gridrefinement
+
+        assert isinstance(calculators, GPAW)
+        self._calculators = calculators
+
+        super().__init__(
+            array_object=array_object,
+            cell=calculators.atoms.cell,
+            n_grid_points_z=calculators.get_number_of_grid_points()[2]
+            * gridrefinement,
+            quantity=quantity,
+            projection=projection,
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            plane=plane,
+            rotate_field=rotate_field,
+            origin=origin,
+            box=box,
+            periodic=periodic,
+            device=device,
+        )
+
+    def _get_magnetization(self) -> tuple[np.ndarray, bool]:
+        return get_magnetization_from_gpaw(
+            self._calculators, gridrefinement=self.gridrefinement
+        )
+
+
+class _ArrayMagnetics(_MagnetizationMagnetics):
+    def __init__(
+        self,
+        magnetization: np.ndarray,
+        cell,
+        array_object,
+        quantity: str = "magnetic_field",
+        projection: str = "fft",
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        slice_thickness: float | tuple[float, ...] = 1.0,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        plane: str = "xy",
+        rotate_field: Optional[tuple[float, float, float]] | str = None,
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: Optional[tuple[float, float, float]] = None,
+        periodic: bool = True,
+        device: Optional[str] = None,
+    ):
+        from ase.cell import Cell
+
+        magnetization = np.asarray(magnetization)
+
+        if magnetization.ndim == 3:
+            # A scalar spin density: collinear, along z by convention.
+            zeros = np.zeros_like(magnetization)
+            magnetization = np.stack([zeros, zeros, magnetization])
+            self._collinear = True
+        elif magnetization.ndim == 4 and magnetization.shape[0] == 3:
+            self._collinear = False
+        else:
+            raise ValueError(
+                "magnetization must have shape (nx, ny, nz) (a collinear "
+                "spin density) or (3, nx, ny, nz) (a vector magnetization "
+                f"density), got {magnetization.shape}"
+            )
+
+        self._magnetization = magnetization
+
+        cell = Cell(np.diag(cell) if np.ndim(cell) == 1 else cell)
+
+        super().__init__(
+            array_object=array_object,
+            cell=cell,
+            n_grid_points_z=magnetization.shape[-1],
+            quantity=quantity,
+            projection=projection,
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            plane=plane,
+            rotate_field=rotate_field,
+            origin=origin,
+            box=box,
+            periodic=periodic,
+            device=device,
+        )
+
+    def _get_magnetization(self) -> tuple[np.ndarray, bool]:
+        return self._magnetization, self._collinear
+
+
+class MagnetizationMagneticField(_ArrayMagnetics, BaseMagneticField):
+    """
+    Sliced magnetic field built from a magnetization density on a 3D grid.
+
+    The magnetization may come from any source (e.g. a micromagnetic model
+    or a DFT code other than GPAW), making this the DFT-agnostic
+    counterpart of `GPAWMagneticField`. Only the periodic part of the
+    field is built; see `calculate_constant_magnetic_field` for the
+    uniform remainder of a ferromagnet.
+
+    Parameters
+    ----------
+    magnetization : np.ndarray
+        Magnetization density in units of Bohr magnetons per cubic
+        Ångström. Either shape (3,) + (nx, ny, nz) for a vector
+        (non-collinear) magnetization, or (nx, ny, nz) for a collinear
+        spin density (placed along z by convention).
+    cell : ase.cell.Cell or np.ndarray
+        Cell defining the region of space where the magnetization is
+        defined.
+    rotate_field : tuple of three float, "auto", or None
+        Euler-angle rotation applied to the built field. Defaults to None:
+        an explicitly given magnetization is genuinely directional. "auto"
+        only applies to collinear (scalar) input.
+
+    Other parameters follow `GPAWMagneticField`.
+    """
+
+    def __init__(
+        self,
+        magnetization: np.ndarray,
+        cell,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        slice_thickness: float | tuple[float, ...] = 1.0,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        plane: str = "xy",
+        rotate_field: Optional[tuple[float, float, float]] | str = None,
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: Optional[tuple[float, float, float]] = None,
+        periodic: bool = True,
+        projection: str = "fft",
+        device: Optional[str] = None,
+    ):
+        super().__init__(
+            magnetization=magnetization,
+            cell=cell,
+            array_object=MagneticFieldArray,
+            quantity="magnetic_field",
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            plane=plane,
+            rotate_field=rotate_field,
+            origin=origin,
+            box=box,
+            periodic=periodic,
+            projection=projection,
+            device=device,
+        )
+
+
+class MagnetizationVectorPotential(_ArrayMagnetics, BaseVectorPotential):
+    """
+    Sliced magnetic vector potential built from a magnetization density on
+    a 3D grid; the DFT-agnostic counterpart of `GPAWVectorPotential`.
+
+    See `MagnetizationMagneticField` for the parameters.
+    """
+
+    def __init__(
+        self,
+        magnetization: np.ndarray,
+        cell,
+        gpts: Optional[int | tuple[int, int]] = None,
+        sampling: Optional[float | tuple[float, float]] = None,
+        slice_thickness: float | tuple[float, ...] = 1.0,
+        exit_planes: Optional[int | tuple[int, ...]] = None,
+        plane: str = "xy",
+        rotate_field: Optional[tuple[float, float, float]] | str = None,
+        origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        box: Optional[tuple[float, float, float]] = None,
+        periodic: bool = True,
+        projection: str = "fft",
+        device: Optional[str] = None,
+    ):
+        super().__init__(
+            magnetization=magnetization,
+            cell=cell,
+            array_object=VectorPotentialArray,
+            quantity="vector_potential",
+            gpts=gpts,
+            sampling=sampling,
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            plane=plane,
+            rotate_field=rotate_field,
+            origin=origin,
+            box=box,
+            periodic=periodic,
+            projection=projection,
+            device=device,
+        )
+
+
+class SpinDensityMagneticField(MagnetizationMagneticField):
+    """
+    Sliced magnetic field built from a collinear spin density on a 3D grid.
+
+    Thin convenience wrapper around `MagnetizationMagneticField` for the
+    collinear case: the magnetization is `spin_density` along z. Like the
+    GPAW builders, `rotate_field` defaults to "auto" here, since a
+    collinear spin axis has no real-space meaning.
+    """
+
+    def __init__(
+        self,
+        spin_density: np.ndarray,
+        cell,
+        rotate_field: Optional[tuple[float, float, float]] | str = _AUTO_ROTATE_FIELD,
+        **kwargs,
+    ):
+        spin_density = np.asarray(spin_density)
+        if spin_density.ndim != 3:
+            raise ValueError(
+                f"spin_density must have shape (nx, ny, nz), got "
+                f"{spin_density.shape}"
+            )
+        super().__init__(
+            magnetization=spin_density,
+            cell=cell,
+            rotate_field=rotate_field,
+            **kwargs,
         )
 
 
@@ -688,8 +1107,3 @@ def gpaw_magnetic_fields(
         vector_potential=vector_potential,
         magnetic_field=magnetic_field,
     )
-
-
-class SpinDensityMagneticField:
-    def __init__(self, spin_density, cell):
-        raise NotImplementedError
