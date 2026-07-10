@@ -471,7 +471,12 @@ class _MagnetizationMagnetics(_FieldBuilder):
             array = fft_interpolate(array, shape)
 
             for i, slice_idx in enumerate(range(first_slice, last_slice)):
-                slice_array = array[..., slice_idx]
+                # Multiply the pointwise sample at the slice plane by the
+                # slice thickness so both projection modes yield
+                # slice-integrated (projected) fields, matching the
+                # convention of PotentialArray and the consumers
+                # (adjust_coulomb_potential, the Pauli multislice solver).
+                slice_array = array[..., slice_idx] * slice_thicknesses[i]
 
                 if self._valid_gpts != slice_array.shape[1:]:
                     slice_array = fft_interpolate(slice_array, slice_shape)
