@@ -50,11 +50,9 @@ extra = [
     "dask-labextension",
     "bokeh",
 ]
-core-loss = [
-    "sympy",
-]
 gpaw = [
     "hankel",
+    "sympy",
 ]
 
 [dependency-groups]
