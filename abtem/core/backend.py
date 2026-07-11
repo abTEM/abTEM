@@ -52,6 +52,80 @@ def check_cupy_is_installed():
         raise RuntimeError("CuPy is not installed, GPU calculations disabled")
 
 
+_cuda_cluster_client = None
+
+
+def ensure_cuda_cluster():
+    """
+    Start a dask-cuda cluster spanning all visible GPUs and return its client.
+
+    The cluster assigns one worker process to each GPU, allowing dask to distribute
+    computations across all of them. It is created once per process and reused on
+    subsequent calls. Requires the optional dask-cuda package.
+
+    Returns
+    -------
+    distributed.Client
+        The client connected to the dask-cuda cluster.
+    """
+    global _cuda_cluster_client
+
+    if _cuda_cluster_client is not None:
+        if getattr(_cuda_cluster_client, "status", None) == "running":
+            return _cuda_cluster_client
+        # The previous cluster was shut down; discard it and start a new one.
+        _cuda_cluster_client = None
+
+    try:
+        from dask_cuda import LocalCUDACluster  # type: ignore
+    except ImportError:
+        raise RuntimeError(
+            "The dask-cuda package is required to distribute computations across "
+            "multiple GPUs. Please install it (see "
+            "https://docs.rapids.ai/api/dask-cuda/stable/install/), or set the "
+            "configuration option 'dask.multi-gpu' to false."
+        )
+
+    from distributed import Client
+
+    _cuda_cluster_client = Client(LocalCUDACluster())
+
+    return _cuda_cluster_client
+
+
+def is_gpu_dask_client(client) -> bool:
+    """
+    Check whether a distributed client can safely execute CuPy computations.
+
+    Only a client whose workers are each single-threaded — as produced by
+    ``dask_cuda.LocalCUDACluster``, which additionally pins one GPU per worker — is
+    considered suitable. The threaded scheduler and multi-threaded workers share a
+    single CUDA context per process, which cannot be used with CuPy.
+
+    Parameters
+    ----------
+    client : distributed.Client or None
+        The client to check.
+
+    Returns
+    -------
+    bool
+        True if the client is running and all of its workers are single-threaded.
+    """
+    if client is None:
+        return False
+
+    if getattr(client, "status", None) != "running":
+        return False
+
+    try:
+        nthreads = client.nthreads()
+    except Exception:
+        return False
+
+    return len(nthreads) > 0 and all(n == 1 for n in nthreads.values())
+
+
 def validate_device(device: str | None = None) -> str:
     """
     Validate the device string.
