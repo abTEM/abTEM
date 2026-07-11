@@ -1,9 +1,12 @@
+"""Tests of the upsampled (C-PRISM) scattering matrix, ``SMatrix(upsample=True)``."""
+
 import numpy as np
 import pytest
 from ase.build import bulk
 
 import abtem
-from abtem import CPRISM, CustomScan, GridScan, Potential, Probe, SMatrix
+from abtem import CompressedSMatrixArray, CustomScan, GridScan, Potential, Probe, SMatrix
+from abtem.prism.s_matrix import SMatrixArray
 
 
 def _small_potential(gpts=96, repetitions=(2, 2, 3)):
@@ -19,22 +22,23 @@ def _relative_error(measurement, reference):
 
 
 @pytest.mark.parametrize("interpolation", [(1, 1), (2, 2), (2, 4)])
-def test_c_prism_matches_probe(interpolation):
-    c_prism = CPRISM(
+def test_upsample_matches_probe(interpolation):
+    s_matrix = SMatrix(
         extent=20,
         gpts=128,
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=interpolation,
+        upsample=True,
         tolerance=1e-6,
     )
 
-    c_prism_array = c_prism.build(lazy=False)
+    s_matrix_array = s_matrix.build(lazy=False)
 
     probe_diffraction_patterns = (
-        c_prism.dummy_probes().build(lazy=False).diffraction_patterns(max_angle=None)
+        s_matrix.dummy_probes().build(lazy=False).diffraction_patterns(max_angle=None)
     )
-    diffraction_patterns = c_prism_array.reduce().diffraction_patterns(max_angle=None)
+    diffraction_patterns = s_matrix_array.reduce().diffraction_patterns(max_angle=None)
 
     assert np.allclose(
         np.squeeze(diffraction_patterns.array),
@@ -43,19 +47,23 @@ def test_c_prism_matches_probe(interpolation):
     )
 
 
-def test_c_prism_rank_one_in_vacuum():
-    c_prism = CPRISM(
+def test_upsample_rank_one_in_vacuum():
+    s_matrix = SMatrix(
         extent=20,
         gpts=128,
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=(2, 2),
+        upsample=True,
         tolerance=1e-6,
     )
-    assert c_prism.build(lazy=False).rank == 1
+    s_matrix_array = s_matrix.build(lazy=False)
+
+    assert isinstance(s_matrix_array, CompressedSMatrixArray)
+    assert s_matrix_array.rank == 1
 
 
-def test_c_prism_matches_multislice_no_interpolation():
+def test_upsample_matches_multislice_no_interpolation():
     potential = _small_potential()
 
     probe = Probe(energy=100e3, semiangle_cutoff=20)
@@ -67,16 +75,17 @@ def test_c_prism_matches_multislice_no_interpolation():
         potential=potential, scan=scan, lazy=False
     ).diffraction_patterns(max_angle=50)
 
-    c_prism = CPRISM(
+    s_matrix = SMatrix(
         potential=potential,
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=1,
+        upsample=True,
         tolerance=1e-6,
         max_rank=10_000,
     )
 
-    diffraction_patterns = c_prism.reduce(scan=scan, lazy=False).diffraction_patterns(
+    diffraction_patterns = s_matrix.reduce(scan=scan, lazy=False).diffraction_patterns(
         max_angle=50
     )
 
@@ -85,7 +94,7 @@ def test_c_prism_matches_multislice_no_interpolation():
     )
 
 
-def test_c_prism_beats_prism_at_same_interpolation():
+def test_upsample_beats_prism_at_same_interpolation():
     potential = _small_potential(repetitions=(2, 2, 4))
 
     probe = Probe(energy=100e3, semiangle_cutoff=20)
@@ -104,21 +113,25 @@ def test_c_prism_beats_prism_at_same_interpolation():
         potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
     ).scan(scan=scan, detectors=detector, lazy=False)
 
-    c_prism_measurement = CPRISM(
-        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+    upsampled_measurement = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
     ).scan(scan=scan, detectors=detector, lazy=False)
 
     prism_error = _relative_error(prism_measurement, reference)
-    c_prism_error = _relative_error(c_prism_measurement, reference)
+    upsampled_error = _relative_error(upsampled_measurement, reference)
 
-    assert c_prism_error < prism_error
+    assert upsampled_error < prism_error
     # the annular detector integrates any aliased ghost probes of the
     # interpolation as error; the band-limited interpolant must keep the
     # absolute error small, not just smaller than PRISM
-    assert c_prism_error < 0.05
+    assert upsampled_error < 0.05
 
 
-def test_c_prism_off_grid_positions():
+def test_upsample_off_grid_positions():
     potential = _small_potential()
 
     probe = Probe(energy=100e3, semiangle_cutoff=20)
@@ -130,16 +143,17 @@ def test_c_prism_off_grid_positions():
         potential=potential, scan=scan, lazy=False
     ).diffraction_patterns(max_angle=50)
 
-    c_prism = CPRISM(
+    s_matrix = SMatrix(
         potential=potential,
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=1,
+        upsample=True,
         tolerance=1e-6,
         max_rank=10_000,
     )
 
-    diffraction_patterns = c_prism.reduce(scan=scan, lazy=False).diffraction_patterns(
+    diffraction_patterns = s_matrix.reduce(scan=scan, lazy=False).diffraction_patterns(
         max_angle=50
     )
 
@@ -148,21 +162,26 @@ def test_c_prism_off_grid_positions():
     )
 
 
-def test_c_prism_windowed():
+def test_upsample_windowed():
     potential = _small_potential()
 
     detector = abtem.AnnularDetector(inner=40, outer=100)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
 
-    full = CPRISM(
-        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
-    ).scan(scan=scan, detectors=detector, lazy=False)
-
-    windowed = CPRISM(
+    full = SMatrix(
         potential=potential,
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=2,
+        upsample=True,
+    ).scan(scan=scan, detectors=detector, lazy=False)
+
+    windowed = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
         window_gpts=48,
     ).scan(scan=scan, detectors=detector, lazy=False)
 
@@ -171,26 +190,27 @@ def test_c_prism_windowed():
     assert np.allclose(windowed.array, full.array, rtol=0.12)
 
 
-def test_c_prism_window_normalization():
-    c_prism = CPRISM(
+def test_upsample_window_normalization():
+    s_matrix = SMatrix(
         extent=20,
         gpts=128,
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=(2, 2),
+        upsample=True,
         tolerance=1e-6,
         window_gpts=48,
     )
 
     diffraction_patterns = (
-        c_prism.build(lazy=False).reduce().diffraction_patterns(max_angle=None)
+        s_matrix.build(lazy=False).reduce().diffraction_patterns(max_angle=None)
     )
 
     assert np.allclose(diffraction_patterns.array.sum(), 1.0, atol=1e-2)
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_c_prism_frozen_phonons(lazy):
+def test_upsample_frozen_phonons(lazy):
     atoms = bulk("Si", cubic=True) * (2, 2, 3)
     frozen_phonons = abtem.FrozenPhonons(atoms, num_configs=2, sigmas=0.1, seed=13)
     potential = Potential(frozen_phonons, gpts=96, slice_thickness=2)
@@ -198,11 +218,15 @@ def test_c_prism_frozen_phonons(lazy):
     detector = abtem.AnnularDetector(inner=40, outer=100)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 3))
 
-    c_prism = CPRISM(
-        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
     )
 
-    measurement = c_prism.scan(scan=scan, detectors=detector, lazy=lazy)
+    measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
 
     if lazy:
         measurement = measurement.compute()
@@ -211,23 +235,27 @@ def test_c_prism_frozen_phonons(lazy):
     assert np.all(measurement.array >= 0.0)
 
 
-def test_c_prism_lazy_matches_eager():
+def test_upsample_lazy_matches_eager():
     potential = _small_potential()
 
     detector = abtem.AnnularDetector(inner=40, outer=100)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 3))
 
     kwargs = dict(
-        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
     )
 
-    eager = CPRISM(**kwargs).scan(scan=scan, detectors=detector, lazy=False)
-    lazy = CPRISM(**kwargs).scan(scan=scan, detectors=detector, lazy=True).compute()
+    eager = SMatrix(**kwargs).scan(scan=scan, detectors=detector, lazy=False)
+    lazy = SMatrix(**kwargs).scan(scan=scan, detectors=detector, lazy=True).compute()
 
     assert np.allclose(eager.array, lazy.array, rtol=1e-4, atol=1e-8)
 
 
-def test_c_prism_detectors():
+def test_upsample_detectors():
     potential = _small_potential()
 
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(2, 2))
@@ -239,18 +267,22 @@ def test_c_prism_detectors():
         abtem.WavesDetector(),
     ]
 
-    c_prism = CPRISM(
-        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
     )
 
-    measurements = c_prism.scan(scan=scan, detectors=detectors, lazy=False)
+    measurements = s_matrix.scan(scan=scan, detectors=detectors, lazy=False)
 
     assert len(measurements) == len(detectors)
     for measurement in measurements:
         assert measurement.shape[:2] == (2, 2)
 
 
-def test_c_prism_ctf_ensemble():
+def test_upsample_ctf_ensemble():
     potential = _small_potential()
 
     detector = abtem.AnnularDetector(inner=40, outer=100)
@@ -258,32 +290,37 @@ def test_c_prism_ctf_ensemble():
 
     ctf = abtem.CTF(defocus=np.linspace(0, 50, 3))
 
-    c_prism = CPRISM(
-        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
     )
 
-    measurement = c_prism.scan(scan=scan, detectors=detector, ctf=ctf, lazy=False)
+    measurement = s_matrix.scan(scan=scan, detectors=detector, ctf=ctf, lazy=False)
 
     assert measurement.shape == (3, 2, 2)
 
 
-def test_c_prism_downsampled_gpts_independent_of_interpolation():
+def test_upsample_downsampled_gpts_independent_of_interpolation():
     potential = _small_potential()
 
     downsampled_gpts = set()
     for interpolation in [(1, 1), (2, 2), (2, 4), (4, 4)]:
-        c_prism = CPRISM(
+        s_matrix = SMatrix(
             potential=potential,
             energy=100e3,
             semiangle_cutoff=20,
             interpolation=interpolation,
+            upsample=True,
         )
-        downsampled_gpts.add(c_prism.downsampled_gpts)
+        downsampled_gpts.add(s_matrix.downsampled_gpts)
 
     assert len(downsampled_gpts) == 1
 
 
-def test_c_prism_aberrated_ctf_matches_probe():
+def test_upsample_aberrated_ctf_matches_probe():
     # the azimuthal angle convention of the reduction coefficients must match
     # polar_spatial_frequencies, ie. arctan2(ky, kx); the real-space intensity
     # of an aberrated probe is sensitive to the convention
@@ -297,31 +334,35 @@ def test_c_prism_aberrated_ctf_matches_probe():
         coma_angle=1.0,
     )
 
-    c_prism = CPRISM(
+    s_matrix = SMatrix(
         extent=20,
         gpts=128,
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=(2, 2),
+        upsample=True,
         tolerance=1e-6,
     )
-    c_prism_array = c_prism.build(lazy=False)
+    s_matrix_array = s_matrix.build(lazy=False)
 
-    probe = Probe._from_ctf(extent=20, gpts=c_prism_array.gpts, ctf=ctf, energy=100e3)
+    probe = Probe._from_ctf(
+        extent=20, gpts=s_matrix_array.gpts, ctf=ctf, energy=100e3
+    )
     probe_intensity = probe.build(lazy=False).intensity().array
 
-    c_prism_intensity = c_prism_array.reduce(ctf=ctf).intensity().array
+    upsampled_intensity = s_matrix_array.reduce(ctf=ctf).intensity().array
 
     assert np.allclose(
-        np.squeeze(c_prism_intensity),
+        np.squeeze(upsampled_intensity),
         np.squeeze(probe_intensity),
         atol=1e-3 * probe_intensity.max(),
     )
 
 
-def test_c_prism_identical_to_prism_without_interpolation():
+def test_upsample_identical_to_prism_without_interpolation():
     # at an interpolation factor of (1, 1) the plane-wave expansion is complete
-    # and no compression is performed, hence C-PRISM is identical to PRISM
+    # and no compression is performed, hence the upsampled scattering matrix is
+    # identical to PRISM
     potential = _small_potential()
 
     detector = abtem.AnnularDetector(inner=40, outer=100)
@@ -331,29 +372,71 @@ def test_c_prism_identical_to_prism_without_interpolation():
         potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=1
     ).scan(scan=scan, detectors=detector, lazy=False)
 
-    c_prism_measurement = CPRISM(
-        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=1
-    ).scan(scan=scan, detectors=detector, lazy=False)
+    upsampled = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        upsample=True,
+    )
 
-    assert np.allclose(c_prism_measurement.array, prism_measurement.array)
+    assert isinstance(upsampled.build(lazy=False), SMatrixArray)
+
+    upsampled_measurement = upsampled.scan(scan=scan, detectors=detector, lazy=False)
+
+    assert np.allclose(upsampled_measurement.array, prism_measurement.array)
 
 
-def test_c_prism_defocus_phase():
+def test_upsample_defocus_phase():
     # the propagation phase is factored out before the interpolation and added
     # back on the dense plane waves; it is a pure phase, unity for a
     # zero-thickness (vacuum) expansion and non-trivial for a real potential.
     # the exact round-trip is pinned by the vacuum and aberrated-ctf tests
-    vacuum = CPRISM(
-        extent=20, gpts=64, energy=100e3, semiangle_cutoff=20, interpolation=2
+    vacuum = SMatrix(
+        extent=20,
+        gpts=64,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
     )
     assert np.allclose(vacuum._defocus_phase(vacuum.wave_vectors), 1.0)
 
-    thick = CPRISM(
+    thick = SMatrix(
         potential=_small_potential(),
         energy=100e3,
         semiangle_cutoff=20,
         interpolation=2,
+        upsample=True,
     )
     phase = thick._defocus_phase(thick.wave_vectors)
     assert np.allclose(np.abs(phase), 1.0)
     assert not np.allclose(phase, 1.0)
+
+
+def test_upsample_only_options_require_upsample():
+    kwargs = dict(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20)
+
+    with pytest.raises(ValueError, match="upsample=True"):
+        SMatrix(**kwargs, interpolation=2, max_rank=64)
+
+    with pytest.raises(ValueError, match="upsample=True"):
+        SMatrix(**kwargs, interpolation=2, position_quantization=16)
+
+
+def test_upsample_kwargs_do_not_change_prism():
+    # the PRISM scattering matrix and its copies are unchanged by the upsampling
+    # options at their defaults
+    potential = _small_potential()
+
+    s_matrix = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20, interpolation=2
+    )
+
+    copied = SMatrix(
+        potential=potential, **s_matrix._copy_kwargs(exclude=("potential",))
+    )
+
+    assert copied.window_gpts == s_matrix.window_gpts
+    assert copied.downsampled_gpts == s_matrix.downsampled_gpts
+    assert not copied.upsample
