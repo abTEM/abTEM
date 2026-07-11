@@ -50,6 +50,12 @@ extra = [
     "dask-labextension",
     "bokeh",
 ]
+# Install every optional runtime extra at once. GPU packages (cupy, dask-cuda)
+# are intentionally excluded: their wheels are CUDA/RAPIDS-version specific and
+# must be installed to match the local toolkit (see the multi-GPU docs).
+all = [
+    "abtem[extra]",
+]
 
 [dependency-groups]
 dev = [
