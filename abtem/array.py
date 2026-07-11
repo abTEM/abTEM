@@ -45,7 +45,9 @@ from abtem.core.backend import (
     copy_to_device,
     cp,
     device_name_from_array_module,
+    ensure_cuda_cluster,
     get_array_module,
+    is_gpu_dask_client,
 )
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -506,14 +508,29 @@ def _compute(
     if is_gpu:
         check_cupy_is_installed()
 
-        if "scheduler" not in kwargs:
+        from distributed import get_client
+
+        try:
+            client = get_client()
+        except ValueError:
+            client = None
+
+        # Start a dask-cuda cluster spanning all visible GPUs when multi-GPU is
+        # enabled, no client is already handling the computation, and the user has
+        # not explicitly requested a scheduler.
+        if (
+            client is None
+            and "scheduler" not in kwargs
+            and config.get("dask.multi-gpu", False)
+            and cp.cuda.runtime.getDeviceCount() > 1
+        ):
+            client = ensure_cuda_cluster()
+
+        # The threaded scheduler and multi-threaded workers cannot be used with CuPy;
+        # fall back to synchronous execution unless a suitable (dask-cuda) client is
+        # handling the computation.
+        if not is_gpu_dask_client(client) and "scheduler" not in kwargs:
             kwargs["scheduler"] = "synchronous"
-
-        if "num_workers" not in kwargs:
-            kwargs["num_workers"] = cp.cuda.runtime.getDeviceCount()
-
-        if "threads_per_worker" not in kwargs:
-            kwargs["threads_per_worker"] = cp.cuda.runtime.getDeviceCount()
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler

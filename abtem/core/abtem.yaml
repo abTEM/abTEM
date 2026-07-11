@@ -18,6 +18,9 @@ dask:
   chunk-size: 128 MB
   # The target chunk size to use for dask arrays on the gpu
   chunk-size-gpu: 512 MB
+  # Automatically distribute gpu computations over all visible gpus by starting a
+  # dask-cuda cluster. Requires the optional dask-cuda package.
+  multi-gpu: false
 cupy:
   # The size of the fft cache in MB used by cupy
   # https://docs.cupy.dev/en/stable/user_guide/fft.html#fft-plan-cache
