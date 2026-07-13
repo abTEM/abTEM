@@ -603,7 +603,10 @@ def _config_rng(seed, potential_index, config_seed=None) -> np.random.Generator:
     if config_seed is not None:
         entropy.append(int(config_seed))
     elif isinstance(potential_index, tuple):
-        entropy.extend(int(i) for i in potential_index)
+        # Elements may be bare ints or (possibly array-wrapped) numpy scalars
+        # from ``np.unravel_index`` -- ``np.asarray(i).item()`` handles both
+        # without triggering NumPy's ndim>0-to-scalar deprecation warning.
+        entropy.extend(int(np.asarray(i).item()) for i in potential_index)
     else:
         entropy.append(int(potential_index))
 

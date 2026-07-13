@@ -484,6 +484,32 @@ def _renormalize_total_intensity(waves: Waves, target_norm) -> Waves:
     return waves.__class__(**kwargs)
 
 
+def _renormalize_order_waves_inplace(order_waves: list) -> None:
+    """Rescale all order-resolved waves in place by a common factor so their
+    combined total intensity is 1 per ensemble member.
+
+    Per-slice counterpart of ``_renormalize_wave_inplace`` for order-resolved
+    plasmon scattering: applies the *same* scale to every loss-order channel,
+    preserving the order-to-order intensity split built up by
+    ``scatter_by_order`` while still preventing the unnormalized
+    phase-scramble transmission function from over/underflowing across many
+    slices.
+    """
+    xp = get_array_module(order_waves[0].device)
+    total = sum(
+        xp.sum(
+            xp.abs(w._array).astype(xp.float64) ** 2,
+            axis=(-2, -1),
+            keepdims=True,
+        )
+        for w in order_waves
+    )
+    total = xp.maximum(total, xp.finfo(xp.float64).tiny)
+    scale = (1.0 / xp.sqrt(total)).astype(order_waves[0]._array.dtype)
+    for w in order_waves:
+        w._array = w._array * scale
+
+
 def _renormalize_order_waves(order_waves: list, target_norm) -> None:
     """Renormalize order-resolved waves so their total intensity matches the
     incident beam.  The same scale factor is applied to every order so that
@@ -890,6 +916,9 @@ def multislice_and_detect(
                         order_waves[n], order_backscatter[n] = stepped
                     else:
                         order_waves[n] = stepped
+
+                if _phase_scramble:
+                    _renormalize_order_waves_inplace(order_waves)
 
             elif algorithm.expansion_scope == "full":
                 waves, backscatter_waves = multislice_step(

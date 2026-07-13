@@ -5,6 +5,7 @@ from utils import gpu
 
 import abtem
 from abtem import (
+    CrystalPotential,
     CustomScan,
     FrozenPhonons,
     PhaseScramblePlasmons,
@@ -279,6 +280,53 @@ def test_plasmons_order_resolved_backscatter(device):
     assert _to_numpy(backward.array).shape[:2] == (n_orders, n_exit)
     # Reverse propagation produced finite backscattered waves.
     assert np.all(np.isfinite(_to_numpy(backward.array)))
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_plasmons_order_resolved_with_phase_scramble_mixing(device):
+    """Order-resolved plasmon scattering (Mendis 2019) must stay numerically
+    stable when the potential itself uses CrystalPotential's
+    mixing="phase_scramble" (Mendis 2023) -- an unrelated, unrenormalized
+    per-slice transmission function whose combined |T| != 1 previously
+    starved the order-resolved wave channels to exact zero within ~100
+    slices (they were missing the per-slice renormalization applied on the
+    single-channel path). Uses enough repetitions to exercise that decay."""
+    atoms = ase.build.bulk("Si", cubic=True)
+    frozen_phonons = FrozenPhonons(
+        atoms, num_configs=4, sigmas=0.078, directions="xy", seed=1
+    )
+    unit_potential = Potential(
+        frozen_phonons, gpts=48, slice_thickness=1.36, device=device
+    ).build(lazy=False)
+    potential = CrystalPotential(
+        unit_potential,
+        repetitions=(1, 1, 60),
+        mixing="phase_scramble",
+        num_frozen_phonons=1,
+        seeds=(0,),
+    )
+    wave = PlaneWave(energy=200e3, device=device)
+    detector = abtem.PixelatedDetector(max_angle="valid")
+
+    plasmons = PhaseScramblePlasmons(
+        mean_free_path=1050.0,
+        excitation_energy=16.7,
+        critical_angle=19.1,
+        seed=7,
+        max_loss_order=2,
+    )
+    result = wave.multislice(potential, detector, plasmons=plasmons).compute()
+    arr = _to_numpy(result.array)
+
+    assert arr.shape[0] == 3  # orders 0, 1, 2
+    assert np.all(np.isfinite(arr))
+    # Every order channel carries real weight -- none starved to zero.
+    intensity_per_order = arr.reshape(arr.shape[0], -1).sum(axis=-1)
+    assert np.all(intensity_per_order > 0)
+    # Total intensity across orders is conserved (renormalized to the
+    # incident beam); a looser tolerance than the non-mixed case accounts
+    # for the coarser grid's larger anti-aliasing bandlimit loss.
+    assert float(intensity_per_order.sum()) == pytest.approx(1.0, rel=5e-2)
 
 
 def test_estimate_plasmon_parameters_silicon():
