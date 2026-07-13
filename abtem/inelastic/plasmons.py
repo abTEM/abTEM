@@ -942,20 +942,21 @@ def scale_critical_angle(
 class PhaseScramblePlasmons:
     """Fast single-pass plasmon energy-loss model (phase-scramble method).
 
-    Implements the plasmon-scattering "phase scrambling" formulation of B.G. Mendis,
-    *Microsc. Microanal.* **29** (2023) 1111 — the same paper (and the same
-    coherent phase-scramble mechanism) as :func:`abtem.CrystalPotential`'s
-    ``mixing="phase_scramble"``, applied here to plasmon losses instead of
-    phonon (thermal atomic displacement) disorder; see that class's
-    docstring. In contrast to :class:`MonteCarloPlasmons` — which implements the
-    earlier B.G. Mendis, *Ultramicroscopy* **206** (2019) 112816 (and its 2020
-    corrigendum) approach of running a separate full multislice for every
-    sampled scattering event — this model applies plasmon scattering *inline* at the
-    bottom of every slice within a single multislice pass, so all plasmon orders
-    accumulate simultaneously. Statistical convergence is obtained by incoherently
-    averaging over phase-scramble repetitions, which are realised by reusing the
-    frozen-phonon configuration ensemble of the potential (``num_configs`` plays the
-    role of the number of repetitions).
+    Implements the plasmon-scattering model of B.G. Mendis, *Ultramicroscopy*
+    **206** (2019) 112816 (and its 2020 corrigendum), which B.G. Mendis,
+    *Microsc. Microanal.* **29** (2023) 1111 cites and reuses directly rather
+    than presenting an independent plasmon method. In contrast to
+    :class:`MonteCarloPlasmons` — the 2019 paper's own original implementation,
+    which runs a separate full multislice for every sampled scattering event —
+    this model applies the same plasmon-scattering physics *inline* at the
+    bottom of every slice within a single multislice pass, so all plasmon
+    orders accumulate simultaneously. Statistical convergence is obtained by
+    *incoherently* averaging over repetitions, realised by reusing the
+    frozen-phonon configuration ensemble of the potential (``num_configs`` plays
+    the role of the number of repetitions) — ordinary ensemble averaging, not
+    the coherent multi-configuration combination (eq. 7c) that the 2023 paper
+    introduces for phonon disorder; see :func:`abtem.CrystalPotential`'s
+    ``mixing="phase_scramble"``.
 
     At the bottom of each slice the real-space wave function ``psi`` is updated as
 
