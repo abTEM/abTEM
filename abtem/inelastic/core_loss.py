@@ -206,7 +206,12 @@ def numerov(f, x0, dx, dh):
     """Given precomputed function f(x), solves for x(t), which satisfies:
     x''(t) = f(t) x(t)
     """
-    x = np.zeros(len(f))
+    # f.copy() rather than np.zeros(len(f)): some numba/numpy pairings
+    # (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's internal
+    # np.zeros -> np.empty lowering inside @njit, while ndarray.copy() is
+    # unaffected. Every element of x is overwritten below before being
+    # read, so the borrowed initial values from f are never used.
+    x = f.copy()
     x[0] = x0
     x[1] = x0 + dh * dx
     h2 = dh**2
