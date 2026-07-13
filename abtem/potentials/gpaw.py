@@ -593,9 +593,25 @@ class GPAWParametrization:
     """
     Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT
     calculation.
+
+    Parameters
+    ----------
+    nodes : int, optional
+        Number of nodes used by the Hankel transform (`hankel.SymmetricFourierTransform`)
+        that converts the all-electron radial charge density into an X-ray
+        scattering factor. `None` (default) lets `hankel` choose automatically.
+    integration_step : float, optional
+        Step size used by the Hankel transform. The default of 0.002 is fine
+        for light elements, but is too coarse for heavier ones (e.g. In, Z=49),
+        where it can produce a non-monotonic, unphysical scattering factor; 0.001
+        resolves this for most elements at negligible extra cost. The heaviest
+        elements (e.g. Re, Z=75) may still show a several-percent-level
+        mismatch against tabulated parametrizations even at this step size,
+        plausibly from GPAW's scalar-relativistic treatment diverging from
+        whatever reference the tabulated parameters were fit to.
     """
 
-    def __init__(self, nodes=None, integration_step=0.002):
+    def __init__(self, nodes=None, integration_step=0.001):
         self._nodes = nodes
         self._integration_step = integration_step
         self._potential_functions = {}
@@ -635,20 +651,24 @@ class GPAWParametrization:
         if isinstance(symbol, Number):
             symbol = chemical_symbols[symbol]
 
+        added_electrons = self._get_added_electrons(symbol, charge)
+
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
             ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
-            ae.run()
+
+            for n, l, df in added_electrons:
+                ae.add(n, l, df)
+
+            if added_electrons:
+                # The occupations perturbed by add() need a more conservative
+                # mixing schedule to reach self-consistency than the default,
+                # which is tuned for the unperturbed (neutral) configuration.
+                ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+            else:
+                ae.run()
+
             ae.scalar_relativistic = True
             ae.refine()
-
-        # added_electrons = self._get_added_electrons(symbol, charge)
-        #
-        # for added_electron in added_electrons:
-        #     ae.add(*added_electron[:2], added_electron[-1])
-
-        # # ae.run()
-        # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-        # maxiter=5000, mix=0.005, dnmax=1e-5)
 
         return ae
 
@@ -678,7 +698,13 @@ class GPAWParametrization:
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
 
-        from hankel import SymmetricFourierTransform
+        try:
+            from hankel import SymmetricFourierTransform
+        except ImportError as e:
+            raise ImportError(
+                "Calculating a GPAW-derived scattering factor requires hankel. "
+                "Install it with `pip install abtem[gpaw]` or `pip install hankel`."
+            ) from e
 
         ht = SymmetricFourierTransform(ndim=3, h=self._integration_step, N=self._nodes)
         k = np.linspace(0.001, 12, 2000)
@@ -697,6 +723,13 @@ class GPAWParametrization:
         return fx
 
     def _to_lobato(self, symbol, charge):
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+
+        key = (symbol, charge)
+        if key in self._potential_functions:
+            return self._potential_functions[key]
+
         fx = self.x_ray_scattering_factor(symbol, charge)
         n = self.charge(symbol, charge)
 
@@ -710,15 +743,27 @@ class GPAWParametrization:
         fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
         fe[k == 0] = fe0
 
-        if isinstance(symbol, str):
-            symbol = atomic_numbers[symbol]
-
+        # The Lobato functional form has near-degenerate parameter
+        # directions -- large, nearly-cancelling terms that barely affect
+        # the fitted curve in k-space but can shift the real-space
+        # reconstruction substantially near r = 0. An unregularized refit of
+        # DFT-derived (as opposed to exact tabulated) data can wander along
+        # those directions; a small regularization keeping the fit close to
+        # the tabulated Lobato parameters (used as the initial guess)
+        # measurably improves agreement without materially degrading the
+        # fit to `fe` itself.
         parametrization_aeatom = LobatoParametrization({})
-        parametrization_aeatom.fit(symbol, k, fe)
+        parametrization_aeatom.fit(atomic_numbers[symbol], k, fe, regularization=0.05)
+
+        self._potential_functions[key] = parametrization_aeatom
         return parametrization_aeatom
 
     def potential(self, symbol: str, charge: float = 0.0):
-        return self._to_lobato(symbol, charge).potential(symbol, charge)
+        # The DFT calculation for `charge` already produced the ionized
+        # density the fit below is based on, so the returned
+        # LobatoParametrization's own (separate, cation-unsupported) charge
+        # correction must not be triggered by passing charge through again.
+        return self._to_lobato(symbol, charge).potential(symbol)
 
     def scattering_factor(self, symbol, charge: float = 0.0):
-        return self._to_lobato(symbol, charge).scattering_factor(symbol, charge)
+        return self._to_lobato(symbol, charge).scattering_factor(symbol)

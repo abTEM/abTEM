@@ -568,7 +568,7 @@ class TransitionPotential(BaseTransitionPotential):
         except ImportError as e:
             raise ImportError(
                 "Calculating core-loss EELS form factors requires sympy. "
-                "Install it with `pip install abtem[core-loss]` or "
+                "Install it with `pip install abtem[gpaw]` or "
                 "`pip install sympy`."
             ) from e
 
