@@ -1,3 +1,6 @@
+import itertools
+
+import dask.array as da
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -7,8 +10,18 @@ from hypothesis import given
 from utils import gpu
 
 from abtem import AnnularDetector, PixelatedDetector, PlaneWave
-from abtem.inelastic.phonons import FrozenPhonons
+from abtem.core.chunks import chunk_ranges, validate_chunks
+from abtem.core.ensemble import _wrap_with_array, unpack_blockwise_args
+from abtem.core.utils import itemset
+from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhononsAxis
 from abtem.scan import CustomScan
+
+
+def to_numpy(array):
+    """Convert array to numpy, handling both CPU and GPU arrays."""
+    if hasattr(array, "get"):  # CuPy array
+        return np.asarray(array.get())
+    return np.asarray(array)
 
 
 # @reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
@@ -243,3 +256,112 @@ def test_frozen_phonon_lazy_vs_eager(device, ensemble_mean):
     np.testing.assert_allclose(
         result_eager.array, result_lazy.array, rtol=1e-5, atol=1e-7
     )
+
+
+class _TwoAxisFrozenPhonons(BaseFrozenPhonons):
+    """Test-only frozen phonons with two independent, non-trivial ensemble
+    axes. No built-in ensemble class combines two such axes, but this is
+    needed to exercise `Waves.multislice`'s eager potential-ensemble
+    iteration (`_generate_potential_configurations` in multislice.py), which
+    previously mishandled indices whenever a potential ensemble had more than
+    one non-trivial axis.
+    """
+
+    def __init__(self, trajectory: np.ndarray):
+        self._trajectory = trajectory
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(
+            trajectory.ravel()[0], None, None
+        )
+        super().__init__(atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=False)
+
+    @property
+    def ensemble_shape(self):
+        return self._trajectory.shape
+
+    @property
+    def ensemble_axes_metadata(self):
+        return [
+            FrozenPhononsAxis(_ensemble_mean=False) for _ in self._trajectory.shape
+        ]
+
+    @property
+    def _default_ensemble_chunks(self):
+        return (1,) * len(self.ensemble_shape)
+
+    @property
+    def atoms(self):
+        return self._trajectory.ravel()[0]
+
+    def __len__(self):
+        return int(np.prod(self.ensemble_shape))
+
+    @property
+    def num_configs(self):
+        return len(self)
+
+    def randomize(self, atoms):
+        return atoms
+
+    def _partition_args(self, chunks=None, lazy=True):
+        if chunks is None:
+            chunks = self._default_ensemble_chunks
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+
+        array = np.zeros(tuple(len(c) for c in chunks), dtype=object)
+        for block_index, ranges in zip(
+            np.ndindex(array.shape), itertools.product(*chunk_ranges(chunks))
+        ):
+            slices = tuple(slice(start, stop) for start, stop in ranges)
+            sub = _TwoAxisFrozenPhonons(self._trajectory[slices])
+            itemset(array, block_index, _wrap_with_array(sub, ndims=len(chunks)))
+
+        if lazy:
+            array = da.from_array(array, chunks=1)
+
+        return (array,)
+
+    @staticmethod
+    def _from_partition_args_func(*args):
+        args = unpack_blockwise_args(args)
+        ensemble = args[0]
+        return _wrap_with_array(ensemble, len(ensemble.ensemble_shape))
+
+    def _from_partitioned_args(self):
+        return self._from_partition_args_func
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_multislice_two_axis_ensemble_eager_vs_lazy_vs_reference(device):
+    """Regression test: `Waves.multislice(potential, lazy=False)` must match
+    `lazy=True` (and an independent single-member reference) when the
+    potential's ensemble has two non-trivial axes at once.
+    """
+    rng = np.random.default_rng(0)
+    base_atoms = Atoms("Si", positions=[(0, 0, 1)], cell=(5, 5, 2), pbc=True)
+
+    shape = (2, 2)
+    trajectory = np.empty(shape, dtype=object)
+    for index in np.ndindex(shape):
+        displaced = base_atoms.copy()
+        displaced.positions += rng.normal(scale=0.05, size=displaced.positions.shape)
+        itemset(trajectory, index, displaced)
+
+    ensemble = _TwoAxisFrozenPhonons(trajectory)
+
+    waves = PlaneWave(energy=100e3, gpts=(32, 32), device=device)
+
+    result_eager = waves.multislice(ensemble, lazy=False)
+    result_lazy = waves.multislice(ensemble, lazy=True).compute()
+
+    for index in np.ndindex(shape):
+        reference = PlaneWave(energy=100e3, gpts=(32, 32), device=device).multislice(
+            trajectory[index], lazy=False
+        )
+
+        reference_array = to_numpy(reference.array)
+        np.testing.assert_allclose(
+            to_numpy(result_eager.array[index]), reference_array, rtol=1e-5, atol=1e-7
+        )
+        np.testing.assert_allclose(
+            to_numpy(result_lazy.array[index]), reference_array, rtol=1e-5, atol=1e-7
+        )
