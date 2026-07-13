@@ -95,15 +95,24 @@ def _find_spin_axis(waves: "Waves") -> int:
 
 
 def _validate_field(field, potential, name: str, expected_cls) -> None:
+    """
+    Validate a field against the potential. The field may cover the full
+    potential depth, or — for z-periodic samples (e.g. a `CrystalPotential`
+    repeating a unit cell) — exactly one period of it: when the field's
+    slice count divides the potential's, its slices are cycled modulo its
+    length, so unit-cell field arrays never need tiling in z.
+    """
     if not isinstance(field, expected_cls):
         raise ValueError(
             f"{name} must be a built {expected_cls.__name__}, got {type(field)}"
         )
 
-    if field.num_slices != potential.num_slices:
+    if potential.num_slices % field.num_slices != 0:
         raise ValueError(
-            f"{name} has {field.num_slices} slices, but the potential has "
-            f"{potential.num_slices}; build them with the same slice_thickness"
+            f"{name} has {field.num_slices} slices, which neither matches nor "
+            f"divides the potential's {potential.num_slices}; build them with "
+            f"the same slice_thickness (a field covering one z-period of a "
+            f"repeating potential is cycled automatically)"
         )
 
     if tuple(field.gpts) != tuple(potential.gpts):
@@ -118,10 +127,14 @@ def _validate_field(field, potential, name: str, expected_cls) -> None:
             f"potential extent {tuple(potential.extent)}"
         )
 
-    # Same slice count but different thicknesses would silently mis-scale
-    # the per-slice rates (the projected field slices are divided by the
-    # potential's slice thickness).
-    if not np.allclose(field.slice_thickness, potential.slice_thickness):
+    # Mismatched thicknesses would silently mis-scale the per-slice rates
+    # (the projected field slices are divided by the potential's slice
+    # thickness). Compare cyclically to cover the z-periodic case.
+    field_thickness = np.asarray(field.slice_thickness)
+    potential_thickness = np.asarray(potential.slice_thickness)
+    if not np.allclose(
+        np.resize(field_thickness, potential_thickness.shape), potential_thickness
+    ):
         raise ValueError(
             f"{name} slice thicknesses do not match the potential's; build "
             f"them with the same slice_thickness"
@@ -570,16 +583,27 @@ def pauli_multislice_and_detect(
 
             # The stored field slices are projected (slice-integrated);
             # divide by the thickness to get the per-slice rates the Pauli
-            # operator uses.
+            # operator uses. The modulo cycles z-periodic (unit-cell)
+            # fields over a repeating potential (see _validate_field).
             vector_potential_slice = (
-                xp.asarray(vector_potential_arrays[slice_index], dtype=real_dtype)
+                xp.asarray(
+                    vector_potential_arrays[
+                        slice_index % len(vector_potential_arrays)
+                    ],
+                    dtype=real_dtype,
+                )
                 / thickness
             )
 
             magnetic_field_slice = None
             if magnetic_field_arrays is not None:
                 magnetic_field_slice = (
-                    xp.asarray(magnetic_field_arrays[slice_index], dtype=real_dtype)
+                    xp.asarray(
+                        magnetic_field_arrays[
+                            slice_index % len(magnetic_field_arrays)
+                        ],
+                        dtype=real_dtype,
+                    )
                     / thickness
                 )
 
@@ -720,10 +744,15 @@ def pauli_multislice(
     vector_potential : VectorPotentialArray
         Built magnetic vector potential with the same grid and slicing as
         the potential (periodic part; slices in Å²T, slice-integrated).
+        For a z-periodic sample (e.g. a `CrystalPotential` repeating a
+        unit cell in z), a field covering exactly one period may be given
+        instead — its slices are cycled automatically, avoiding tiling
+        the field arrays in z.
     magnetic_field : MagneticFieldArray, optional
         Built magnetic field (periodic part; slices in ÅT,
-        slice-integrated). Required for the spin Zeeman term — without it
-        only the orbital (A) coupling is applied.
+        slice-integrated; may cover one z-period, like
+        `vector_potential`). Required for the spin Zeeman term — without
+        it only the orbital (A) coupling is applied.
     fields : GPAWMagneticFields, optional
         Bundle providing any of the components above (including
         `average_field`) that were not given explicitly; build the field

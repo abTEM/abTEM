@@ -791,3 +791,69 @@ def test_split_exit_planes(device):
         assert (
             np.abs(out_array[i] - to_numpy(reference.array)).max() < 1e-12
         ), f"exit plane at {k} slices does not match an independent run"
+
+
+@pytest.mark.parametrize("method", ["series", "split"])
+def test_z_periodic_fields(method):
+    """Fields covering one z-period of a repeating potential are cycled
+    modulo their slice count, matching explicitly z-tiled fields; also a
+    CrystalPotential smoke test for the same workflow."""
+    from abtem.potentials.iam import CrystalPotential
+
+    atoms = bulk("Fe", "bcc", a=2.87, cubic=True)
+    set_magnetic_moments(atoms, np.tile([0.0, 0.0, 2.2], (len(atoms), 1)))
+
+    gpts_cell, xy_reps, z_reps = 16, 3, 4
+    dz = 2.87 / 2
+    gpts = gpts_cell * xy_reps
+
+    A_unit = VectorPotential(atoms, gpts=gpts_cell, slice_thickness=dz).build(
+        lazy=False
+    ).tile((xy_reps, xy_reps, 1))
+    B_unit = MagneticField(atoms, gpts=gpts_cell, slice_thickness=dz).build(
+        lazy=False
+    ).tile((xy_reps, xy_reps, 1))
+    A_tiled = A_unit.tile((1, 1, z_reps))
+    B_tiled = B_unit.tile((1, 1, z_reps))
+
+    unit_potential = abtem.Potential(
+        atoms * (xy_reps, xy_reps, 1), gpts=gpts, slice_thickness=dz
+    ).build(lazy=False)
+    crystal = CrystalPotential(unit_potential, (1, 1, z_reps))
+
+    probe = abtem.Probe(
+        energy=ENERGY, semiangle_cutoff=25, gpts=gpts, extent=2.87 * xy_reps
+    )
+    spinor_input = probe.build(lazy=False).to_spinor((1, 0))
+
+    out_periodic = pauli_multislice(
+        spinor_input.copy(),
+        crystal,
+        vector_potential=A_unit,
+        magnetic_field=B_unit,
+        average_field=(0, 0, 2.2),
+        method=method,
+    )
+    out_tiled = pauli_multislice(
+        spinor_input.copy(),
+        crystal,
+        vector_potential=A_tiled,
+        magnetic_field=B_tiled,
+        average_field=(0, 0, 2.2),
+        method=method,
+    )
+
+    a1, a2 = to_numpy(out_periodic.array), to_numpy(out_tiled.array)
+    assert np.abs(a1 - a2).max() < 1e-13
+    assert np.all(np.isfinite(a1))
+
+    # mismatched (non-divisor) slice counts still fail loudly
+    A_bad = A_unit.tile((1, 1, 3))
+    with pytest.raises(ValueError, match="divides"):
+        pauli_multislice(
+            spinor_input.copy(),
+            crystal,
+            vector_potential=A_bad,
+            magnetic_field=B_unit,
+            method=method,
+        )
