@@ -5245,12 +5245,78 @@ class MomentumResolvedSpectrum(BaseMeasurements):
             return fig, ax
 
 
+def _thermal_weight_tds(
+    I_tds: np.ndarray,
+    e_values: np.ndarray,
+    energy_axis_idx: int,
+    temperature: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Unfold a classical (loss/gain-symmetric) TDS intensity, computed at
+    energy magnitudes ``|E|`` only, into quantum loss (``+E``) and gain
+    (``-E``) sides via detailed balance.
+
+    A single frozen-phonon multislice run per energy magnitude already
+    contains the *combined* loss + gain intensity — the split between the
+    two sides is a quantum-statistical effect governed by the Bose-Einstein
+    phonon occupation ``n(E)``, not something the classical thermal sampling
+    distinguishes. The zero-energy bin is passed through unweighted: there is
+    no loss/gain asymmetry at zero energy transfer, and the classical
+    sampling already accounts for the thermal occupation there.
+
+    Loss and gain weights, ``(n+1)/(2n+1)`` and ``n/(2n+1)``, sum to 1, so
+    splitting preserves the total (loss + gain) spectral weight of the
+    unweighted input at each energy magnitude.
+    """
+    from ase import units
+
+    if e_values[0] != 0.0 or np.any(np.diff(e_values) <= 0):
+        raise ValueError(
+            "temperature-based loss/gain unfolding requires energies "
+            "starting at 0 and strictly increasing (one multislice run per "
+            "|energy loss|, unfolded into +/- sides here)."
+        )
+
+    xp = get_array_module(I_tds)
+
+    nonzero_e = e_values[1:]
+    beta = 1.0 / (units.kB * temperature)
+    n_occ = 1.0 / (np.exp(nonzero_e * beta) - 1.0)
+    loss_weight = (n_occ + 1.0) / (2.0 * n_occ + 1.0)
+    gain_weight = n_occ / (2.0 * n_occ + 1.0)
+
+    def _broadcast(weight):
+        shape = [1] * I_tds.ndim
+        shape[energy_axis_idx] = len(weight)
+        return xp.asarray(weight.reshape(shape))
+
+    zero_slice = tuple(
+        slice(0, 1) if i == energy_axis_idx else slice(None)
+        for i in range(I_tds.ndim)
+    )
+    nonzero_slice = tuple(
+        slice(1, None) if i == energy_axis_idx else slice(None)
+        for i in range(I_tds.ndim)
+    )
+
+    I_zero = I_tds[zero_slice]
+    I_loss = I_tds[nonzero_slice] * _broadcast(loss_weight)
+    # Reverse along the energy axis: ascending |E| -> descending (most
+    # negative first), so the final signed axis comes out ascending overall.
+    I_gain = xp.flip(I_tds[nonzero_slice] * _broadcast(gain_weight), axis=energy_axis_idx)
+
+    result_array = xp.concatenate([I_gain, I_zero, I_loss], axis=energy_axis_idx)
+    e_values_signed = np.concatenate([-nonzero_e[::-1], [0.0], nonzero_e])
+
+    return result_array, e_values_signed
+
+
 def phonon_loss_diffraction_patterns(
     exit_waves,
     component: str = "tds",
     max_angle: str | float = "cutoff",
     parity: str = "odd",
     block_direct: bool | float = False,
+    temperature: Optional[float] = None,
 ) -> "DiffractionPatterns":
     """
     Compute inelastic (TDS) diffraction patterns from energy-resolved
@@ -5284,12 +5350,23 @@ def phonon_loss_diffraction_patterns(
         If True, the direct beam is blocked in the resulting diffraction
         patterns. If given as a float, masks up to that scattering angle
         [mrad]. Default is False.
+    temperature : float, optional
+        Sample temperature [K]. If given, unfolds the TDS signal — computed
+        from a single frozen-phonon run per energy *magnitude* — into signed
+        quantum loss (``+E``) and gain (``-E``) sides using Bose-Einstein
+        detailed balance, following P. Zeiger's approach. Requires
+        ``component="tds"`` and an ``EnergyLossAxis`` whose values start at 0
+        and strictly increase (the classical/incoherent-minus-coherent
+        signal is symmetric in loss/gain; only their *split* is a quantum
+        effect). The zero-energy bin is unweighted. Default is None (no
+        unfolding — the returned energies are the ones in ``exit_waves``).
 
     Returns
     -------
     DiffractionPatterns
         Intensity patterns with the ``FrozenPhononsAxis`` removed and the
-        ``EnergyLossAxis`` preserved.
+        ``EnergyLossAxis`` preserved (or replaced by its signed loss/gain
+        unfolding if ``temperature`` is given).
     """
     from abtem.core.axes import EnergyLossAxis, FrozenPhononsAxis, OrdinalAxis
 
@@ -5342,11 +5419,29 @@ def phonon_loss_diffraction_patterns(
     if component not in valid_components:
         raise ValueError(f"component must be one of {valid_components}")
 
+    if temperature is not None and component != "tds":
+        raise ValueError(
+            "temperature-based loss/gain unfolding requires component='tds'."
+        )
+
     remaining_axes = [
         ax
         for i, ax in enumerate(exit_waves.ensemble_axes_metadata)
         if i != fp_axis_idx
     ]
+
+    if temperature is not None:
+        remaining_energy_axis_idx = next(
+            i for i, ax in enumerate(remaining_axes) if isinstance(ax, EnergyLossAxis)
+        )
+        energy_axis = remaining_axes[remaining_energy_axis_idx]
+        e_values = np.asarray(energy_axis.values, dtype=float)
+        I_tds, e_values_signed = _thermal_weight_tds(
+            I_tds, e_values, remaining_energy_axis_idx, temperature
+        )
+        remaining_axes[remaining_energy_axis_idx] = EnergyLossAxis(
+            values=tuple(e_values_signed), units=energy_axis.units
+        )
 
     if component == "all":
         xp = get_array_module(I_tds)
