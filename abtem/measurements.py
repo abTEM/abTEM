@@ -219,6 +219,21 @@ def _scan_extent(measurement):
     return extent
 
 
+def _spatial_frequency_squared(
+    gpts: tuple[int, int],
+    sampling: tuple[float, float],
+    xp: ModuleType = np,
+) -> np.ndarray:
+    """Squared spatial frequency grid, the shared (and expensive) part of
+    :func:`_annular_detector_mask` — factored out so callers building many
+    masks for the same ``gpts``/``sampling`` (e.g. a q-sweep) can compute it
+    once and reuse it."""
+    kx, ky = spatial_frequencies(
+        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
+    )
+    return kx[:, None] ** 2 + ky[None] ** 2
+
+
 def _annular_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -227,12 +242,10 @@ def _annular_detector_mask(
     offset: tuple[float, float] = (0.0, 0.0),
     fftshift: bool = False,
     xp: ModuleType = np,
+    k2: Optional[np.ndarray] = None,
 ) -> np.ndarray | list[np.ndarray]:
-    kx, ky = spatial_frequencies(
-        gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), False, xp
-    )
-
-    k2 = kx[:, None] ** 2 + ky[None] ** 2
+    if k2 is None:
+        k2 = _spatial_frequency_squared(gpts, sampling, xp)
 
     bins = (k2 >= inner**2) & (k2 < outer**2)
 
@@ -5305,29 +5318,44 @@ def phonon_loss_diffraction_patterns(
             "Pass the Waves object directly, not DiffractionPatterns."
         )
 
+    # --- select component (validated up front, before any computation) ---
+    valid_components = ("tds", "coherent", "incoherent", "all")
+    if component not in valid_components:
+        raise ValueError(f"component must be one of {valid_components}")
+
     # --- number of frozen-phonon configurations ---
     N = exit_waves.shape[fp_axis_idx]
 
     dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
 
-    # Coherent: sum complex exit waves first, then compute diffraction pattern
-    #   I_coh = |FT(Σ_j psi_j)|² / N²
-    coherent_waves = exit_waves.sum(axis=fp_axis_idx)
-    dp_coherent = coherent_waves.diffraction_patterns(**dp_kwargs)
-    I_coherent = dp_coherent.array / N**2
+    # Only compute the branches actually needed for the requested component.
+    # The incoherent branch requires a diffraction pattern per frozen-phonon
+    # configuration (N FFTs) and dominates cost, so skipping it for
+    # component="coherent" matters a lot in practice.
+    need_coherent = component in ("coherent", "tds", "all")
+    need_incoherent = component in ("incoherent", "tds", "all")
 
-    # Incoherent: compute diffraction patterns first, then sum intensities
-    #   I_inc = Σ_j |FT(psi_j)|² / N
-    dp_all = exit_waves.diffraction_patterns(**dp_kwargs)
-    I_incoherent = dp_all.array.sum(axis=fp_axis_idx) / N
+    dp_reference = None
 
-    # TDS = incoherent - coherent
-    I_tds = I_incoherent - I_coherent
+    if need_coherent:
+        # Coherent: sum complex exit waves first, then compute diffraction pattern
+        #   I_coh = |FT(Σ_j psi_j)|² / N²
+        coherent_waves = exit_waves.sum(axis=fp_axis_idx)
+        dp_coherent = coherent_waves.diffraction_patterns(**dp_kwargs)
+        I_coherent = dp_coherent.array / N**2
+        dp_reference = dp_coherent
 
-    # --- select component ---
-    valid_components = ("tds", "coherent", "incoherent", "all")
-    if component not in valid_components:
-        raise ValueError(f"component must be one of {valid_components}")
+    if need_incoherent:
+        # Incoherent: compute diffraction patterns first, then sum intensities
+        #   I_inc = Σ_j |FT(psi_j)|² / N
+        dp_all = exit_waves.diffraction_patterns(**dp_kwargs)
+        I_incoherent = dp_all.array.sum(axis=fp_axis_idx) / N
+        if dp_reference is None:
+            dp_reference = dp_all
+
+    if component in ("tds", "all"):
+        # TDS = incoherent - coherent
+        I_tds = I_incoherent - I_coherent
 
     remaining_axes = [
         ax
@@ -5350,13 +5378,13 @@ def phonon_loss_diffraction_patterns(
     else:
         result_array = I_incoherent
 
-    metadata = dict(dp_coherent.metadata)
+    metadata = dict(dp_reference.metadata)
     metadata["phonon_loss_component"] = component
 
     result = DiffractionPatterns(
         result_array,
-        sampling=dp_coherent.sampling,
-        fftshift=dp_coherent.fftshift,
+        sampling=dp_reference.sampling,
+        fftshift=dp_reference.fftshift,
         ensemble_axes_metadata=remaining_axes or None,
         metadata=metadata,
     )
@@ -5542,6 +5570,11 @@ def momentum_resolved_spectrum(
         gpts = dp.shape[-2:]
         sampling = dp.angular_sampling
 
+        # The spatial-frequency grid is the same for every q-step (only the
+        # offset/roll differs), so compute it once rather than inside the
+        # per-q loop below.
+        k2 = _spatial_frequency_squared(gpts, sampling, xp)
+
         # Build all masks at once and stack: (n_q, gy, gx)
         masks = xp.stack(
             [
@@ -5553,6 +5586,7 @@ def momentum_resolved_spectrum(
                     offset=(float(q * cos_a), float(q * sin_a)),
                     fftshift=dp.fftshift,
                     xp=xp,
+                    k2=k2,
                 )
                 for q in q_values
             ],
