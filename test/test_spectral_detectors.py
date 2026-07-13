@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 
 import abtem
-from abtem.detectors import SpectralAnnularDetector, SpectralSlitDetector
+from abtem.detectors import (
+    SpectralAnnularDetector,
+    SpectralSlitDetector,
+    _slit_detector_mask,
+)
 from abtem.measurements import DiffractionPatterns, momentum_resolved_spectrum
 
 
@@ -180,3 +184,61 @@ def test_spectrum_show_no_warning():
         import matplotlib
         matplotlib.use("Agg")
         spec.show()
+
+
+# ---- rotated-slit mask correctness -------------------------------------------
+
+
+@pytest.mark.parametrize("angle", [0.0, 30.0, 45.0, 60.0, 90.0, 137.0])
+def test_slit_mask_area_matches_true_rectangle_at_any_angle(angle):
+    """The detector mask must integrate the true rotated rectangle, not its
+    axis-aligned bounding box (which is larger for any non-90-degree-multiple
+    angle and only coincides with the true area at angle=0/90/180/270)."""
+    gpts = (512, 512)
+    sampling = (0.2, 0.2)
+    extent, width = 40.0, 4.0
+
+    det = SpectralSlitDetector(width=width, q_min=0.0, q_max=extent, angle=angle)
+    mask = _slit_detector_mask(
+        gpts,
+        sampling,
+        center=det._center,
+        angle=det._angle,
+        extent=det._extent,
+        width=det._width,
+        fftshift=True,
+    )
+
+    pixel_area = sampling[0] * sampling[1]
+    true_area = extent * width
+    aabb_area = (
+        (det._corners[1] - det._corners[0]) * (det._corners[3] - det._corners[2])
+    )
+
+    mask_area = mask.sum() * pixel_area
+
+    # Should match the true rectangle area (allowing for pixel discretization),
+    # not the (generally much larger) axis-aligned bounding box.
+    assert mask_area == pytest.approx(true_area, rel=0.1)
+    if angle % 90 != 0:
+        assert aabb_area > true_area * 1.5  # sanity: AABB is genuinely bigger here
+        assert mask_area < aabb_area * 0.5  # would fail against the old AABB bug
+
+
+def test_slit_corners_mode_rejects_conflicting_geometry_params():
+    """corners is documented as incompatible with offset/angle/q_min/q_max/width;
+    all five must actually be validated, not just q_max/width."""
+    corners = (-10.0, 10.0, -2.0, 2.0)
+
+    SpectralSlitDetector(corners=corners)  # baseline: corners alone is fine
+
+    with pytest.raises(ValueError, match="not both"):
+        SpectralSlitDetector(corners=corners, angle=45.0)
+    with pytest.raises(ValueError, match="not both"):
+        SpectralSlitDetector(corners=corners, q_min=5.0)
+    with pytest.raises(ValueError, match="not both"):
+        SpectralSlitDetector(corners=corners, offset=(1.0, 0.0))
+    with pytest.raises(ValueError, match="not both"):
+        SpectralSlitDetector(corners=corners, q_max=10.0)
+    with pytest.raises(ValueError, match="not both"):
+        SpectralSlitDetector(corners=corners, width=5.0)

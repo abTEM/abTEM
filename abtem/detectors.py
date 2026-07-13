@@ -788,11 +788,22 @@ class AnnularDetector(_AbstractRadialDetector):
 def _slit_detector_mask(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
-    corners: tuple[float, float, float, float],
+    center: tuple[float, float],
+    angle: float,
+    extent: float,
+    width: float,
     fftshift: bool = False,
     xp=np,
 ) -> np.ndarray:
     """Boolean mask for a rectangular slit in reciprocal space.
+
+    The rectangle is centred at *center*, with its long axis (full length
+    *extent*) rotated by *angle* from kx and full perpendicular width
+    *width*. Membership is tested by rotating the grid into the slit's local
+    frame (long axis along local x) rather than testing against an
+    axis-aligned bounding box, so this is correct for any *angle* — an
+    axis-aligned box only coincides with the true rotated rectangle when
+    *angle* is a multiple of 90 degrees.
 
     Parameters
     ----------
@@ -800,8 +811,14 @@ def _slit_detector_mask(
         Grid points.
     sampling : (float, float)
         Angular sampling [mrad/pixel].
-    corners : (kx_min, kx_max, ky_min, ky_max)
-        Rectangle bounds in mrad (signed with respect to diffraction-pattern origin).
+    center : (kx, ky)
+        Centre of the slit rectangle [mrad].
+    angle : float
+        Rotation of the long axis [degrees, CCW from kx].
+    extent : float
+        Full length of the slit along its long axis [mrad].
+    width : float
+        Full width of the slit perpendicular to its long axis [mrad].
     fftshift : bool
         If True, zero frequency is at the centre of the array.
     xp : array module
@@ -817,8 +834,21 @@ def _slit_detector_mask(
     kx2d = kx[:, None] * xp.ones((1, gpts[1]))
     ky2d = xp.ones((gpts[0], 1)) * ky[None, :]
 
-    kx_min, kx_max, ky_min, ky_max = corners
-    mask = (kx2d >= kx_min) & (kx2d < kx_max) & (ky2d >= ky_min) & (ky2d < ky_max)
+    angle_rad = np.deg2rad(angle)
+    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    dx = kx2d - center[0]
+    dy = ky2d - center[1]
+    local_x = dx * cos_a + dy * sin_a
+    local_y = -dx * sin_a + dy * cos_a
+
+    half_extent = extent / 2.0
+    half_width = width / 2.0
+    mask = (
+        (local_x >= -half_extent)
+        & (local_x < half_extent)
+        & (local_y >= -half_width)
+        & (local_y < half_width)
+    )
 
     if fftshift:
         mask = xp.fft.fftshift(mask)
@@ -957,7 +987,13 @@ class SpectralSlitDetector(BaseDetector):
     ):
         self._q_sampling = float(q_sampling) if q_sampling is not None else None
         if corners is not None:
-            if any(p is not None for p in (q_max, width)):
+            if (
+                q_max is not None
+                or width is not None
+                or angle != 0.0
+                or offset != (0.0, 0.0)
+                or q_min != 0.0
+            ):
                 raise ValueError(
                     "Provide either 'corners' or 'offset'/'angle'/'q_min'/'q_max'/'width', not both."
                 )
@@ -974,6 +1010,10 @@ class SpectralSlitDetector(BaseDetector):
             self._extent = float(corners[1] - corners[0])
             self._width = float(corners[3] - corners[2])
             self._q_min = 0.0
+            self._center = (
+                (corners[0] + corners[1]) / 2.0,
+                (corners[2] + corners[3]) / 2.0,
+            )
         else:
             if q_max is None or width is None:
                 raise ValueError("Provide both 'q_max' and 'width' when not using 'corners'.")
@@ -994,6 +1034,10 @@ class SpectralSlitDetector(BaseDetector):
             )
             self._extent = q_max - q_min
             self._width = float(width)
+            self._center = slit_center
+            # AABB retained only for introspection/display via the `corners`
+            # property; the detector mask itself uses _center/_angle directly
+            # (see _slit_detector_mask) so it is correct for any angle.
             self._corners = _corners_from_slit_params(
                 slit_center, self._angle, self._extent, self._width
             )
@@ -1083,7 +1127,10 @@ class SpectralSlitDetector(BaseDetector):
         return _slit_detector_mask(
             gpts=gpts,
             sampling=angular_sampling,
-            corners=self._corners,
+            center=self._center,
+            angle=self._angle,
+            extent=self._extent,
+            width=self._width,
             fftshift=fftshift,
             xp=xp,
         )
@@ -1238,7 +1285,10 @@ class SpectralSlitDetector(BaseDetector):
         mask = _slit_detector_mask(
             gpts=gpts,
             sampling=sampling,
-            corners=self._corners,
+            center=self._center,
+            angle=self._angle,
+            extent=self._extent,
+            width=self._width,
             fftshift=False,
             xp=xp,
         )
