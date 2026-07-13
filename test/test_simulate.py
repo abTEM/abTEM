@@ -17,6 +17,13 @@ from abtem.inelastic.phonons import BaseFrozenPhonons, FrozenPhonons, FrozenPhon
 from abtem.scan import CustomScan
 
 
+def to_numpy(array):
+    """Convert array to numpy, handling both CPU and GPU arrays."""
+    if hasattr(array, "get"):  # CuPy array
+        return np.asarray(array.get())
+    return np.asarray(array)
+
+
 # @reproduce_failure('6.56.3', b'AXicY2BAAoxwhkUDA2HASppyFBtwMYEAAJNaAXw=')
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True], ids=["not_lazy"])
@@ -351,9 +358,10 @@ def test_multislice_two_axis_ensemble_eager_vs_lazy_vs_reference(device):
             trajectory[index], lazy=False
         )
 
+        reference_array = to_numpy(reference.array)
         np.testing.assert_allclose(
-            result_eager.array[index], reference.array, rtol=1e-5, atol=1e-7
+            to_numpy(result_eager.array[index]), reference_array, rtol=1e-5, atol=1e-7
         )
         np.testing.assert_allclose(
-            result_lazy.array[index], reference.array, rtol=1e-5, atol=1e-7
+            to_numpy(result_lazy.array[index]), reference_array, rtol=1e-5, atol=1e-7
         )
