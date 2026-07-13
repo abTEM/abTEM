@@ -86,7 +86,22 @@ class _DummyGPAW:
         # compensation charge coefficients from Q_aL to ccc_aL.
         Q_aL = getattr(gpaw.density, "Q_aL", None)
         if Q_aL is None:
-            Q_aL = gpaw.density.ccc_aL
+            Q_aL = getattr(gpaw.density, "ccc_aL", None)
+        if Q_aL is None:
+            # Neither attribute is populated: on old-style GPAW (Density.Q_aL
+            # starts as None) this happens for a calculator restarted from a
+            # .gpw file without rerunning the SCF loop, since Q_aL is filled
+            # in as a side effect of calculate() rather than eagerly on load.
+            # Compute it explicitly instead of assuming it is already cached.
+            if hasattr(gpaw.density, "calculate_multipole_moments"):
+                _, Q_aL = gpaw.density.calculate_multipole_moments()
+            elif hasattr(gpaw.density, "calculate_compensation_charge_coefficients"):
+                Q_aL = gpaw.density.calculate_compensation_charge_coefficients()
+            else:
+                raise AttributeError(
+                    "could not find or compute GPAW's compensation charge "
+                    "coefficients (Q_aL/ccc_aL) on this density object"
+                )
 
         kwargs = {
             "setup_mode": gpaw.parameters.mode,
