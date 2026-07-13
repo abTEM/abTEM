@@ -5338,12 +5338,7 @@ def phonon_loss_diffraction_patterns(
         Complex exit waves from a multislice simulation with an
         ``EnergyResolvedAtomsEnsemble`` (``ensemble_mean=False``).
         Must contain both a ``FrozenPhononsAxis`` and an ``EnergyLossAxis``
-        in its ensemble axes. Run that multislice simulation with
-        ``lazy=True`` and ``.compute()`` the result before calling this
-        function: as of this writing, eager (``lazy=False``) multislice
-        silently gives incorrect exit waves whenever the potential's
-        ensemble has two non-trivial axes at once (energy and config here),
-        a pre-existing limitation unrelated to this function.
+        in its ensemble axes.
     component : {'tds', 'coherent', 'incoherent', 'all'}
         Which component to return.  ``'all'`` stacks the three along a
         new leading ``OrdinalAxis(label='component')``.
