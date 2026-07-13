@@ -523,13 +523,14 @@ def _validate_potential_ensemble_indices(
 
 
 def _generate_potential_configurations(potential):
+    # generate_blocks() is called with its default chunks=1, which validates to
+    # a size-1 chunk along every ensemble axis (see Ensemble.generate_blocks),
+    # so potential_index from np.ndindex(shape) is already the full per-axis
+    # index tuple. Re-unraveling it here previously scrambled the index for any
+    # potential ensemble with more than one non-trivial axis (each element of
+    # the tuple got treated as an independent flat index into the full shape).
     for potential_index, _, potential_configuration in potential.generate_blocks():
         potential_configuration = potential_configuration.item()
-
-        if len(potential.ensemble_shape):
-            potential_index = np.unravel_index(
-                potential_index, potential.ensemble_shape
-            )
 
         yield potential_index, potential_configuration
 
@@ -1304,7 +1305,7 @@ class MultisliceTransform(WavesTransform[BaseMeasurements]):
         chunks: tuple[int, ...] = ()
 
         if len(self.potential.ensemble_shape) > 0:
-            chunks = chunks + (1,)
+            chunks = chunks + (1,) * len(self.potential.ensemble_shape)
 
         if len(self.potential.exit_planes) > 1:
             chunks = chunks + (len(self.potential.exit_planes),)
