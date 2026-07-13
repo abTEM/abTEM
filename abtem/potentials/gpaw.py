@@ -82,15 +82,21 @@ class _DummyGPAW:
         atoms = gpaw.atoms.copy()
         atoms.calc = None
 
+        # GPAW's new-style calculator (default since GPAW 26) renames the
+        # compensation charge coefficients from Q_aL to ccc_aL.
+        Q_aL = getattr(gpaw.density, "Q_aL", None)
+        if Q_aL is None:
+            Q_aL = gpaw.density.ccc_aL
+
         kwargs = {
-            "setup_mode": gpaw.parameters["mode"],
-            "setup_xc": gpaw.parameters["xc"],
+            "setup_mode": gpaw.parameters.mode,
+            "setup_xc": gpaw.parameters.xc,
             "nt_sG": gpaw.density.nt_sG.copy(),
             "gd": gpaw.density.gd.new_descriptor(comm=SerialCommunicator()),
             "D_asp": dict(gpaw.density.D_asp),
             "atoms": atoms,
             "valence_potential": gpaw.get_electrostatic_potential(),
-            "Q_aL": dict(gpaw.density.Q_aL),
+            "Q_aL": dict(Q_aL),
         }
 
         return cls(**kwargs)
