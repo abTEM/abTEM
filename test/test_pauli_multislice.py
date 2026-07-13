@@ -143,9 +143,11 @@ def test_scalar_limit(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_constant_field_spin_precession(device):
+@pytest.mark.parametrize("method", ["series", "split"])
+def test_constant_field_spin_precession(device, method):
     """Spin initially along z precesses about a constant B along x at the
-    analytic rate e*B/(hbar*k)."""
+    analytic rate e*B/(hbar*k). The split method's Zeeman factor is an exact
+    per-pixel rotation, so it must reproduce this too."""
     gpts, extent = 32, 20.0
     n_slices, dz = 50, 10.0
     B0 = 2e4  # T; exaggerated to give an O(1 rad) rotation
@@ -160,7 +162,9 @@ def test_constant_field_spin_precession(device):
     waves = abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device=device)
     spinor = waves.build(lazy=False).to_spinor((1, 0))
 
-    out = pauli_multislice(spinor, potential, vector_potential=A, magnetic_field=B)
+    out = pauli_multislice(
+        spinor, potential, vector_potential=A, magnetic_field=B, method=method
+    )
 
     wavelength = energy2wavelength(ENERGY)
     theta = e_over_hbar * B0 * wavelength / (2 * np.pi) * (n_slices * dz)
@@ -171,7 +175,9 @@ def test_constant_field_spin_precession(device):
 
     # a spin parallel to the field is stationary
     spinor = waves.build(lazy=False).to_spinor((1, 1))
-    out = pauli_multislice(spinor, potential, vector_potential=A, magnetic_field=B)
+    out = pauli_multislice(
+        spinor, potential, vector_potential=A, magnetic_field=B, method=method
+    )
     s = spin_expectation(to_numpy(out.array))
     assert np.allclose(s, [1, 0, 0], atol=1e-6)
 
@@ -217,8 +223,9 @@ def test_average_field_precession(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("method", ["series", "split"])
 @pytest.mark.parametrize("l", [1, -1])
-def test_vortex_orbital_phase(device, l):
+def test_vortex_orbital_phase(device, method, l):
     """A vortex beam with OAM l in A = B x r / 2 acquires the orbital Zeeman
     phase -e*B*l/(2*hbar*k) per unit length."""
     gpts, extent = 128, 40.0
@@ -252,10 +259,18 @@ def test_vortex_orbital_phase(device, l):
     spinor = waves.to_spinor((1, 0))
 
     out_B = pauli_multislice(
-        spinor.copy(), potential, vector_potential=A, magnetic_field=B_zero
+        spinor.copy(),
+        potential,
+        vector_potential=A,
+        magnetic_field=B_zero,
+        method=method,
     )
     out_0 = pauli_multislice(
-        spinor.copy(), potential, vector_potential=A_zero, magnetic_field=B_zero
+        spinor.copy(),
+        potential,
+        vector_potential=A_zero,
+        magnetic_field=B_zero,
+        method=method,
     )
 
     overlap = np.vdot(to_numpy(out_0.array[0]), to_numpy(out_B.array[0]))
@@ -671,3 +686,108 @@ def test_iam_noncollinear_smoke():
 
     assert np.abs(to_numpy(out_zero.array)[1]).max() == 0
     assert np.abs(out_array[1]).max() > 0
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_split_matches_series(device):
+    """The split-step method agrees with the per-slice-exact series method
+    up to the expected Strang splitting error, which shrinks with slice
+    thickness."""
+    atoms = bulk("Fe", "bcc", a=2.87, cubic=True) * (2, 2, 1)
+    set_magnetic_moments(atoms, np.tile([0.0, 0.0, 2.2], (len(atoms), 1)))
+
+    def run(method, dz):
+        potential = abtem.Potential(
+            atoms, gpts=64, slice_thickness=dz, device=device
+        ).build(lazy=False)
+        A = VectorPotential(atoms, gpts=64, slice_thickness=dz, device=device).build(
+            lazy=False
+        )
+        B = MagneticField(atoms, gpts=64, slice_thickness=dz, device=device).build(
+            lazy=False
+        )
+        probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=25, device=device)
+        probe.grid.match(potential)
+        spinor = probe.build(lazy=False).to_spinor((1, 0))
+        out = pauli_multislice(
+            spinor,
+            potential,
+            vector_potential=A,
+            magnetic_field=B,
+            average_field=(0, 0, 2.2),
+            method=method,
+        )
+        return to_numpy(out.array)
+
+    # sanity: at coarse slicing the two methods agree at the few-percent
+    # level (the residual mixes split's Strang error with the series
+    # method's dz-independent finite-difference dispersion, so an exact
+    # convergence rate against the series is not testable here)
+    dz_coarse = 2.87 / 2
+    err_coarse = np.abs(run("split", dz_coarse) - run("series", dz_coarse)).max()
+    scale = np.abs(run("series", dz_coarse)).max()
+    assert err_coarse / scale < 0.05
+
+    # Cauchy self-convergence of the split method with slice thickness
+    e1 = np.abs(run("split", 2.87 / 2) - run("split", 2.87 / 4)).max()
+    e2 = np.abs(run("split", 2.87 / 4) - run("split", 2.87 / 8)).max()
+    assert e2 < e1
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_split_exit_planes(device):
+    """The split method's Strang bookkeeping (trailing half-propagation
+    completed on a copy at exit planes) gives exit waves identical to
+    independent runs truncated at the same thickness."""
+    gpts, extent, dz = 32, 20.0, 2.0
+    n = 6
+    rng = np.random.default_rng(11)
+
+    V = rng.random((n, gpts, gpts)) * 30.0
+    A_array = rng.standard_normal((n, 3, gpts, gpts)) * 0.5
+    B_array = rng.standard_normal((n, 3, gpts, gpts)) * 100.0
+
+    probe = abtem.Probe(
+        energy=ENERGY, semiangle_cutoff=20, gpts=gpts, extent=extent, device=device
+    )
+    spinor_input = probe.build(lazy=False).to_spinor((0.8, 0.6j))
+
+    full = abtem.PotentialArray(
+        V, slice_thickness=dz, extent=(extent, extent), exit_planes=2
+    )
+    A = VectorPotentialArray(
+        A_array, slice_thickness=dz, extent=(extent, extent)
+    )
+    B = MagneticFieldArray(B_array, slice_thickness=dz, extent=(extent, extent))
+
+    out = pauli_multislice(
+        spinor_input.copy(),
+        full,
+        vector_potential=A,
+        magnetic_field=B,
+        method="split",
+    )
+    out_array = to_numpy(out.array)
+
+    # exit_planes=2 includes the entrance plane (-1) at index 0
+    assert to_numpy(out.array).shape[0] == 4
+    for i, k in enumerate((2, 4, 6), start=1):
+        truncated = abtem.PotentialArray(
+            V[:k], slice_thickness=dz, extent=(extent, extent)
+        )
+        A_k = VectorPotentialArray(
+            A_array[:k], slice_thickness=dz, extent=(extent, extent)
+        )
+        B_k = MagneticFieldArray(
+            B_array[:k], slice_thickness=dz, extent=(extent, extent)
+        )
+        reference = pauli_multislice(
+            spinor_input.copy(),
+            truncated,
+            vector_potential=A_k,
+            magnetic_field=B_k,
+            method="split",
+        )
+        assert (
+            np.abs(out_array[i] - to_numpy(reference.array)).max() < 1e-12
+        ), f"exit plane at {k} slices does not match an independent run"
