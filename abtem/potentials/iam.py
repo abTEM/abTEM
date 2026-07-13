@@ -2102,7 +2102,7 @@ class CrystalPotential(_PotentialBuilder):
             # Pre-compute and cache every pool configuration's tiled
             # transmission function once; each slice then combines them as a
             # coherent sum with fresh random phases (mixed static potential,
-            # Mendis 2019) instead of drawing a single configuration per tile.
+            # Mendis 2023) instead of drawing a single configuration per tile.
             tf_cache: dict[tuple[int, int], np.ndarray] = {}
             for ci in range(n_configs):
                 for j in range(len(self.potential_unit)):
@@ -2209,8 +2209,17 @@ class CrystalPotential(_PotentialBuilder):
                             np.exp(2j * np.pi * phases[ci - 1]) * tf_cache[(ci, j)]
                         )
                     combined = combined / n_configs
+                    # ``combined[None]`` (numpy's newaxis) gives the new leading
+                    # axis a stride of 0 (a broadcast view), which a mismatch
+                    # between ``_new_fftw_object``'s planning dummy (created via
+                    # ``np.zeros_like``, which does *not* preserve a stride-0
+                    # axis) and the real array turns into a pyfftw
+                    # "Invalid input striding" crash the first time this
+                    # tiled-crystal grid size is bandlimited. ``reshape`` gives
+                    # the leading axis a genuine (non-broadcast) stride instead.
+                    combined = combined.reshape((1,) + combined.shape)
                     slic = TransmissionFunction(
-                        combined[None],
+                        combined,
                         slice_thickness=(self.potential_unit.slice_thickness[j],),
                         extent=self.extent,
                         energy=energy,
