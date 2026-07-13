@@ -76,7 +76,13 @@ def _a_dot_gradient_stencil(
     @njit(parallel=True, fastmath=True)
     def _stencil_cpu_batch(a, Ax, Ay):
         M, H, W = a.shape
-        out = np.zeros_like(a)
+        # a.copy() + slice-fill rather than np.zeros_like: some numba/numpy
+        # pairings (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's
+        # internal np.zeros_like -> np.empty_like lowering inside @njit, while
+        # ndarray.copy() (used identically by finite_difference.py's Laplace
+        # stencil) is unaffected.
+        out = a.copy()
+        out[:] = 0
         for m in prange(M):
             for i in range(n, H - n):
                 for j in range(n, W - n):
