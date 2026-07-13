@@ -641,6 +641,11 @@ class Waves(BaseWaves, ArrayObject):
                 raise ValueError("polarization must be nonzero")
             spinor = spinor / norm
 
+        # Match the wave device: CuPy rejects arithmetic with non-scalar
+        # NumPy operands.
+        xp = get_array_module(self.device)
+        spinor = xp.asarray(spinor)
+
         array = self.array[None] * spinor.reshape((2,) + (1,) * len(self.shape))
 
         kwargs = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))

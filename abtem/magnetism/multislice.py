@@ -110,6 +110,15 @@ def _validate_field(field, potential, name: str, expected_cls) -> None:
             f"potential extent {tuple(potential.extent)}"
         )
 
+    # Same slice count but different thicknesses would silently mis-scale
+    # the per-slice rates (the projected field slices are divided by the
+    # potential's slice thickness).
+    if not np.allclose(field.slice_thickness, potential.slice_thickness):
+        raise ValueError(
+            f"{name} slice thicknesses do not match the potential's; build "
+            f"them with the same slice_thickness"
+        )
+
 
 def _non_periodic_vector_potential_slice(
     average_field: np.ndarray,
@@ -197,10 +206,16 @@ def _pauli_multislice_step(
     up = (slice(None),) * spin_axis + (0,)
     down = (slice(None),) * spin_axis + (1,)
 
+    # A_x, A_y are constant across every Taylor-series term of this slice's
+    # exponential (only the wave function changes between terms), so pad
+    # them once here instead of on every gradient_stencil call.
+    A_x_padded = gradient_stencil.pad_field(A_x)
+    A_y_padded = gradient_stencil.pad_field(A_y)
+
     def pauli_operator(array):
         out = laplace_stencil(array) * laplace_prefactor
         out += t_eff * array
-        out += gradient_coefficient * gradient_stencil(array, A_x, A_y)
+        out += gradient_coefficient * gradient_stencil(array, A_x_padded, A_y_padded)
 
         if B_z is not None:
             zeeman_up = B_z * array[up] + B_minus * array[down]
@@ -248,7 +263,6 @@ def pauli_multislice_and_detect(
     """
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
-    waves = waves.copy()
 
     spin_axis = _find_spin_axis(waves)
 
@@ -266,12 +280,13 @@ def pauli_multislice_and_detect(
     xp = get_array_module(waves.device)
     real_dtype = get_dtype(complex=False)
 
-    vector_potential_arrays = xp.asarray(
-        vector_potential.array, dtype=real_dtype
-    )
+    # Kept on their native (usually host) device; each slice is transferred
+    # on demand in the loop below, so the full field stacks never need to
+    # fit in device memory alongside the waves.
+    vector_potential_arrays = vector_potential.array
     magnetic_field_arrays = None
     if magnetic_field is not None:
-        magnetic_field_arrays = xp.asarray(magnetic_field.array, dtype=real_dtype)
+        magnetic_field_arrays = magnetic_field.array
 
     if average_field is not None:
         average_field = np.asarray(average_field, dtype=float)
@@ -280,6 +295,10 @@ def pauli_multislice_and_detect(
                 f"average_field must be a vector of shape (3,), got "
                 f"{average_field.shape}"
             )
+        if not np.any(average_field):
+            average_field = None
+
+    if average_field is not None:
         # Coordinates for the non-periodic A_np = 1/2 B_avg x (r - r0); the
         # gauge origin is the supercell center, minimizing |A_np| over the
         # cell.
@@ -321,7 +340,9 @@ def pauli_multislice_and_detect(
         enabled=pbar, total=int(n_slices), leave=False, desc="multislice"
     )
 
-    waves_input = waves.copy()
+    # The multislice step mutates the wave array in place; each
+    # configuration starts from a fresh copy, leaving the input untouched.
+    waves_input = waves
 
     for potential_index, potential_configuration in _generate_potential_configurations(
         potential
@@ -349,11 +370,17 @@ def pauli_multislice_and_detect(
             # The stored field slices are projected (slice-integrated);
             # divide by the thickness to get the per-slice rates the Pauli
             # operator uses.
-            vector_potential_slice = vector_potential_arrays[slice_index] / thickness
+            vector_potential_slice = (
+                xp.asarray(vector_potential_arrays[slice_index], dtype=real_dtype)
+                / thickness
+            )
 
             magnetic_field_slice = None
             if magnetic_field_arrays is not None:
-                magnetic_field_slice = magnetic_field_arrays[slice_index] / thickness
+                magnetic_field_slice = (
+                    xp.asarray(magnetic_field_arrays[slice_index], dtype=real_dtype)
+                    / thickness
+                )
 
             if average_field is not None:
                 z = depth + thickness / 2
@@ -370,6 +397,12 @@ def pauli_multislice_and_detect(
                 if magnetic_field_slice is not None:
                     magnetic_field_slice = (
                         magnetic_field_slice + average_field_device[:, None, None]
+                    )
+                else:
+                    # No periodic field given, but average_field promises a
+                    # constant Zeeman term.
+                    magnetic_field_slice = xp.broadcast_to(
+                        average_field_device[:, None, None], (3,) + tuple(gpts)
                     )
 
             waves = _pauli_multislice_step(
@@ -452,9 +485,11 @@ def pauli_multislice(
         slice-integrated). Required for the spin Zeeman term — without it
         only the orbital (A) coupling is applied.
     fields : GPAWMagneticFields, optional
-        Bundle providing any of the three components above that were not
-        given explicitly (build the field with
-        ``include_magnetic_field=True`` for the Zeeman term).
+        Bundle providing any of the components above (including
+        `average_field`) that were not given explicitly; build the field
+        with ``include_magnetic_field=True`` for the periodic Zeeman term.
+        Pass ``average_field=(0, 0, 0)`` explicitly to suppress the
+        bundle's uniform field.
     detectors : (list of) BaseDetector, optional
         Detectors applied at the exit plane(s). Defaults to returning the
         exit wave functions.
@@ -496,6 +531,8 @@ def pauli_multislice(
             vector_potential = fields.vector_potential
         if magnetic_field is None:
             magnetic_field = fields.magnetic_field
+        if average_field is None:
+            average_field = fields.average_field
 
     if potential is None or vector_potential is None:
         raise ValueError(
@@ -505,9 +542,10 @@ def pauli_multislice(
 
     if magnetic_field is None:
         warnings.warn(
-            "no magnetic_field given: the spin Zeeman term is omitted and "
-            "only the orbital (vector-potential) coupling is applied. Build "
-            "the fields with include_magnetic_field=True to include it."
+            "no magnetic_field given: the spin Zeeman term of the periodic "
+            "field is omitted (a constant Zeeman term is still applied if "
+            "average_field is given). Build the fields with "
+            "include_magnetic_field=True to include the periodic part."
         )
 
     if get_dtype(complex=True) == np.complex64:

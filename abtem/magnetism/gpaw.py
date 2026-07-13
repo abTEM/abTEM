@@ -354,6 +354,11 @@ class _MagnetizationMagnetics(_FieldBuilder):
         self._cell3d = cell
 
         self._rotate_field = rotate_field
+        #: The rotation applied to the field's vector components on the last
+        #: `generate_slices` pass (None until then, or when no rotation was
+        #: applied). Consumers needing consistency with a separately computed
+        #: constant field (see `gpaw_magnetic_fields`) apply the same matrix.
+        self._resolved_rotation_matrix: Optional[np.ndarray] = None
 
         if projection == "real_space" and isinstance(slice_thickness, (float, int)):
             slice_thickness = float(slice_thickness)
@@ -429,6 +434,7 @@ class _MagnetizationMagnetics(_FieldBuilder):
             ]
 
         rotate_field = self._rotate_field
+        self._resolved_rotation_matrix = None
         if isinstance(rotate_field, str) and rotate_field == _AUTO_ROTATE_FIELD:
             # The auto swap exists because collinear spin has no real-space
             # direction; a non-collinear magnetization is genuinely
@@ -438,8 +444,12 @@ class _MagnetizationMagnetics(_FieldBuilder):
                     vector_potential
                 )
                 array = _apply_rotation_matrix(array, rotation_matrix)
+                self._resolved_rotation_matrix = rotation_matrix
         elif rotate_field:
             array = rotate_vector_field(array, rotate_field)
+            self._resolved_rotation_matrix = R.from_euler(
+                "xyz", rotate_field
+            ).as_matrix()
 
         slice_thicknesses = np.array(self.slice_thickness)
         slice_shape = (3,) + self._valid_gpts
@@ -851,11 +861,22 @@ class GPAWMagneticFields:
     magnetic components up to a repeated crystal's size, and
     `.combined_potential()` to fold the vector potential into an
     electrostatic potential via `adjust_coulomb_potential`.
+
+    `average_field` (B_avg, the uniform part of the field that a periodic
+    vector potential cannot represent -- see `calculate_constant_magnetic_field`)
+    is *not* recoverable from `magnetic_field`, since the latter is built
+    from the periodic vector potential and integrates to zero average by
+    construction. It is computed once from the calculator's magnetization
+    while `gpaw_magnetic_fields` still holds a reference to it, permuted by
+    the same `plane`-dependent axis order as the field arrays. Pass it as
+    `pauli_multislice`'s `average_field` argument; it is left untouched by
+    `.tile()` since it is a single global constant, not a per-slice field.
     """
 
     potential: PotentialArray
     vector_potential: VectorPotentialArray
     magnetic_field: Optional[MagneticFieldArray] = None
+    average_field: Optional[np.ndarray] = None
 
     def tile(
         self, repetitions: tuple[int, int] | tuple[int, int, int]
@@ -1046,6 +1067,12 @@ def gpaw_magnetic_fields(
     Returns
     -------
     GPAWMagneticFields
+        Its `average_field` (B_avg, the uniform field a periodic vector
+        potential cannot represent) is computed from `magnetic_calculator`'s
+        magnetization and permuted by the same `plane`-dependent axis order
+        as `vector_potential`/`magnetic_field`, so it stays consistent with
+        them under a non-default `plane`. Pass it to `pauli_multislice`'s
+        `average_field` argument.
     """
     if isinstance(calculators, (list, tuple)):
         if magnetic_calculator is None:
@@ -1083,16 +1110,13 @@ def gpaw_magnetic_fields(
     if not lazy:
         potential = potential.compute()
 
-    vector_potential = (
-        GPAWVectorPotential(
-            magnetic_calculator,
-            rotate_field=rotate_field,
-            **shared,
-            **field_kwargs,
-        )
-        .build()
-        .compute()
+    vector_potential_builder = GPAWVectorPotential(
+        magnetic_calculator,
+        rotate_field=rotate_field,
+        **shared,
+        **field_kwargs,
     )
+    vector_potential = vector_potential_builder.build().compute()
 
     magnetic_field = None
     if include_magnetic_field:
@@ -1107,8 +1131,22 @@ def gpaw_magnetic_fields(
             .compute()
         )
 
+    magnetization, _ = get_magnetization_from_gpaw(
+        magnetic_calculator, gridrefinement=field_kwargs.get("gridrefinement", 1)
+    )
+    average_field = calculate_constant_magnetic_field(magnetization)
+    # Keep the constant field consistent with the built arrays: the same
+    # plane-dependent component permutation, then the same rotation (if any)
+    # that `rotate_field` applied to the vector components.
+    average_field = average_field[list(plane_to_axes(plane))]
+    if vector_potential_builder._resolved_rotation_matrix is not None:
+        average_field = (
+            vector_potential_builder._resolved_rotation_matrix @ average_field
+        )
+
     return GPAWMagneticFields(
         potential=potential,
         vector_potential=vector_potential,
         magnetic_field=magnetic_field,
+        average_field=average_field,
     )

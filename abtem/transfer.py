@@ -710,6 +710,13 @@ class Vortex(BaseAperture):
         else:
             array = alpha < semiangle_cutoff
         array = array * np.exp(1j * phi * self.quantum_number)
+        if self.quantum_number != 0:
+            # The vortex phase is singular on the optical axis, where a true
+            # vortex beam has zero amplitude; the alpha = 0 grid point would
+            # otherwise get the arbitrary phase of arctan2(0, 0). Leaving it
+            # nonzero breaks the exact mirror relation between +l and -l
+            # beams that mirror-difference magnetic signals rely on.
+            array = array * (alpha > 0.0)
         return array
 
 

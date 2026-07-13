@@ -74,8 +74,11 @@ def spin_expectation(array):
     return np.array([sx, sy, sz])
 
 
-def test_to_spinor():
-    probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=20, gpts=64, extent=10)
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_to_spinor(device):
+    probe = abtem.Probe(
+        energy=ENERGY, semiangle_cutoff=20, gpts=64, extent=10, device=device
+    )
     waves = probe.build(lazy=False)
 
     spinor = waves.to_spinor((1, 1j))
@@ -120,7 +123,9 @@ def test_scalar_limit(device):
     )[0]
 
     n = potential.num_slices
-    A, B = zero_fields(n, potential.gpts[0], potential.extent[0], 1.35)
+    A, B = zero_fields(
+        n, potential.gpts[0], potential.extent[0], potential.slice_thickness
+    )
 
     out = pauli_multislice(
         waves.copy().to_spinor((0.6, 0.8j)),
@@ -171,7 +176,8 @@ def test_constant_field_spin_precession(device):
     assert np.allclose(s, [1, 0, 0], atol=1e-6)
 
 
-def test_average_field_precession():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_average_field_precession(device):
     """The uniform-field path (average_field -> A_np + constant Zeeman)
     reproduces the analytic precession for a realistic field strength."""
     gpts, extent = 32, 20.0
@@ -182,7 +188,7 @@ def test_average_field_precession():
     A, B = zero_fields(n_slices, gpts, extent, dz)
 
     spinor = (
-        abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent)
+        abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device=device)
         .build(lazy=False)
         .to_spinor((1, 0))
     )
@@ -274,11 +280,13 @@ def test_collinear_matches_adjusted_potential():
     smooth = rng.standard_normal((n, 4, 4))
     from abtem.core.fft import fft_interpolate
 
-    A_array[:, 2] = fft_interpolate(smooth, (n, gpts, gpts)) * 5.0 * dz
+    # use the potential's actual (depth-adjusted) slice thicknesses
+    dzs = np.array(potential.slice_thickness)
+    A_array[:, 2] = fft_interpolate(smooth, (n, gpts, gpts)) * 5.0 * dzs[:, None, None]
     A = VectorPotentialArray(
-        A_array, extent=(extent, extent), slice_thickness=dz
+        A_array, extent=(extent, extent), slice_thickness=potential.slice_thickness
     )
-    _, B = zero_fields(n, gpts, extent, dz)
+    _, B = zero_fields(n, gpts, extent, potential.slice_thickness)
 
     probe = abtem.Probe(energy=ENERGY, semiangle_cutoff=25)
     probe.grid.match(potential)
@@ -304,7 +312,8 @@ def test_collinear_matches_adjusted_potential():
     assert np.abs(out_array[1]).max() / scale < 1e-14
 
 
-def test_lazy_matches_eager():
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_lazy_matches_eager(device):
     """The lazy dask path (spin axis pinned to one chunk) is identical to the
     eager path, including genuine spin mixing."""
     gpts, extent, n, dz = 32, 20.0, 10, 2.0
@@ -324,7 +333,7 @@ def test_lazy_matches_eager():
         extent=(extent, extent),
     )
 
-    pw = abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent)
+    pw = abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device=device)
 
     eager = pauli_multislice(
         pw.build(lazy=False).to_spinor((1, 0)),
@@ -342,6 +351,274 @@ def test_lazy_matches_eager():
     assert np.abs(to_numpy(eager.array) - to_numpy(lazy.array)).max() < 1e-12
     # the off-diagonal Zeeman terms populated the spin-down channel
     assert np.abs(to_numpy(eager.array[1])).max() > 1e-4
+
+
+def test_vortex_probe_spinor():
+    """A Probe with the built-in Vortex aperture composes with to_spinor and
+    the Pauli solver: scanned batches work, the lazy path matches eager
+    bit-exactly, and the beam equals the hand-built vortex construction
+    (hard aperture disk times exp(il*phi) in reciprocal space)."""
+    from abtem.scan import GridScan
+    from abtem.transfer import Vortex
+
+    gpts, extent, n, dz = 32, 20.0, 4, 2.0
+    l = 2
+    semiangle_cutoff = 25.0
+
+    potential = abtem.PotentialArray(
+        np.random.RandomState(0).rand(n, gpts, gpts) * 5,
+        slice_thickness=dz,
+        extent=(extent, extent),
+    )
+    A = VectorPotentialArray(
+        np.random.RandomState(1).randn(n, 3, gpts, gpts) * 0.3,
+        slice_thickness=dz,
+        extent=(extent, extent),
+    )
+    B = MagneticFieldArray(
+        np.random.RandomState(2).randn(n, 3, gpts, gpts) * 3000,
+        slice_thickness=dz,
+        extent=(extent, extent),
+    )
+
+    probe = abtem.Probe(
+        aperture=Vortex(quantum_number=l, semiangle_cutoff=semiangle_cutoff),
+        energy=ENERGY,
+        extent=extent,
+        gpts=gpts,
+    )
+
+    # the built-in Vortex equals the hand-built construction
+    built = to_numpy(probe.build(lazy=False).array)
+    base = to_numpy(
+        abtem.Probe(
+            semiangle_cutoff=semiangle_cutoff,
+            energy=ENERGY,
+            extent=extent,
+            gpts=gpts,
+            soft=False,
+        )
+        .build(lazy=False)
+        .array
+    )
+    wavelength = energy2wavelength(ENERGY)
+    k = np.fft.fftfreq(gpts, d=extent / gpts)
+    KX, KY = np.meshgrid(k, k, indexing="ij")
+    mask = np.where(
+        np.hypot(KX, KY) <= semiangle_cutoff * 1e-3 / wavelength,
+        np.exp(1j * l * np.arctan2(KY, KX)),
+        0.0,
+    )
+    mask[0, 0] = 0.0  # the vortex phase singularity carries no amplitude
+    reference = np.fft.ifft2(np.fft.fft2(base) * mask)
+    overlap = np.abs(np.vdot(built, reference)) / (
+        np.linalg.norm(built) * np.linalg.norm(reference)
+    )
+    assert abs(overlap - 1) < 1e-12
+
+    # the on-axis bin is zero, so +l and -l probes at mirrored positions are
+    # exact mirror images -- required for mirror-difference magnetic signals
+    assert np.abs(np.fft.fft2(to_numpy(built))[..., 0, 0]).max() < 1e-12
+    p, Mp = (7.0, 11.0), (11.0, 7.0)
+    bp = to_numpy(probe.build(scan=[list(p)], lazy=False).array)
+    probe_m = abtem.Probe(
+        aperture=Vortex(quantum_number=-l, semiangle_cutoff=semiangle_cutoff),
+        energy=ENERGY,
+        extent=extent,
+        gpts=gpts,
+    )
+    bm = to_numpy(probe_m.build(scan=[list(Mp)], lazy=False).array)
+    constant = np.vdot(bp.T, bm) / np.vdot(bp.T, bp.T)
+    assert np.abs(bm - constant * bp.T).max() / np.abs(bm).max() < 1e-12
+
+    # scanned spinor batch through the Pauli solver, lazy matches eager
+    scan = GridScan(start=(5, 5), end=(10, 10), gpts=(2, 2), endpoint=False)
+    eager = pauli_multislice(
+        probe.build(scan=scan, lazy=False).to_spinor((1, 0)),
+        potential,
+        vector_potential=A,
+        magnetic_field=B,
+    )
+    lazy = pauli_multislice(
+        probe.build(scan=scan, lazy=True).to_spinor((1, 0)),
+        potential,
+        vector_potential=A,
+        magnetic_field=B,
+    ).compute()
+
+    assert eager.shape == (2, 2, 2, gpts, gpts)
+    assert np.abs(to_numpy(eager.array) - to_numpy(lazy.array)).max() < 1e-12
+    # the off-diagonal Zeeman terms populated the spin-down channel
+    assert np.abs(to_numpy(eager.array)[1]).max() > 0
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_average_field_zeeman_without_periodic_field(device):
+    """average_field applies its constant Zeeman term also when no periodic
+    magnetic_field is given (only the periodic Zeeman part is omitted)."""
+    gpts, extent = 32, 20.0
+    n_slices, dz = 50, 10.0
+    B0 = 2.0  # T
+
+    potential = vacuum_potential(n_slices, gpts, extent, dz)
+    A, _ = zero_fields(n_slices, gpts, extent, dz)
+
+    spinor = (
+        abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device=device)
+        .build(lazy=False)
+        .to_spinor((1, 0))
+    )
+
+    with pytest.warns(UserWarning, match="magnetic_field"):
+        out = pauli_multislice(
+            spinor, potential, vector_potential=A, average_field=(B0, 0, 0)
+        )
+
+    wavelength = energy2wavelength(ENERGY)
+    theta = e_over_hbar * B0 * wavelength / (2 * np.pi) * (n_slices * dz)
+
+    s = spin_expectation(to_numpy(out.array))
+    assert abs(s[1] + theta) < 1e-7
+
+
+def test_fields_bundle_defaults():
+    """pauli_multislice(fields=...) picks up the potential, both field
+    arrays and average_field from the bundle, matching the explicit call;
+    an explicit zero average_field suppresses the bundle's uniform field."""
+    from abtem.magnetism.gpaw import GPAWMagneticFields
+
+    gpts, extent, n, dz = 32, 20.0, 10, 2.0
+    potential = abtem.PotentialArray(
+        np.random.RandomState(0).rand(n, gpts, gpts) * 10,
+        slice_thickness=dz,
+        extent=(extent, extent),
+    )
+    A = VectorPotentialArray(
+        np.random.RandomState(1).randn(n, 3, gpts, gpts) * 0.5,
+        slice_thickness=dz,
+        extent=(extent, extent),
+    )
+    B = MagneticFieldArray(
+        np.random.RandomState(2).randn(n, 3, gpts, gpts) * 5000,
+        slice_thickness=dz,
+        extent=(extent, extent),
+    )
+    average_field = np.array([2.0, 1.0, 0.5])
+
+    fields = GPAWMagneticFields(
+        potential=potential,
+        vector_potential=A,
+        magnetic_field=B,
+        average_field=average_field,
+    )
+
+    spinor = (
+        abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent)
+        .build(lazy=False)
+        .to_spinor((1, 0))
+    )
+
+    out_bundle = pauli_multislice(spinor.copy(), fields=fields)
+    out_explicit = pauli_multislice(
+        spinor.copy(),
+        potential,
+        vector_potential=A,
+        magnetic_field=B,
+        average_field=average_field,
+    )
+    assert np.array_equal(to_numpy(out_bundle.array), to_numpy(out_explicit.array))
+
+    out_zero = pauli_multislice(spinor.copy(), fields=fields, average_field=(0, 0, 0))
+    out_none = pauli_multislice(
+        spinor.copy(), potential, vector_potential=A, magnetic_field=B
+    )
+    assert np.array_equal(to_numpy(out_zero.array), to_numpy(out_none.array))
+
+
+def test_mismatched_slice_thickness_raises():
+    """Equal slice counts but different slice thicknesses would silently
+    mis-scale the field rates, so they must be rejected."""
+    gpts, extent, n = 16, 10.0, 4
+    potential = vacuum_potential(n, gpts, extent, 1.0)
+    A, B = zero_fields(n, gpts, extent, 2.0)
+
+    spinor = (
+        abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent)
+        .build(lazy=False)
+        .to_spinor((1, 0))
+    )
+
+    with pytest.raises(ValueError, match="slice thickness"):
+        pauli_multislice(spinor, potential, vector_potential=A, magnetic_field=B)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_rectangular_grid(device):
+    """Spin precession on a rectangular grid with unequal samplings,
+    exercising the non-square handling of the stencils, fields and extent."""
+    gpts, extent = (24, 40), (12.0, 30.0)
+    n_slices, dz = 20, 10.0
+    B0 = 2e4
+
+    potential = abtem.PotentialArray(
+        np.zeros((n_slices,) + gpts), slice_thickness=dz, extent=extent
+    )
+    A = VectorPotentialArray(
+        np.zeros((n_slices, 3) + gpts), slice_thickness=dz, extent=extent
+    )
+    B_array = np.zeros((n_slices, 3) + gpts)
+    B_array[:, 0] = B0 * dz
+    B = MagneticFieldArray(B_array, slice_thickness=dz, extent=extent)
+
+    spinor = (
+        abtem.PlaneWave(energy=ENERGY, gpts=gpts, extent=extent, device=device)
+        .build(lazy=False)
+        .to_spinor((1, 0))
+    )
+    out = pauli_multislice(spinor, potential, vector_potential=A, magnetic_field=B)
+
+    wavelength = energy2wavelength(ENERGY)
+    theta = e_over_hbar * B0 * wavelength / (2 * np.pi) * (n_slices * dz)
+    s = spin_expectation(to_numpy(out.array))
+    assert np.allclose(s, [0.0, -np.sin(theta), np.cos(theta)], atol=1e-6)
+
+
+def test_auto_rotation_recorded():
+    """The rotation that rotate_field applies to the vector components is
+    recorded on the builder, so gpaw_magnetic_fields can transform the
+    separately computed average_field consistently."""
+    from abtem.magnetism.gpaw import (
+        _ROTATION_Y_INTO_Z,
+        MagnetizationVectorPotential,
+    )
+
+    n = 16
+    cell = np.diag([8.0, 8.0, 8.0])
+    x = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    # collinear spin density varying along x: A = curl solve gives A_y only,
+    # so the auto rotation must pick the y-into-z swap
+    spin_density = np.broadcast_to(
+        (1.0 + 0.5 * np.cos(x))[:, None, None], (n, n, n)
+    ).copy()
+
+    builder = MagnetizationVectorPotential(
+        spin_density, cell, gpts=n, slice_thickness=0.5, rotate_field="auto"
+    )
+    built = builder.build()
+
+    assert builder._resolved_rotation_matrix is not None
+    assert np.allclose(builder._resolved_rotation_matrix, _ROTATION_Y_INTO_Z)
+
+    # the built A indeed carries its magnetic component along z
+    array = np.asarray(built.array)
+    assert np.abs(array[:, 2]).max() > 10 * np.abs(array[:, :2]).max()
+
+    # without rotation nothing is recorded
+    builder_none = MagnetizationVectorPotential(
+        spin_density, cell, gpts=n, slice_thickness=0.5, rotate_field=None
+    )
+    builder_none.build()
+    assert builder_none._resolved_rotation_matrix is None
 
 
 def test_iam_noncollinear_smoke():
@@ -384,7 +661,7 @@ def test_iam_noncollinear_smoke():
 
     # removing the moments removes the magnetic signal
     A_zero, B_zero = zero_fields(
-        potential.num_slices, gpts, potential.extent[0], dz
+        potential.num_slices, gpts, potential.extent[0], potential.slice_thickness
     )
     out_zero = pauli_multislice(
         spinor.copy(), potential, vector_potential=A_zero, magnetic_field=B_zero
