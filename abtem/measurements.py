@@ -5318,44 +5318,29 @@ def phonon_loss_diffraction_patterns(
             "Pass the Waves object directly, not DiffractionPatterns."
         )
 
-    # --- select component (validated up front, before any computation) ---
-    valid_components = ("tds", "coherent", "incoherent", "all")
-    if component not in valid_components:
-        raise ValueError(f"component must be one of {valid_components}")
-
     # --- number of frozen-phonon configurations ---
     N = exit_waves.shape[fp_axis_idx]
 
     dp_kwargs = dict(max_angle=max_angle, parity=parity, fftshift=True)
 
-    # Only compute the branches actually needed for the requested component.
-    # The incoherent branch requires a diffraction pattern per frozen-phonon
-    # configuration (N FFTs) and dominates cost, so skipping it for
-    # component="coherent" matters a lot in practice.
-    need_coherent = component in ("coherent", "tds", "all")
-    need_incoherent = component in ("incoherent", "tds", "all")
+    # Coherent: sum complex exit waves first, then compute diffraction pattern
+    #   I_coh = |FT(Σ_j psi_j)|² / N²
+    coherent_waves = exit_waves.sum(axis=fp_axis_idx)
+    dp_coherent = coherent_waves.diffraction_patterns(**dp_kwargs)
+    I_coherent = dp_coherent.array / N**2
 
-    dp_reference = None
+    # Incoherent: compute diffraction patterns first, then sum intensities
+    #   I_inc = Σ_j |FT(psi_j)|² / N
+    dp_all = exit_waves.diffraction_patterns(**dp_kwargs)
+    I_incoherent = dp_all.array.sum(axis=fp_axis_idx) / N
 
-    if need_coherent:
-        # Coherent: sum complex exit waves first, then compute diffraction pattern
-        #   I_coh = |FT(Σ_j psi_j)|² / N²
-        coherent_waves = exit_waves.sum(axis=fp_axis_idx)
-        dp_coherent = coherent_waves.diffraction_patterns(**dp_kwargs)
-        I_coherent = dp_coherent.array / N**2
-        dp_reference = dp_coherent
+    # TDS = incoherent - coherent
+    I_tds = I_incoherent - I_coherent
 
-    if need_incoherent:
-        # Incoherent: compute diffraction patterns first, then sum intensities
-        #   I_inc = Σ_j |FT(psi_j)|² / N
-        dp_all = exit_waves.diffraction_patterns(**dp_kwargs)
-        I_incoherent = dp_all.array.sum(axis=fp_axis_idx) / N
-        if dp_reference is None:
-            dp_reference = dp_all
-
-    if component in ("tds", "all"):
-        # TDS = incoherent - coherent
-        I_tds = I_incoherent - I_coherent
+    # --- select component ---
+    valid_components = ("tds", "coherent", "incoherent", "all")
+    if component not in valid_components:
+        raise ValueError(f"component must be one of {valid_components}")
 
     remaining_axes = [
         ax
@@ -5378,13 +5363,13 @@ def phonon_loss_diffraction_patterns(
     else:
         result_array = I_incoherent
 
-    metadata = dict(dp_reference.metadata)
+    metadata = dict(dp_coherent.metadata)
     metadata["phonon_loss_component"] = component
 
     result = DiffractionPatterns(
         result_array,
-        sampling=dp_reference.sampling,
-        fftshift=dp_reference.fftshift,
+        sampling=dp_coherent.sampling,
+        fftshift=dp_coherent.fftshift,
         ensemble_axes_metadata=remaining_axes or None,
         metadata=metadata,
     )
