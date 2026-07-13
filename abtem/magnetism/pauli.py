@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from typing import Callable
 
 import numba  # type: ignore
@@ -28,6 +29,7 @@ first_derivative_fd_coefficients = {
 }
 
 
+@lru_cache(maxsize=None)
 def _a_dot_gradient_stencil(
     accuracy: int,
     sampling: tuple[float, float],
@@ -35,12 +37,27 @@ def _a_dot_gradient_stencil(
     device: str = "cpu",
 ) -> Callable:
     """
-    Build a fused stencil function computing A_x * d/dx + A_y * d/dy of a
-    wave-function array with periodic (wrap) boundaries.
+    Build (and cache) a fused stencil function computing
+    A_x * d/dx + A_y * d/dy of a wave-function array with periodic (wrap)
+    boundaries.
 
-    The returned function takes (waves, A_x, A_y) where waves has shape
-    (..., nx, ny) — axis -2 is x and axis -1 is y, following the abTEM
-    array convention — and A_x, A_y have shape (nx, ny).
+    The returned function takes (waves, A_x_padded, A_y_padded) where waves
+    has shape (..., nx, ny) — axis -2 is x and axis -1 is y, following the
+    abTEM array convention — and A_x_padded, A_y_padded are A_x, A_y
+    pre-padded with the same wrap boundary via the returned function's
+    `.pad_field` attribute.
+
+    A_x and A_y are constant across all Taylor-series terms of a slice's
+    exponential (only the wave function changes between terms), so the
+    caller pads them once per slice with `.pad_field` and reuses the result,
+    rather than re-padding on every term.
+
+    Cached on (accuracy, sampling, dtype, device): a fresh `@njit` closure
+    forces numba to recompile from scratch even when functionally identical
+    to one already compiled, and `ADotGradientOperator` is instantiated
+    anew inside every `pauli_multislice_and_detect` call -- once per lazy
+    dask chunk on the scanned path -- so without this cache, every chunk
+    would pay a full JIT compile (order of a second) independently.
     """
     if accuracy not in first_derivative_fd_coefficients:
         raise ValueError(
@@ -59,8 +76,7 @@ def _a_dot_gradient_stencil(
     @njit(parallel=True, fastmath=True)
     def _stencil_cpu_batch(a, Ax, Ay):
         M, H, W = a.shape
-        out = a.copy()
-        out[:] = 0
+        out = np.zeros_like(a)
         for m in prange(M):
             for i in range(n, H - n):
                 for j in range(n, W - n):
@@ -103,7 +119,13 @@ def _a_dot_gradient_stencil(
 
         return out
 
-    def _stencil(a, Ax, Ay):
+    def pad_field(A):
+        """Pad a static A_x/A_y field with the stencil's wrap boundary.
+        Call once per slice and reuse across all Taylor-series terms."""
+        xp = get_array_module(A)
+        return xp.pad(xp.asarray(A), padding, mode="wrap")
+
+    def _stencil(a, Ax_padded, Ay_padded):
         xp = get_array_module(a)
 
         original_shape = a.shape
@@ -111,8 +133,6 @@ def _a_dot_gradient_stencil(
 
         pad_width = [(0, 0), (padding,) * 2, (padding,) * 2]
         a = xp.pad(a, pad_width=pad_width, mode="wrap")
-        Ax_padded = xp.pad(xp.asarray(Ax), padding, mode="wrap")
-        Ay_padded = xp.pad(xp.asarray(Ay), padding, mode="wrap")
 
         if device == "cpu":
             result = _stencil_cpu_batch(a, Ax_padded, Ay_padded)
@@ -123,6 +143,9 @@ def _a_dot_gradient_stencil(
 
         result = result[:, padding:-padding, padding:-padding]
         return result.reshape(original_shape)
+
+    _stencil.pad_field = pad_field
+    _stencil.padding = padding
 
     return _stencil
 

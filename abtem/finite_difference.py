@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
@@ -190,9 +191,22 @@ def _laplace_stencil_array(accuracy):
     return stencil
 
 
+@lru_cache(maxsize=None)
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=np.complex64, device: str = "cpu"
 ):
+    """
+    Build (and cache) the compiled Laplace stencil function.
+
+    Numba recompiles a `@njit` closure from scratch whenever it sees a new
+    Python function object, even if two closures are functionally
+    identical -- so without this cache, every fresh `LaplaceOperator`
+    instance (e.g. one built per `pauli_multislice`/`multislice_and_detect`
+    call, or once per dask chunk on the lazy path) pays a full JIT compile
+    (order of a second) even when an identical stencil was already compiled
+    moments ago. Caching here, keyed on the actual numerical parameters,
+    lets independent `LaplaceOperator` instances share one compiled kernel.
+    """
     c = finite_difference_coefficients(2, accuracy)
     c = c * prefactor
     c = c.astype(dtype)
@@ -322,10 +336,10 @@ class LaplaceOperator:
         self._stencil = None
 
     def _get_new_stencil(self, key, device: str = "cpu"):
-        wavelength, sampling = key
+        wavelength, sampling, dtype = key
         prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
-            self._accuracy, prefactor, mode="wrap", device=device
+            self._accuracy, prefactor, mode="wrap", dtype=dtype, device=device
         )
 
     def get_stencil(self, waves: Waves, device: str = "cpu") -> Callable:
@@ -348,12 +362,14 @@ class LaplaceOperator:
         key = (
             waves.wavelength,
             waves.sampling,
+            waves.array.dtype.type,
+            device,
         )
 
         if key == self._key:
             return self._stencil
 
-        self._stencil = self._get_new_stencil(key, device=device)
+        self._stencil = self._get_new_stencil(key[:3], device=device)
         self._key = key
         return self._stencil
 
