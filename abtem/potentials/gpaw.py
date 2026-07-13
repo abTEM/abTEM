@@ -32,7 +32,7 @@ from abtem.inelastic.phonons import (
     FrozenPhonons,
     _safe_read_atoms,
 )
-from abtem.parametrizations import EwaldParametrization, LobatoParametrization
+from abtem.parametrizations import LobatoParametrization
 from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
@@ -405,74 +405,6 @@ class GPAWPotential(_PotentialBuilder):
     def calculators(self):
         return self._calculators
 
-    def _get_all_electron_density(self):
-        calculator = (
-            self.calculators[0]
-            if isinstance(self.calculators, list)
-            else self.calculators
-        )
-
-        try:
-            calculator = calculator.compute()
-        except AttributeError:
-            pass
-
-        # assert len(self.calculators) == 1
-
-        calculator = _DummyGPAW.from_generic(calculator)
-
-        atoms = self.frozen_phonons.atoms
-
-        if self.repetitions != (1, 1, 1):
-            cell_cv = calculator.gd.cell_cv * self.repetitions
-            N_c = tuple(
-                n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
-            )
-            gd = calculator.gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
-            atoms = atoms * self.repetitions
-            nt_sG = np.tile(calculator.nt_sG, self.repetitions)
-        else:
-            gd = calculator.gd
-            nt_sG = calculator.nt_sG
-
-        random_atoms = self.frozen_phonons.randomize(atoms)
-
-        calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
-        calc.initialize(random_atoms)
-
-        return self._get_all_electron_density(
-            nt_sG=nt_sG,
-            gd=gd,
-            D_asp=calculator.D_asp,
-            setups=calc.setups,
-            gridrefinement=self.gridrefinement,
-            atoms=random_atoms,
-        )
-
-    def _get_ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(width=3)
-
-        atoms = self.frozen_phonons.atoms * self.repetitions
-
-        atoms = self.frozen_phonons.randomize(atoms)
-
-        ewald_potential = Potential(
-            atoms=atoms,
-            gpts=self.gpts,
-            sampling=self.sampling,
-            parametrization=ewald_parametrization,
-            slice_thickness=self.slice_thickness,
-            projection="finite",
-            # integral_method="quadrature",
-            plane=self.plane,
-            box=self.box,
-            origin=self.origin,
-            exit_planes=self.exit_planes,
-            device=self.device,
-        )
-
-        return ewald_potential
-
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
         """
         Generate the slices for the potential.
@@ -656,15 +588,6 @@ class GPAWPotential(_PotentialBuilder):
 
         return (array,)
 
-        # return (array,)
-        # # if lazy:
-
-        # #     print(array)
-
-        # #     return (da.concatenate(list(array)),)
-        # # else:
-        # #     return (array,)
-
 
 class GPAWParametrization:
     """
@@ -799,35 +722,3 @@ class GPAWParametrization:
 
     def scattering_factor(self, symbol, charge: float = 0.0):
         return self._to_lobato(symbol, charge).scattering_factor(symbol, charge)
-
-    # def potential(self, symbol: str, charge: float = 0.0):
-    #     return interp1d(k, fe, fill_value=(fe0, 0.), bounds_error=False)
-    # def potential(self, symbol: str, charge: float = 0.0):
-    #     """
-    #     Calculate the radial electrostatic potential for an atom.
-    #
-    #     Parameters
-    #     ----------
-    #     symbol : str
-    #         Chemical symbol of the atomic element.
-    #     charge : float, optional
-    #         Charge the atom by the given fractional number of electrons.
-    #
-    #     Returns
-    #     -------
-    #     potential : callable
-    #         Function of the radial electrostatic potential with parameter 'r'
-    # corresponding to the radial distance from the core.
-    #     """
-    #
-    #     ae = self._get_all_electron_atom(symbol, charge)
-    #     r = ae.rgd.r_g * units.Bohr
-    #
-    #     ve = -ae.rgd.poisson(ae.n_sg.sum(0))
-    #     ve = interp1d(r, ve, fill_value="extrapolate", bounds_error=False)
-    #
-    #     vr = (
-    #         lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0)
-    #         + ve(r) / r * units.Hartree * units.Bohr
-    #     )
-    #     return vr
