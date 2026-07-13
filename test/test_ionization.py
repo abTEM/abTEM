@@ -11,6 +11,8 @@ with CuPy installed the GPU code paths in ``fast_roll`` /
 ``gpu`` is a ``pytest.param`` defined in ``test/utils.py`` that skips when
 CuPy isn't present.
 """
+import sys
+
 import ase
 import numpy as np
 import pytest
@@ -24,6 +26,11 @@ try:
     import cupy as cp
 except ImportError:
     cp = None
+
+try:
+    import gpaw  # noqa: F401
+except ImportError:
+    pass
 
 from utils import gpu  # noqa: E402  -- pytest.param('gpu', skipif no cupy)
 
@@ -347,5 +354,48 @@ def test_transition_potential_crystal_dedup_collapses_slice_cache():
         f"got {len(unique)} — CrystalPotential.generate_slices tile cache may "
         "have regressed"
     )
+
+
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+def test_subshell_transitions_real_gpaw_pipeline():
+    """End-to-end regression test using GPAW's real atomic all-electron
+    solvers (``gpaw.atom.all_electron.AllElectron`` and
+    ``gpaw.atom.aeatom.AllElectronAtom``, wired up through
+    ``SubshellTransitions``), instead of the synthetic
+    ``TransitionPotentialArray`` the other tests in this module use to
+    exercise the scan machinery without depending on GPAW.
+
+    This is a different GPAW entry point than the periodic crystal
+    calculator used by ``GPAWPotential`` (see ``abtem/potentials/gpaw.py``
+    and ``test/test_gpaw.py``), so a GPAW upgrade breaking one gives no
+    guarantee about the other -- this needs its own coverage.
+    """
+    from abtem.inelastic.core_loss import SubshellTransitions
+
+    atoms = ase.build.bulk("Si", cubic=True)
+    potential = abtem.Potential(atoms, gpts=32, slice_thickness=2.7)
+
+    transitions = SubshellTransitions(Z=14, n=2, l=1, order=1, epsilon=1.0, xc="PBE")
+    assert len(transitions) > 0
+
+    transition_potentials = transitions.get_transition_potentials(
+        extent=potential.extent, gpts=potential.gpts, energy=100e3
+    )
+    assert len(transition_potentials) == len(transitions)
+
+    probe = abtem.Probe(energy=100e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+
+    detector = abtem.AnnularDetector(inner=0, outer=40)
+    result = probe.transition_potential_scan(
+        potential=potential,
+        transition_potentials=transition_potentials,
+        scan=(0, 0),
+        detectors=detector,
+        lazy=False,
+    )
+    array = np.asarray(result.array)
+    assert np.isfinite(array).all()
+    assert np.any(array != 0)
 
 
