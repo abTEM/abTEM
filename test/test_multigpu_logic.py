@@ -206,3 +206,36 @@ def test_explicit_scheduler_skips_cluster(monkeypatch):
         _build_lazy_gpu().compute(progress_bar=False, scheduler="synchronous")
     assert started == []  # user asked for a scheduler -> no cluster spun up
     assert captured.get("scheduler") == "synchronous"
+
+
+# --------------------------------------------------------------------------
+# _gpu_scheduler_guard  (nested-compute guard, reconciled with #269's to_zarr)
+# --------------------------------------------------------------------------
+
+
+def test_gpu_scheduler_guard_cpu_no_override():
+    import dask
+
+    before = dask.config.get("scheduler", None)
+    with abtem.array._gpu_scheduler_guard(False):
+        assert dask.config.get("scheduler", None) == before  # untouched on CPU
+
+
+def test_gpu_scheduler_guard_no_client_forces_synchronous(monkeypatch):
+    import dask
+    import distributed
+
+    monkeypatch.setattr(distributed, "get_client", _no_client)
+    with abtem.array._gpu_scheduler_guard(True):
+        assert dask.config.get("scheduler", None) == "synchronous"
+
+
+def test_gpu_scheduler_guard_cuda_client_not_forced(monkeypatch):
+    import dask
+    import distributed
+
+    monkeypatch.setattr(distributed, "get_client", lambda *a, **k: mock.Mock(status="running"))
+    monkeypatch.setattr(abtem.array, "is_gpu_dask_client", lambda c: True)
+    with abtem.array._gpu_scheduler_guard(True):
+        # a suitable dask-cuda client is left to distribute; not forced synchronous
+        assert dask.config.get("scheduler", None) != "synchronous"

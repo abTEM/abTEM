@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import json
 import warnings
@@ -421,24 +420,20 @@ class ComputableList(list):
         if not compute:
             return delayed_write
 
-        # Use synchronous scheduler on GPU to avoid multiple dask tasks
-        # running in parallel, each loading potential chunks + wave arrays
-        # into VRAM simultaneously. We must use dask.config.set() rather
-        # than just passing scheduler= to dask.compute(), because the
-        # delayed graph contains inner array.compute() calls that would
-        # otherwise use dask's default threaded scheduler.
+        # On GPU, force the synchronous scheduler to avoid multiple dask tasks
+        # running in parallel, each loading potential chunks + wave arrays into
+        # VRAM simultaneously. We must use dask.config.set() (via the guard) rather
+        # than just passing scheduler= to dask.compute(), because the delayed graph
+        # contains inner array.compute() calls that would otherwise use dask's
+        # default threaded scheduler. The guard makes an exception for an active
+        # single-threaded dask-cuda client, which already runs one task per GPU.
         is_gpu = config.get("device") == "gpu" or any(
             _is_gpu_array_object(obj) for obj in self
         )
         if is_gpu:
             check_cupy_is_installed()
 
-        scheduler_ctx = (
-            dask.config.set(scheduler="synchronous") if is_gpu
-            else contextlib.nullcontext()
-        )
-
-        with scheduler_ctx, _compute_context(
+        with _gpu_scheduler_guard(is_gpu), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
             output = dask.compute(delayed_write, **kwargs)[0]
@@ -520,6 +515,35 @@ def _is_gpu_array_object(obj) -> bool:
     was GPU), so this correctly handles the to_cpu=True case.
     """
     return hasattr(obj, "device") and obj.device == "gpu"
+
+
+@contextmanager
+def _gpu_scheduler_guard(is_gpu: bool):
+    """Guard nested/implicit GPU computes against the threaded scheduler.
+
+    On GPU, force the synchronous scheduler so that nested ``array.compute()``
+    calls cannot fall back to dask's default threaded scheduler and load multiple
+    potential/wave chunks into a single GPU's memory at once. When a single-
+    threaded dask-cuda client is active (one worker pinned per GPU), that per-GPU
+    exclusivity already holds inside each worker, so the work is left to the
+    client to distribute across the cluster instead of being forced synchronous.
+    """
+    if not is_gpu:
+        yield
+        return
+
+    from distributed import get_client
+
+    try:
+        client = get_client()
+    except ValueError:
+        client = None
+
+    if is_gpu_dask_client(client):
+        yield
+    else:
+        with dask.config.set(scheduler="synchronous"):
+            yield
 
 
 def _compute(
