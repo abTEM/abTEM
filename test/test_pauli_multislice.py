@@ -102,6 +102,52 @@ def test_to_spinor(device):
     assert lazy.array.chunks[0] == (2,)
 
 
+def test_to_spinor_does_not_double_block_size():
+    """build(scan=..., lazy=True) picks dask chunk sizes from max_batch="auto"
+    before any spin axis exists. Pinning the new spin axis to a single chunk
+    of 2 (needed since the solver mixes the two components) then doubles the
+    byte size of every existing block unless the other ensemble axes are
+    re-chunked to compensate -- a real source of GPU OOM inside
+    pauli_multislice's per-slice FFTs, since the auto-chunking decision had
+    no way to know spin was coming. to_spinor() must re-derive the ensemble
+    chunking to land back near the pre-spinor block size, not silently
+    inherit it unchanged."""
+    from abtem.scan import GridScan
+
+    probe = abtem.Probe(
+        energy=ENERGY, semiangle_cutoff=20, gpts=256, extent=10, device="cpu"
+    )
+    scan = GridScan(start=(0, 0), end=(5, 5), gpts=(16, 16), endpoint=True)
+    waves = probe.build(scan=scan, lazy=True, max_batch=4 * 256 * 256)
+
+    pre_elements = np.prod(waves.array.chunksize)
+    spinor = waves.to_spinor((1, 0))
+    post_elements = np.prod(spinor.array.chunksize)
+
+    assert spinor.array.chunks[0] == (2,)
+    # allow some slack for indivisibility, but this must land close to 1x,
+    # never anywhere near the unmitigated 2x
+    assert post_elements <= 1.5 * pre_elements
+
+
+def test_to_spinor_single_position_does_not_raise():
+    """Edge case for the same fix: if the ensemble chunking is already at
+    the minimum (one scan position per block, nothing left to shrink),
+    to_spinor() must fall back to the smallest achievable chunking rather
+    than raising (validate_chunks previously errored here, since the
+    inferred budget became unsatisfiable once spin was pinned to 2)."""
+    from abtem.scan import GridScan
+
+    probe = abtem.Probe(
+        energy=ENERGY, semiangle_cutoff=20, gpts=256, extent=10, device="cpu"
+    )
+    scan = GridScan(start=(0, 0), end=(5, 5), gpts=(1, 1), endpoint=True)
+    waves = probe.build(scan=scan, lazy=True)
+
+    spinor = waves.to_spinor((1, 0))
+    assert spinor.array.chunks[0] == (2,)
+
+
 def test_requires_spin_axis():
     gpts, extent, n, dz = 16, 10.0, 2, 1.0
     potential = vacuum_potential(n, gpts, extent, dz)

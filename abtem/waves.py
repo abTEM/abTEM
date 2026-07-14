@@ -657,7 +657,41 @@ class Waves(BaseWaves, ArrayObject):
         if waves.is_lazy:
             # The Pauli solver mixes the two spin components inside each
             # dask block, so the spin axis must never be split into chunks.
-            waves = waves.rechunk(((2,),) + waves._lazy_array.chunks[1:])
+            # Forcing it into one chunk of size 2 doubles the byte size of
+            # every existing chunk -- the chunking along the OTHER axes was
+            # decided by build()'s max_batch="auto" before this spin axis
+            # existed, so it has no way to account for that doubling.
+            # Left uncorrected, blocks can end up to 2x the intended
+            # dask.chunk-size(-gpu) budget, which is a real source of GPU
+            # OOM inside pauli_multislice's per-slice FFTs. Re-derive the
+            # other axes' chunk sizes with validate_chunks, targeting the
+            # same byte budget the pre-spinor chunking already respected
+            # (inferred from its own largest block), with the spin axis
+            # pinned at (2,) and everything else auto again.
+            old_chunks = self._lazy_array.chunks
+            old_block_elements = int(np.prod([max(c) for c in old_chunks]))
+            # only the ensemble axes (scan positions etc., now including the
+            # new spin axis) may be auto-shrunk; the base/pixel-grid axes
+            # must stay whole, matching how _build_validated chunks them
+            # in the first place (self._default_ensemble_chunks + self._valid_gpts)
+            n_ensemble = len(waves.ensemble_shape)
+            chunks_spec = (
+                (2,) + ("auto",) * (n_ensemble - 1) + waves.base_shape
+            )
+            # if the pre-spinor ensemble chunks were already at the minimum
+            # (size 1, e.g. a single scan position), there is nothing left
+            # to shrink to absorb the spin axis's 2x -- fall back to the
+            # smallest achievable block size instead of erroring.
+            min_block_elements = 2 * int(np.prod(waves.base_shape))
+            max_elements = max(old_block_elements, min_block_elements)
+            valid_chunks = validate_chunks(
+                shape=waves.shape,
+                chunks=chunks_spec,
+                max_elements=max_elements,
+                dtype=waves.dtype,
+                device=waves.device,
+            )
+            waves = waves.rechunk(valid_chunks)
 
         return waves
 
