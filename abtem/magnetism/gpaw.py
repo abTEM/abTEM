@@ -9,6 +9,7 @@ from scipy.spatial.transform import Rotation as R  # type: ignore
 
 from abtem.atoms import plane_to_axes
 from abtem.bloch.dynamical import equal_slice_thicknesses
+from abtem.core.backend import get_array_module
 from abtem.core.fft import fft_interpolate
 from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.magnetism.iam import (
@@ -453,6 +454,13 @@ class _MagnetizationMagnetics(_FieldBuilder):
 
         slice_thicknesses = np.array(self.slice_thickness)
         slice_shape = (3,) + self._valid_gpts
+        # calculate_vector_potential_from_magnetization/curl_fourier above
+        # are host-only (hardcoded np.fft), so `array` is always NumPy here
+        # regardless of self.device; move each yielded slice to the
+        # requested device at this boundary instead (mirrors the identical
+        # fix for QuasiDipoleProjections.integrate_on_grid in
+        # abtem/magnetism/iam.py).
+        xp = get_array_module(self.device)
 
         if self._projection == "real_space":
             depth = self._cell3d[2, 2]
@@ -471,7 +479,7 @@ class _MagnetizationMagnetics(_FieldBuilder):
                     slice_array = fft_interpolate(slice_array, slice_shape)
 
                 yield self._array_object(
-                    slice_array[None],
+                    xp.asarray(slice_array[None]),
                     extent=self.extent,
                     slice_thickness=slice_thicknesses[i],
                 )
@@ -492,7 +500,7 @@ class _MagnetizationMagnetics(_FieldBuilder):
                     slice_array = fft_interpolate(slice_array, slice_shape)
 
                 yield self._array_object(
-                    slice_array[None],
+                    xp.asarray(slice_array[None]),
                     extent=self.extent,
                     slice_thickness=slice_thicknesses[i],
                 )

@@ -901,3 +901,48 @@ def test_field_builders_respect_device(device):
 
         assert isinstance(A.array, cp.ndarray)
         assert isinstance(B.array, cp.ndarray)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_magnetization_field_builders_respect_device(device):
+    """_MagnetizationMagnetics.generate_slices (shared by GPAWVectorPotential/
+    GPAWMagneticField and their DFT-agnostic counterparts
+    MagnetizationVectorPotential/MagnetizationMagneticField) computes
+    everything through host-only FFT routines
+    (calculate_vector_potential_from_magnetization, curl_fourier -- both
+    hardcoded np.fft, independent of `device`) and never moved the result
+    to the requested device before yielding it -- a second, independent
+    instance of the same bug class as test_field_builders_respect_device,
+    in the GPAW-density field-construction path rather than the
+    quasi-dipole atomistic one. Exercised here via the DFT-agnostic
+    builders (synthetic magnetization), avoiding the cost of a real GPAW
+    calculation while covering the exact code path that was broken."""
+    from abtem.magnetism.gpaw import (
+        MagnetizationMagneticField,
+        MagnetizationVectorPotential,
+    )
+
+    cell = np.diag([2.87, 2.87, 2.87])
+    gpts3d = (16, 16, 16)
+    rng = np.random.default_rng(3)
+    magnetization = np.zeros((3,) + gpts3d)
+    magnetization[2] = rng.random(gpts3d)  # collinear, along z
+
+    A = MagnetizationVectorPotential(
+        magnetization, cell, gpts=16, slice_thickness=1.435, device=device
+    ).build(lazy=False)
+    B = MagnetizationMagneticField(
+        magnetization, cell, gpts=16, slice_thickness=1.435, device=device
+    ).build(lazy=False)
+
+    A_array, B_array = to_numpy(A.array), to_numpy(B.array)
+    assert np.all(np.isfinite(A_array))
+    assert np.all(np.isfinite(B_array))
+    assert np.abs(A_array).max() > 0
+    assert np.abs(B_array).max() > 0
+
+    if device == "gpu":
+        import cupy as cp
+
+        assert isinstance(A.array, cp.ndarray)
+        assert isinstance(B.array, cp.ndarray)
