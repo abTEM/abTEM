@@ -23,13 +23,20 @@ from abtem.magnetism.iam import (
 )
 from abtem.magnetism.multislice import e_over_hbar, pauli_multislice
 from abtem.magnetism.utils import set_magnetic_moments
-from abtem.multislice import RealSpaceMultislice, multislice_and_detect
+from abtem.multislice import (
+    FourierMultislice,
+    RealSpaceMultislice,
+    multislice_and_detect,
+)
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore::numba.core.errors.NumbaPerformanceWarning"
 )
 
 ENERGY = 100e3
+
+# the two Pauli evolution schemes, keyed by short test-ID names
+ALGORITHMS = {"series": RealSpaceMultislice(), "split": FourierMultislice()}
 
 
 @pytest.fixture(autouse=True)
@@ -163,7 +170,7 @@ def test_constant_field_spin_precession(device, method):
     spinor = waves.build(lazy=False).to_spinor((1, 0))
 
     out = pauli_multislice(
-        spinor, potential, vector_potential=A, magnetic_field=B, method=method
+        spinor, potential, vector_potential=A, magnetic_field=B, algorithm=ALGORITHMS[method]
     )
 
     wavelength = energy2wavelength(ENERGY)
@@ -176,7 +183,7 @@ def test_constant_field_spin_precession(device, method):
     # a spin parallel to the field is stationary
     spinor = waves.build(lazy=False).to_spinor((1, 1))
     out = pauli_multislice(
-        spinor, potential, vector_potential=A, magnetic_field=B, method=method
+        spinor, potential, vector_potential=A, magnetic_field=B, algorithm=ALGORITHMS[method]
     )
     s = spin_expectation(to_numpy(out.array))
     assert np.allclose(s, [1, 0, 0], atol=1e-6)
@@ -263,14 +270,14 @@ def test_vortex_orbital_phase(device, method, l):
         potential,
         vector_potential=A,
         magnetic_field=B_zero,
-        method=method,
+        algorithm=ALGORITHMS[method],
     )
     out_0 = pauli_multislice(
         spinor.copy(),
         potential,
         vector_potential=A_zero,
         magnetic_field=B_zero,
-        method=method,
+        algorithm=ALGORITHMS[method],
     )
 
     overlap = np.vdot(to_numpy(out_0.array[0]), to_numpy(out_B.array[0]))
@@ -715,7 +722,7 @@ def test_split_matches_series(device):
             vector_potential=A,
             magnetic_field=B,
             average_field=(0, 0, 2.2),
-            method=method,
+            algorithm=ALGORITHMS[method],
         )
         return to_numpy(out.array)
 
@@ -765,7 +772,7 @@ def test_split_exit_planes(device):
         full,
         vector_potential=A,
         magnetic_field=B,
-        method="split",
+        algorithm=FourierMultislice(),
     )
     out_array = to_numpy(out.array)
 
@@ -786,7 +793,7 @@ def test_split_exit_planes(device):
             truncated,
             vector_potential=A_k,
             magnetic_field=B_k,
-            method="split",
+            algorithm=FourierMultislice(),
         )
         assert (
             np.abs(out_array[i] - to_numpy(reference.array)).max() < 1e-12
@@ -832,7 +839,7 @@ def test_z_periodic_fields(method):
         vector_potential=A_unit,
         magnetic_field=B_unit,
         average_field=(0, 0, 2.2),
-        method=method,
+        algorithm=ALGORITHMS[method],
     )
     out_tiled = pauli_multislice(
         spinor_input.copy(),
@@ -840,7 +847,7 @@ def test_z_periodic_fields(method):
         vector_potential=A_tiled,
         magnetic_field=B_tiled,
         average_field=(0, 0, 2.2),
-        method=method,
+        algorithm=ALGORITHMS[method],
     )
 
     a1, a2 = to_numpy(out_periodic.array), to_numpy(out_tiled.array)
@@ -855,5 +862,5 @@ def test_z_periodic_fields(method):
             crystal,
             vector_potential=A_bad,
             magnetic_field=B_unit,
-            method=method,
+            algorithm=ALGORITHMS[method],
         )

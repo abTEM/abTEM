@@ -19,16 +19,17 @@ magnetic coefficients are mass-independent (the gamma factors cancel
 against the (hbar*k)**-1 prefactor of the Pauli equation), so relativistic
 correctness follows from the corrected wavelength alone.
 
-Two per-slice evolution schemes are provided (see `pauli_multislice`'s
-`method` parameter): a full Taylor expansion of exp(1j * dz * H) — the
-same expansion as `RealSpaceMultislice` — which is exact within a slice
-and is the default, and an optional fast Strang-symmetrized
-operator-splitting scheme with the exact paraxial Fourier propagator and
-exact pointwise transmission/Zeeman factors, which trades a
-dz^3-commutator splitting error (requiring slice-thickness convergence,
-like conventional FFT multislice) for a 7-15x speedup. Fields follow the
-projected (slice-integrated) convention of `PotentialArray`: vector
-potential slices in Å²T, magnetic field slices in ÅT.
+Two per-slice evolution schemes are provided, selected with the same
+algorithm objects as the scalar multislice (see `pauli_multislice`'s
+`algorithm` parameter): `RealSpaceMultislice` (the default) applies a
+full Taylor expansion of exp(1j * dz * H), exact within a slice, while
+`FourierMultislice` applies a fast Strang-symmetrized operator-splitting
+scheme with the spectral Fourier propagator and exact pointwise
+transmission/Zeeman factors, trading a dz^3-commutator splitting error
+(requiring slice-thickness convergence, like conventional FFT
+multislice) for a 7-15x speedup. Fields follow the projected
+(slice-integrated) convention of `PotentialArray`: vector potential
+slices in Å²T, magnetic field slices in ÅT.
 """
 
 from __future__ import annotations
@@ -46,7 +47,6 @@ from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import energy2sigma, energy2wavelength
 from abtem.core.fft import fft2, ifft2
-from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import get_dtype
 from abtem.detectors import BaseDetector, validate_detectors
 from abtem.finite_difference import LaplaceOperator, _multislice_exponential_series
@@ -55,7 +55,10 @@ from abtem.magnetism.iam import MagneticFieldArray, VectorPotentialArray
 from abtem.magnetism.pauli import ADotGradientOperator
 from abtem.measurements import BaseMeasurements
 from abtem.multislice import (
+    FourierMultislice,
     MultisliceTransform,
+    RealSpaceMultislice,
+    _fresnel_propagator_array,
     _generate_potential_configurations,
     _potential_ensemble_shape_and_metadata,
     _update_measurements,
@@ -69,6 +72,33 @@ if TYPE_CHECKING:
 
 #: e / hbar in units of 1/(T Å²), so that (e/hbar) * A[ÅT] has units 1/Å.
 e_over_hbar = units._e / (units._hplanck / (2 * np.pi)) * 1e-20
+
+
+def _validate_algorithm(
+    algorithm: Optional[FourierMultislice | RealSpaceMultislice],
+) -> FourierMultislice | RealSpaceMultislice:
+    if algorithm is None:
+        algorithm = RealSpaceMultislice()
+
+    if isinstance(algorithm, RealSpaceMultislice):
+        if algorithm.order != 1 or algorithm.expansion_scope != "propagator":
+            raise ValueError(
+                "the Pauli operator supports only order=1 and "
+                "expansion_scope='propagator' for RealSpaceMultislice"
+            )
+    elif isinstance(algorithm, FourierMultislice):
+        if algorithm.conjugate or algorithm.transpose:
+            raise NotImplementedError(
+                "conjugate/transpose are not implemented for the Pauli "
+                "multislice"
+            )
+    else:
+        raise ValueError(
+            f"algorithm must be a RealSpaceMultislice or FourierMultislice, "
+            f"got {type(algorithm)}"
+        )
+
+    return algorithm
 
 
 def _find_spin_axis(waves: "Waves") -> int:
@@ -166,21 +196,22 @@ def _non_periodic_vector_potential_slice(
 
 class _SplitStepPropagator:
     """
-    Cached Fourier-space kernels for the split-step Pauli method: paraxial
-    Fresnel propagators exp(-i pi lambda dz k^2), optionally with the
-    antialiasing aperture folded in (saving the separate per-slice
-    bandlimiting FFT pair the series method needs).
-
-    The paraxial (order-1) propagator is used deliberately — it is the
-    exact exponential of the same Laplacian term the series method
-    expands, so the two methods solve the same (paraxial Pauli) equation.
+    Cached Fourier-space kernels for the split-step Pauli method: Fresnel
+    propagators of the requested order (see `FourierMultislice.order`;
+    order 1 is the paraxial exponential of the same Laplacian term the
+    series method expands, so that choice solves the strictly paraxial
+    Pauli equation of the papers), optionally with the antialiasing
+    aperture folded in (saving the separate per-slice bandlimiting FFT
+    pair the series method needs). The kernel itself is built by the same
+    `_fresnel_propagator_array` the conventional multislice uses.
 
     Kernels are cached per (thickness, mask) so the Strang half/merged
     steps (dz/2 at entry and exit planes, (dz_i + dz_{i+1})/2 between
     slices) do not thrash a single-slot cache.
     """
 
-    def __init__(self):
+    def __init__(self, order=1):
+        self._order = order
         self._grid_key = None
         self._kernels = {}
 
@@ -202,12 +233,13 @@ class _SplitStepPropagator:
         kernel = self._kernels.get(key)
         if kernel is None:
             xp = get_array_module(waves.device)
-            kx, ky = spatial_frequencies(
-                waves._valid_gpts, waves._valid_sampling, xp=xp
-            )
-            k2 = kx[:, None] ** 2 + ky[None] ** 2
-            kernel = complex_exponential(
-                -k2 * np.pi * thickness * waves.wavelength
+            kernel = _fresnel_propagator_array(
+                thickness,
+                waves._valid_gpts,
+                waves._valid_sampling,
+                waves._valid_energy,
+                waves.device,
+                order=self._order,
             )
             if mask:
                 kernel = kernel * antialias_aperture(
@@ -448,10 +480,7 @@ def pauli_multislice_and_detect(
     vector_potential: Optional[VectorPotentialArray] = None,
     magnetic_field: Optional[MagneticFieldArray] = None,
     average_field: Optional[np.ndarray] = None,
-    method: str = "series",
-    derivative_accuracy: int = 6,
-    tolerance: float = 1e-16,
-    max_terms: int = 300,
+    algorithm: Optional[FourierMultislice | RealSpaceMultislice] = None,
     pbar: bool = False,
 ) -> BaseMeasurements | "Waves" | list[BaseMeasurements | "Waves"]:
     """
@@ -465,8 +494,8 @@ def pauli_multislice_and_detect(
     waves = waves.ensure_real_space()
     detectors = validate_detectors(detectors)
 
-    if method not in ("split", "series"):
-        raise ValueError(f"method must be 'split' or 'series', got {method!r}")
+    algorithm = _validate_algorithm(algorithm)
+    use_split = isinstance(algorithm, FourierMultislice)
 
     spin_axis = _find_spin_axis(waves)
 
@@ -518,10 +547,24 @@ def pauli_multislice_and_detect(
         origin = np.array([extent[0] / 2, extent[1] / 2, total_thickness / 2])
         average_field_device = xp.asarray(average_field, dtype=real_dtype)
 
-    laplace = LaplaceOperator(derivative_accuracy)
+    if use_split:
+        # The split method's A_xy gradient series has per-slice magnitude
+        # ~1e-3, so these fixed settings reach machine precision in a few
+        # terms; the scheme knobs users tune live on the algorithm object.
+        derivative_accuracy = 6
+        tolerance = 1e-16
+        max_terms = 300
+        laplace = None
+        split_step_propagator = _SplitStepPropagator(order=algorithm.order)
+    else:
+        derivative_accuracy = algorithm.derivative_accuracy
+        tolerance = algorithm.tolerance
+        max_terms = algorithm.max_terms
+        laplace = LaplaceOperator(derivative_accuracy)
+        split_step_propagator = None
+
     a_dot_gradient = ADotGradientOperator(derivative_accuracy)
     antialias_aperture = AntialiasAperture()
-    split_step_propagator = _SplitStepPropagator()
 
     (
         extra_ensemble_axes_shape,
@@ -630,7 +673,7 @@ def pauli_multislice_and_detect(
                         average_field_device[:, None, None], (3,) + tuple(gpts)
                     )
 
-            if method == "split":
+            if use_split:
                 if previous_half is None:
                     waves = split_step_propagator.propagate(
                         waves, thickness / 2, mask=False
@@ -673,7 +716,7 @@ def pauli_multislice_and_detect(
                 )
 
                 if measurements is not None:
-                    if method == "split":
+                    if use_split:
                         # Complete the owed trailing half-propagation on a
                         # copy for detection; the sweep itself continues
                         # uncorrected (the next merged kernel includes it).
@@ -687,7 +730,7 @@ def pauli_multislice_and_detect(
                     )
                 exit_plane_index += 1
 
-        if method == "split" and previous_half is not None:
+        if use_split and previous_half is not None:
             # Finish the sweep for this configuration so the fallback
             # (single exit plane, measurements allocated lazily below)
             # detects a fully evolved wave.
@@ -714,10 +757,7 @@ def pauli_multislice(
     fields: Optional[GPAWMagneticFields] = None,
     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     average_field: Optional[np.ndarray] = None,
-    method: str = "series",
-    derivative_accuracy: int = 6,
-    tolerance: float = 1e-16,
-    max_terms: int = 300,
+    algorithm: Optional[FourierMultislice | RealSpaceMultislice] = None,
 ) -> BaseMeasurements | "Waves" | list[BaseMeasurements | "Waves"]:
     """
     Run the paraxial Pauli multislice algorithm [PRB 94, 174414 (2016),
@@ -778,50 +818,47 @@ def pauli_multislice(
         ferromagnet. Omit `average_field` only for compensated textures
         (e.g. antiferromagnets, where B_avg = 0) or when deliberately
         isolating the periodic-field contribution.
-    method : str, optional
-        Per-slice evolution scheme:
+    algorithm : RealSpaceMultislice or FourierMultislice, optional
+        Per-slice evolution scheme, selected with the same algorithm
+        objects as the scalar `Waves.multislice`:
 
-        - ``"series"`` (default): full Taylor expansion of the per-slice
-          exponential of the complete Pauli operator [PRB 94, 174414,
-          Eq. (14)]. Exact within a slice (no operator-splitting error),
-          but its propagation term uses a finite-difference Laplacian
-          (see `derivative_accuracy`) whose k-space dispersion error at
-          coarse transverse sampling does not shrink with slice
-          thickness.
-        - ``"split"``: Strang-symmetrized operator splitting with the
-          exact spectral paraxial propagator (half-steps around each
-          transmission, merged into one FFT pair per slice), exact
-          pointwise transmission/Zeeman factors (the Zeeman part as a
-          closed-form per-pixel spin rotation), and a short Taylor
-          series for the A_xy gradient coupling only. Per-slice
-          splitting error is of order dz^3 double commutators — one
-          order better than the standard (non-magnetic) FFT multislice
-          algorithm — at 7-15x the speed of ``"series"``.
+        - `RealSpaceMultislice` (the default): full Taylor expansion of
+          the per-slice exponential of the complete Pauli operator
+          [PRB 94, 174414, Eq. (14)]. Exact within a slice (no
+          operator-splitting error), but its propagation term uses a
+          finite-difference Laplacian (`derivative_accuracy` field)
+          whose k-space dispersion error at coarse transverse sampling
+          does not shrink with slice thickness. Only ``order=1`` and
+          ``expansion_scope="propagator"`` are supported for the Pauli
+          operator. Its ``tolerance`` field directly trades speed for
+          per-slice accuracy: the magnetic signal is of relative order
+          1e-4 to 1e-8, so a tolerance a few orders below the signal
+          (rather than the 1e-16 default) reduces the per-slice term
+          count substantially at no meaningful cost (measured: ~1.9x
+          faster at 1e-7 for a relative signal change of ~8e-8).
+        - `FourierMultislice`: Strang-symmetrized operator splitting
+          with the spectral Fourier propagator of the requested
+          ``order`` (half-steps around each transmission, merged into
+          one FFT pair per slice; ``order=1`` solves the strictly
+          paraxial equation of the papers), exact pointwise
+          transmission/Zeeman factors (the Zeeman part as a closed-form
+          per-pixel spin rotation), and a short internal Taylor series
+          for the A_xy gradient coupling only. Per-slice splitting
+          error is of order dz^3 double commutators — one order better
+          than the standard (non-magnetic) FFT multislice algorithm —
+          at 7-15x the speed of the default. ``conjugate`` and
+          ``transpose`` are not supported for the Pauli operator.
 
-        The two methods differ in which error each carries: ``"series"``
-        is exact in dz but approximates transverse propagation with a
-        stencil; ``"split"`` propagates spectrally (exact on the grid)
-        but splits the slice operator (error vanishing as dz -> 0). At
-        converged transverse sampling they agree (measured: 2.7%
-        signal-level discrepancy at 12 grid points per FePt unit cell
-        collapsing to 0.03% at 18) — so converge the transverse grid
-        first; a residual method difference at coarse sampling mostly
-        reflects the stencil dispersion of ``"series"``, not a
-        ``"split"`` deficiency.
-    derivative_accuracy : int, optional
-        Finite-difference accuracy for the Laplace and gradient operators
-        (default 6).
-    tolerance : float, optional
-        Convergence tolerance for the per-slice exponential Taylor
-        series (default 1e-16). For ``"series"`` this directly trades
-        speed for per-slice accuracy: the magnetic signal is of relative
-        order 1e-4 to 1e-8, so a tolerance a few orders below the signal
-        (rather than machine precision) reduces the per-slice term count
-        substantially at no meaningful cost. For ``"split"`` it only
-        controls the (cheap) A_xy gradient series.
-    max_terms : int, optional
-        Maximum number of terms in the exponential Taylor series
-        (default 300).
+        The two schemes differ in which error each carries: the
+        real-space series is exact in dz but approximates transverse
+        propagation with a stencil; the Fourier split-step propagates
+        spectrally (exact on the grid) but splits the slice operator
+        (error vanishing as dz -> 0). At converged transverse sampling
+        they agree (measured: 2.7% signal-level discrepancy at 12 grid
+        points per FePt unit cell collapsing to 0.03% at 18) — so
+        converge the transverse grid first; a residual difference at
+        coarse sampling mostly reflects the stencil dispersion of the
+        series scheme, not a split-step deficiency.
 
     Returns
     -------
@@ -882,10 +919,7 @@ def pauli_multislice(
         vector_potential=vector_potential,
         magnetic_field=magnetic_field,
         average_field=average_field,
-        method=method,
-        derivative_accuracy=derivative_accuracy,
-        tolerance=tolerance,
-        max_terms=max_terms,
+        algorithm=algorithm,
     )
 
     return transform.apply(waves)
