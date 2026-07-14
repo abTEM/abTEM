@@ -528,6 +528,19 @@ class Waves(BaseWaves, ArrayObject):
             self.reciprocal_space_sampling[1] * wl * 1e3,
         )
 
+    @property
+    def wavelength(self) -> float:
+        """Relativistic electron wavelength [Å].
+
+        Resolves the per-member energy (``metadata["energy"]`` or a single-value
+        ``EnergyAxis``) for an indexed energy-ensemble member, mirroring
+        :attr:`angular_sampling`.  A full multi-energy ensemble has no single
+        wavelength and raises ``EnergyUndefinedError``.
+        """
+        from abtem.core.energy import energy2wavelength
+
+        return energy2wavelength(self._valid_energy)
+
     @classmethod
     def from_array_and_metadata(
         cls,
@@ -1357,14 +1370,60 @@ class Waves(BaseWaves, ArrayObject):
             The wave functions with the contrast transfer function applied.
         """
 
+        from abtem.array import stack
+        from abtem.core.axes import EnergyAxis
+
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        if not ctf.accelerator.energy:
-            ctf.accelerator.match(self.accelerator)
+        # Multi-energy ensemble: a single CTF cannot represent several
+        # wavelengths at once.  Apply the CTF to each energy member at its own
+        # wavelength and restack along the EnergyAxis.
+        energy_axes = [
+            (i, ax)
+            for i, ax in enumerate(self.ensemble_axes_metadata)
+            if isinstance(ax, EnergyAxis) and len(ax.values) > 1
+        ]
+        if energy_axes:
+            if ctf.accelerator.energy is not None:
+                raise ValueError(
+                    "Cannot apply a CTF with a fixed energy to a multi-energy "
+                    "ensemble: each energy member requires its own wavelength. "
+                    "Pass a CTF without an energy so the per-member energies are "
+                    "used."
+                )
+            axis_idx, energy_axis = energy_axes[0]
+            members = []
+            for i, energy in enumerate(energy_axis.values):
+                index = tuple(
+                    i if j == axis_idx else slice(None)
+                    for j in range(len(self.ensemble_shape))
+                )
+                member_ctf = ctf.copy()
+                member_ctf.accelerator.energy = float(energy)
+                members.append(
+                    self[index].apply_ctf(member_ctf, max_batch=max_batch)
+                )
+            waves = stack(members, energy_axis, axis=axis_idx)
+            # The stacked object must remain a genuine multi-energy ensemble:
+            # its scalar accelerator/metadata energy come from member[0] and
+            # would misrepresent the other members.
+            waves.accelerator.energy = None
+            waves._metadata.pop("energy", None)
+            assert isinstance(waves, Waves)
+            return waves
 
-        self.accelerator.match(ctf.accelerator, check_match=True)
-        self.accelerator.check_is_defined()
+        if not ctf.accelerator.energy:
+            # Single energy: resolve the wavelength from the wave functions
+            # (ordinary waves, or an indexed ensemble member whose per-member
+            # energy lives in metadata) without mutating ``self``.
+            ctf.accelerator.energy = self._valid_energy
+        else:
+            # CTF fixes the energy: verify it does not disagree with a concrete
+            # wave energy, but do not overwrite ``self``.
+            self.accelerator.check_match(ctf.accelerator)
+
+        ctf.accelerator.check_is_defined()
 
         waves = self.apply_transform(ctf, max_batch=max_batch)
         assert isinstance(waves, Waves)  # Type narrowing for MyPy
