@@ -67,7 +67,8 @@ def test_is_gpu_dask_client_rejects_real_cpu_cluster():
 
 def _fake_dask_cuda_module():
     m = types.ModuleType("dask_cuda")
-    m.LocalCUDACluster = type("LocalCUDACluster", (), {})
+    # ensure_cuda_cluster may pass memory_limit=..., so accept **kwargs
+    m.LocalCUDACluster = type("LocalCUDACluster", (), {"__init__": lambda self, **kw: None})
     return m
 
 

@@ -88,7 +88,21 @@ def ensure_cuda_cluster():
 
     from distributed import Client
 
-    _cuda_cluster_client = Client(LocalCUDACluster())
+    # Cap each worker's memory to a share of the cgroup/job limit so a
+    # memory-constrained allocation (e.g. a Slurm cgroup) spills instead of being
+    # OOM-killed. dask-cuda otherwise sizes workers from the node total, which
+    # over-commits when the cgroup grants less than the node has.
+    cluster_kwargs: dict = {}
+    try:
+        from distributed.system import MEMORY_LIMIT
+
+        n_gpus = cp.cuda.runtime.getDeviceCount() if cp is not None else 0
+        if n_gpus > 0:
+            cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
+    except Exception:  # noqa: BLE001 -- fall back to dask-cuda's default sizing
+        pass
+
+    _cuda_cluster_client = Client(LocalCUDACluster(**cluster_kwargs))
 
     return _cuda_cluster_client
 
