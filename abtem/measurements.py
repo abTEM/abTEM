@@ -5132,29 +5132,52 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         title: bool | str = True,
         e_units: str = "meV",
         **kwargs,
-    ) -> "Visualization":
+    ) -> tuple:
         """
         Show the spectrum as a 2D heatmap with q on the x-axis and energy
         on the y-axis.
 
+        Unlike other abTEM measurements this method plots directly with
+        matplotlib (the q and energy axes are non-linear, so the shared
+        :class:`.Visualization` imshow machinery does not apply) and therefore
+        returns the raw matplotlib objects rather than a :class:`.Visualization`.
+
         Parameters
         ----------
         ax : matplotlib Axes, optional
+            Only used for the single-panel case (ignored when exploding).
         cbar : bool
             Show colorbar. Default True.
         cmap : str, optional
             Colormap name. Default 'viridis'.
         vmin, vmax : float, optional
-            Colour-scale limits.
+            Colour-scale limits.  When exploding, a value left as None is filled
+            from the global min/max across all panels so the shared colorbar is
+            meaningful.
         power : float
             Display on a power scale.
         explode : bool or sequence of int
-            Explode ensemble axes into a grid.
+            If True, explode all ensemble axes into a panel grid. If a sequence
+            of ints, explode only those ensemble-axis indices (the remaining
+            ensemble axes collapse to their first element). If falsy (default),
+            a single panel is shown.
         figsize : (width, height), optional
         title : bool or str
+            If a string, used as the (base) title. If True, a default title is
+            generated. If False, no title is set.
         e_units : str
             Units for the energy axis ('meV' or 'eV'). Default 'meV'.
+        kwargs
+            Forwarded to :meth:`matplotlib.axes.Axes.pcolormesh`.
+
+        Returns
+        -------
+        fig, ax : matplotlib Figure and Axes (single panel) or ndarray of Axes
+            (exploded grid).
         """
+        import itertools
+        import warnings
+
         import matplotlib.pyplot as plt
         from matplotlib.colors import PowerNorm
 
@@ -5170,12 +5193,43 @@ class MomentumResolvedSpectrum(BaseMeasurements):
         else:
             e_label = "Energy loss [eV]"
 
-        # Handle ensemble dimensions
+        n_q, n_e = len(q), len(e)
         ensemble_shape = array.shape[: -self._base_dims]
-        if len(ensemble_shape) > 0 and explode:
-            import itertools
+        n_ensemble = len(ensemble_shape)
 
-            indices = list(itertools.product(*[range(s) for s in ensemble_shape]))
+        # Resolve which ensemble axes to explode into a panel grid.
+        if explode is True:
+            explode_axes: tuple[int, ...] = tuple(range(n_ensemble))
+        elif not explode:
+            explode_axes = ()
+        else:
+            explode_axes = tuple(int(a) % n_ensemble for a in explode)
+
+        cbar_label = (
+            f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]"
+        )
+
+        def panel_data(grid_index: tuple[int, ...]) -> np.ndarray:
+            # Exploded axes take their grid value; other ensemble axes collapse
+            # to their first element.
+            selected = iter(grid_index)
+            full = tuple(
+                next(selected) if d in explode_axes else 0 for d in range(n_ensemble)
+            )
+            data = array[full] if full else array
+            data = np.asarray(data)
+            if data.shape != (n_q, n_e):
+                raise ValueError(
+                    f"Shape mismatch in MomentumResolvedSpectrum.show(): "
+                    f"data.shape={data.shape} but expected ({n_q}, {n_e}) from "
+                    f"q_values (len {n_q}) and e_values (len {n_e}). "
+                    f"Full array shape: {array.shape}"
+                )
+            return data
+
+        if explode_axes:
+            grid_sizes = [ensemble_shape[a] for a in explode_axes]
+            indices = list(itertools.product(*[range(s) for s in grid_sizes]))
             n = len(indices)
             ncols = min(n, 4)
             nrows = (n + ncols - 1) // ncols
@@ -5183,66 +5237,71 @@ class MomentumResolvedSpectrum(BaseMeasurements):
                 figsize = (4 * ncols, 3.5 * nrows)
             fig, axes_arr = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
             axes_flat = axes_arr.flatten()
-            norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-            for k, idx in enumerate(indices):
+
+            # Shared colour scale across panels so the single colorbar applies to
+            # every panel (otherwise the norm autoscales to the first panel only).
+            panels = [panel_data(idx).T for idx in indices]
+            _vmin = min(float(p.min()) for p in panels) if vmin is None else vmin
+            _vmax = max(float(p.max()) for p in panels) if vmax is None else vmax
+            norm = PowerNorm(gamma=power, vmin=_vmin, vmax=_vmax)
+
+            im = None
+            for k, (idx, data_t) in enumerate(zip(indices, panels)):
                 a = axes_flat[k]
-                data = array[idx]
-                im = a.pcolormesh(q, e, data.T, shading="nearest", cmap=cmap, norm=norm)
+                im = a.pcolormesh(
+                    q, e, data_t, shading="nearest", cmap=cmap, norm=norm, **kwargs
+                )
                 a.set_xlabel("q [mrad]")
                 a.set_ylabel(e_label)
+                parts = [
+                    self.ensemble_axes_metadata[a_idx][idx[j]].format_title()
+                    for j, a_idx in enumerate(explode_axes)
+                ]
+                panel_title = ", ".join(parts)
+                if isinstance(title, str):
+                    panel_title = f"{title} — {panel_title}" if panel_title else title
                 if title:
-                    parts = []
-                    for dim, ax_meta in enumerate(self.ensemble_axes_metadata):
-                        parts.append(ax_meta[idx[dim]].format_title())
-                    a.set_title(", ".join(parts))
+                    a.set_title(panel_title)
             for k in range(len(indices), len(axes_flat)):
                 axes_flat[k].set_visible(False)
-            if cbar:
+            if cbar and im is not None:
                 fig.colorbar(
-                    im,
-                    ax=axes_flat[: len(indices)].tolist(),
-                    label=f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]",
+                    im, ax=axes_flat[: len(indices)].tolist(), label=cbar_label
                 )
             fig.tight_layout()
             return fig, axes_arr
+
+        # Single panel — collapse any ensemble axes to their first element.
+        if n_ensemble > 0:
+            warnings.warn(
+                "MomentumResolvedSpectrum.show(): array has ensemble axes "
+                f"{ensemble_shape}; showing member {(0,) * n_ensemble} only. Pass "
+                "explode=True (or a sequence of ensemble-axis indices) to see all.",
+                stacklevel=2,
+            )
+        data = panel_data(())
+
+        if ax is None:
+            if figsize is None:
+                figsize = (6, 4)
+            fig, ax = plt.subplots(figsize=figsize)
         else:
-            # Single panel — take first ensemble member if needed
-            data = array
-            while data.ndim > 2:
-                data = data[0]
+            fig = ax.get_figure()
 
-            n_q, n_e = len(q), len(e)
-            if data.shape != (n_q, n_e):
-                raise ValueError(
-                    f"Shape mismatch in MomentumResolvedSpectrum.show(): "
-                    f"data.shape={data.shape} but expected ({n_q}, {n_e}) "
-                    f"from q_values (len {n_q}) and e_values (len {n_e}).  "
-                    f"Full array shape: {array.shape}"
-                )
-
-            if ax is None:
-                if figsize is None:
-                    figsize = (6, 4)
-                fig, ax = plt.subplots(figsize=figsize)
-            else:
-                fig = ax.get_figure()
-
-            norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
-            im = ax.pcolormesh(q, e, data.T, shading="nearest", cmap=cmap, norm=norm)
-            ax.set_xlabel("q [mrad]")
-            ax.set_ylabel(e_label)
-            if isinstance(title, str) and title is not True:
-                ax.set_title(title)
-            elif title is True:
-                ax.set_title("S(q, E)")
-            if cbar:
-                fig.colorbar(
-                    im,
-                    ax=ax,
-                    label=f"{self.metadata.get('label', '')} [{self.metadata.get('units', '')}]",
-                )
-            fig.tight_layout()
-            return fig, ax
+        norm = PowerNorm(gamma=power, vmin=vmin, vmax=vmax)
+        im = ax.pcolormesh(
+            q, e, data.T, shading="nearest", cmap=cmap, norm=norm, **kwargs
+        )
+        ax.set_xlabel("q [mrad]")
+        ax.set_ylabel(e_label)
+        if isinstance(title, str):
+            ax.set_title(title)
+        elif title is True:
+            ax.set_title("S(q, E)")
+        if cbar:
+            fig.colorbar(im, ax=ax, label=cbar_label)
+        fig.tight_layout()
+        return fig, ax
 
 
 def _thermal_weight_tds(
