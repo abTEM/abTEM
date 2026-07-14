@@ -13,6 +13,7 @@ from scipy.interpolate import interp1d  # type: ignore
 from scipy.optimize import brentq  # type: ignore
 
 from abtem.core.axes import AxisMetadata, OrdinalAxis, RealSpaceAxis, ThicknessAxis
+from abtem.core.backend import get_array_module
 from abtem.core.energy import energy2sigma
 from abtem.core.grid import coordinate_grid
 from abtem.inelastic.phonons import BaseFrozenPhonons
@@ -417,8 +418,15 @@ class QuasiDipoleProjections:
         sampling: tuple[float, float],
         device: str = "cpu",
     ):
+        # The interpolation kernel below (self._interpolation_func, a numba
+        # @njit host function) always operates on host memory; there is no
+        # GPU implementation. Build on host as before and move the result
+        # to the requested device only at the end, so callers on GPU get a
+        # device array back instead of `device` being silently ignored.
+        xp = get_array_module(device)
+
         if len(atoms) == 0:
-            return np.zeros((3,) + gpts, dtype=np.float32)
+            return xp.zeros((3,) + gpts, dtype=np.float32)
 
         positions = atoms.positions
         magnetic_moments = atoms.get_array("magnetic_moments")
@@ -454,7 +462,7 @@ class QuasiDipoleProjections:
                 scratch,
             )
 
-        return array
+        return xp.asarray(array)
 
 
 class QuasiDipoleMagneticFieldProjections(QuasiDipoleProjections):

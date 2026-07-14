@@ -170,7 +170,8 @@ def test_constant_field_spin_precession(device, method):
     spinor = waves.build(lazy=False).to_spinor((1, 0))
 
     out = pauli_multislice(
-        spinor, potential, vector_potential=A, magnetic_field=B, algorithm=ALGORITHMS[method]
+        spinor, potential, vector_potential=A, magnetic_field=B,
+        algorithm=ALGORITHMS[method],
     )
 
     wavelength = energy2wavelength(ENERGY)
@@ -183,7 +184,8 @@ def test_constant_field_spin_precession(device, method):
     # a spin parallel to the field is stationary
     spinor = waves.build(lazy=False).to_spinor((1, 1))
     out = pauli_multislice(
-        spinor, potential, vector_potential=A, magnetic_field=B, algorithm=ALGORITHMS[method]
+        spinor, potential, vector_potential=A, magnetic_field=B,
+        algorithm=ALGORITHMS[method],
     )
     s = spin_expectation(to_numpy(out.array))
     assert np.allclose(s, [1, 0, 0], atol=1e-6)
@@ -864,3 +866,38 @@ def test_z_periodic_fields(method):
             magnetic_field=B_unit,
             algorithm=ALGORITHMS[method],
         )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_field_builders_respect_device(device):
+    """QuasiDipoleProjections.integrate_on_grid (the default integrator for
+    VectorPotential/MagneticField) must return an array on the requested
+    device, not silently ignore it. This directly covers a real GPU bug
+    (integrate_on_grid always built on host via a hardcoded np.zeros,
+    unconditionally returning NumPy even for device='gpu') that surfaced
+    as a `ValueError: non-scalar numpy.ndarray cannot be used for fill`
+    deep inside `generate_slices`' single-atomic-number fast path, for any
+    single-element structure -- e.g. plain bcc Fe -- since that path skips
+    the (correctly device-aware) explicit `xp.zeros` allocation used when
+    multiple species or multiple slices are combined per chunk."""
+    atoms = bulk("Fe", "bcc", a=2.87, cubic=True)
+    set_magnetic_moments(atoms, np.tile([0.0, 0.0, 2.2], (len(atoms), 1)))
+
+    A = VectorPotential(atoms, gpts=16, slice_thickness=1.435, device=device).build(
+        lazy=False
+    )
+    B = MagneticField(atoms, gpts=16, slice_thickness=1.435, device=device).build(
+        lazy=False
+    )
+
+    A_array, B_array = to_numpy(A.array), to_numpy(B.array)
+    assert np.all(np.isfinite(A_array))
+    assert np.all(np.isfinite(B_array))
+    assert np.abs(A_array).max() > 0
+    assert np.abs(B_array).max() > 0
+
+    if device == "gpu":
+        import cupy as cp
+
+        assert isinstance(A.array, cp.ndarray)
+        assert isinstance(B.array, cp.ndarray)
