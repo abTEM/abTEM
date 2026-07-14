@@ -11,25 +11,17 @@ from ase import Atom, Atoms, units
 from ase.data import chemical_symbols
 from numba import jit
 from scipy.interpolate import interp1d
+from scipy.special import spherical_jn
 
-# ---------
-# This is a version check for scipy >=v1.17.0
-from importlib.metadata import version, PackageNotFoundError
-from packaging.version import Version
 try:
-    import scipy
-    _SCIPY_VERSION = Version(version("scipy"))
-except PackageNotFoundError:
-    scipy = None
-    _SCIPY_VERSION = None
+    # sph_harm_y is the non-deprecated replacement for sph_harm, available
+    # since scipy 1.15; sph_harm itself is removed in scipy 1.17.
+    from scipy.special import sph_harm_y
+except ImportError:
+    from scipy.special import sph_harm
 
-if _SCIPY_VERSION is not None and _SCIPY_VERSION >= Version("1.17.0"):
-    from scipy.special import spherical_jn, sph_harm_y
-else:
-    from scipy.special import spherical_jn, sph_harm
     def sph_harm_y(n, m, theta, phi):
         return sph_harm(m, n, phi, theta)
-# ---------
 
 
 from abtem.array import ArrayObject
@@ -214,7 +206,12 @@ def numerov(f, x0, dx, dh):
     """Given precomputed function f(x), solves for x(t), which satisfies:
     x''(t) = f(t) x(t)
     """
-    x = np.zeros(len(f))
+    # f.copy() rather than np.zeros(len(f)): some numba/numpy pairings
+    # (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's internal
+    # np.zeros -> np.empty lowering inside @njit, while ndarray.copy() is
+    # unaffected. Every element of x is overwritten below before being
+    # read, so the borrowed initial values from f are never used.
+    x = f.copy()
     x[0] = x0
     x[1] = x0 + dh * dx
     h2 = dh**2
@@ -571,7 +568,14 @@ class TransitionPotential(BaseTransitionPotential):
         return interp1d(radial_grid, integral)(k)
 
     def _calculate_form_factor(self, bound, excited, k, phi, theta):
-        from sympy.physics.wigner import wigner_3j
+        try:
+            from sympy.physics.wigner import wigner_3j
+        except ImportError as e:
+            raise ImportError(
+                "Calculating core-loss EELS form factors requires sympy. "
+                "Install it with `pip install abtem[gpaw]` or "
+                "`pip install sympy`."
+            ) from e
 
         Hn0 = np.zeros_like(k, dtype=complex)
         l = bound.l

@@ -1463,9 +1463,12 @@ class FieldArray(BaseField, ArrayObject):
 
         assert len(repetitions) == 3
 
-        new_array = np.tile(
-            self.array, (repetitions[2], repetitions[0], repetitions[1])
-        )
+        tile_reps = [1] * len(self.array.shape)
+        tile_reps[-self._base_dims] = repetitions[2]
+        tile_reps[-2] = repetitions[0]
+        tile_reps[-1] = repetitions[1]
+
+        new_array = np.tile(self.array, tuple(tile_reps))
 
         if self.extent is not None:
             new_extent = (

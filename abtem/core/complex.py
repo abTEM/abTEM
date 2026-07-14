@@ -11,6 +11,10 @@ from abtem.core.backend import check_cupy_is_installed, cp
 def _complex_exponential(x):
     """
     Calculate the complex exponential.
+
+    The ``cos(x) + i sin(x)`` form is fast for real ``x`` but overflows for
+    complex ``x`` with a large imaginary part (``cosh``/``sinh`` blow up), so
+    complex input is routed to ``exp`` in :func:`complex_exponential` instead.
     """
     return np.cos(x) + 1.0j * np.sin(x)
 
@@ -106,6 +110,10 @@ def complex_exponential(x: np.ndarray | da.core.Array) -> np.ndarray | da.core.A
     """
 
     if isinstance(x, np.ndarray):
+        if np.iscomplexobj(x):
+            # cos(z) + i sin(z) overflows for large |Im z| (strongly evanescent
+            # propagator components); exp is overflow-safe and decays to zero.
+            return np.exp(1.0j * x)
         return _complex_exponential(x)
 
     if isinstance(x, da.core.Array):

@@ -50,11 +50,16 @@ extra = [
     "dask-labextension",
     "bokeh",
 ]
+gpaw = [
+    "hankel",
+    "sympy",
+]
 # Install every optional runtime extra at once. GPU packages (cupy, dask-cuda)
 # are intentionally excluded: their wheels are CUDA/RAPIDS-version specific and
 # must be installed to match the local toolkit (see the multi-GPU docs).
 all = [
     "abtem[extra]",
+    "abtem[gpaw]",
 ]
 
 [dependency-groups]
@@ -80,6 +85,7 @@ test = [
     "jupyter-client>=8.8.0",
     "py>=1.11.0",
     "pytest-cov>=7.0.0",
+    "sympy",
     "tox>=4.34.1",
 ]
 
