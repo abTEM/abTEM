@@ -419,7 +419,21 @@ class ComputableList(list):
         if not compute:
             return delayed_write
 
-        with _compute_context(
+        # Match ArrayObject.compute: GPU computations must run on the
+        # synchronous scheduler (see _gpu_compute_kwargs). The scheduler is
+        # additionally set via dask.config because the delayed writer calls
+        # array.compute() internally -- a nested compute that would
+        # otherwise fall back to the default threaded scheduler, running
+        # multiple GPU blocks concurrently and multiplying peak device
+        # memory by the worker count.
+        kwargs, is_gpu = _gpu_compute_kwargs(self, kwargs)
+        scheduler_context = (
+            dask.config.set(scheduler=kwargs["scheduler"])
+            if is_gpu
+            else nullcontext()
+        )
+
+        with scheduler_context, _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
             output = dask.compute(delayed_write, **kwargs)[0]
@@ -492,6 +506,33 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
+def _gpu_compute_kwargs(array_objects, kwargs: dict) -> tuple[dict, bool]:
+    """Apply the GPU scheduler defaults shared by every compute entry point.
+
+    Dask's default threaded scheduler runs multiple blocks concurrently;
+    on a GPU that multiplies peak device memory by the worker count, so
+    all GPU computations must default to the synchronous scheduler. The
+    output object's own device is not a sufficient signal (detectors copy
+    measurements to the CPU by default, so a GPU multislice pipeline can
+    end in a NumPy-backed lazy array) -- the global ``device``
+    configuration option is checked as well.
+    """
+    is_gpu = config.get("device") == "gpu" or any(
+        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
+    )
+
+    if not is_gpu:
+        return kwargs, False
+
+    check_cupy_is_installed()
+
+    kwargs = dict(kwargs)
+    kwargs.setdefault("scheduler", "synchronous")
+    kwargs.setdefault("num_workers", cp.cuda.runtime.getDeviceCount())
+    kwargs.setdefault("threads_per_worker", cp.cuda.runtime.getDeviceCount())
+    return kwargs, True
+
+
 def _compute(
     array_objects: list[ArrayObjectType],
     progress_bar: Optional[bool] = None,
@@ -499,21 +540,7 @@ def _compute(
     resource_profiler: bool = False,
     **kwargs,
 ) -> tuple[list[ArrayObjectType], tuple]:
-    is_gpu = config.get("device") == "gpu" or any(
-        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
-    )
-
-    if is_gpu:
-        check_cupy_is_installed()
-
-        if "scheduler" not in kwargs:
-            kwargs["scheduler"] = "synchronous"
-
-        if "num_workers" not in kwargs:
-            kwargs["num_workers"] = cp.cuda.runtime.getDeviceCount()
-
-        if "threads_per_worker" not in kwargs:
-            kwargs["threads_per_worker"] = cp.cuda.runtime.getDeviceCount()
+    kwargs, _ = _gpu_compute_kwargs(array_objects, kwargs)
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler

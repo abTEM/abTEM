@@ -248,9 +248,15 @@ class _SplitStepPropagator:
             kernel = kernel.astype(waves.array.dtype)
             self._kernels[key] = kernel
 
-        waves._array = ifft2(
-            fft2(waves._array, overwrite_x=True) * kernel, overwrite_x=True
-        )
+        # In-place kernel multiply, matching the scalar path's
+        # _fft2_convolve -- the out-of-place product would allocate an
+        # extra full wave-block on every slice.
+        array = fft2(waves._array, overwrite_x=True)
+        try:
+            array *= kernel
+        except ValueError:
+            array = array * kernel
+        waves._array = ifft2(array, overwrite_x=True)
         return waves
 
 
@@ -319,12 +325,22 @@ def _pauli_multislice_step_split(
             u_down_up = (-1.0j * sinc * (theta[0] + 1.0j * theta[1])).astype(
                 complex_dtype
             )
-            new_up = transmission * (u_diag * array[up] + u_up_down * array[down])
-            new_down = transmission * (
-                u_down_up * array[up] + u_diag_conj * array[down]
-            )
+            # Accumulate each output component in place instead of via the
+            # nested expression transmission * (a * up + b * down), which
+            # holds several wave-sized temporaries at once; per-slice
+            # allocation churn at that scale fragments the CuPy memory
+            # pool over many slices.
+            new_up = u_diag * array[up]
+            new_up += u_up_down * array[down]
+            new_up *= transmission
+            new_down = u_diag_conj * array[down]
+            new_down += u_down_up * array[up]
+            new_down *= transmission
             array[up] = new_up
             array[down] = new_down
+            # Release the wave-sized buffers before the gradient series
+            # below allocates its own.
+            del new_up, new_down
         else:
             # Collinear fast path: the rotation is diagonal, exp(∓i theta_z).
             array[up] *= transmission * complex_exponential(-theta[2]).astype(
