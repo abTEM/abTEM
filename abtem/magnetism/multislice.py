@@ -783,25 +783,42 @@ def pauli_multislice(
 
         - ``"series"`` (default): full Taylor expansion of the per-slice
           exponential of the complete Pauli operator [PRB 94, 174414,
-          Eq. (14)]. Exact within a slice (no operator-splitting error);
-          the accuracy reference.
+          Eq. (14)]. Exact within a slice (no operator-splitting error),
+          but its propagation term uses a finite-difference Laplacian
+          (see `derivative_accuracy`) whose k-space dispersion error at
+          coarse transverse sampling does not shrink with slice
+          thickness.
         - ``"split"``: Strang-symmetrized operator splitting with the
-          exact paraxial Fourier propagator (half-steps around each
+          exact spectral paraxial propagator (half-steps around each
           transmission, merged into one FFT pair per slice), exact
           pointwise transmission/Zeeman factors (the Zeeman part as a
           closed-form per-pixel spin rotation), and a short Taylor
-          series for the A_xy gradient coupling only. Per-slice error is
-          of order dz^3 double commutators — one order better than the
-          standard (non-magnetic) FFT multislice algorithm — at 7-15x
-          the speed of ``"series"``. Like conventional FFT multislice,
-          it requires slice-thickness convergence; check against
-          ``"series"`` (or thinner slices) before production use.
+          series for the A_xy gradient coupling only. Per-slice
+          splitting error is of order dz^3 double commutators — one
+          order better than the standard (non-magnetic) FFT multislice
+          algorithm — at 7-15x the speed of ``"series"``.
+
+        The two methods differ in which error each carries: ``"series"``
+        is exact in dz but approximates transverse propagation with a
+        stencil; ``"split"`` propagates spectrally (exact on the grid)
+        but splits the slice operator (error vanishing as dz -> 0). At
+        converged transverse sampling they agree (measured: 2.7%
+        signal-level discrepancy at 12 grid points per FePt unit cell
+        collapsing to 0.03% at 18) — so converge the transverse grid
+        first; a residual method difference at coarse sampling mostly
+        reflects the stencil dispersion of ``"series"``, not a
+        ``"split"`` deficiency.
     derivative_accuracy : int, optional
         Finite-difference accuracy for the Laplace and gradient operators
         (default 6).
     tolerance : float, optional
-        Convergence tolerance for the per-slice exponential Taylor series
-        (default 1e-16).
+        Convergence tolerance for the per-slice exponential Taylor
+        series (default 1e-16). For ``"series"`` this directly trades
+        speed for per-slice accuracy: the magnetic signal is of relative
+        order 1e-4 to 1e-8, so a tolerance a few orders below the signal
+        (rather than machine precision) reduces the per-slice term count
+        substantially at no meaningful cost. For ``"split"`` it only
+        controls the (cheap) A_xy gradient series.
     max_terms : int, optional
         Maximum number of terms in the exponential Taylor series
         (default 300).
