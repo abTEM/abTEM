@@ -440,3 +440,137 @@ def test_upsample_kwargs_do_not_change_prism():
     assert copied.window_gpts == s_matrix.window_gpts
     assert copied.downsampled_gpts == s_matrix.downsampled_gpts
     assert not copied.upsample
+
+
+def test_upsample_streamed_expansion_matches_expanded():
+    # the streamed full-window reduction never materializes the expanded
+    # scattering matrix; it must agree with the expanded reduction to floating
+    # point precision for on-grid scans, off-grid positions and aberrated CTFs
+    potential = _small_potential()
+
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+    )
+    s_matrix_array = s_matrix.build(lazy=False)
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 3))
+    detector = abtem.PixelatedDetector(max_angle=None)
+
+    expanded = s_matrix_array.reduce(scan=scan, detectors=detector)
+
+    for max_batch_expansion in (7, 10_000):
+        streamed = s_matrix_array.reduce(
+            scan=scan, detectors=detector, max_batch_expansion=max_batch_expansion
+        )
+        assert np.allclose(
+            streamed.array, expanded.array, atol=1e-5 * expanded.array.max()
+        )
+
+    positions = CustomScan(np.array([[1.234, 2.345], [3.001, 0.777]]))
+    expanded = s_matrix_array.reduce(scan=positions, detectors=detector)
+    streamed = s_matrix_array.reduce(
+        scan=positions, detectors=detector, max_batch_expansion=33
+    )
+    assert np.allclose(
+        streamed.array, expanded.array, atol=1e-5 * expanded.array.max()
+    )
+
+    ctf = abtem.CTF(semiangle_cutoff=20, defocus=50, Cs=1e5)
+    expanded = s_matrix_array.reduce(scan=scan, detectors=detector, ctf=ctf)
+    streamed = s_matrix_array.reduce(
+        scan=scan, detectors=detector, ctf=ctf, max_batch_expansion=50
+    )
+    assert np.allclose(
+        streamed.array, expanded.array, atol=1e-5 * expanded.array.max()
+    )
+
+
+def test_upsample_streamed_expansion_through_s_matrix():
+    # the constructor argument streams the one-shot scan without changing the
+    # result, both eagerly and lazily
+    potential = _small_potential()
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(3, 3))
+    detector = abtem.PixelatedDetector(max_angle=None)
+    kwargs = dict(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+    )
+
+    expanded = SMatrix(**kwargs).scan(scan=scan, detectors=detector, lazy=False)
+    streamed = SMatrix(**kwargs, max_batch_expansion=41).scan(
+        scan=scan, detectors=detector, lazy=False
+    )
+    assert np.allclose(
+        streamed.array, expanded.array, atol=1e-5 * expanded.array.max()
+    )
+
+    lazy_streamed = (
+        SMatrix(**kwargs, max_batch_expansion=41)
+        .scan(scan=scan, detectors=detector, lazy=True)
+        .compute()
+    )
+    assert np.allclose(
+        lazy_streamed.array, expanded.array, atol=1e-5 * expanded.array.max()
+    )
+
+
+def test_upsample_streamed_expansion_validation():
+    kwargs = dict(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20)
+
+    with pytest.raises(ValueError, match="upsample=True"):
+        SMatrix(**kwargs, interpolation=2, max_batch_expansion=8)
+
+    with pytest.raises(ValueError, match="window_gpts"):
+        SMatrix(
+            **kwargs,
+            interpolation=2,
+            upsample=True,
+            window_gpts=32,
+            max_batch_expansion=8,
+        )
+
+    # a window covering the full grid is no window, hence compatible with the
+    # streamed expansion (copies pass the derived window back through here)
+    s_matrix = SMatrix(
+        **kwargs, interpolation=2, upsample=True, max_batch_expansion=8
+    )
+    copied = SMatrix(**s_matrix._copy_kwargs(exclude=("potential",)))
+    assert copied.max_batch_expansion == 8
+    assert copied.window_gpts == s_matrix.window_gpts
+
+    s_matrix_array = SMatrix(
+        **kwargs, interpolation=2, upsample=True, window_gpts=32
+    ).build(lazy=False)
+    with pytest.raises(ValueError, match="window_gpts"):
+        s_matrix_array.reduce(max_batch_expansion=8)
+
+
+def test_upsample_singular_values_spectrum():
+    # the full spectrum is kept for choosing the tolerance; it extends the
+    # retained singular values and is sorted in descending order
+    potential = _small_potential()
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-2,
+    ).build(lazy=False)
+
+    singular_values = s_matrix_array.singular_values
+    assert len(singular_values) >= s_matrix_array.rank
+    assert np.allclose(
+        singular_values[: s_matrix_array.rank], s_matrix_array.sigma
+    )
+    assert np.all(np.diff(singular_values) <= 0)
+    assert singular_values[s_matrix_array.rank - 1] >= 1e-2 * singular_values[0]
