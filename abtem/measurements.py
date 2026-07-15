@@ -5211,10 +5211,12 @@ class MomentumResolvedSpectrum(BaseMeasurements):
 
         def panel_data(grid_index: tuple[int, ...]) -> np.ndarray:
             # Exploded axes take their grid value; other ensemble axes collapse
-            # to their first element.
-            selected = iter(grid_index)
+            # to their first element. grid_index is positional in explode_axes
+            # order (matching how indices was built below), not ascending axis
+            # order, so map by axis identity rather than consuming positionally.
+            axis_to_value = dict(zip(explode_axes, grid_index))
             full = tuple(
-                next(selected) if d in explode_axes else 0 for d in range(n_ensemble)
+                axis_to_value.get(d, 0) for d in range(n_ensemble)
             )
             data = array[full] if full else array
             data = np.asarray(data)
