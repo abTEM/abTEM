@@ -94,13 +94,13 @@ def projected_potential(r, p):
         2 * p[0][:, None] / p[1][:, None] * kn(0, r[None] * p[1][:, None])
         + p[0][:, None] * r[None] * kn(1, r[None] * p[1][:, None])
     ).sum(0)
-    return v.astype(np.float32)
+    return v
 
 
 @jit(nopython=True, nogil=True)
 def projected_scattering_factor(k2, p):
-    pi = np.array(np.pi, dtype=np.float32)
-    pi2 = np.array(np.pi**2, dtype=np.float32)
+    pi = np.pi
+    pi2 = np.pi**2
     k2 = 4 * pi2 * k2
     f = (
         8
