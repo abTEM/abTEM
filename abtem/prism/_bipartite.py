@@ -191,7 +191,8 @@ def pad_window(corner, length, margin, n):
 
     Returns ``(padded_indices, inner_slice)`` where ``padded_indices`` are the
     un-wrapped pixel indices of the widened window and ``inner_slice`` selects the
-    original window within it: ``padded_indices[inner_slice] == corner + arange(length)``.
+    original window within it:
+    ``padded_indices[inner_slice] == corner + arange(length)``.
     The margin gives the windowed forward-Fresnel enough room that its periodic
     wrap-around stays outside the inner window (paper: ``_fb_margin``).
     """
@@ -217,7 +218,9 @@ def fresnel_margin(distance, wavelength, k_max, sampling, gpts):
 
 
 def _window_tilt(k, iy, ix, extent, gpts, sign, xp, cdtype):
-    """``exp(sign · 2πi k · r)`` on the window pixels ``(iy, ix)`` → ``(len(k), wy, wx)``.
+    """``exp(sign · 2πi k · r)`` on the window pixels ``(iy, ix)``.
+
+    Returns shape ``(len(k), wy, wx)``.
 
     Matches :func:`abtem.prism.utils.plane_waves`: ``r = (iy·extent0/gpts0,
     ix·extent1/gpts1)``. The window indices may be un-wrapped (negative or
@@ -225,12 +228,12 @@ def _window_tilt(k, iy, ix, extent, gpts, sign, xp, cdtype):
     integer for the PRISM beam grid, so this is consistent with the wrapped crop.
     """
     real_dtype = get_dtype(complex=False)
-    dy = np.float32(extent[0] / gpts[0])
-    dx = np.float32(extent[1] / gpts[1])
+    dy = real_dtype(extent[0] / gpts[0])
+    dx = real_dtype(extent[1] / gpts[1])
     x = xp.asarray(iy, dtype=real_dtype) * dy  # (wy,)
     y = xp.asarray(ix, dtype=real_dtype) * dx  # (wx,)
     k = xp.asarray(k, dtype=real_dtype)  # (M, 2)
-    phase = (sign * 2.0 * np.float32(np.pi)) * (
+    phase = real_dtype(sign * 2.0 * np.pi) * (
         k[:, 0, None, None] * x[None, :, None] + k[:, 1, None, None] * y[None, None, :]
     )
     return complex_exponential(phase).astype(cdtype)
