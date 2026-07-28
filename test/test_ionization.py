@@ -12,6 +12,7 @@ with CuPy installed the GPU code paths in ``fast_roll`` /
 CuPy isn't present.
 """
 import sys
+import warnings
 
 import ase
 import numpy as np
@@ -409,6 +410,63 @@ def test_prism_eels_beam_basis_matches_multislice_at_interp_1(device, double_cha
 
     assert arr_multislice.shape == arr_beam_basis.shape
     np.testing.assert_allclose(arr_beam_basis, arr_multislice, rtol=1e-4, atol=1e-6)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("double_channel", [False, True])
+def test_prism_eels_beam_basis_handles_undersampled_scan(device, double_channel):
+    """A scan too coarse relative to ``interpolation`` can leave an ionization
+    site with NO scan position inside its PRISM window (extent /
+    interpolation, cropped to half that per axis) -- that site contributes
+    exactly zero and must be skipped rather than reaching the empty-batch FFT
+    that CuPy (unlike NumPy) rejects with 'Invalid number of FFT data points
+    (0)'. Regression test: this must not raise, must warn exactly once (not
+    once per site/slice), and must stay finite.
+    """
+    from abtem.inelastic.core_loss import prism_transition_potential_scan_beam_basis
+
+    unit_atoms = ase.build.bulk("Si", cubic=True)
+    atoms = unit_atoms * (2, 2, 2)
+    slice_thickness = float(unit_atoms.cell[2, 2])
+
+    potential = abtem.Potential(
+        atoms, gpts=(32, 32), slice_thickness=slice_thickness, device=device
+    )
+    energy = 100e3
+    tp = _make_synthetic_tp(14, (32, 32), potential.extent, energy=energy)
+    detector = abtem.FlexibleAnnularDetector(to_cpu=True)
+    # A 2x2 scan over the whole (2x2-tiled) cell is far coarser than the
+    # interpolation=4 PRISM window -- deliberately triggers the empty mask.
+    scan = abtem.GridScan(
+        start=(0, 0), end=potential.extent, gpts=(2, 2), endpoint=False
+    )
+    s_matrix = abtem.SMatrix(
+        potential=potential, energy=energy, semiangle_cutoff=20.0,
+        interpolation=4, downsample=False, device=device,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = prism_transition_potential_scan_beam_basis(
+            s_matrix,
+            transition_potentials=tp,
+            scan=scan,
+            detectors=detector,
+            sites=atoms,
+            double_channel=double_channel,
+        )
+        undersampled_warnings = [
+            w for w in caught
+            if issubclass(w.category, UserWarning)
+            and "no scan position within its PRISM window" in str(w.message)
+        ]
+
+    arr = np.asarray(res.array)
+    assert len(undersampled_warnings) == 1, (
+        f"expected exactly one undersampled-scan warning, got "
+        f"{len(undersampled_warnings)}"
+    )
+    assert np.all(np.isfinite(arr))
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
