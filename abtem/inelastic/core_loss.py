@@ -2068,6 +2068,7 @@ def prism_transition_potential_scan_beam_basis(
             )
 
     # --- Main loop ---
+    warned_empty_mask = False
     for slice_index, transmission in enumerate(transmissions):
         s_waves = _step(s_waves, transmission)
 
@@ -2119,6 +2120,44 @@ def prism_transition_potential_scan_beam_basis(
             site_xy = np.array(
                 [atom.position[0], atom.position[1]], dtype=np.float32
             )
+
+            # Which scan positions fall inside this atom's PRISM window
+            # (only depends on site_xy, not on any of the S1/S2 reconstruction
+            # below) -- compute and check it FIRST so a scan too coarse for
+            # this atom (no position lands inside its window, so it would
+            # contribute exactly zero) skips the reconstruction work entirely
+            # instead of building empty-batch arrays that some backends (e.g.
+            # CuPy's FFT) reject.
+            mask = xp.ones(n_positions, dtype=bool)
+            if interpolation[0] > 1:
+                mask &= (
+                    xp.abs(positions[:, 0] - site_xy[0])
+                    % (extent[0] - prism_region[0])
+                ) <= prism_region[0]
+            if interpolation[1] > 1:
+                mask &= (
+                    xp.abs(positions[:, 1] - site_xy[1])
+                    % (extent[1] - prism_region[1])
+                ) <= prism_region[1]
+
+            if not bool(mask.any()):
+                if not warned_empty_mask:
+                    warnings.warn(
+                        "PRISM-EELS beam-basis: at least one ionization site "
+                        "has no scan position within its PRISM window "
+                        "(extent / interpolation, cropped to half that per "
+                        "axis) -- the scan is too coarse relative to "
+                        "`interpolation` for that site to contribute "
+                        "anything. Such sites are skipped (equivalent to a "
+                        "zero contribution); use a denser scan or lower "
+                        "`interpolation` if this is unintended.",
+                        stacklevel=2,
+                    )
+                    warned_empty_mask = True
+                continue
+
+            coeff_masked = coefficients[mask]  # (n_masked, n_k)
+
             site_pixel = site_xy / full_sampling_arr
             site_pixel_int = np.rint(site_pixel).astype(int)
             crop_corner = (
@@ -2167,20 +2206,6 @@ def prism_transition_potential_scan_beam_basis(
             else:
                 s1_crop = wrapped_crop_2d(s_waves.array, crop_corner, window_gpts)
             HS1 = H_crop[:, None] * s1_crop[None, :]  # (n_T, n_k, wh, ww)
-
-            mask = xp.ones(n_positions, dtype=bool)
-            if interpolation[0] > 1:
-                mask &= (
-                    xp.abs(positions[:, 0] - site_xy[0])
-                    % (extent[0] - prism_region[0])
-                ) <= prism_region[0]
-            if interpolation[1] > 1:
-                mask &= (
-                    xp.abs(positions[:, 1] - site_xy[1])
-                    % (extent[1] - prism_region[1])
-                ) <= prism_region[1]
-
-            coeff_masked = coefficients[mask]  # (n_masked, n_k)
 
             if double_channel:
                 if partitions_s2 is not None:
