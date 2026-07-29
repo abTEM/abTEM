@@ -668,3 +668,48 @@ def disk_meshgrid(r: int) -> np.ndarray:
     rows = cols.T
     inside = (rows**2 + cols**2) <= r**2
     return np.array((rows[inside], cols[inside])).T
+
+
+def disk_meshgrid_iter(r: int, chunk_size: int = 2_000_000):
+    """Yield chunks of disk indices without building the full (2r+1)² array.
+
+    For large radii the standard :func:`disk_meshgrid` allocates two
+    ``(2r+1, 2r+1)`` intermediate arrays on the CPU and a single output
+    that can each be many gigabytes.  This generator builds the result
+    row-by-row and yields it in manageable chunks of at most
+    *chunk_size* ``(row, col)`` pairs.
+
+    Parameters
+    ----------
+    r : int
+        Disk radius in pixels.
+    chunk_size : int, optional
+        Maximum number of ``(row, col)`` pairs per yielded chunk.
+
+    Yields
+    ------
+    numpy.ndarray
+        ``(N, 2)`` int32 array of ``(row_offset, col_offset)`` pairs
+        where ``row_offset² + col_offset² <= r²``.
+    """
+    import math as _math
+
+    r_sq = r * r
+    buffer: list[np.ndarray] = []
+    buffer_count = 0
+
+    for row in range(-r, r + 1):
+        max_col = _math.isqrt(r_sq - row * row)
+        n_cols = 2 * max_col + 1
+        cols = np.arange(-max_col, max_col + 1, dtype=np.int32)
+        rows = np.full(n_cols, row, dtype=np.int32)
+        buffer.append(np.stack((rows, cols), axis=1))
+        buffer_count += n_cols
+
+        if buffer_count >= chunk_size:
+            yield np.concatenate(buffer)
+            buffer = []
+            buffer_count = 0
+
+    if buffer:
+        yield np.concatenate(buffer)

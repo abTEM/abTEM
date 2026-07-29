@@ -35,7 +35,7 @@ from abtem.core.axes import (
 )
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import Chunks, chunk_ranges, generate_chunks, validate_chunks
-from abtem.core.complex import complex_exponential
+from abtem.core.complex import complex_exponential, complex_exponential_scaled
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2sigma
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
 from abtem.core.grid import Grid, HasGrid2DMixin
@@ -44,6 +44,7 @@ from abtem.inelastic.phonons import (
     AtomsEnsemble,
     BaseFrozenPhonons,
     DummyFrozenPhonons,
+    FrozenPhonons,
     validate_seeds,
 )
 from abtem.integrals import (
@@ -102,6 +103,9 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
         exit_plane_index = 0
         exit_planes = self.exit_planes
 
+        if len(exit_planes) == 0:
+            return np.zeros(len(self), dtype=bool)
+
         if exit_planes[0] == -1:
             exit_plane_index += 1
 
@@ -133,6 +137,97 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
     @abstractmethod
     def generate_slices(self, first_slice: int = 0, last_slice: Optional[int] = None):
         pass
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Previously, ``build()`` always placed the entire slice dimension into a
+        single dask chunk — meaning the full ``(num_slices, gpts_y, gpts_x)``
+        array had to fit in memory (or VRAM) at once. There was no slice-level
+        chunking. This method introduces that missing middle ground: it eagerly
+        builds a group of contiguous slices that fits within a configurable
+        memory budget, yields it as a ``PotentialArray``, and the caller can
+        discard it after propagation before the next chunk is built. This
+        bounds peak memory and enables simulations of systems whose full
+        potential would not fit in memory.
+
+        On GPU this is especially important: dask uses a synchronous scheduler,
+        so the full potential chunk would be materialized at once in VRAM.
+        Chunking over slices keeps VRAM usage bounded while still feeding the
+        GPU enough data per chunk for efficient computation.
+
+        This default implementation collects slices from ``generate_slices()``
+        and stacks them. Subclasses may override for more efficient
+        implementations (e.g. ``_FieldBuilderFromAtoms`` uses
+        ``build(first_slice, last_slice)`` to avoid intermediate single-slice
+        allocations).
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget (``dask.chunk-size`` on CPU,
+            ``dask.chunk-size-gpu`` on GPU). Can also be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
+
+        Yields
+        ------
+        PotentialArray
+            A chunk of contiguous potential slices with correctly assigned
+            exit planes.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        xp = get_array_module(self.device)
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            arrays = []
+            slice_thicknesses = []
+            for slic in self.generate_slices(chunk_start, chunk_end):
+                arrays.append(slic.array)
+                slice_thicknesses.extend(slic.slice_thickness)
+
+            array = xp.concatenate(arrays, axis=0)
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            chunk = PotentialArray(
+                array,
+                slice_thickness=tuple(slice_thicknesses),
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
 
     @abstractmethod
     def build(
@@ -219,6 +314,179 @@ class BaseField(Ensemble, HasGrid2DMixin, EqualityMixin, CopyMixin, metaclass=AB
                 kwargs["explode"] = True
 
             return self.to_images().show(**kwargs)
+
+    def depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+    ) -> Images:
+        """Create a depth profile by projecting the potential along a spatial axis.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+
+        Returns
+        -------
+        depth_profile : Images
+            2D image(s) with the remaining spatial axis horizontal and depth
+            (z) vertical. Any ensemble axes (e.g. frozen phonons) are preserved.
+        """
+        return self.build().depth_profile(
+            projection_axis=projection_axis,
+            depth=depth,
+        )
+
+    def show_depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+        z_scale: float = 1.0,
+        slice_lines: bool = True,
+        ax=None,
+        cbar: bool = False,
+        cmap: Optional[str] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        power: float = 1.0,
+        common_color_scale: bool = False,
+        explode: bool | Sequence[int] = (),
+        figsize: Optional[tuple[int, int]] = None,
+        title: bool | str = True,
+        **kwargs,
+    ):
+        """Show a depth cross-section of the potential.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+        z_scale : float
+            Scaling factor for the z-axis relative to the spatial axis.
+            Values less than 1 compress the z-axis, making panels of thick
+            specimens more compact. Default is 1.0 (equal scaling).
+        slice_lines : bool
+            If True (default), draw horizontal lines at slice boundaries.
+        ax : matplotlib.axes.Axes, optional
+            If given the plot is added to the axis.
+        cbar : bool, optional
+            Add a colorbar to the plot. Default is False.
+        cmap : str, optional
+            Matplotlib colormap name.
+        vmin : float, optional
+            Minimum of the color scale.
+        vmax : float, optional
+            Maximum of the color scale.
+        power : float
+            Show image on a power scale.
+        common_color_scale : bool, optional
+            If True, all images in a grid share the same color scale.
+        explode : bool or sequence of int, optional
+            If True, create a grid of images for ensemble items.
+        figsize : two int, optional
+            Figure size as (width, height) in inches.
+        title : bool or str, optional
+            Column title for the images.
+        **kwargs
+            Additional keyword arguments passed to the show method.
+
+        Returns
+        -------
+        visualization : Visualization
+        """
+        from abtem.visualize import Visualization
+
+        profile = self.depth_profile(
+            projection_axis=projection_axis,
+            depth=depth,
+        )
+
+        if figsize is None and ax is None:
+            spatial_extent = profile.extent[0]
+            z_extent = profile.extent[1]
+
+            if explode is True or (isinstance(explode, Sequence) and explode):
+                n_panels = (
+                    profile.ensemble_shape[0] if profile.ensemble_shape else 1
+                )
+            else:
+                n_panels = 1
+
+            visual_ratio = (z_extent * z_scale) / spatial_extent
+            panel_width = 3.0
+            panel_height = panel_width * visual_ratio
+            if panel_height < 1.0:
+                panel_width = min(5.0, 1.0 / visual_ratio)
+                panel_height = panel_width * visual_ratio
+            elif panel_height > 8.0:
+                panel_height = 8.0
+                panel_width = panel_height / visual_ratio
+
+            figsize = (
+                panel_width * n_panels + 1.0 * n_panels + 0.5,
+                max(2.5, panel_height + 1.5),
+            )
+
+        visualization = Visualization(
+            measurement=profile,
+            ax=ax,
+            common_scale=common_color_scale,
+            figsize=figsize,
+            title=title,
+            aspect=False,
+            share_x=True,
+            share_y=True,
+            explode=explode,
+            overlay=(),
+            interactive=True,
+            value_limits=(vmin, vmax),
+            power=power,
+            cmap=cmap,
+            cbar=cbar,
+            **kwargs,
+        )
+
+        spatial_label = "x" if projection_axis == "y" else "y"
+        visualization.set_xlabel(f"{spatial_label} [Å]")
+        visualization.set_ylabel("z [Å]")
+
+        z_sampling = profile.sampling[1]
+        for idx in np.ndindex(visualization.axes.shape):
+            artist = visualization.artists[idx]
+            xlim = artist.get_xlim()
+            ylim = artist.get_ylim()
+            artist.set_extent(
+                (xlim[0], xlim[1], ylim[0] + z_sampling / 2, ylim[1] + z_sampling / 2)
+            )
+
+        visualization.adjust_coordinate_limits_to_artists()
+
+        for idx in np.ndindex(visualization.axes.shape):
+            visualization.axes[idx].set_aspect(z_scale)
+
+        if slice_lines:
+            limits = self.slice_limits
+            z_boundaries = sorted({z for lo, hi in limits for z in (lo, hi)})
+            for idx in np.ndindex(visualization.axes.shape):
+                for z in z_boundaries:
+                    visualization.axes[idx].axhline(
+                        z, color="white", linewidth=0.5, alpha=0.5
+                    )
+
+        return visualization
 
 
 class BasePotential(BaseField, metaclass=ABCMeta):
@@ -455,9 +723,8 @@ class _FieldBuilder(BaseField):
             )
 
             if self.ensemble_shape:
-                for _, _, potential_wrapped in self.generate_blocks(1):
+                for i, _, potential_wrapped in self.generate_blocks(1):
                     potential = potential_wrapped.item()
-                    i = np.unravel_index(0, self.ensemble_shape)
 
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
@@ -716,6 +983,72 @@ class _FieldBuilderFromAtoms(_FieldBuilder):
                 yield depth, potential_array
             else:
                 yield potential_array
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Overrides the base class to use ``build(first_slice, last_slice,
+        lazy=False)`` for each chunk range. This eagerly computes a contiguous
+        block of slices directly into a single allocation, avoiding the
+        overhead of building and stacking individual slices. Each chunk is
+        discarded by the caller after propagation, so only one chunk needs
+        to reside in memory (or VRAM) at a time.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            An eagerly computed chunk of contiguous potential slices.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            chunk = self.build(
+                first_slice=chunk_start, last_slice=chunk_end, lazy=False
+            )
+
+            # Remap exit planes to chunk-local indices (build() sets the
+            # full potential's exit_planes which are global indices).
+            chunk._exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            yield chunk
 
     @property
     def ensemble_axes_metadata(self):
@@ -995,6 +1328,81 @@ class FieldArray(BaseField, ArrayObject):
 
             yield slic
 
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        For a pre-built ``PotentialArray`` the data is already in memory
+        (or backed by a dask array whose single chunk spans all slices).
+        This method yields views into the existing array without any new
+        allocation or copy, so chunking only controls iteration grouping.
+
+        Note: if the array is dask-backed, the full potential is still
+        materialized as a single chunk when computed (dask never chunks
+        along the slice axis). To benefit from true memory-bounded
+        slice chunking, pass an unbuilt :class:`.Potential` to the
+        multislice algorithm instead.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice.
+        last_slice : int, optional
+            Index of the last slice.
+        chunk_size : int or str, optional
+            Number of slices per chunk. ``"auto"`` selects based on the
+            configured memory budget.
+
+        Yields
+        ------
+        PotentialArray
+            A view into the existing array covering a chunk of slices.
+        """
+        from abtem.core.chunks import (
+            estimate_potential_chunk_size,
+            generate_chunks,
+        )
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(
+                self.gpts, self.device
+            )
+
+        # Cap so the whole range is one chunk when it fits in the budget,
+        # then distribute evenly so the last chunk is never smaller than
+        # necessary (equal_sized_chunks inside generate_chunks handles this).
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        exit_plane_after = self._exit_plane_after
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            s = (0,) * (len(self.array.shape) - 3) + (
+                slice(chunk_start, chunk_end),
+            )
+            chunk_array = self.array[s]
+
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+
+            chunk = self.__class__(
+                chunk_array,
+                slice_thickness=self.slice_thickness[chunk_start:chunk_end],
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk
+
     def __getitem__(self, items):
         if isinstance(items, (Number, slice)):
             items = (items,)
@@ -1055,9 +1463,12 @@ class FieldArray(BaseField, ArrayObject):
 
         assert len(repetitions) == 3
 
-        new_array = np.tile(
-            self.array, (repetitions[2], repetitions[0], repetitions[1])
-        )
+        tile_reps = [1] * len(self.array.shape)
+        tile_reps[-self._base_dims] = repetitions[2]
+        tile_reps[-2] = repetitions[0]
+        tile_reps[-1] = repetitions[1]
+
+        new_array = np.tile(self.array, tuple(tile_reps))
 
         if self.extent is not None:
             new_extent = (
@@ -1085,6 +1496,76 @@ class FieldArray(BaseField, ArrayObject):
             sampling=(self.sampling[0], self.sampling[1]),
             metadata=self.metadata,
             ensemble_axes_metadata=self.axes_metadata[:-2],
+        )
+
+    def depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+    ) -> Images:
+        """Create a depth profile by projecting the potential along a spatial axis.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+
+        Returns
+        -------
+        depth_profile : Images
+            2D image(s) with the remaining spatial axis horizontal and depth
+            (z) vertical.
+        """
+        from copy import copy
+
+        if projection_axis not in ("x", "y"):
+            raise ValueError("projection_axis must be 'x' or 'y'.")
+
+        array = self.array
+
+        if projection_axis == "y":
+            sum_axis = -1
+            spatial_sampling = self.sampling[0]
+        else:
+            sum_axis = -2
+            spatial_sampling = self.sampling[1]
+
+        if depth is not None:
+            proj_sampling = (
+                self.sampling[1] if projection_axis == "y" else self.sampling[0]
+            )
+            proj_gpts = self.gpts[1] if projection_axis == "y" else self.gpts[0]
+            n = max(1, min(proj_gpts, round(depth / proj_sampling)))
+            start = (proj_gpts - n) // 2
+            slices = [slice(None)] * len(array.shape)
+            slices[sum_axis] = slice(start, start + n)
+            array = array[tuple(slices)]
+
+        array = array.sum(axis=sum_axis)
+
+        xp = get_array_module(array)
+        if hasattr(array, "rechunk"):
+            array = da.moveaxis(array, -2, -1)
+        else:
+            array = xp.moveaxis(array, -2, -1)
+
+        n_z = self.num_slices
+        z_extent = self.thickness
+        z_sampling = z_extent / n_z if n_z > 0 else 1.0
+
+        metadata = copy(self.metadata)
+
+        return Images(
+            array,
+            sampling=(spatial_sampling, z_sampling),
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
         )
 
     def project(self) -> Images:
@@ -1171,9 +1652,9 @@ class PotentialArray(BasePotential, FieldArray):
 
     @staticmethod
     def _transmission_function(array, energy):
-        xp = get_array_module(array)
-        sigma = xp.array(energy2sigma(energy), dtype=get_dtype())
-        array = complex_exponential(sigma * array)
+        # complex_exponential_scaled fuses the sigma multiplication into the
+        # GPU sin/cos kernel, avoiding one slice-sized real temporary.
+        array = complex_exponential_scaled(array, energy2sigma(energy))
         return array
 
     @classmethod
@@ -1336,10 +1817,21 @@ class CrystalPotential(_PotentialBuilder):
     unit. This may allow calculations to be performed with lower computational cost by
     calculating the potential unit once and repeating it.
 
-    If the repeating unit is a potential with frozen phonons it is treated as an
-    ensemble from which each repeating unit along the `z`-direction is randomly drawn.
-    If `num_frozen_phonons` an ensemble of crystal potentials are created each with a
-    random seed for choosing potential units.
+    If the repeating unit is a potential with frozen phonons, it is treated as a
+    pool of displaced configurations: every repetition of the unit (each lateral
+    tile of every `z`-repetition) draws a configuration from the pool. Draws are
+    balanced over the whole crystal, so reuse of a configuration is the minimum
+    the pool size allows -- no two tiles within a layer are identical whenever
+    the pool permits, and a pool of at least
+    ``repetitions[0] * repetitions[1] * repetitions[2]`` configurations gives
+    every repeated unit a distinct configuration (statistically equivalent to
+    tiling the displaced atoms directly). If `num_frozen_phonons` is set, an
+    ensemble of crystal potentials is created; each member independently
+    rebuilds its own pool of atomic displacement snapshots (reseeded from
+    that member's own seed) rather than sharing one fixed pool across the
+    ensemble, so members are genuinely independent thermal realisations --
+    there is no need to size the pool for the ensemble, only for a single
+    crystal (see above).
 
     Parameters
     ----------
@@ -1348,7 +1840,9 @@ class CrystalPotential(_PotentialBuilder):
     repetitions : three int
         The repetitions of the potential in `x`, `y` and `z`.
     num_frozen_phonons : int, optional
-        Number of frozen phonon configurations assembled from the potential units.
+        Number of crystal realisations in the frozen-phonon ensemble; each
+        realisation independently rebuilds its own pool of atomic
+        displacement snapshots.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the
@@ -1393,12 +1887,6 @@ class CrystalPotential(_PotentialBuilder):
                 " not have frozen phonons"
             )
 
-        if (potential_unit.num_configurations > 1) and (num_frozen_phonons is not None):
-            warnings.warn(
-                "the potential unit has frozen phonons, but 'num_frozen_phonons' is not"
-                " set"
-            )
-
         gpts = (
             potential_unit._valid_gpts[0] * repetitions[0],
             potential_unit._valid_gpts[1] * repetitions[1],
@@ -1429,6 +1917,7 @@ class CrystalPotential(_PotentialBuilder):
         self._potential_unit = potential_unit
         self._repetitions = repetitions
         self._ensemble_mean = ensemble_mean
+        self._sliced_atoms: Optional[BaseSlicedAtoms] = None
 
     @property
     def ensemble_mean(self) -> bool:
@@ -1499,6 +1988,55 @@ class CrystalPotential(_PotentialBuilder):
             return []
         else:
             return [FrozenPhononsAxis(_ensemble_mean=self._ensemble_mean)]
+
+    def get_sliced_atoms(self) -> BaseSlicedAtoms:
+        """
+        The atoms of the full crystal grouped into the slices given by the slice
+        thicknesses.
+
+        The atoms are reconstructed by tiling the unit potential's transformed
+        (orthogonalised) atoms by the crystal repetitions. This makes
+        ``CrystalPotential`` work with any code path that derives atomic sites
+        from a potential via ``get_sliced_atoms`` -- e.g. the core-loss EELS
+        driver's automatic site extraction -- without special-casing the
+        repeating-unit structure.
+
+        Notes
+        -----
+        - **Frozen phonons are not displaced.** ``get_transformed_atoms``
+          returns the equilibrium (mean) positions, so the returned sites are
+          the un-displaced atomic columns. This is deliberate: a
+          ``CrystalPotential`` ensemble draws an independent random unit
+          configuration per z-repetition, so there is no single displaced
+          realisation to return, and atomic-column site identification (the
+          main consumer) wants the equilibrium column positions anyway. This
+          differs from ``Potential.get_sliced_atoms``, which applies the
+          frozen-phonon displacement of its single configuration.
+        - The result is cached; the tile is non-trivial for large supercells.
+
+        Returns
+        -------
+        sliced_atoms : BaseSlicedAtoms
+        """
+        if self._sliced_atoms is not None:
+            return self._sliced_atoms
+
+        if not hasattr(self._potential_unit, "get_transformed_atoms"):
+            raise RuntimeError(
+                "Cannot derive atoms from a CrystalPotential whose "
+                f"potential_unit ({type(self._potential_unit).__name__}) does "
+                "not expose 'get_transformed_atoms' (e.g. a precomputed "
+                "PotentialArray). Pass the scattering sites explicitly instead."
+            )
+
+        unit_atoms = self._potential_unit.get_transformed_atoms()
+        tiled_atoms = unit_atoms * self._repetitions
+
+        self._sliced_atoms = SliceIndexedAtoms(
+            tiled_atoms, slice_thickness=self.slice_thickness
+        )
+
+        return self._sliced_atoms
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
@@ -1576,6 +2114,72 @@ class CrystalPotential(_PotentialBuilder):
 
         return (array,)
 
+    @property
+    def _n_lateral_tiles(self) -> int:
+        return self.repetitions[0] * self.repetitions[1]
+
+    def _pool_unit_for_member(self, member_seed: Optional[int]) -> BasePotential:
+        """Return the unit potential to draw pool configurations from for one
+        ensemble member (``member_seed`` is that member's seed), or for the
+        single default builder (``member_seed`` is None).
+
+        Two independent adjustments are made when the unit carries frozen
+        phonons; a precomputed ``PotentialArray`` unit has a fixed pool and is
+        always returned unchanged.
+
+        1. **Enlarge to the tile count.** A frozen-phonon ``CrystalPotential``
+           assembles each slice as a mosaic: every lateral tile draws an
+           independent pool configuration. If the pool holds fewer
+           configurations than there are lateral tiles
+           (``repetitions[0] * repetitions[1]``), some tiles must reuse a
+           configuration -- reintroducing the artificial in-plane periodicity
+           the mosaic is meant to remove. The pool is transparently enlarged
+           to the tile count (warning).
+
+        2. **Reseed per ensemble member.** Every ensemble member is built from
+           the *same* ``potential_unit`` object, so without reseeding every
+           member would draw from an identical, fixed pool of configurations
+           -- differing only in how those same snapshots are arranged across
+           the crystal, not in which atomic displacements exist. That is a
+           much weaker form of independence than a frozen-phonon ensemble is
+           supposed to provide, and sizing the pool cannot fix it (drawing
+           from a bigger *shared* pool still shares it). Instead, when this
+           call belongs to an ensemble (``member_seed`` is not None), the pool
+           is quietly rebuilt with ``member_seed`` as its root seed, so each
+           member gets its own independent set of atomic snapshots. This adds
+           no cost: the pool was already rebuilt once per member.
+        """
+        unit = self.potential_unit
+        n_tiles = self._n_lateral_tiles
+        fp = getattr(unit, "frozen_phonons", None)
+        if not isinstance(fp, FrozenPhonons) or fp.num_configs <= 1:
+            return unit
+
+        enlarge = fp.num_configs < n_tiles
+        reseed = member_seed is not None
+        if not enlarge and not reseed:
+            return unit
+
+        if enlarge:
+            warnings.warn(
+                f"frozen-phonon pool ({fp.num_configs}) is smaller than the "
+                f"number of lateral tiles ({n_tiles}); enlarging the pool to "
+                f"{n_tiles} so each tile draws a distinct configuration and no "
+                "lateral duplication occurs. Pass a unit with "
+                f"num_configs >= {n_tiles} to silence this."
+            )
+
+        new_fp = FrozenPhonons(
+            fp.atoms,
+            num_configs=n_tiles if enlarge else fp.num_configs,
+            sigmas=fp.sigmas,
+            directions=fp.directions,
+            ensemble_mean=fp.ensemble_mean,
+            seed=int(member_seed) if reseed else int(fp.seed[0]),
+        )
+        kwargs = unit._copy_kwargs(exclude=("atoms",))
+        return type(unit)(new_fp, **kwargs)
+
     def generate_slices(
         self,
         first_slice: int = 0,
@@ -1601,44 +2205,260 @@ class CrystalPotential(_PotentialBuilder):
         """
         # if hasattr(self.potential_unit, "array")
         #    potentials = self.potential_unit
-        if not isinstance(self.potential_unit, PotentialArray):
-            potentials = self.potential_unit.build(lazy=False)
+        member_seed = None if self.seeds is None else int(self.seeds[0])
+        pool_unit = self._pool_unit_for_member(member_seed)
+        if not isinstance(pool_unit, PotentialArray):
+            potentials = pool_unit.build(lazy=False)
         else:
-            potentials = self.potential_unit
+            potentials = pool_unit
 
         assert isinstance(potentials, PotentialArray)
 
         if len(potentials.shape) == 3:
             potentials = potentials.expand_dims(axis=0)
 
-        if self.seeds is None:
-            rng = np.random.default_rng(self.seeds)
-        else:
-            rng = np.random.default_rng(self.seeds[0])
+        rng = np.random.default_rng(member_seed)
+
+        if last_slice is None:
+            last_slice = len(self)
 
         exit_plane_after = self._exit_plane_after
         cum_thickness = np.cumsum(self.slice_thickness)
-        start = first_slice
-        stop = first_slice + 1
+        unit_slices = len(self.potential_unit)
+        global_idx = 0  # global slice counter across all z-repetitions
+
+        # Lazy cache of tiled unit slices, keyed by (config_idx, slice_idx).
+        # Without it each (z-rep, unit-slice) pair re-tiles the same array via
+        # ``.tile(self.repetitions[:2])`` — for the no-frozen-phonon case
+        # (n_configs == 1) every z-rep produces an identical result so the
+        # cost scales linearly with ``repetitions[2]``. The cache turns this
+        # into ``n_configs * len(self.potential_unit)`` unique tile calls.
+        # For the SrTiO3 tutorial (reps=(4,4,25), 2 unit slices, no FP) this
+        # is 2 tiles instead of 50; the cache footprint is bounded by the
+        # tiled-unit byte size and freed when the generator is exhausted.
+        tiled_cache: dict[tuple[int, int], PotentialArray] = {}
+        unit_generators: dict[int, object] = {}
+        tile_xy = self.repetitions[:2]
+
+        n_configs = potentials.shape[0]
+
+        # The mosaic path (frozen-phonon pools, n_configs > 1) needs random
+        # per-tile access into the pool, so materialise the (small unit-cell)
+        # pool array once. A lazily-built PotentialArray unit carries a dask
+        # array here; compute it so per-tile fancy indexing works and stays on
+        # the target device.
+        xp = get_array_module(self.device)
+        _pool_array = potentials.array
+        if n_configs > 1 and hasattr(_pool_array, "compute"):
+            _pool_array = _pool_array.compute()
+
+        def _tiled_slice(config_idx: int, j: int) -> PotentialArray:
+            key = (config_idx, j)
+            cached = tiled_cache.get(key)
+            if cached is not None:
+                return cached
+            gen = unit_generators.get(config_idx)
+            if gen is None:
+                gen = potentials[config_idx].generate_slices()
+                unit_generators[config_idx] = gen
+            slic = next(gen).tile(tile_xy)
+            tiled_cache[key] = slic
+            return slic
+
+        def _mosaic_slice(config_tiles: np.ndarray, j: int) -> PotentialArray:
+            # Assemble sub-slice ``j`` of the lateral supercell by placing an
+            # *independently drawn* pool configuration at every lateral
+            # repetition (a mosaic), rather than replicating a single displaced
+            # unit across all tiles. This is what reproduces genuine lateral
+            # (in-plane) thermal disorder: with plain ``.tile()`` every one of
+            # the ``repetitions[0] * repetitions[1]`` tiles is a bit-identical
+            # copy, so there is no in-plane disorder at all and no diffuse
+            # (Kikuchi) scattering can form. ``config_tiles`` holds one pool
+            # index per lateral tile, shaped ``repetitions[:2]``.
+            sub = _pool_array[:, j]  # (n_configs, uy, ux)
+            uy, ux = sub.shape[-2], sub.shape[-1]
+            mosaic = sub[xp.asarray(config_tiles)]  # (rep0, rep1, uy, ux)
+            # Interleave to match ``PotentialArray.tile`` block layout, which
+            # tiles the row axis by repetitions[0] and the col axis by
+            # repetitions[1] (np.tile(array, (rep2, rep0, rep1))).
+            mosaic = mosaic.transpose(0, 2, 1, 3).reshape(
+                tile_xy[0] * uy, tile_xy[1] * ux
+            )
+            return potentials.__class__(
+                mosaic[None],
+                potentials.slice_thickness[j : j + 1],
+                extent=self.extent,
+            )
+
+        n_tiles = tile_xy[0] * tile_xy[1]
+
+        # Balanced global drawing: every pool configuration receives a total
+        # usage budget of floor/ceil(total_slots / n_configs) over the whole
+        # crystal (all lateral tiles x all z-repetitions), and each z-layer
+        # draws the ``n_tiles`` configurations with the most budget remaining
+        # (random tie-breaking keeps assignments uniform). Drawing each layer
+        # independently instead (i.e. with replacement across z) lets the
+        # same configuration recur in many layers even when the pool is large
+        # enough to avoid it, correlating slices along z and measurably
+        # inflating thermal-diffuse statistics above the tiled-atoms ground
+        # truth. With budgets, reuse is the minimum the pool size allows and
+        # is spread evenly: once ``n_configs >= n_tiles * repetitions[2]``
+        # every unit cell in the crystal receives a distinct configuration --
+        # statistically identical to tiling the displaced atoms directly.
+        # Within a layer draws remain distinct whenever the pool allows (no
+        # in-plane duplication), as before.
+        if n_configs > 1:
+            total_slots = n_tiles * self.repetitions[2]
+            base, extra = divmod(total_slots, n_configs)
+            budgets = np.full(n_configs, base, dtype=np.int64)
+            if extra:
+                budgets[rng.permutation(n_configs)[:extra]] += 1
+
+        def _draw_config_tiles() -> np.ndarray:
+            if n_configs >= n_tiles:
+                # The ``n_tiles`` most-underused configurations, in random
+                # order (permute first; the stable sort then orders by budget
+                # only, keeping ties shuffled).
+                order = rng.permutation(n_configs)
+                chosen = order[np.argsort(-budgets[order], kind="stable")[:n_tiles]]
+            else:
+                # Pool smaller than a single layer: in-plane repeats are
+                # unavoidable; cycle freshly shuffled permutations to spread
+                # them as evenly as possible.
+                n_perms = -(-n_tiles // n_configs)  # ceil
+                chosen = np.concatenate(
+                    [rng.permutation(n_configs) for _ in range(n_perms)]
+                )[:n_tiles]
+            np.subtract.at(budgets, chosen, 1)
+            return chosen.reshape(tile_xy)
 
         for i in range(self.repetitions[2]):
-            potential = potentials[rng.integers(0, potentials.shape[0])]
-            generator = potential.generate_slices()
+            # Draw an independent displaced realisation per unit cell in the x,
+            # y and z supercell directions. For a single-config pool this
+            # collapses to the cheap cached ``.tile()`` path below.
+            # Always draw (even for z-repetitions skipped below) so the
+            # frozen-phonon sequence and the pool budget accounting stay
+            # consistent regardless of first_slice -- different chunks of the
+            # same crystal must see the same per-layer configuration draws.
+            if n_configs > 1:
+                config_tiles = _draw_config_tiles()
+            else:
+                config_tiles = None
 
-            for j in range(len(self.potential_unit)):
-                slic = next(generator).tile(self.repetitions[:2])
+            if global_idx + unit_slices <= first_slice:
+                # This entire z-repetition is before the requested window;
+                # advance the counter and skip.
+                global_idx += unit_slices
+                continue
 
-                exit_planes = tuple(np.where(exit_plane_after[start:stop])[0])
+            if global_idx >= last_slice:
+                # Past the requested window; nothing more to yield.
+                return
 
-                slic._exit_planes = exit_planes
-
-                start += 1
-                stop += 1
-
-                if return_depth:
-                    yield cum_thickness[stop - 1], slic
+            for j in range(unit_slices):
+                # Iterate j from 0 even for slices before first_slice in a
+                # partially-overlapping rep, so the unit generator advances in
+                # order (j=0, j=1, ...). The tiling cache ensures each
+                # (config, j) pair is tiled at most once.
+                if config_tiles is None:
+                    slic = _tiled_slice(0, j)
                 else:
-                    yield slic
+                    slic = _mosaic_slice(config_tiles, j)
 
-                if j == last_slice:
-                    break
+                if global_idx >= first_slice:
+                    exit_planes = tuple(
+                        np.where(exit_plane_after[global_idx : global_idx + 1])[0]
+                    )
+                    # Mutating the cached slice's exit_planes is safe: consumer
+                    # reads exit_planes immediately on each yield and holds no
+                    # back-reference across iterations.
+                    slic._exit_planes = exit_planes
+
+                    if return_depth:
+                        yield cum_thickness[global_idx], slic
+                    else:
+                        yield slic
+
+                global_idx += 1
+
+                if global_idx >= last_slice:
+                    return
+
+    def generate_chunked_slices(
+        self,
+        first_slice: int = 0,
+        last_slice: Optional[int] = None,
+        chunk_size: int | str = "auto",
+    ):
+        """
+        Generate potential slices in memory-budgeted chunks.
+
+        Unlike the base-class implementation, this override builds the unit
+        potential **once** (not once per chunk) and fills each output chunk
+        array in-place, slice by slice, using ``xp.tile``.  This avoids the
+        ~2× peak-memory spike that the base class incurs from accumulating
+        per-slice tiled arrays into a list before concatenating them.
+
+        The dtype of the output follows the unit potential's array dtype,
+        which is set by the abtem ``precision`` config key (float32 / float64).
+        """
+        from abtem.core.chunks import estimate_potential_chunk_size, generate_chunks
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        if chunk_size == "auto":
+            chunk_size = estimate_potential_chunk_size(self.gpts, self.device)
+        chunk_size = min(chunk_size, last_slice - first_slice)
+
+        xp = get_array_module(self.device)
+        exit_plane_after = self._exit_plane_after
+
+        # Build the unit potential once; the base class would re-build it on
+        # every chunk (one generate_slices() call per chunk).
+        if not isinstance(self.potential_unit, PotentialArray):
+            unit_built = self.potential_unit.build(lazy=False)
+        else:
+            unit_built = self.potential_unit
+
+        unit_arr = unit_built.array  # (n_unit_slices, h, w) or (n_configs, n_unit_slices, h, w)
+        if unit_arr.ndim == 3:
+            unit_arr = unit_arr[np.newaxis]  # → (1, n_unit_slices, h, w)
+
+        rng = np.random.default_rng(self.seeds[0] if self.seeds is not None else None)
+        unit_slices = len(self.potential_unit)
+        n_configs = unit_arr.shape[0]
+
+        # Pre-draw frozen-phonon config indices — one per z-repetition —
+        # to match the sequence that generate_slices() would produce.
+        config_indices = rng.integers(0, n_configs, size=self.repetitions[2])
+
+        unit_st = self.potential_unit.slice_thickness
+
+        for chunk_start, chunk_end in generate_chunks(
+            last_slice - first_slice, chunks=chunk_size, start=first_slice
+        ):
+            n = chunk_end - chunk_start
+            out = None
+            slice_thicknesses = []
+
+            for k, global_idx in enumerate(range(chunk_start, chunk_end)):
+                rep_i, unit_j = divmod(global_idx, unit_slices)
+                slc = unit_arr[config_indices[rep_i], unit_j]   # (h, w)
+                tiled = xp.tile(slc, self.repetitions[:2])       # (full_h, full_w)
+
+                if out is None:
+                    out = xp.empty((n,) + tiled.shape, dtype=tiled.dtype)
+                out[k] = tiled
+                slice_thicknesses.append(unit_st[unit_j])
+
+            exit_planes = tuple(
+                np.where(exit_plane_after[chunk_start:chunk_end])[0]
+            )
+            chunk = PotentialArray(
+                out,
+                slice_thickness=tuple(slice_thicknesses),
+                extent=self.extent,
+            )
+            chunk._exit_planes = exit_planes
+            yield chunk

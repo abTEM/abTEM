@@ -880,9 +880,22 @@ def orthogonalize_cell(
     assert box is not None
 
     if tuple(np.diag(atoms.cell)) == tuple(box):
-        if return_transform:
-            return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
-        else:
+        if is_cell_orthogonal(atoms.cell):
+            if return_transform:
+                return atoms, (np.zeros(3), np.ones(3), np.zeros(3))
+            else:
+                return atoms
+        # Early-exit bug: diag==box with non-orthogonal cell -> GS fallback
+        if not return_transform and not return_transform_matrix:
+            from numpy import dot
+            _cell = np.array(atoms.cell, dtype=float)
+            v1, v2, v3 = _cell[0], _cell[1], _cell[2]
+            v2_new = v2 - dot(v2, v1) / dot(v1, v1) * v1
+            from ase import Atoms as _Atoms
+            atoms = _Atoms(symbols=atoms.get_chemical_symbols(),
+                           positions=atoms.get_positions().copy(),
+                           cell=np.array([v1, v2_new, v3]), pbc=atoms.pbc)
+            atoms.wrap()
             return atoms
 
     if np.any(atoms.cell.lengths() < tolerance):

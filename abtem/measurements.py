@@ -668,6 +668,7 @@ def integrate_disc(
     border : str
         Specify how to treat integration regions that cross the image border. The valid
         values and their behaviours are:
+
         'wrap'
             The measurement is extended by wrapping around to the opposite edge.
         'raise'
@@ -1120,7 +1121,7 @@ class _BaseMeasurement2D(BaseMeasurements):
                 mode=mode,
                 cval=cval,
                 depth=depth,
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = gaussian_filter(self.array, sigma=sigma, mode=mode, cval=cval)
@@ -1191,6 +1192,7 @@ class _BaseMeasurement2D(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         explode: bool | Sequence[int] = (),
         overlay: bool | Sequence[int] = (),
@@ -1222,7 +1224,10 @@ class _BaseMeasurement2D(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show image on a power scale.
+            Show image on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show image on a logarithmic intensity scale. Cannot be used
+            together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -1272,6 +1277,7 @@ class _BaseMeasurement2D(BaseMeasurements):
             interactive=not interact and display,
             value_limits=(vmin, vmax),
             power=power,
+            logscale=logscale,
             cmap=cmap,
             cbar=cbar,
             units=units,
@@ -1442,7 +1448,7 @@ class Images(_BaseMeasurement2D):
             array = array.map_blocks(
                 _integrate_gradient_2d,
                 sampling=self.sampling,
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = _integrate_gradient_2d(self.array, sampling=self.sampling)
@@ -1733,7 +1739,7 @@ class Images(_BaseMeasurement2D):
                 chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
             )
             array = array.map_blocks(
-                self._diffractograms, meta=xp.array((), dtype=xp.float32)
+                self._diffractograms, meta=xp.array((), dtype=get_dtype(complex=False))
             )
         else:
             array = self._diffractograms(self.array)
@@ -1836,7 +1842,7 @@ class _BaseMeasurement1D(BaseMeasurements):
 
         return LineScan(start=start, end=end, sampling=sampling)
 
-    def _add_to_visualization(self, *args, **kwargs):
+    def _add_to_plot(self, *args, **kwargs):
         if not all(key in self.metadata for key in ("start", "end")):
             raise RuntimeError(
                 "The metadata does not contain the keys 'start' and 'end'"
@@ -1845,7 +1851,7 @@ class _BaseMeasurement1D(BaseMeasurements):
         if "width" in self.metadata:
             kwargs["width"] = self.metadata["width"]
 
-        self._line_scan().add_to_axes(*args, **kwargs)
+        self._line_scan().add_to_plot(*args, **kwargs)
 
     @staticmethod
     def _calculate_widths(array, sampling, height):
@@ -1959,7 +1965,7 @@ class _BaseMeasurement1D(BaseMeasurements):
                 endpoint=endpoint,
                 order=order,
                 chunks=self.array.chunks[:-1] + (gpts,),
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._interpolate(self.array, gpts, endpoint, order)
@@ -2280,7 +2286,7 @@ def _gaussian_source_size(measurements, sigma: float | tuple[float, float]):
             sigma=padded_sigma,
             mode="wrap",
             depth=depth,
-            meta=xp.array((), dtype=xp.float32),
+            meta=xp.array((), dtype=get_dtype(complex=False)),
         )
     else:
         array = gaussian_filter(measurements.array, sigma=padded_sigma, mode="wrap")
@@ -2904,7 +2910,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 new_sampling=sampling,
                 new_gpts=gpts,
                 chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                dtype=np.float32,
+                dtype=get_dtype(complex=False),
             )
         else:
             array = self._batch_interpolate_bilinear(
@@ -3047,12 +3053,16 @@ class DiffractionPatterns(_BaseMeasurement2D):
             )
         )[..., np.concatenate(indices)]
 
+        # Use the configured floating-point precision, not a hardcoded float32.
+        # _AbstractRadialDetector._out_dtype returns get_dtype(complex=False), so
+        # the result dtype must match to avoid a silent precision downgrade.
+        fp_dtype = array.dtype
         result = xp.zeros(
             (
                 array.shape[0],
                 len(indices),
             ),
-            dtype=xp.float32,
+            dtype=fp_dtype,
         )
 
         if xp is cp:
@@ -3135,7 +3145,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                     len(self.shape) - 2,
                     len(self.shape) - 1,
                 ),
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._radial_binning(
@@ -3273,7 +3283,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 fftshift=self.fftshift,
                 offset=offset,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             integrated_intensity = self._integrate_fourier_space(
@@ -3354,7 +3364,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 )
             )
             array = self.array.map_blocks(
-                self._com, x=x, y=y, drop_axis=base_axes, dtype=np.complex64
+                self._com, x=x, y=y, drop_axis=base_axes, dtype=get_dtype(complex=True)
             )
         else:
             array = self._com(self.array, x=x, y=y)
@@ -3405,7 +3415,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 inner=inner,
                 outer=outer,
                 angular_coordinates=self.angular_coordinates,
-                meta=xp.array((), dtype=xp.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._bandlimit(self.array, inner, outer, self.angular_coordinates)
@@ -3575,7 +3585,7 @@ class DiffractionPatterns(_BaseMeasurement2D):
                 drop_axis=base_axes,
                 new_axis=base_axes[0],
                 chunks=self.array.chunks[:-2] + (n,),
-                meta=xp.array((), dtype=np.float32),
+                meta=xp.array((), dtype=get_dtype(complex=False)),
             )
         else:
             array = self._azimuthal_average(
@@ -4095,7 +4105,7 @@ class PolarMeasurements(BaseMeasurements):
 
         xp = get_array_module(self.array)
 
-        array = xp.zeros_like(xp.array(differential_1.array), dtype=xp.complex64)
+        array = xp.zeros_like(xp.array(differential_1.array), dtype=get_dtype(complex=True))
 
         array.real = differential_1.array
         array.imag = differential_2.array
@@ -4143,6 +4153,7 @@ class PolarMeasurements(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         explode: bool | Sequence[bool] = (),
         overlay: bool | Sequence[int] = (),
@@ -4176,7 +4187,10 @@ class PolarMeasurements(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show image on a power scale.
+            Show image on a power scale. Cannot be used together with ``logscale``.
+        logscale : bool
+            If True, show image on a logarithmic intensity scale. Cannot be used
+            together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -4223,6 +4237,7 @@ class PolarMeasurements(BaseMeasurements):
             vmin=vmin,
             vmax=vmax,
             power=power,
+            logscale=logscale,
             common_color_scale=common_color_scale,
             explode=explode,
             overlay=overlay,
@@ -4788,6 +4803,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         power: float = 1.0,
+        logscale: bool = False,
         common_color_scale: bool = False,
         scale: float = 0.5,
         explode: bool | Sequence[bool] = (),
@@ -4820,7 +4836,11 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             Maximum of the intensity color scale. Default is the maximum of the array
             values.
         power : float
-            Show diffraction spots intensities on a power scale.
+            Show diffraction spots intensities on a power scale. Cannot be used
+            together with ``logscale``.
+        logscale : bool
+            If True, show diffraction spots on a logarithmic intensity scale.
+            Cannot be used together with ``power != 1.0``.
         common_color_scale : bool, optional
             If True all images in an image grid are shown on the same colorscale, and a
             single colorbar is created (if it is requested). Default is False.
@@ -4878,6 +4898,7 @@ class IndexedDiffractionPatterns(BaseMeasurements):
             interactive=not interact and display,
             value_limits=(vmin, vmax),
             power=power,
+            logscale=logscale,
             cmap=cmap,
             cbar=cbar,
             scale=scale,

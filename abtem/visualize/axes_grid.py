@@ -8,7 +8,26 @@ from matplotlib.axes import Axes
 from mpl_toolkits.axes_grid1 import Divider, Size
 from mpl_toolkits.axes_grid1.axes_grid import _cbaraxes_class_factory
 
+from matplotlib.transforms import Bbox
+
 from abtem.core.utils import flatten_list_of_lists, interleave
+
+
+class _SyncedCbarLocator:
+    """Locator that keeps a colorbar aligned with a reference axes."""
+
+    def __init__(self, original_locator, ref_ax, sync_axis="y"):
+        self._original = original_locator
+        self._ref_ax = ref_ax
+        self._sync_axis = sync_axis
+
+    def __call__(self, axes, renderer):
+        pos = self._original(axes, renderer)
+        ref = self._ref_ax.get_position(original=False)
+        if self._sync_axis == "y":
+            return Bbox.from_bounds(pos.x0, ref.y0, pos.width, ref.height)
+        else:
+            return Bbox.from_bounds(ref.x0, pos.y0, ref.width, pos.height)
 
 
 def _cbar_orientation(cbar_loc):
@@ -103,6 +122,9 @@ class AxesGrid:
 
         self._set_axes_locators()
         self._set_caxes_locators()
+
+        if ncbars > 0:
+            self._connect_cbar_sync()
 
         if sharex:
             for inner_axes in self._axes[:, 1:]:
@@ -294,6 +316,18 @@ class AxesGrid:
             line_types = ["bottom"] + line_types + ["top"]
 
         return line_types
+
+    def _connect_cbar_sync(self):
+        ref_ax = self._axes.ravel()[0]
+        sync_axis = "y" if self._cbar_loc == "right" else "x"
+        for cax in self._caxes.ravel():
+            if cax is None or cax == 0:
+                continue
+            original_locator = cax.get_axes_locator()
+            if original_locator is not None:
+                cax.set_axes_locator(
+                    _SyncedCbarLocator(original_locator, ref_ax, sync_axis)
+                )
 
     def set_sizes(self, **kwargs):
         for key, value in kwargs.items():

@@ -23,6 +23,7 @@ from abtem.core.axes import (
     OrdinalAxis,
     RealSpaceAxis,
     ReciprocalSpaceAxis,
+    ThicknessAxis,
 )
 from abtem.core.backend import (
     device_name_from_array_module,
@@ -430,6 +431,8 @@ class Waves(BaseWaves, ArrayObject):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
@@ -775,6 +778,270 @@ class Waves(BaseWaves, ArrayObject):
         """
         return self.to_images(convert_complex="imag")
 
+    def depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+        convert_complex: str = "intensity",
+    ) -> Images:
+        """Create a depth profile by projecting wave functions along a spatial axis.
+
+        Requires wave functions with a thickness dimension, i.e. from a multislice
+        simulation with ``exit_planes``.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+        convert_complex : str
+            How to convert the complex wave function before projecting. One of
+            ``"intensity"`` (default), ``"phase"``, ``"real"``, or ``"imag"``.
+
+        Returns
+        -------
+        depth_profile : Images
+            2D image(s) with the depth (z) as the first base axis and the
+            remaining spatial axis as the second. Any additional ensemble axes
+            (e.g. scan positions) are preserved.
+        """
+        thickness_idx = None
+        for i, ax in enumerate(self.ensemble_axes_metadata):
+            if isinstance(ax, ThicknessAxis):
+                thickness_idx = i
+                break
+
+        if thickness_idx is None:
+            raise ValueError(
+                "Wave functions must have a ThicknessAxis (use exit_planes "
+                "in the potential to record waves at each slice)."
+            )
+
+        if projection_axis not in ("x", "y"):
+            raise ValueError("projection_axis must be 'x' or 'y'.")
+
+        if convert_complex in ("domain_coloring", "none", None):
+            images = self.to_images(convert_complex=None)
+        else:
+            images = self.to_images(convert_complex=convert_complex)
+        array = images.array
+
+        if projection_axis == "y":
+            sum_axis = -1
+            spatial_sampling = self.sampling[0]
+            spatial_gpts = self.gpts[0]
+        else:
+            sum_axis = -2
+            spatial_sampling = self.sampling[1]
+            spatial_gpts = self.gpts[1]
+
+        if depth is not None:
+            proj_sampling = self.sampling[1] if projection_axis == "y" else self.sampling[0]
+            proj_gpts = self.gpts[1] if projection_axis == "y" else self.gpts[0]
+            n = max(1, min(proj_gpts, round(depth / proj_sampling)))
+            start = (proj_gpts - n) // 2
+            slices = [slice(None)] * len(array.shape)
+            slices[sum_axis] = slice(start, start + n)
+            array = array[tuple(slices)]
+
+        array = array.sum(axis=sum_axis)
+
+        xp = get_array_module(array)
+        if hasattr(array, "rechunk"):
+            array = da.moveaxis(array, thickness_idx, -1)
+        else:
+            array = xp.moveaxis(array, thickness_idx, -1)
+
+        thickness_values = self.ensemble_axes_metadata[thickness_idx].values
+        z_extent = max(thickness_values)
+        n_z = len(thickness_values)
+        z_sampling = z_extent / n_z if n_z > 0 else 1.0
+
+        remaining_metadata = [
+            ax
+            for i, ax in enumerate(self.ensemble_axes_metadata)
+            if i != thickness_idx
+        ]
+
+        metadata = copy(self.metadata)
+        metadata["label"] = convert_complex
+        metadata["units"] = "arb. unit"
+
+        return Images(
+            array,
+            sampling=(spatial_sampling, z_sampling),
+            ensemble_axes_metadata=remaining_metadata,
+            metadata=metadata,
+        )
+
+    def show_depth_profile(
+        self,
+        projection_axis: str = "y",
+        depth: Optional[float] = None,
+        convert_complex: str = "intensity",
+        z_scale: float = 1.0,
+        slice_lines: bool = False,
+        ax=None,
+        cbar: bool = False,
+        cmap: Optional[str] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        power: float = 1.0,
+        common_color_scale: bool = False,
+        explode: bool | Sequence[int] = (),
+        figsize: Optional[tuple[int, int]] = None,
+        title: bool | str = True,
+        **kwargs,
+    ) -> Visualization:
+        """Show a depth propagation profile of the wave functions.
+
+        Requires wave functions with a thickness dimension, i.e. from a multislice
+        simulation with ``exit_planes``.
+
+        Parameters
+        ----------
+        projection_axis : str
+            Spatial axis to project (sum) along. ``"y"`` (default) produces an
+            x–z cross-section; ``"x"`` produces a y–z cross-section.
+        depth : float, optional
+            If given, project only over a finite slab of this thickness [Å],
+            centered on the midpoint of the projected axis. The number of grid
+            points is rounded to the nearest integer. If ``None``, the full
+            extent is projected.
+        convert_complex : str
+            How to convert the complex wave function before projecting. One of
+            ``"intensity"`` (default), ``"phase"``, ``"real"``, or ``"imag"``.
+        z_scale : float
+            Scaling factor for the z-axis relative to the spatial axis.
+            Values less than 1 compress the z-axis, making panels of thick
+            specimens more compact. Default is 1.0 (equal scaling).
+        slice_lines : bool
+            If True, draw horizontal lines at slice boundaries. Default is
+            False.
+        ax : matplotlib.axes.Axes, optional
+            If given the plot is added to the axis.
+        cbar : bool, optional
+            Add a colorbar to the plot. Default is False.
+        cmap : str, optional
+            Matplotlib colormap name.
+        vmin : float, optional
+            Minimum of the intensity color scale.
+        vmax : float, optional
+            Maximum of the intensity color scale.
+        power : float
+            Show image on a power scale.
+        common_color_scale : bool, optional
+            If True, all images in a grid share the same color scale.
+        explode : bool or sequence of int, optional
+            If True, create a grid of images for ensemble items.
+        figsize : two int, optional
+            Figure size as (width, height) in inches.
+        title : bool or str, optional
+            Column title for the images.
+        **kwargs
+            Additional keyword arguments passed to the show method.
+
+        Returns
+        -------
+        visualization : Visualization
+        """
+        profile = self.depth_profile(
+            projection_axis=projection_axis,
+            depth=depth,
+            convert_complex=convert_complex,
+        )
+
+        if figsize is None and ax is None:
+            spatial_extent = profile.extent[0]
+            z_extent = profile.extent[1]
+
+            if explode is True or (isinstance(explode, Sequence) and explode):
+                n_panels = (
+                    profile.ensemble_shape[0] if profile.ensemble_shape else 1
+                )
+            else:
+                n_panels = 1
+
+            visual_ratio = (z_extent * z_scale) / spatial_extent
+            panel_width = 3.0
+            panel_height = panel_width * visual_ratio
+            if panel_height < 1.0:
+                panel_width = min(5.0, 1.0 / visual_ratio)
+                panel_height = panel_width * visual_ratio
+            elif panel_height > 8.0:
+                panel_height = 8.0
+                panel_width = panel_height / visual_ratio
+
+            figsize = (
+                panel_width * n_panels + 1.0 * n_panels + 0.5,
+                max(2.5, panel_height + 1.5),
+            )
+
+        from abtem.visualize import Visualization
+
+        viz_complex = convert_complex if convert_complex in (
+            "domain_coloring", "none", None
+        ) else "none"
+
+        visualization = Visualization(
+            measurement=profile,
+            ax=ax,
+            common_scale=common_color_scale,
+            figsize=figsize,
+            title=title,
+            aspect=False,
+            share_x=True,
+            share_y=True,
+            explode=explode,
+            overlay=(),
+            interactive=True,
+            value_limits=(vmin, vmax),
+            power=power,
+            cmap=cmap,
+            cbar=cbar,
+            convert_complex=viz_complex,
+            **kwargs,
+        )
+
+        spatial_label = "x" if projection_axis == "y" else "y"
+        visualization.set_xlabel(f"{spatial_label} [Å]")
+        visualization.set_ylabel("z [Å]")
+
+        z_sampling = profile.sampling[1]
+        for idx in np.ndindex(visualization.axes.shape):
+            artist = visualization.artists[idx]
+            xlim = artist.get_xlim()
+            ylim = artist.get_ylim()
+            artist.set_extent(
+                (xlim[0], xlim[1], ylim[0] + z_sampling / 2, ylim[1] + z_sampling / 2)
+            )
+
+        visualization.adjust_coordinate_limits_to_artists()
+
+        for idx in np.ndindex(visualization.axes.shape):
+            visualization.axes[idx].set_aspect(z_scale)
+
+        if slice_lines:
+            thickness_idx = None
+            for i, ax_meta in enumerate(self.ensemble_axes_metadata):
+                if isinstance(ax_meta, ThicknessAxis):
+                    thickness_idx = i
+                    break
+            if thickness_idx is not None:
+                z_positions = self.ensemble_axes_metadata[thickness_idx].values
+                for idx in np.ndindex(visualization.axes.shape):
+                    for z in z_positions:
+                        visualization.axes[idx].axhline(
+                            z, color="white", linewidth=0.5, alpha=0.5
+                        )
+
+        return visualization
+
     def downsample(
         self,
         max_angle: str | float = "cutoff",
@@ -1094,9 +1361,14 @@ class Waves(BaseWaves, ArrayObject):
             converted to measurements after running the multislice algorithm.
             See `abtem.measurements.detect` for a list of implemented detectors. If
             not given, returns the wave functions themselves.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
-
 
         Returns
         -------
@@ -1204,7 +1476,21 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def apply_transform(
         self, transform, max_batch: int | str = "auto", lazy: bool = True
     ):
-        return self.build(lazy=lazy).apply_transform(transform, max_batch=max_batch)
+        # Resolve VRAM-aware batch size *before* building so that
+        # _build_validated receives the correct probe count and creates
+        # the right dask chunks.  If we let max_batch="auto" reach
+        # _build_validated it falls back to the dask.chunk-size-gpu config
+        # (512 MB default → batch≈2 at 4096²), ignoring free CUDA memory.
+        if max_batch == "auto" and self._device == "gpu":
+            from abtem.core.chunks import estimate_scan_batch_size
+
+            max_batch = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+
+        built = self.build(lazy=lazy, max_batch=max_batch)
+        # Keep _device so that ArrayObject.apply_transform can select the
+        # synchronous scheduler for GPU work and propagate device to outputs.
+        built._device = self._device
+        return built.apply_transform(transform, max_batch=max_batch)
 
     def check_can_build(self):
         """Check whether the wave functions can be built."""
@@ -1353,6 +1639,15 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         if lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self._valid_gpts))
+            elif max_batch == "auto" and self.device == "gpu":
+                # Query free CUDA memory to pick a probe batch that fits in
+                # VRAM.  The config-based fallback (dask.chunk-size-gpu,
+                # default 512 MB) gives only ~2 probes at 4096², which is
+                # far below the GPU-optimal batch size.
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+                max_batch = int(n_probes * np.prod(self._valid_gpts))
 
             chunks = self._default_ensemble_chunks + self._valid_gpts
 
@@ -1544,6 +1839,12 @@ class PlaneWave(WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
 

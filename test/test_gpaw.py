@@ -5,10 +5,11 @@ import numpy as np
 import pytest
 from ase import Atoms, units
 
+from abtem.inelastic.phonons import FrozenPhonons
 from abtem.potentials.iam import Potential
 
 try:
-    from gpaw import GPAW
+    from gpaw import GPAW, PW
     from gpaw.utilities.ps2ae import PS2AE
 
     from abtem.potentials.gpaw import GPAWPotential
@@ -19,7 +20,7 @@ except ImportError:
 @pytest.fixture
 def gpaw_calculator_no_bonding():
     atoms = Atoms("C", positions=[(0, 0, 0)], cell=(5.0,) * 3, pbc=True)
-    atoms.calc = GPAW(mode="fd", h=0.2, txt=None, kpts=(3, 3, 3))
+    atoms.calc = GPAW(mode=PW(500), h=0.2, txt=None, kpts=(3, 3, 3))
     atoms.get_potential_energy()
     return atoms.calc
 
@@ -27,7 +28,7 @@ def gpaw_calculator_no_bonding():
 @pytest.fixture
 def gpaw_calculator_bonding():
     atoms = Atoms("C", positions=[(0, 0, 0)], cell=(2.0,) * 3, pbc=True)
-    atoms.calc = GPAW(mode="fd", h=0.2, txt=None, kpts=(3, 3, 3))
+    atoms.calc = GPAW(mode=PW(500), h=0.2, txt=None, kpts=(3, 3, 3))
     atoms.get_potential_energy()
     return atoms.calc
 
@@ -66,19 +67,19 @@ def test_compare_ps2ae_to_abtem_bonding(gpaw_calculator_bonding):
     assert_psae_matches_abtem(gpaw_calculator_bonding)
 
 
-# @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
-# def test_gpaw_potential_with_frozen_phonons(gpaw_calculator_bonding):
-#     frozen_phonons = FrozenPhonons(
-#         gpaw_calculator_bonding.atoms, num_configs=2, sigmas=0.1
-#     )
-#     gpaw_potential = GPAWPotential(
-#         gpaw_calculator_bonding, sampling=0.05, frozen_phonons=frozen_phonons
-#     )
-#     assert gpaw_potential.ensemble_shape == (2,)
-#     assert gpaw_potential.build().ensemble_shape == (2,)
-#     gpaw_potential = gpaw_potential.build().compute()
-#     assert gpaw_potential.ensemble_shape == (2,)
-#     assert not np.allclose(gpaw_potential.array[0], gpaw_potential.array[1])
+@pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")
+def test_gpaw_potential_with_frozen_phonons(gpaw_calculator_bonding):
+    frozen_phonons = FrozenPhonons(
+        gpaw_calculator_bonding.atoms, num_configs=2, sigmas=0.1
+    )
+    gpaw_potential = GPAWPotential(
+        gpaw_calculator_bonding, sampling=0.05, frozen_phonons=frozen_phonons
+    )
+    assert gpaw_potential.ensemble_shape == (2,)
+    assert gpaw_potential.build().ensemble_shape == (2,)
+    gpaw_potential = gpaw_potential.build().compute()
+    assert gpaw_potential.ensemble_shape == (2,)
+    assert not np.allclose(gpaw_potential.array[0], gpaw_potential.array[1])
 
 
 @pytest.mark.skipif("gpaw" not in sys.modules, reason="requires gpaw")

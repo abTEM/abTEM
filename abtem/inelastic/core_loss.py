@@ -12,25 +12,17 @@ from ase import Atom, Atoms, units
 from ase.data import chemical_symbols
 from numba import jit
 from scipy.interpolate import interp1d
+from scipy.special import spherical_jn
 
-# ---------
-# This is a version check for scipy >=v1.17.0
-from importlib.metadata import version, PackageNotFoundError
-from packaging.version import Version
 try:
-    import scipy
-    _SCIPY_VERSION = Version(version("scipy"))
-except PackageNotFoundError:
-    scipy = None
-    _SCIPY_VERSION = None
+    # sph_harm_y is the non-deprecated replacement for sph_harm, available
+    # since scipy 1.15; sph_harm itself is removed in scipy 1.17.
+    from scipy.special import sph_harm_y
+except ImportError:
+    from scipy.special import sph_harm
 
-if _SCIPY_VERSION is not None and _SCIPY_VERSION >= Version("1.17.0"):
-    from scipy.special import spherical_jn, sph_harm_y
-else:
-    from scipy.special import spherical_jn, sph_harm
     def sph_harm_y(n, m, theta, phi):
         return sph_harm(m, n, phi, theta)
-# ---------
 
 
 from abtem.array import ArrayObject
@@ -215,7 +207,12 @@ def numerov(f, x0, dx, dh):
     """Given precomputed function f(x), solves for x(t), which satisfies:
     x''(t) = f(t) x(t)
     """
-    x = np.zeros(len(f))
+    # f.copy() rather than np.zeros(len(f)): some numba/numpy pairings
+    # (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's internal
+    # np.zeros -> np.empty lowering inside @njit, while ndarray.copy() is
+    # unaffected. Every element of x is overwritten below before being
+    # read, so the borrowed initial values from f are never used.
+    x = f.copy()
     x[0] = x0
     x[1] = x0 + dh * dx
     h2 = dh**2
@@ -572,7 +569,14 @@ class TransitionPotential(BaseTransitionPotential):
         return interp1d(radial_grid, integral)(k)
 
     def _calculate_form_factor(self, bound, excited, k, phi, theta):
-        from sympy.physics.wigner import wigner_3j
+        try:
+            from sympy.physics.wigner import wigner_3j
+        except ImportError as e:
+            raise ImportError(
+                "Calculating core-loss EELS form factors requires sympy. "
+                "Install it with `pip install abtem[gpaw]` or "
+                "`pip install sympy`."
+            ) from e
 
         Hn0 = np.zeros_like(k, dtype=complex)
         l = bound.l
@@ -688,35 +692,49 @@ class TransitionPotential(BaseTransitionPotential):
         return self.build().to_images().show(**kwargs)
 
 
-# @njit(fastmath=True)
 def fast_roll(array, shifts):
-    xp = get_array_module(array)
-    output = xp.empty((len(shifts),) + array.shape, dtype=array.dtype)
+    """Batched 2D circular roll: ``out[i] == xp.roll(array, shifts[i], axis=(0, 1))``.
 
+    On CPU the per-site quadrant-copy loop is already very fast — each slice is
+    a memmove — and beats both ``xp.roll`` in a loop and a full advanced-indexing
+    gather. On GPU the advanced-indexing form wins because the per-site loop
+    serialises kernel launches; we dispatch on the backend.
+
+    Shifts are first reduced modulo ``H`` / ``W`` so negative and out-of-range
+    values are handled correctly (the previous version raised RuntimeError on
+    negative shifts).
+    """
+    xp = get_array_module(array)
+    H, W = array.shape[-2:]
+    shifts = shifts.copy()
+    shifts[:, 0] %= H
+    shifts[:, 1] %= W
+
+    if xp is not np:
+        # GPU path: batched gather. CuPy's advanced indexing launches one
+        # kernel for the whole batch instead of one per site.
+        rows = (xp.arange(H)[None, :] - shifts[:, 0:1]) % H
+        cols = (xp.arange(W)[None, :] - shifts[:, 1:2]) % W
+        return array[rows[:, :, None], cols[:, None, :]]
+
+    # CPU path: per-site quadrant copy. Memmove inside each branch is faster
+    # than any vectorised numpy alternative we benchmarked.
+    output = xp.empty((len(shifts),) + array.shape, dtype=array.dtype)
     for i in range(len(shifts)):
-        if np.all(shifts[i] > 0):
-            output[i, : shifts[i, 0], : shifts[i, 1]] = array[
-                -shifts[i, 0] :, -shifts[i, 1] :
-            ]
-            output[i, : shifts[i, 0], shifts[i, 1] :] = array[
-                -shifts[i, 0] :, : -shifts[i, 1]
-            ]
-            output[i, shifts[i, 0] :, : shifts[i, 1]] = array[
-                : -shifts[i, 0], -shifts[i, 1] :
-            ]
-            output[i, shifts[i, 0] :, shifts[i, 1] :] = array[
-                : -shifts[i, 0], : -shifts[i, 1]
-            ]
-        elif shifts[i, 1] > 0:
-            output[i, :, : shifts[i, 1]] = array[:, -shifts[i, 1] :]
-            output[i, :, shifts[i, 1] :] = array[:, : -shifts[i, 1] :]
-        elif shifts[i, 0] > 0:
-            output[i, : shifts[i, 0], :] = array[-shifts[i, 0] :, :]
-            output[i, shifts[i, 0] :, :] = array[: -shifts[i, 0] :, :]
-        elif (shifts[i, 0] == 0) and (shifts[i, 1] == 0):
-            output[i] = array
+        s0, s1 = int(shifts[i, 0]), int(shifts[i, 1])
+        if s0 > 0 and s1 > 0:
+            output[i, :s0, :s1] = array[-s0:, -s1:]
+            output[i, :s0, s1:] = array[-s0:, :-s1]
+            output[i, s0:, :s1] = array[:-s0, -s1:]
+            output[i, s0:, s1:] = array[:-s0, :-s1]
+        elif s1 > 0:
+            output[i, :, :s1] = array[:, -s1:]
+            output[i, :, s1:] = array[:, :-s1]
+        elif s0 > 0:
+            output[i, :s0, :] = array[-s0:, :]
+            output[i, s0:, :] = array[:-s0, :]
         else:
-            raise RuntimeError()
+            output[i] = array
 
     return output
 
@@ -886,20 +904,46 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
 
             local_potential = copy_to_device(self._local_potential, waves.array)
 
-            shifted_local_potential = fast_roll(local_potential, rounded_sites)
+            # Stream the overlap reduction over sites in chunks. The full
+            # (n_sites, *waves_shape, H, W) tensor that the naive computation
+            # would build can dwarf available memory for big scans / many sites;
+            # by reducing each chunk to a per-site sum before moving on, peak
+            # transient is O(chunk_size) instead of O(n_sites).
+            #
+            # The chunk size targets the same byte budget as the rest of abTEM
+            # (dask.chunk-size / dask.chunk-size-gpu) via validate_chunks, so
+            # users who already tuned that knob for a memory-constrained
+            # workstation get the tighter behaviour here automatically.
+            abs2_waves = abs2(waves.array)
+            n_sites = len(validated_sites)
+            reduce_axes_offset = len(waves.shape) - 2  # broadcast dims per site
 
-            shifted_local_potential = shifted_local_potential.reshape(
-                (len(validated_sites),)
-                + (1,) * (len(waves.shape) - 2)
-                + shifted_local_potential.shape[-2:]
-            )
+            chunks = validate_chunks(
+                shape=(n_sites,) + waves.shape,
+                chunks=("auto",) + (-1,) * len(waves.shape),
+                max_elements="auto",
+                dtype=waves.dtype,
+                device=self.device,
+            )[0]
 
-            overlaps = shifted_local_potential * abs2(waves.array[None])
-            overlaps = overlaps.sum(axis=(-2, -1))
-
-            mask = overlaps > threshold
-
-            mask = mask.any(tuple(range(1, len(overlaps.shape))))
+            mask = xp.zeros(n_sites, dtype=bool)
+            start = 0
+            for chunk_size in chunks:
+                end = start + chunk_size
+                shifted = fast_roll(local_potential, rounded_sites[start:end])
+                shifted = shifted.reshape(
+                    (end - start,)
+                    + (1,) * reduce_axes_offset
+                    + shifted.shape[-2:]
+                )
+                overlaps = (shifted * abs2_waves[None]).sum(axis=(-2, -1))
+                chunk_mask = overlaps > threshold
+                if chunk_mask.ndim > 1:
+                    chunk_mask = chunk_mask.any(
+                        tuple(range(1, chunk_mask.ndim))
+                    )
+                mask[start:end] = chunk_mask
+                start = end
 
             mask = copy_to_device(mask, "cpu")
             # if np.any(mask):
@@ -1024,7 +1068,7 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         )
 
     def show(self, **kwargs):
-        self.to_images().show(**kwargs)
+        return self.to_images().show(**kwargs)
 
 
 def _extract_scattering_sites(potential, sites):
