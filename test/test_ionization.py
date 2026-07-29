@@ -285,7 +285,6 @@ def test_transition_potential_scan_crystal_potential_matches_manual_tile(device)
 
 
 
-
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_eels_matches_multislice_eels_at_interp_1(device):
     """SMatrix.transition_potential_scan at interpolation=(1,1) reproduces
@@ -1007,5 +1006,3 @@ def test_subshell_transitions_real_gpaw_pipeline():
     array = np.asarray(result.array)
     assert np.isfinite(array).all()
     assert np.any(array != 0)
-
-
