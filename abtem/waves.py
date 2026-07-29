@@ -30,7 +30,7 @@ from abtem.core.backend import (
     get_array_module,
     validate_device,
 )
-from abtem.core.chunks import validate_chunks
+from abtem.core.chunks import estimate_potential_chunk_size, validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -55,7 +55,7 @@ from abtem.multislice import (
     MultisliceTransform,
     transition_potential_multislice_and_detect,
 )
-from abtem.potentials.iam import BasePotential, validate_potential
+from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
 from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import TiltType2D, validate_tilt
@@ -106,6 +106,39 @@ def _antialias_cutoff_gpts(
     extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
     return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+
+
+def _prebuild_reused_potential(
+    potential: Optional[BasePotential], waves: Waves
+) -> Optional[BasePotential]:
+    """Build an unbuilt potential once, up front, if it is about to be reused
+    across more than one lazy chunk of ``waves`` (e.g. a scan over many probe
+    positions).
+
+    Without this, each chunk's multislice task independently rebuilds the full
+    potential from atoms, since the atom-projection integration happens eagerly
+    inside the per-chunk dask task body rather than as a shared, cached dask
+    node (see abTEM issue #339). Only pre-build when the whole potential fits
+    within the same per-chunk memory budget that ``generate_chunked_slices``
+    already uses, so this never risks exceeding memory for potentials too
+    large to build in one piece.
+    """
+    if (
+        potential is None
+        or isinstance(potential, PotentialArray)
+        or not waves.is_lazy
+    ):
+        return potential
+
+    if int(np.prod(waves.array.numblocks)) <= 1:
+        return potential
+
+    chunk_size = estimate_potential_chunk_size(potential.gpts, potential.device)
+
+    if potential.num_slices <= chunk_size:
+        potential = potential.build()
+
+    return potential
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
@@ -1300,6 +1333,7 @@ class Waves(BaseWaves, ArrayObject):
             transition_potentials = [transition_potentials]
 
         potential = validate_potential(potential, self)
+        potential = _prebuild_reused_potential(potential, self)
 
         measurements: list[Waves | BaseMeasurements] = []
         for transition_potential in transition_potentials:
@@ -1379,6 +1413,7 @@ class Waves(BaseWaves, ArrayObject):
             (if no detector(s) given).
         """
         potential = validate_potential(potential, self)
+        potential = _prebuild_reused_potential(potential, self)
 
         multislice_transform = MultisliceTransform(
             potential=potential, detectors=detectors, **multislice_func_kwargs
@@ -2155,6 +2190,8 @@ class Probe(WavesBuilder):
             probe.grid.match(potential)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
+
+        potential = _prebuild_reused_potential(potential, waves)
 
         multislice = MultisliceTransform(potential, detectors, **multislice_func_kwargs)
 
