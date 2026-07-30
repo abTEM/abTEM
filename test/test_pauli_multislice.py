@@ -337,6 +337,94 @@ def test_vortex_orbital_phase(device, method, l):
     assert abs(phase - expected) < 0.02 * abs(expected)
 
 
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("method", ["series", "split"])
+def test_average_field_vortex_orbital_phase(device, method):
+    """The orbital coupling reached through `average_field` matches both the
+    analytic vortex phase and the explicitly-supplied-A route.
+
+    `test_vortex_orbital_phase` covers the A_xy.grad_xy term when A is
+    handed in as a VectorPotentialArray. This covers the other route to the
+    same physics: `average_field`, where abTEM itself builds the
+    non-periodic A_np = B x r / 2. That path is otherwise only exercised by
+    `test_average_field_precession`, which uses a plane wave and therefore
+    probes only the sigma.B Zeeman term, never the orbital one -- yet it is
+    the path the vortex OAM magnetic signal depends on.
+
+    Comparing l = +L against l = -L cancels the l-independent Zeeman phase
+    that `average_field` also contributes, leaving 2*phi with
+    phi = -e*B*l*z/(2*hbar*k).
+    """
+    gpts, extent = 128, 40.0
+    n_slices, dz = 10, 1.0
+    B0 = 5e4  # T, as in test_vortex_orbital_phase
+    L = 2
+
+    x = (np.arange(gpts) - gpts / 2) * (extent / gpts)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+
+    potential = vacuum_potential(n_slices, gpts, extent, dz)
+    A_zero, B_zero = zero_fields(n_slices, gpts, extent, dz)
+
+    # the explicit-A reference, A = B x r / 2 with B along z
+    A_array = np.zeros((n_slices, 3, gpts, gpts))
+    A_array[:, 0] = -0.5 * B0 * Y * dz
+    A_array[:, 1] = +0.5 * B0 * X * dz
+    A_explicit = VectorPotentialArray(
+        A_array, slice_thickness=dz, extent=(extent, extent)
+    )
+
+    from abtem.core.backend import get_array_module
+
+    xp = get_array_module(device)
+
+    def phase_for(l, use_average_field):
+        vortex = (X + 1j * np.sign(l) * Y) ** abs(l) * np.exp(
+            -(X**2 + Y**2) / (2 * 6.0**2)
+        )
+        vortex /= np.sqrt((np.abs(vortex) ** 2).sum())
+        waves = abtem.PlaneWave(
+            energy=ENERGY, gpts=gpts, extent=extent, device=device
+        ).build(lazy=False)
+        waves._array = xp.asarray(vortex.astype(to_numpy(waves.array).dtype))
+        spinor = waves.to_spinor((1, 0))
+
+        kwargs = (
+            {"vector_potential": A_zero, "average_field": (0.0, 0.0, B0)}
+            if use_average_field
+            else {"vector_potential": A_explicit}
+        )
+        out = pauli_multislice(
+            spinor.copy(),
+            potential,
+            magnetic_field=B_zero,
+            algorithm=ALGORITHMS[method],
+            **kwargs,
+        )
+        ref = pauli_multislice(
+            spinor.copy(),
+            potential,
+            vector_potential=A_zero,
+            magnetic_field=B_zero,
+            algorithm=ALGORITHMS[method],
+        )
+        overlap = np.vdot(to_numpy(ref.array[0]), to_numpy(out.array[0]))
+        return np.angle(overlap)
+
+    wavelength = energy2wavelength(ENERGY)
+    expected = (
+        -e_over_hbar * wavelength / (2 * np.pi) * B0 * L / 2 * (n_slices * dz)
+    )
+
+    avg = phase_for(+L, True) - phase_for(-L, True)
+    explicit = phase_for(+L, False) - phase_for(-L, False)
+
+    # the average_field route reproduces the analytic orbital phase ...
+    assert abs(avg - 2 * expected) < 0.05 * abs(2 * expected)
+    # ... and agrees with the explicitly-supplied-A route
+    assert abs(avg - explicit) < 0.05 * abs(2 * expected)
+
+
 def test_collinear_matches_adjusted_potential():
     """For a collinear sample (A along z only, no Zeeman) the Pauli solver
     must match the scalar path through adjust_coulomb_potential."""

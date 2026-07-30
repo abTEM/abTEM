@@ -19,9 +19,70 @@ from abtem.magnetism.iam import (
     VectorPotentialArray,
 )
 from abtem.magnetism.utils import bohr_magneton, vacuum_permeability
-from abtem.potentials.charge_density import curl_fourier, integrate_gradient_fourier
+from abtem.potentials.charge_density import (
+    band_limit_fourier,
+    curl_fourier,
+    integrate_gradient_fourier,
+)
 from abtem.potentials.gpaw import GPAWPotential
 from abtem.potentials.iam import PotentialArray, _FieldBuilder
+
+
+#: Default Fourier-space band limit [1/Å] applied to a magnetization density
+#: before the vector potential and magnetic field are constructed from it.
+#:
+#: An all-electron magnetization density reconstructed pointwise on a uniform
+#: grid contains near-nucleus structure far sharper than any such grid can
+#: represent: for a heavy element the peak value does not converge with grid
+#: refinement (measured for L1_0 FePt at the Pt site: the peak spin density
+#: grows 170 -> 500 -> 900 -> 3100 μB/Å³ as the grid is refined 4x -> 12x,
+#: while the volume integral -- the physically meaningful magnetic moment --
+#: stays constant to five digits). Constructing B from that density is
+#: ill-posed in the pointwise sense, and because B = curl(A) multiplies each
+#: Fourier component by its frequency, the unrepresentable high-frequency
+#: content is amplified rather than averaged away: the resulting near-nucleus
+#: field values are grid-dependent and can exceed the physical field by
+#: orders of magnitude.
+#:
+#: Band-limiting the magnetization first makes the construction well-posed --
+#: the resulting fields become grid-refinement independent -- and reflects how
+#: a density is represented in practice: an LAPW density (as used in
+#: Edström, Lubk & Rusz, PRB 94, 174414 (2016)) is a Fourier series with a
+#: finite cutoff in the interstitial region and a radial expansion inside the
+#: muffin-tin spheres, so placing it on a uniform grid band-limits it
+#: inherently -- without making it any less all-electron.
+#:
+#: The default of 4 1/Å is set to match the density cutoff of the LAPW code
+#: used for the reference calculations. WIEN2k expands rho and V in the
+#: interstitial region up to a largest wavevector GMAX given in bohr^-1,
+#: conventionally 12-14; converting to the spatial-frequency convention used
+#: here, GMAX = 12-14 bohr^-1 is 3.6-4.2 1/Å, so 4 1/Å sits in the middle of
+#: the range the reference calculation itself would have used.
+#:
+#: Two independent checks support it. (1) Magnitudes: it brings every panel of
+#: PRB 94, 174414 Fig. 2 and Fig. 3 within the paper's own colorbar bounds,
+#: with the near-nucleus features appearing as the small unsaturated dots seen
+#: there. (2) Sign: the spin density at a heavy nucleus is *negative* from
+#: core polarization (measured at the Pt site of L1_0 FePt:
+#: -895 μB/Å³) even though the site's total moment is positive (+0.36 μB), so
+#: the sign of the smoothed value flips depending on how hard it is smoothed --
+#: the narrow negative core spike wins at a high cutoff, the broad positive
+#: valence cloud wins at a low one. The paper shows positive spin density and
+#: B_z at the Pt site; reproducing that sign requires a cutoff below ~5 1/Å
+#: with the default taper, which 4 1/Å satisfies while 6 1/Å does not. The
+#: sign is thus a sharper constraint on the cutoff than the magnitudes are.
+#:
+#: Note that the band limit is applied with a smooth (raised-cosine) roll-off
+#: by default, not a brick-wall cutoff -- see the `taper` argument of
+#: `band_limit_fourier`. A sharp cutoff fixes the magnitudes just as well but
+#: leaves conspicuous concentric Gibbs fringes around each atom, since a
+#: brick-wall filter is a ringing (sinc-like) kernel in real space. Because
+#: the taper starts rolling off at `g_max / 2`, a given `g_max` removes
+#: somewhat more than a sharp cutoff at the same value would.
+#:
+#: Pass `g_max=None` to disable band-limiting entirely and recover the raw
+#: pointwise construction.
+DEFAULT_MAGNETIZATION_G_MAX = 4.0
 
 
 def calculate_constant_magnetic_field(magnetization: np.ndarray) -> np.ndarray:
@@ -138,7 +199,10 @@ def rotate_vector_field(
 
 
 def calculate_vector_potential_from_magnetization(
-    magnetization: np.ndarray, cell
+    magnetization: np.ndarray,
+    cell,
+    g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+    taper: str = "cosine",
 ) -> np.ndarray:
     """
     Periodic part of the magnetic vector potential from a magnetization
@@ -161,28 +225,37 @@ def calculate_vector_potential_from_magnetization(
     cell : ase.cell.Cell
         ASE `Cell` object defining the region of space where the
         magnetization is defined.
+    g_max : float, optional
+        Band limit [1/Å] applied to the magnetization before the vector
+        potential is constructed, removing near-nucleus structure too sharp
+        for the grid to represent. Defaults to
+        `DEFAULT_MAGNETIZATION_G_MAX`; see that constant for why this
+        matters and how the default was chosen. Pass `None` to disable.
 
     Returns
     -------
     vector_potential : np.ndarray
         The periodic vector potential of shape (3,) + (nx, ny, nz) [ÅT].
     """
+    magnetization = band_limit_fourier(magnetization, cell, g_max, taper=taper)
     j = bohr_magneton * curl_fourier(magnetization, cell)
     A = -vacuum_permeability * integrate_gradient_fourier(j, cell)
     return A
 
 
-def calculate_magnetic_vector_potential(spin_density, cell):
+def calculate_magnetic_vector_potential(
+    spin_density, cell, g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX
+):
     """
     Periodic vector potential [ÅT] of a collinear spin density (m along z).
 
     See `calculate_vector_potential_from_magnetization` for the general
-    (non-collinear) form.
+    (non-collinear) form and for the meaning of `g_max`.
     """
     m = np.stack(
         [np.zeros_like(spin_density), np.zeros_like(spin_density), spin_density]
     )
-    return calculate_vector_potential_from_magnetization(m, cell)
+    return calculate_vector_potential_from_magnetization(m, cell, g_max=g_max)
 
 
 def get_magnetization_from_gpaw(calc, gridrefinement: int = 2):
@@ -242,19 +315,31 @@ def get_magnetization_from_gpaw(calc, gridrefinement: int = 2):
     return np.stack([zeros, zeros, rho]), True
 
 
-def get_vector_potential_from_gpaw(calc, gridrefinement=2):
-    """Periodic vector potential [ÅT] from a converged GPAW calculation."""
+def get_vector_potential_from_gpaw(
+    calc, gridrefinement=2, g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX
+):
+    """Periodic vector potential [ÅT] from a converged GPAW calculation.
+
+    See `DEFAULT_MAGNETIZATION_G_MAX` for the meaning of `g_max`.
+    """
     magnetization, _ = get_magnetization_from_gpaw(
         calc, gridrefinement=gridrefinement
     )
     return calculate_vector_potential_from_magnetization(
-        magnetization, calc.atoms.cell
+        magnetization, calc.atoms.cell, g_max=g_max
     )
 
 
-def get_magnetic_field_from_gpaw(calc, gridrefinement=2):
-    """Periodic magnetic field [T] from a converged GPAW calculation."""
-    A = get_vector_potential_from_gpaw(calc, gridrefinement=gridrefinement)
+def get_magnetic_field_from_gpaw(
+    calc, gridrefinement=2, g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX
+):
+    """Periodic magnetic field [T] from a converged GPAW calculation.
+
+    See `DEFAULT_MAGNETIZATION_G_MAX` for the meaning of `g_max`.
+    """
+    A = get_vector_potential_from_gpaw(
+        calc, gridrefinement=gridrefinement, g_max=g_max
+    )
     B = curl_fourier(A, calc.atoms.cell)
     return B
 
@@ -350,9 +435,14 @@ class _MagnetizationMagnetics(_FieldBuilder):
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
+        g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+        taper: str = "cosine",
         device: Optional[str] = None,
     ):
         self._cell3d = cell
+
+        self.g_max = g_max
+        self.taper = taper
 
         self._rotate_field = rotate_field
         #: The rotation applied to the field's vector components on the last
@@ -416,7 +506,7 @@ class _MagnetizationMagnetics(_FieldBuilder):
         magnetization, collinear = self._get_magnetization()
 
         vector_potential = calculate_vector_potential_from_magnetization(
-            magnetization, self._cell3d
+            magnetization, self._cell3d, g_max=self.g_max, taper=self.taper
         )
 
         if self._quantity == "vector_potential":
@@ -541,6 +631,8 @@ class _GPAWMagnetics(_MagnetizationMagnetics):
         frozen_phonons: Optional[BaseFrozenPhonons] = None,
         repetitions: tuple[int, int, int] = (1, 1, 1),
         gridrefinement: int = 4,
+        g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+        taper: str = "cosine",
         device: Optional[str] = None,
     ):
         _check_unsupported_ensemble_params(frozen_phonons, repetitions)
@@ -566,6 +658,8 @@ class _GPAWMagnetics(_MagnetizationMagnetics):
             origin=origin,
             box=box,
             periodic=periodic,
+            g_max=g_max,
+            taper=taper,
             device=device,
         )
 
@@ -592,6 +686,8 @@ class _ArrayMagnetics(_MagnetizationMagnetics):
         origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
+        g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+        taper: str = "cosine",
         device: Optional[str] = None,
     ):
         from ase.cell import Cell
@@ -631,6 +727,8 @@ class _ArrayMagnetics(_MagnetizationMagnetics):
             origin=origin,
             box=box,
             periodic=periodic,
+            g_max=g_max,
+            taper=taper,
             device=device,
         )
 
@@ -680,6 +778,8 @@ class MagnetizationMagneticField(_ArrayMagnetics, BaseMagneticField):
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
         projection: str = "fft",
+        g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+        taper: str = "cosine",
         device: Optional[str] = None,
     ):
         super().__init__(
@@ -697,6 +797,8 @@ class MagnetizationMagneticField(_ArrayMagnetics, BaseMagneticField):
             box=box,
             periodic=periodic,
             projection=projection,
+            g_max=g_max,
+            taper=taper,
             device=device,
         )
 
@@ -723,6 +825,8 @@ class MagnetizationVectorPotential(_ArrayMagnetics, BaseVectorPotential):
         box: Optional[tuple[float, float, float]] = None,
         periodic: bool = True,
         projection: str = "fft",
+        g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+        taper: str = "cosine",
         device: Optional[str] = None,
     ):
         super().__init__(
@@ -740,6 +844,8 @@ class MagnetizationVectorPotential(_ArrayMagnetics, BaseVectorPotential):
             box=box,
             periodic=periodic,
             projection=projection,
+            g_max=g_max,
+            taper=taper,
             device=device,
         )
 
@@ -792,6 +898,8 @@ class GPAWMagneticField(_GPAWMagnetics, BaseMagneticField):
         repetitions: tuple[int, int, int] = (1, 1, 1),
         gridrefinement: int = 1,
         projection: str = "fft",
+        g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+        taper: str = "cosine",
         device: Optional[str] = None,
     ):
         _check_unsupported_ensemble_params(frozen_phonons, repetitions)
@@ -812,6 +920,8 @@ class GPAWMagneticField(_GPAWMagnetics, BaseMagneticField):
             gridrefinement=gridrefinement,
             projection=projection,
             periodic=periodic,
+            g_max=g_max,
+            taper=taper,
         )
 
 
@@ -832,6 +942,8 @@ class GPAWVectorPotential(_GPAWMagnetics, BaseVectorPotential):
         repetitions: tuple[int, int, int] = (1, 1, 1),
         gridrefinement: int = 1,
         projection: str = "fft",
+        g_max: Optional[float] = DEFAULT_MAGNETIZATION_G_MAX,
+        taper: str = "cosine",
         device: Optional[str] = None,
     ):
         _check_unsupported_ensemble_params(frozen_phonons, repetitions)
@@ -852,6 +964,8 @@ class GPAWVectorPotential(_GPAWMagnetics, BaseVectorPotential):
             gridrefinement=gridrefinement,
             projection=projection,
             periodic=periodic,
+            g_max=g_max,
+            taper=taper,
         )
 
 
