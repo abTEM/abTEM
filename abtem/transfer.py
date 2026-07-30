@@ -709,7 +709,14 @@ class Vortex(BaseAperture):
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
         return self._get_axes_metadata_from_distributions(
-            quantum_number={"label": "quantum_number", "tex_label": "$l$"},
+            quantum_number={
+                "label": "quantum_number",
+                # dimensionless (OAM in units of hbar); without this the axis
+                # inherits NonLinearAxis's "unknown" default and every panel
+                # title reads e.g. "l = 1 unknown"
+                "units": "",
+                "tex_label": "$l$",
+            },
             semiangle_cutoff={
                 "label": "semiangle_cutoff",
                 "units": "mrad",

@@ -162,3 +162,8 @@ def test_vortex_ensemble_axes_metadata():
     axes = aperture.ensemble_axes_metadata
     assert [ax.label for ax in axes] == ["quantum_number", "semiangle_cutoff"]
     assert [len(ax.values) for ax in axes] == [3, 2]
+    # OAM is dimensionless; without an explicit empty string it inherits
+    # NonLinearAxis's "unknown" default and panel titles read "l = 1 unknown"
+    assert axes[0].units == ""
+    assert axes[1].units == "mrad"
+    assert "unknown" not in axes[0].format_title()
