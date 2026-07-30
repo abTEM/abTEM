@@ -650,10 +650,15 @@ class Vortex(BaseAperture):
 
     Parameters
     ----------
-    quantum_number : int
-        Quantum number of vortex beam.
-    semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+    quantum_number : int or BaseDistribution
+        Quantum number of vortex beam. Alternatively, a list/tuple/array of quantum
+        numbers may be provided to build an ensemble over multiple orbital angular
+        momenta (e.g. `quantum_number=[-1, 1]`) in a single `Waves` object, the same
+        way a distribution of `semiangle_cutoff` values builds an ensemble for
+        `Aperture`.
+    semiangle_cutoff : float or BaseDistribution
+        The cutoff semiangle of the aperture [mrad]. Alternatively, a distribution of
+        angles may be provided.
     energy : float, optional
         Electron energy [eV]. If not provided, inferred from the wave functions.
     extent : float or two float, optional
@@ -668,19 +673,20 @@ class Vortex(BaseAperture):
 
     def __init__(
         self,
-        quantum_number: int,
-        semiangle_cutoff: float,
+        quantum_number: int | BaseDistribution,
+        semiangle_cutoff: float | BaseDistribution,
         energy: Optional[float] = None,
         extent: Optional[float | tuple[float, float]] = None,
         gpts: Optional[int | tuple[int, int]] = None,
         sampling: Optional[float | tuple[float, float]] = None,
         soft: bool = False,
     ):
-        self._quantum_number = quantum_number
+        self._quantum_number = validate_distribution(quantum_number)
         self._soft = soft
         super().__init__(
+            distributions=("quantum_number", "semiangle_cutoff"),
             energy=energy,
-            semiangle_cutoff=semiangle_cutoff,
+            semiangle_cutoff=validate_distribution(semiangle_cutoff),
             extent=extent,
             gpts=gpts,
             sampling=sampling,
@@ -692,31 +698,74 @@ class Vortex(BaseAperture):
         return self._soft
 
     @property
-    def quantum_number(self) -> int:
+    def quantum_number(self) -> int | BaseDistribution:
         """Quantum number of vortex beam."""
         return self._quantum_number
+
+    @quantum_number.setter
+    def quantum_number(self, value: int | BaseDistribution) -> None:
+        self._quantum_number = validate_distribution(value)
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        return self._get_axes_metadata_from_distributions(
+            quantum_number={"label": "quantum_number", "tex_label": "$l$"},
+            semiangle_cutoff={
+                "label": "semiangle_cutoff",
+                "units": "mrad",
+                "tex_label": "$\\alpha_{cut}$",
+            },
+        )
 
     def _evaluate_from_angular_grid(
         self, alpha: np.ndarray, phi: np.ndarray
     ) -> np.ndarray:
         xp = get_array_module(alpha)
-        alpha = xp.array(alpha)
 
-        semiangle_cutoff = self.semiangle_cutoff
-        assert isinstance(semiangle_cutoff, SupportsFloat)
+        (quantum_number, semiangle_cutoff), _ = _unpack_distributions(
+            self.quantum_number, self.semiangle_cutoff, shape=alpha.shape, xp=xp
+        )
         semiangle_cutoff = semiangle_cutoff / 1e3
+
+        # every ensemble axis (from either quantum_number or semiangle_cutoff, if
+        # they are distributions) precedes the grid's own two trailing axes, matching
+        # the axis convention _unpack_distributions used above
+        axis = tuple(range(0, self._num_ensemble_axes))
+        alpha = xp.expand_dims(xp.asarray(alpha), axis=axis)
+        phi = xp.expand_dims(xp.asarray(phi), axis=axis)
+
+        # True only at the optical axis (alpha=0), where the vortex phase is
+        # singular; used below both to regularize the soft-aperture edge formula's
+        # division and to zero the l != 0 phase singularity itself
+        center = xp.zeros(alpha.shape[-2:], dtype=bool)
+        center[0, 0] = True
+        center = xp.expand_dims(center, axis=axis)
+
         if self._soft:
-            array = soft_aperture(alpha, phi, semiangle_cutoff, self.angular_sampling)
+            angular_sampling = (
+                xp.asarray(self.angular_sampling, dtype=get_dtype(complex=False))
+                * 1e-3
+            )
+            denominator = xp.sqrt(
+                (xp.cos(phi) * angular_sampling[0]) ** 2
+                + (xp.sin(phi) * angular_sampling[1]) ** 2
+            )
+            denominator = xp.where(center, 1.0, denominator)
+            array = xp.clip(
+                (semiangle_cutoff - alpha) / denominator + 0.5, a_min=0.0, a_max=1.0
+            )
+            array = xp.where(center, 1.0, array)
         else:
             array = alpha < semiangle_cutoff
-        array = array * np.exp(1j * phi * self.quantum_number)
-        if self.quantum_number != 0:
-            # The vortex phase is singular on the optical axis, where a true
-            # vortex beam has zero amplitude; the alpha = 0 grid point would
-            # otherwise get the arbitrary phase of arctan2(0, 0). Leaving it
-            # nonzero breaks the exact mirror relation between +l and -l
-            # beams that mirror-difference magnetic signals rely on.
-            array = array * (alpha > 0.0)
+
+        array = array * xp.exp(1j * phi * quantum_number)
+        # The vortex phase is singular on the optical axis, where a true vortex beam
+        # has zero amplitude; the alpha = 0 grid point would otherwise get the
+        # arbitrary phase of arctan2(0, 0). Leaving it nonzero breaks the exact
+        # mirror relation between +l and -l beams that mirror-difference magnetic
+        # signals rely on. l=0 has no such singularity, so its own ensemble slice is
+        # left untouched even when combined with l != 0 in the same ensemble.
+        array = xp.where(quantum_number != 0, array * xp.logical_not(center), array)
         return array
 
 
