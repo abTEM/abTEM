@@ -772,7 +772,11 @@ class Vortex(BaseAperture):
         # mirror relation between +l and -l beams that mirror-difference magnetic
         # signals rely on. l=0 has no such singularity, so its own ensemble slice is
         # left untouched even when combined with l != 0 in the same ensemble.
-        array = xp.where(quantum_number != 0, array * xp.logical_not(center), array)
+        # quantum_number may be a plain Python scalar (non-distribution case);
+        # cupy's xp.where requires an actual array condition, unlike numpy's,
+        # which tolerates a bare bool
+        nonzero = xp.asarray(quantum_number != 0)
+        array = xp.where(nonzero, array * xp.logical_not(center), array)
         return array
 
 
