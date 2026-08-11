@@ -130,6 +130,69 @@ def calculate_non_periodic_magnetic_vector_potential(
     (in the reference calculations of PRB 94, 174414 this was 48x48 to
     60x60 unit cells).
 
+    Two caveats that a larger supercell does NOT fix:
+
+    1. Enlarging the supercell does not make the boundary error go away.
+       |A_np| grows linearly with the cell size L at fixed B_avg, while the
+       wave amplitude reaching the boundary falls, so their product -- which
+       is what the boundary artifact scales with -- saturates. Measured for
+       a 30 mrad l=+1 vortex on FePt (B_avg = 1.385 T, 20 u.c. thick),
+       as the four-fold symmetry violation of the scanned intensity, which
+       the crystal symmetry requires to vanish:
+
+           supercell    boundary intensity fraction    C4 violation
+           6x6                    1.26e-2                2.11e-5
+           10x10                  5.90e-3                1.47e-5
+           14x14                  3.96e-3                1.45e-5
+
+       i.e. flat from 10x10 on, while the boundary amplitude keeps falling.
+       With average_field=(0, 0, 0) the same quantity is ~3e-8, so this is
+       entirely an A_np artifact. It is an orbital effect: for the same
+       system it contributes a relative antisymmetric component of 1.2e-5
+       to the total intensity, 7.3e-3 to the spin (I_up - I_down) signal,
+       but 0.97 to the OAM (l=+1 minus mirrored l=-1) signal, which is a
+       small difference of large numbers. If the simulated structure has a
+       known point symmetry, projecting the result onto the symmetric
+       subspace removes it; the symmetry-preserving component is
+       supercell-converged (0.3% over 6x6 to 14x14 at 4 mrad).
+
+    2. B_avg = mu_0 * M is the 3D-periodic result, which carries no
+       demagnetizing field. A multislice sample is an infinite slab --
+       periodic in x and y, finite in z -- so the shape-dependent
+       demagnetizing field must be added to get the macroscopic B inside
+       the sample. For M along the slab normal (the common case of a
+       perpendicularly magnetized film viewed along the easy axis) the
+       bound currents vanish identically, curl(M) = 0 and M x n = 0, giving
+       H = -M and B = 0 inside: the correct uniform field is then zero, not
+       mu_0 * M. For M in the film plane the demagnetizing factor is ~0 and
+       B_avg = mu_0 * M stands. Choose `average_field` for the geometry
+       being modelled rather than passing this function's output blindly.
+
+       This choice is not cosmetic. For the FePt case above, dropping to
+       B_avg = 0 removes the artifact at its source -- the C4 violation
+       falls from 1.14 to 0.026 without any symmetrization -- but the OAM
+       signal itself drops to 18-32% of its B_avg = mu_0 * M value, since
+       the uniform field dominates the orbital coupling for a probe wider
+       than the unit cell. The two conventions are physically different
+       predictions, not numerically equivalent, so the geometry has to be
+       decided deliberately.
+
+    A general alternative that avoids the artifact without giving up the
+    uniform field: for a *uniform* B the paraxial evolution is analytic, so
+    it need not be gridded at all. A uniform axial B_z acts on a paraxial
+    beam as a rigid Larmor rotation about the beam axis,
+    theta_L = (e / 2 m v) * integral(B_z dz), plus a quadratic (weak-lens)
+    phase and, for a vortex probe, an orbital Zeeman phase proportional to
+    l * B_z. Applied as operators these are exact for a uniform field and
+    symmetry-preserving by construction -- a rigid rotation about a
+    symmetry axis cannot break that symmetry, whereas sampling A_np's
+    linear ramp on a periodic grid does. For the FePt case theta_L is only
+    1.65e-5 rad (0.008 wave pixels at the supercell edge), yet the OAM
+    signal it carries is a factor ~5, which is precisely why the ramp's
+    discretization error competes with the signal. This is not implemented
+    here; it is the recommended direction if the A_np artifact becomes
+    limiting.
+
     Parameters
     ----------
     average_field : np.ndarray

@@ -827,6 +827,19 @@ def pauli_multislice(
         only physical while the wave function has negligible amplitude at
         the supercell boundary.
 
+        Enlarging the supercell does NOT remove the resulting boundary
+        error: |A_np| grows linearly with the cell size while the boundary
+        amplitude falls, so the artifact saturates (measured: a symmetry
+        violation that is flat from 10x10 unit cells upward, and ~500x
+        above the average_field=0 baseline). It shows up predominantly in
+        orbital quantities -- for a vortex-beam OAM difference it can be
+        comparable to the signal, while leaving total intensity and spin
+        differences almost untouched. Note also that mu_0 * M is the
+        3D-periodic value with no demagnetizing field, which is the wrong
+        uniform field for a slab magnetized along its normal. See
+        `abtem.magnetism.gpaw.calculate_non_periodic_magnetic_vector_potential`
+        for the quantitative details and for mitigations.
+
         For a beam significantly wider than the unit cell (e.g. a
         large-OAM vortex probe), the interaction with this uniform field
         dominates the orbital (L.B) coupling — the periodic field alone
