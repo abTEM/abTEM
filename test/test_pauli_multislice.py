@@ -1080,3 +1080,143 @@ def test_magnetization_field_builders_respect_device(device):
 
         assert isinstance(A.array, cp.ndarray)
         assert isinstance(B.array, cp.ndarray)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_probe_gauge_origin_restores_lattice_periodicity(device):
+    """A uniform B_avg makes the scanned image non-lattice-periodic.
+
+    The non-periodic A_np = 1/2 B_avg x (r - r0) puts a probe at p in a
+    constant vector potential ~ (p - r0). The paraxial operator is linear in
+    A (no A^2 term), so that constant is not a pure gauge phase: it tilts the
+    beam, which then drifts as it propagates by a position-dependent amount.
+    Two probe positions separated by a lattice vector of the potential --
+    which must be physically equivalent -- therefore disagree.
+
+    Physically a beam entering parallel to a uniform axial B feels no force
+    (v x B = 0), so it travels straight wherever it enters.
+    `gauge_origin="probe"` puts r0 on each probe, enforcing that and
+    restoring the lattice periodicity.
+
+    The observable has to be angle-resolved: the tilt moves intensity around
+    in reciprocal space but conserves the total, so a whole-grid sum is blind
+    to it.
+    """
+    atoms = bulk("Si", cubic=True) * (2, 2, 6)
+    lattice = atoms.cell[0, 0] / 2          # the (2,2,*) tiling doubles it
+    gpts = 128
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0).build(
+        lazy=False
+    )
+    n_slices = potential.array.shape[0]
+    extent = potential.extent[0]
+    A, B = zero_fields(n_slices, gpts, extent, potential.slice_thickness)
+
+    p = (0.3 * lattice, 0.2 * lattice)
+    translated = (p[0], p[1] + lattice)     # a pure lattice translation
+    # a small bright-field aperture: the tilt moves intensity across the
+    # aperture edge, whereas a detector collecting nearly everything is as
+    # blind as a whole-grid sum (the total is conserved)
+    detector = abtem.AnnularDetector(inner=0.0, outer=4.0)
+
+    def run(gauge_origin):
+        probe = abtem.Probe(
+            aperture=abtem.transfer.Vortex(
+                quantum_number=1, semiangle_cutoff=20.0, soft=False
+            ),
+            energy=ENERGY,
+            extent=extent,
+            gpts=gpts,
+            device=device,
+        )
+        waves = probe.build(
+            scan=abtem.CustomScan(np.array([p, translated])), lazy=False
+        ).to_spinor((1.0, 0.0))
+        measurement = pauli_multislice(
+            waves,
+            potential,
+            vector_potential=A,
+            magnetic_field=B,
+            average_field=(0.0, 0.0, 1.385),
+            algorithm=FourierMultislice(),
+            detectors=detector,
+            gauge_origin=gauge_origin,
+        )
+        collected = to_numpy(measurement.array).sum(axis=0)   # sum spin
+        return collected.reshape(2, -1).sum(axis=1)           # one number per position
+
+    fixed = run(None)
+    probe_centred = run("probe")
+
+    def relative_spread(v):
+        return abs(v[0] - v[1]) / abs(v[0])
+
+    # the fixed origin must actually show the defect, otherwise the test is
+    # not exercising anything
+    assert relative_spread(fixed) > 1e-9
+    assert relative_spread(probe_centred) < relative_spread(fixed) / 20
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
+def test_probe_gauge_origin_is_a_noop_without_average_field(device):
+    """With no uniform field there is no A_np, so the gauge origin cannot
+    matter -- the two settings must agree bit for bit."""
+    a, gpts, n_slices = 2.71, 64, 4
+    extent = 4 * a
+    slice_thickness = 0.93
+
+    A, B = zero_fields(n_slices, gpts, extent, slice_thickness)
+    potential = vacuum_potential(n_slices, gpts, extent, slice_thickness)
+
+    def run(gauge_origin):
+        probe = abtem.Probe(
+            energy=ENERGY, semiangle_cutoff=20.0, extent=extent, gpts=gpts,
+            device=device,
+        )
+        waves = probe.build(
+            scan=abtem.CustomScan(np.array([[a, a]])), lazy=False
+        ).to_spinor((1.0, 0.0))
+        return to_numpy(
+            pauli_multislice(
+                waves, potential, vector_potential=A, magnetic_field=B,
+                algorithm=FourierMultislice(), gauge_origin=gauge_origin,
+            ).array
+        )
+
+    assert np.array_equal(run(None), run("probe"))
+
+
+def test_probe_gauge_origin_rejects_unsupported_settings():
+    a, gpts, n_slices = 2.71, 64, 4
+    extent = 4 * a
+    slice_thickness = 0.93
+    A, B = zero_fields(n_slices, gpts, extent, slice_thickness)
+    potential = vacuum_potential(n_slices, gpts, extent, slice_thickness)
+
+    def build():
+        probe = abtem.Probe(
+            energy=ENERGY, semiangle_cutoff=20.0, extent=extent, gpts=gpts
+        )
+        return probe.build(
+            scan=abtem.CustomScan(np.array([[a, a]])), lazy=False
+        ).to_spinor((1.0, 0.0))
+
+    def run(**kwargs):
+        return pauli_multislice(
+            build(), potential, vector_potential=A, magnetic_field=B,
+            **kwargs,
+        )
+
+    with pytest.raises(ValueError, match="gauge_origin must be"):
+        run(average_field=(0.0, 0.0, 1.0), algorithm=FourierMultislice(),
+            gauge_origin="bogus")
+
+    # the series scheme does not carry the per-member ramps
+    with pytest.raises(NotImplementedError, match="split-step"):
+        run(average_field=(0.0, 0.0, 1.0), algorithm=RealSpaceMultislice(),
+            gauge_origin="probe")
+
+    # a non-axial B_avg makes A_np non-separable
+    with pytest.raises(NotImplementedError, match="axial"):
+        run(average_field=(0.5, 0.0, 1.0), algorithm=FourierMultislice(),
+            gauge_origin="probe")

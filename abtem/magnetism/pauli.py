@@ -73,9 +73,20 @@ def _a_dot_gradient_stencil(
     n = len(c) // 2
     padding = n + 1
 
+    # `Ax_u` / `Ay_u` carry a per-ensemble-member *uniform* contribution to
+    # A_x / A_y, used by the probe-centred gauge (see `pauli_multislice`'s
+    # `gauge_origin`). For an axial B_avg the uniform vector potential
+    # A_np = 1/2 B_avg x (r - r0) is separable: A_x depends only on y (and on
+    # the member's own gauge origin) and A_y only on x, so a per-member
+    # (B, W) / (B, H) pair replaces what would otherwise be a full (B, H, W)
+    # field per member -- hundreds of MB at production grid sizes. The
+    # leading axis is indexed modulo its length, so passing length-1 zeros
+    # disables the term with no branching in the inner loop.
+
     @njit(parallel=True, fastmath=True)
-    def _stencil_cpu_batch(a, Ax, Ay):
+    def _stencil_cpu_batch(a, Ax, Ay, Ax_u, Ay_u):
         M, H, W = a.shape
+        Bu = Ax_u.shape[0]
         # a.copy() + slice-fill rather than np.zeros_like: some numba/numpy
         # pairings (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's
         # internal np.zeros_like -> np.empty_like lowering inside @njit, while
@@ -84,27 +95,34 @@ def _a_dot_gradient_stencil(
         out = a.copy()
         out[:] = 0
         for m in prange(M):
+            bu = m % Bu
             for i in range(n, H - n):
                 for j in range(n, W - n):
+                    ax = Ax[i, j] + Ax_u[bu, j]
+                    ay = Ay[i, j] + Ay_u[bu, i]
                     cumul = dtype(0.0)
                     for k in range(-n, n + 1):
-                        cumul += Ax[i, j] * cx[k] * a[m, i + k, j]
-                        cumul += Ay[i, j] * cy[k] * a[m, i, j + k]
+                        cumul += ax * cx[k] * a[m, i + k, j]
+                        cumul += ay * cy[k] * a[m, i, j + k]
                     out[m, i, j] = cumul
         return out
 
     @cuda.jit
-    def _stencil_func_gpu_batch(a, Ax, Ay, out):
+    def _stencil_func_gpu_batch(a, Ax, Ay, Ax_u, Ay_u, out):
         m, i, j = cuda.grid(3)
         M, H, W = a.shape
+        Bu = Ax_u.shape[0]
         if m < M and n <= i < H - n and n <= j < W - n:
+            bu = m % Bu
+            ax = Ax[i, j] + Ax_u[bu, j]
+            ay = Ay[i, j] + Ay_u[bu, i]
             cumul = dtype(0.0)
             for k in range(-n, n + 1):
-                cumul += Ax[i, j] * cx[k] * a[m, i + k, j]
-                cumul += Ay[i, j] * cy[k] * a[m, i, j + k]
+                cumul += ax * cx[k] * a[m, i + k, j]
+                cumul += ay * cy[k] * a[m, i, j + k]
             out[m, i, j] = cumul
 
-    def _stencil_gpu(a, Ax, Ay):
+    def _stencil_gpu(a, Ax, Ay, Ax_u, Ay_u):
         xp = get_array_module(a)
         out = xp.zeros_like(a)
 
@@ -121,7 +139,9 @@ def _a_dot_gradient_stencil(
             math.ceil(a.shape[1] / threadsperblock[1]),
             math.ceil(a.shape[2] / threadsperblock[2]),
         )
-        _stencil_func_gpu_batch[blockspergrid, threadsperblock](a, Ax, Ay, out)
+        _stencil_func_gpu_batch[blockspergrid, threadsperblock](
+            a, Ax, Ay, Ax_u, Ay_u, out
+        )
 
         return out
 
@@ -131,7 +151,12 @@ def _a_dot_gradient_stencil(
         xp = get_array_module(A)
         return xp.pad(xp.asarray(A), padding, mode="wrap")
 
-    def _stencil(a, Ax_padded, Ay_padded):
+    def zero_uniform(xp, n_padded):
+        """A disabled uniform term: one row of zeros, broadcast by the
+        modulo indexing in the kernels."""
+        return xp.zeros((1, n_padded), dtype=dtype)
+
+    def _stencil(a, Ax_padded, Ay_padded, Ax_uniform=None, Ay_uniform=None):
         xp = get_array_module(a)
 
         original_shape = a.shape
@@ -140,10 +165,17 @@ def _a_dot_gradient_stencil(
         pad_width = [(0, 0), (padding,) * 2, (padding,) * 2]
         a = xp.pad(a, pad_width=pad_width, mode="wrap")
 
+        if Ax_uniform is None:
+            Ax_uniform = zero_uniform(xp, a.shape[2])
+        if Ay_uniform is None:
+            Ay_uniform = zero_uniform(xp, a.shape[1])
+
         if device == "cpu":
-            result = _stencil_cpu_batch(a, Ax_padded, Ay_padded)
+            result = _stencil_cpu_batch(a, Ax_padded, Ay_padded,
+                                        Ax_uniform, Ay_uniform)
         elif device == "gpu":
-            result = _stencil_gpu(a, Ax_padded, Ay_padded)
+            result = _stencil_gpu(a, Ax_padded, Ay_padded,
+                                  Ax_uniform, Ay_uniform)
         else:
             raise ValueError(f"Unsupported device: {device}")
 
@@ -151,6 +183,7 @@ def _a_dot_gradient_stencil(
         return result.reshape(original_shape)
 
     _stencil.pad_field = pad_field
+    _stencil.zero_uniform = zero_uniform
     _stencil.padding = padding
 
     return _stencil

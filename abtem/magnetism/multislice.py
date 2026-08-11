@@ -41,7 +41,7 @@ import numpy as np
 from ase import units
 
 from abtem.antialias import AntialiasAperture, antialias_aperture
-from abtem.core.axes import SpinAxis
+from abtem.core.axes import PositionsAxis, ScanAxis, SpinAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
@@ -171,6 +171,95 @@ def _validate_field(field, potential, name: str, expected_cls) -> None:
         )
 
 
+def _probe_gauge_origins(waves: "Waves") -> Optional[np.ndarray]:
+    """Per-ensemble-member gauge origins (x, y) for the probe-centred gauge.
+
+    Returns an array of shape (prod(ensemble_shape), 2) ordered to match the
+    flattening the gradient stencil applies to the wave array (C order over
+    the ensemble axes), or None if the waves carry no scan/position axis.
+    """
+    shape = tuple(waves.ensemble_shape)
+    metadata = waves.ensemble_axes_metadata
+
+    scan_axes = [i for i, m in enumerate(metadata) if isinstance(m, ScanAxis)]
+    position_axes = [i for i, m in enumerate(metadata) if isinstance(m, PositionsAxis)]
+
+    xy = np.zeros(shape + (2,), dtype=float)
+
+    if len(scan_axes) == 2:
+        ax, ay = scan_axes
+        x = np.asarray(metadata[ax].coordinates(shape[ax]), dtype=float)
+        y = np.asarray(metadata[ay].coordinates(shape[ay]), dtype=float)
+        x_shape = [1] * len(shape)
+        x_shape[ax] = shape[ax]
+        y_shape = [1] * len(shape)
+        y_shape[ay] = shape[ay]
+        xy[..., 0] = x.reshape(x_shape)
+        xy[..., 1] = y.reshape(y_shape)
+    elif len(position_axes) == 1:
+        p = position_axes[0]
+        values = np.asarray(metadata[p].values, dtype=float)
+        if values.ndim != 2 or values.shape[-1] != 2:
+            return None
+        value_shape = [1] * len(shape) + [2]
+        value_shape[p] = shape[p]
+        xy[...] = values.reshape(value_shape)
+    else:
+        return None
+
+    return xy.reshape(-1, 2)
+
+
+def _uniform_vector_potential_ramps(
+    average_field, origins, x, y, extent, padding, xp, dtype
+):
+    """Per-member uniform A_x(y) / A_y(x) ramps for the probe-centred gauge.
+
+    A_np = 1/2 B_avg x (r - r0) with r0 the member's own probe position. For
+    an axial B_avg this is separable -- A_x depends only on y, A_y only on x
+    -- so each member needs two 1-D ramps rather than a full 2-D field, which
+    is what keeps a per-position gauge affordable.
+
+    The displacement r - r0 is taken in the MINIMUM-IMAGE convention. The wave
+    is periodic and the stencil pads it by wrapping, so each periodic image of
+    the wave must see the field centred on the corresponding image of its own
+    probe; a ramp continued linearly into the padding would instead multiply
+    wrapped wave content by a value belonging to the unwrapped position. The
+    minimum image makes the ramp periodic -- consistent with the padding by
+    construction -- at the cost of a discontinuity on the line antipodal to
+    the probe, which is exactly where that probe has least amplitude.
+    """
+    Bx, By, Bz = (float(component) for component in average_field)
+
+    if Bx != 0.0 or By != 0.0:
+        raise NotImplementedError(
+            "gauge_origin='probe' currently supports an axial average_field "
+            "(B_avg along z) only; for a general direction A_np is not "
+            "separable and would need a full per-position field. Got "
+            f"average_field={tuple(average_field)}."
+        )
+
+    sampling_x = float(x[1, 0] - x[0, 0]) if x.shape[0] > 1 else 1.0
+    sampling_y = float(y[0, 1] - y[0, 0]) if y.shape[1] > 1 else 1.0
+
+    x_padded = (
+        np.arange(-padding, x.shape[0] + padding) * sampling_x + float(x[0, 0])
+    )
+    y_padded = (
+        np.arange(-padding, y.shape[1] + padding) * sampling_y + float(y[0, 0])
+    )
+
+    def minimum_image(coordinates, origin, period):
+        delta = coordinates[None] - origin[:, None]
+        return (delta + period / 2.0) % period - period / 2.0
+
+    # A_x = -1/2 B_z (y - y0);  A_y = +1/2 B_z (x - x0)
+    A_x = -0.5 * Bz * minimum_image(y_padded, origins[:, 1], extent[1])
+    A_y = 0.5 * Bz * minimum_image(x_padded, origins[:, 0], extent[0])
+
+    return xp.asarray(A_x, dtype=dtype), xp.asarray(A_y, dtype=dtype)
+
+
 def _non_periodic_vector_potential_slice(
     average_field: np.ndarray,
     x: np.ndarray,
@@ -269,6 +358,7 @@ def _pauli_multislice_step_split(
     spin_axis: int,
     tolerance: float = 1e-16,
     max_terms: int = 300,
+    uniform_ramps: Optional[tuple] = None,
 ) -> "Waves":
     """
     Apply the transmission part of one slice of the paraxial Pauli
@@ -358,7 +448,9 @@ def _pauli_multislice_step_split(
     A_x = vector_potential_slice[0].astype(complex_dtype)
     A_y = vector_potential_slice[1].astype(complex_dtype)
 
-    if xp.any(A_x) or xp.any(A_y):
+    A_x_uniform, A_y_uniform = uniform_ramps if uniform_ramps is not None else (None, None)
+
+    if xp.any(A_x) or xp.any(A_y) or A_x_uniform is not None:
         A_x_padded = gradient_stencil.pad_field(A_x)
         A_y_padded = gradient_stencil.pad_field(A_y)
         gradient_exponent = complex_dtype(
@@ -366,12 +458,15 @@ def _pauli_multislice_step_split(
         )
 
         initial_amplitude = xp.abs(array).sum()
-        term = gradient_exponent * gradient_stencil(array, A_x_padded, A_y_padded)
+        term = gradient_exponent * gradient_stencil(
+            array, A_x_padded, A_y_padded, A_x_uniform, A_y_uniform
+        )
         array += term
         for i in range(2, max_terms + 1):
             term = (
                 gradient_exponent
-                * gradient_stencil(term, A_x_padded, A_y_padded)
+                * gradient_stencil(term, A_x_padded, A_y_padded,
+                                   A_x_uniform, A_y_uniform)
                 / i
             )
             array += term
@@ -498,6 +593,7 @@ def pauli_multislice_and_detect(
     average_field: Optional[np.ndarray] = None,
     algorithm: Optional[FourierMultislice | RealSpaceMultislice] = None,
     pbar: bool = False,
+    gauge_origin: Optional[str | tuple[float, float, float]] = None,
 ) -> BaseMeasurements | "Waves" | list[BaseMeasurements | "Waves"]:
     """
     Run the paraxial Pauli multislice algorithm for a batch of spinor wave
@@ -547,10 +643,16 @@ def pauli_multislice_and_detect(
         if not np.any(average_field):
             average_field = None
 
+    probe_gauge = isinstance(gauge_origin, str) and gauge_origin == "probe"
+    if isinstance(gauge_origin, str) and not probe_gauge:
+        raise ValueError(
+            f"gauge_origin must be 'probe', a length-3 sequence, or None, "
+            f"got {gauge_origin!r}"
+        )
+    probe_origins = None
+
     if average_field is not None:
-        # Coordinates for the non-periodic A_np = 1/2 B_avg x (r - r0); the
-        # gauge origin is the supercell center, minimizing |A_np| over the
-        # cell.
+        # Coordinates for the non-periodic A_np = 1/2 B_avg x (r - r0).
         extent = waves.extent
         gpts = waves.gpts
         x = xp.asarray(
@@ -560,8 +662,29 @@ def pauli_multislice_and_detect(
             np.arange(gpts[1])[None] * (extent[1] / gpts[1]), dtype=real_dtype
         )
         total_thickness = potential.thickness
-        origin = np.array([extent[0] / 2, extent[1] / 2, total_thickness / 2])
+        if gauge_origin is None or probe_gauge:
+            origin = np.array([extent[0] / 2, extent[1] / 2, total_thickness / 2])
+        else:
+            origin = np.asarray(gauge_origin, dtype=float)
+            if origin.shape != (3,):
+                raise ValueError(
+                    f"an explicit gauge_origin must have shape (3,), got "
+                    f"{origin.shape}"
+                )
         average_field_device = xp.asarray(average_field, dtype=real_dtype)
+
+        if probe_gauge:
+            probe_origins = _probe_gauge_origins(waves)
+            if probe_origins is None:
+                raise ValueError(
+                    "gauge_origin='probe' needs the waves to carry scan or "
+                    "position axes so each member's own probe position is "
+                    "known; got ensemble axes "
+                    f"{[type(m).__name__ for m in waves.ensemble_axes_metadata]}."
+                )
+    elif probe_gauge:
+        # No uniform field -> no A_np -> the gauge origin is irrelevant.
+        probe_gauge = False
 
     if use_split:
         # The split method's A_xy gradient series has per-slice magnitude
@@ -581,6 +704,29 @@ def pauli_multislice_and_detect(
 
     a_dot_gradient = ADotGradientOperator(derivative_accuracy)
     antialias_aperture = AntialiasAperture()
+
+    # Probe-centred gauge: the uniform A_np is carried as per-member 1-D ramps
+    # instead of being folded into the shared 2-D vector-potential slice, so
+    # every probe sits at its own gauge origin. Built once -- the ramps are
+    # z-independent for an axial B_avg.
+    uniform_ramps = None
+    if probe_gauge:
+        if not use_split:
+            raise NotImplementedError(
+                "gauge_origin='probe' is currently implemented for the "
+                "split-step scheme only; pass algorithm=FourierMultislice()."
+            )
+        stencil = a_dot_gradient.get_stencil(waves, device=waves.device)
+        uniform_ramps = _uniform_vector_potential_ramps(
+            average_field,
+            probe_origins,
+            x,
+            y,
+            extent,
+            stencil.padding,
+            xp,
+            get_dtype(complex=True),
+        )
 
     (
         extra_ensemble_axes_shape,
@@ -667,17 +813,21 @@ def pauli_multislice_and_detect(
                 )
 
             if average_field is not None:
-                z = depth + thickness / 2
-                A_np = _non_periodic_vector_potential_slice(
-                    average_field_device, x, y, z, origin
-                )
-                vector_potential_slice = xp.stack(
-                    [
-                        vector_potential_slice[0] + A_np[0],
-                        vector_potential_slice[1] + A_np[1],
-                        vector_potential_slice[2] + A_np[2],
-                    ]
-                )
+                if not probe_gauge:
+                    z = depth + thickness / 2
+                    A_np = _non_periodic_vector_potential_slice(
+                        average_field_device, x, y, z, origin
+                    )
+                    vector_potential_slice = xp.stack(
+                        [
+                            vector_potential_slice[0] + A_np[0],
+                            vector_potential_slice[1] + A_np[1],
+                            vector_potential_slice[2] + A_np[2],
+                        ]
+                    )
+                # With the probe-centred gauge the transverse A_np is applied
+                # per member through `uniform_ramps`; A_z vanishes for the
+                # axial B_avg that gauge supports, so nothing is added here.
                 if magnetic_field_slice is not None:
                     magnetic_field_slice = (
                         magnetic_field_slice + average_field_device[:, None, None]
@@ -707,6 +857,7 @@ def pauli_multislice_and_detect(
                     spin_axis=spin_axis,
                     tolerance=tolerance,
                     max_terms=max_terms,
+                    uniform_ramps=uniform_ramps,
                 )
                 previous_half = thickness / 2
             else:
@@ -774,6 +925,7 @@ def pauli_multislice(
     detectors: Optional[BaseDetector | list[BaseDetector]] = None,
     average_field: Optional[np.ndarray] = None,
     algorithm: Optional[FourierMultislice | RealSpaceMultislice] = None,
+    gauge_origin: Optional[str | tuple[float, float, float]] = None,
 ) -> BaseMeasurements | "Waves" | list[BaseMeasurements | "Waves"]:
     """
     Run the paraxial Pauli multislice algorithm [PRB 94, 174414 (2016),
@@ -847,6 +999,35 @@ def pauli_multislice(
         ferromagnet. Omit `average_field` only for compensated textures
         (e.g. antiferromagnets, where B_avg = 0) or when deliberately
         isolating the periodic-field contribution.
+    gauge_origin : "probe" or three float, optional
+        Gauge origin r0 for the non-periodic A_np = 1/2 B_avg x (r - r0).
+        Ignored unless `average_field` is nonzero.
+
+        Default (None) puts r0 at the supercell centre, shared by every
+        probe position. That choice is not innocuous for a scan: a probe at
+        p then sits in a constant A_np(p) ~ (p - r0), and since the paraxial
+        operator is linear in A (the A^2 term is dropped) a constant vector
+        potential is not a pure gauge phase -- it tilts the beam, which
+        drifts laterally as it propagates by an amount that depends on where
+        in the cell the probe sits. The scanned image is then not
+        lattice-periodic and loses the crystal's point symmetry, at a
+        relative size of ~1e-5 for FePt at B_avg = 1.385 T, comparable to
+        the magnetic signal itself.
+
+        Pass "probe" to give every scan position its own gauge origin,
+        r0 = p. A beam entering parallel to a uniform axial B feels no
+        force (v x B = 0) and must travel straight wherever it enters;
+        r0 = p makes the canonical and kinetic transverse momenta agree at
+        the probe, so no spurious tilt is introduced, and lattice
+        periodicity (hence the crystal symmetry of the scan) is restored.
+        Verified on FePt: the four-fold symmetry violation of the scanned
+        intensity drops from 1.4e-5 to 7.8e-8, the latter being the
+        average_field=0 baseline.
+
+        Requires the split-step scheme (`FourierMultislice`), waves carrying
+        scan or position axes, and an axial B_avg (for a general direction
+        A_np is not separable). A length-3 sequence sets an explicit fixed
+        origin instead.
     algorithm : RealSpaceMultislice or FourierMultislice, optional
         Per-slice evolution scheme, selected with the same algorithm
         objects as the scalar `Waves.multislice`:
@@ -949,6 +1130,7 @@ def pauli_multislice(
         magnetic_field=magnetic_field,
         average_field=average_field,
         algorithm=algorithm,
+        gauge_origin=gauge_origin,
     )
 
     return transform.apply(waves)
