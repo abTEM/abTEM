@@ -1688,6 +1688,259 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         return waves.reshape((num_positions,) + out_shape)
 
+    def _lattice_geometry(self, scan, warn: bool = False):
+        """Describe a scan as a lattice of the pixel grid, or return None.
+
+        The fast reduction below requires the probe positions to form a regular
+        grid whose step is a whole number of pixels, so that a window offset
+        splits into a whole-step and a sub-step part. The scan may cover any
+        part of the grid and its origin may fall between pixels — a common
+        fractional offset is applied to the reduction kernel instead.
+
+        Returns ``(origin, step, shape, offset)``: the whole-pixel origin, the
+        integer pixel step, the scan shape, and the common fractional offset.
+        """
+        if not isinstance(scan, GridScan):
+            return None
+
+        positions = np.asarray(scan.get_positions())
+        if positions.ndim != 3 or min(positions.shape[:2]) < 2:
+            return None
+
+        pixels = positions / np.array(self.sampling)
+        origin = pixels[0, 0]
+        steps = (pixels[1, 0] - pixels[0, 0], pixels[0, 1] - pixels[0, 0])
+
+        if abs(steps[0][1]) > 1e-6 or abs(steps[1][0]) > 1e-6:
+            return None
+
+        step = (steps[0][0], steps[1][1])
+        shape = positions.shape[:2]
+
+        # the scan must be the exact lattice implied by its first row and column
+        if not (
+            np.allclose(pixels[:, 0, 0], origin[0] + np.arange(shape[0]) * step[0])
+            and np.allclose(pixels[0, :, 1], origin[1] + np.arange(shape[1]) * step[1])
+        ):
+            return None
+
+        if any(abs(value - round(value)) > 1e-6 for value in step):
+            if warn:
+                suggestion = tuple(
+                    min(
+                        (d for d in range(1, gpts + 1) if gpts % d == 0),
+                        key=lambda d: abs(d - n),
+                    )
+                    for n, gpts in zip(shape, self.gpts)
+                )
+                warnings.warn(
+                    "The scan step is not a whole number of pixels "
+                    f"({step[0]:.3f}, {step[1]:.3f}), so the reduction of the "
+                    "compressed scattering matrix falls back to its general "
+                    "(much slower) implementation. Choose a scan whose step "
+                    "divides the grid — for this scattering matrix "
+                    f"{self.gpts} — for example gpts={suggestion}.",
+                    stacklevel=3,
+                )
+            return None
+
+        step = tuple(int(round(value)) for value in step)
+        if min(step) < 1:
+            return None
+
+        # a common fractional origin is exact: it is applied as a sub-pixel
+        # phase ramp on the reduction kernel
+        whole = tuple(int(np.rint(value)) for value in origin)
+        offset = np.array(origin) - np.array(whole)
+
+        # a half-pixel offset rounds inconsistently along the scan (ties round
+        # to even), which would centre the cropping windows of neighbouring
+        # positions one pixel apart; leave those scans to the general path
+        if np.any(np.abs(np.abs(offset) - 0.5) < 1e-6):
+            return None
+
+        return whole, step, shape, offset
+
+    def _lattice_waves_block(
+        self, u_modes, kernel, origin, step, scan_shape, x_start, x_stop
+    ):
+        """Reduce a block of scan rows by the lattice decomposition of the
+        window offsets.
+
+        The reduction ``psi[p, j] = sum_k U[r_p + j - c, k] B[j, k]`` gathers a
+        window of the modes per probe position, which reuses no data: every
+        gathered element is consumed by a single multiply, so it runs at a few
+        percent of the achievable rate. When the probe positions lie on a
+        lattice of the pixel grid with step ``s``, the window offset splits as
+        ``j - c = a * s + b``, and the probe position enters only through the
+        whole-step part::
+
+            psi[p, a s + b] = sum_k U[(p + a) s + b, k] B[a s + b, k]
+
+        For each sub-step offset ``b`` the modes are sliced with stride ``s``
+        (a view, not a gather) and every ``(position + a)`` pair is evaluated
+        by a single matrix product; the probe-dependent shift is then applied
+        by extracting ``G[p + a, a]``. The matrix products reuse both operands
+        across the whole block, which is what the gather formulation cannot do.
+        """
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        gpts = self.gpts
+        window = tuple(kernel.shape[:2])
+        num_modes = kernel.shape[-1]
+        step_x, step_y = step
+        num_y = scan_shape[1]
+        num_block = x_stop - x_start
+
+        offsets = []
+        for length, center, stride in zip(
+            window, (window[0] // 2, window[1] // 2), step
+        ):
+            displacement = np.arange(length) - center
+            sub_step = displacement % stride
+            offsets.append((sub_step, (displacement - sub_step) // stride))
+        (sub_x, whole_x), (sub_y, whole_y) = offsets
+
+        def axis_indices(value, steps, start, num, axis):
+            """Grid indices of the strided slice and the extraction offsets.
+
+            When the scan lattice tiles the periodic axis the window offsets
+            wrap onto the same points, otherwise the slice is extended by the
+            halo of points the window reaches beyond the scan.
+            """
+            if num * step[axis] == gpts[axis] and start == 0:
+                index = (origin[axis] + value + np.arange(num) * step[axis]) % gpts[axis]
+                return xp.asarray(index), xp.asarray(
+                    (np.arange(num)[:, None] + steps[None, :]) % num
+                )
+            first = int(steps.min())
+            length = num + int(steps.max()) - first
+            index = (
+                origin[axis] + value + (start + first + np.arange(length)) * step[axis]
+            ) % gpts[axis]
+            return xp.asarray(index), xp.asarray(
+                np.arange(num)[:, None] + (steps - first)[None, :]
+            )
+
+        waves = xp.zeros((num_block, num_y) + window, dtype=dtype)
+
+        for value_x in range(step_x):
+            select_x = np.flatnonzero(sub_x == value_x)
+            if not len(select_x):
+                continue
+            index_x, row_index = axis_indices(
+                value_x, whole_x[select_x], x_start, num_block, 0
+            )
+
+            for value_y in range(step_y):
+                select_y = np.flatnonzero(sub_y == value_y)
+                if not len(select_y):
+                    continue
+                index_y, column_index = axis_indices(
+                    value_y, whole_y[select_y], 0, num_y, 1
+                )
+
+                modes = u_modes[index_x][:, index_y]
+                block_kernel = kernel[xp.asarray(select_x)][:, xp.asarray(select_y)]
+
+                product = (
+                    modes.reshape(-1, num_modes)
+                    @ block_kernel.reshape(-1, num_modes).T
+                ).reshape(
+                    len(index_x), len(index_y), len(select_x), len(select_y)
+                )
+
+                waves[
+                    :,
+                    :,
+                    xp.asarray(select_x)[:, None],
+                    xp.asarray(select_y)[None, :],
+                ] = product[
+                    row_index[:, None, :, None],
+                    column_index[None, :, None, :],
+                    xp.arange(len(select_x))[None, None, :, None],
+                    xp.arange(len(select_y))[None, None, None, :],
+                ]
+
+        return waves.reshape((num_block * num_y,) + window)
+
+    def _lattice_batch_reduce_to_measurements(
+        self, scan, ctf, detectors, lattice, pbar: bool = False
+    ):
+        """Windowed reduction of a lattice scan (see :meth:`_lattice_waves_block`)."""
+        origin, step, scan_shape, offset = lattice
+
+        measurements = allocate_multislice_measurements(
+            self.dummy_probes(scan=scan, ctf=ctf),
+            detectors,
+            extra_ensemble_axes_shape=(),
+            extra_ensemble_axes_metadata=[],
+        )
+
+        xp = get_array_module(self._device)
+        u_modes = xp.ascontiguousarray(xp.asarray(self._u).transpose(1, 2, 0))
+        window = self.window_gpts
+
+        # block the scan rows so the reduced wave functions of one block stay
+        # within a fixed budget; larger blocks amortize the halo of window rows
+        # shared by neighbouring positions
+        row_bytes = scan_shape[1] * int(np.prod(window)) * 8
+        num_rows = max(1, int(self._REDUCE_BATCH_BYTES * 2 // max(row_bytes, 1)))
+        num_rows = min(num_rows, scan_shape[0])
+
+        pbar = TqdmWrapper(
+            enabled=pbar,
+            total=int(np.prod(scan.shape + ctf.ensemble_shape)),
+            leave=False,
+            desc="reduce",
+        )
+
+        for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
+            sub_ctf = sub_ctf.item()
+            coefficients = self._calculate_ctf_coefficients(sub_ctf)
+            coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
+            kernel = xp.ascontiguousarray(
+                self._window_kernel(
+                    self._coefficient_values(coefficients), offset
+                ).transpose(1, 2, 0)
+            )
+
+            for x_start in range(0, scan_shape[0], num_rows):
+                x_stop = min(x_start + num_rows, scan_shape[0])
+
+                waves_array = self._lattice_waves_block(
+                    u_modes, kernel, origin, step, scan_shape, x_start, x_stop
+                )
+                waves_array = waves_array.reshape(
+                    (1,) * len(sub_ctf.ensemble_shape)
+                    + (x_stop - x_start, scan_shape[1])
+                    + window
+                )
+
+                ensemble_axes_metadata = [
+                    UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
+                ] + [ScanAxis(), ScanAxis()]
+
+                waves = Waves(
+                    waves_array,
+                    sampling=tuple(self.sampling),
+                    energy=self.energy,
+                    ensemble_axes_metadata=ensemble_axes_metadata,
+                    metadata=self.metadata,
+                )
+
+                indices = ctf_slics + (slice(x_start, x_stop),)
+
+                pbar.update_if_exists((x_stop - x_start) * scan_shape[1])
+
+                for detector, measurement in zip(detectors, measurements):
+                    measurement.array[indices] = detector.detect(waves).array
+
+        pbar.close_if_exists()
+
+        return tuple(measurements)
+
     def _reduce_to_waves_batched(self, u_windows, snapped_pixels, kernel):
         """Vectorized equivalent of :meth:`_reduce_to_waves`: the windows of the
         left singular vectors are gathered for batches of probe positions and
@@ -2271,14 +2524,22 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 pbar=pbar,
             )
         else:
-            measurements = self._batch_reduce_to_measurements(
-                scan,
-                ctf,
-                detectors,
-                validated_max_batch_reduction,
-                pbar=pbar,
-                absolute=full_window,
+            lattice = (
+                None if full_window else self._lattice_geometry(scan, warn=True)
             )
+            if lattice is not None:
+                measurements = self._lattice_batch_reduce_to_measurements(
+                    scan, ctf, detectors, lattice, pbar=pbar
+                )
+            else:
+                measurements = self._batch_reduce_to_measurements(
+                    scan,
+                    ctf,
+                    detectors,
+                    validated_max_batch_reduction,
+                    pbar=pbar,
+                    absolute=full_window,
+                )
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         return _wrap_measurements(measurements)

@@ -667,3 +667,63 @@ def test_upsample_reduction_method_validation():
         windowed.reduce(detectors=detector, method="expand")
     with pytest.raises(ValueError, match="modes"):
         full.reduce(detectors=detector, method="modes", max_batch_expansion=16)
+
+
+def test_upsample_lattice_reduction_matches_general():
+    # the lattice (commensurate-scan) reduction must reproduce the general
+    # windowed reduction for tiling scans, partial regions and fractional
+    # scan origins, and must decline scans it cannot represent
+    from abtem.prism.s_matrix import CompressedSMatrixArray
+
+    potential = _small_potential()
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        window_gpts=24,
+    ).build(lazy=False)
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    extent = potential.extent
+    sampling = s_matrix_array.sampling[0]
+
+    scans = [
+        GridScan(start=(0, 0), end=extent, gpts=(16, 16)),  # tiles the grid
+        GridScan(  # partial region, still a whole-pixel step
+            start=(extent[0] * 4 / 64, extent[1] * 8 / 64),
+            end=(extent[0] * 24 / 64, extent[1] * 28 / 64),
+            gpts=(5, 5),
+        ),
+        GridScan(  # fractional origin, applied as a sub-pixel kernel shift
+            start=(sampling * 0.3, sampling * 0.3),
+            end=(sampling * 32.3, sampling * 32.3),
+            gpts=(8, 8),
+        ),
+    ]
+
+    original = CompressedSMatrixArray._lattice_geometry
+    try:
+        for scan in scans:
+            assert original(s_matrix_array, scan) is not None
+            fast = s_matrix_array.reduce(scan=scan, detectors=detector)
+
+            CompressedSMatrixArray._lattice_geometry = (
+                lambda self, scan, warn=False: None
+            )
+            general = s_matrix_array.reduce(scan=scan, detectors=detector)
+            CompressedSMatrixArray._lattice_geometry = original
+
+            assert np.allclose(
+                fast.array, general.array, atol=1e-5 * general.array.max()
+            )
+    finally:
+        CompressedSMatrixArray._lattice_geometry = original
+
+    # scans whose step is not a whole number of pixels fall back and warn
+    incommensurate = GridScan(start=(0, 0), end=extent, gpts=(12, 12))
+    assert s_matrix_array._lattice_geometry(incommensurate) is None
+    with pytest.warns(UserWarning, match="whole number of pixels"):
+        s_matrix_array._lattice_geometry(incommensurate, warn=True)
