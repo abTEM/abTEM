@@ -821,3 +821,31 @@ def test_finite_projection_gpu_matches_cpu_near_atom_core(device):
 
     max_dev = np.abs(gpu_array - cpu).max() / cpu.max()
     assert max_dev < 1e-4, f"GPU vs CPU max relative deviation {max_dev:.3e}"
+
+
+def test_potential_array_slicing_maps_exit_planes():
+    # slicing a potential array must map its exit planes into the sliced range,
+    # otherwise the exit plane can fall outside the slices and the multislice
+    # algorithm silently returns an unpropagated wave function
+    import abtem
+    from ase.build import bulk
+
+    atoms = bulk("Si", cubic=True) * (2, 2, 8)
+    potential = abtem.Potential(atoms, gpts=128, slice_thickness=2.0).build(lazy=False)
+
+    assert potential.exit_planes == (potential.num_slices - 1,)
+
+    for item in (slice(None, 9), slice(5, 15), slice(None, 1)):
+        sliced = potential[item]
+        assert sliced.exit_planes == (sliced.num_slices - 1,)
+        assert max(sliced.exit_planes) < sliced.num_slices
+
+    # splitting the multislice algorithm at a slice boundary is exact
+    probe = abtem.Probe(energy=200e3, semiangle_cutoff=20)
+    probe.grid.match(potential)
+    waves = probe.build(lazy=False)
+
+    whole = waves.multislice(potential)
+    split = waves.multislice(potential[:9]).multislice(potential[9:])
+
+    assert np.allclose(whole.array, split.array)

@@ -555,8 +555,12 @@ def test_upsample_streamed_expansion_validation():
 
 
 def test_upsample_singular_values_spectrum():
-    # the full spectrum is kept for choosing the tolerance; it extends the
-    # retained singular values and is sorted in descending order
+    # the full spectrum is kept for choosing the tolerance and is sorted in
+    # descending order. The retained modes are NOT the leading singular vectors
+    # — the row space of the built beams is retained whole so that the
+    # plane-wave branch is exact — so their amplitudes track the spectrum
+    # without reproducing it, and carry no more energy than the optimal
+    # subspace of the same size.
     potential = _small_potential()
     s_matrix_array = SMatrix(
         potential=potential,
@@ -568,9 +572,583 @@ def test_upsample_singular_values_spectrum():
     ).build(lazy=False)
 
     singular_values = s_matrix_array.singular_values
-    assert len(singular_values) >= s_matrix_array.rank
-    assert np.allclose(
-        singular_values[: s_matrix_array.rank], s_matrix_array.sigma
-    )
+    sigma = s_matrix_array.sigma
+    rank = s_matrix_array.rank
+
+    assert len(singular_values) >= rank
     assert np.all(np.diff(singular_values) <= 0)
-    assert singular_values[s_matrix_array.rank - 1] >= 1e-2 * singular_values[0]
+    assert np.all(np.diff(sigma) <= 0)
+    assert np.isclose(sigma[0], singular_values[0], rtol=1e-3)
+
+    optimal = float((singular_values[:rank] ** 2).sum())
+    assert float((sigma**2).sum()) <= optimal * (1.0 + 1e-5)
+    assert float((sigma**2).sum()) >= optimal * 0.99
+    # every mode above the tolerance is retained; the rank exceeds that count
+    # because the built beams' row space is kept whole
+    assert rank >= int((singular_values >= 1e-2 * singular_values[0]).sum())
+
+
+def test_upsample_modes_reduction_matches_expand():
+    # the full-window mode contraction (the GPU path) must match the expanded
+    # reduction to floating point precision, for commensurate, incommensurate
+    # and off-grid positions, aberrated CTFs, and the complex wave functions
+    potential = _small_potential()
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+    ).build(lazy=False)
+    detector = abtem.PixelatedDetector(max_angle=None)
+
+    scans = [
+        GridScan(start=(0, 0), end=potential.extent, gpts=(3, 3)),
+        GridScan(start=(0.3, 0.11), end=(9.1, 8.7), gpts=(2, 3)),
+        CustomScan(np.array([[1.234, 2.345], [3.001, 0.777]])),
+    ]
+    for scan in scans:
+        expanded = s_matrix_array.reduce(scan=scan, detectors=detector, method="expand")
+        modes = s_matrix_array.reduce(scan=scan, detectors=detector, method="modes")
+        assert np.allclose(
+            modes.array, expanded.array, atol=1e-4 * expanded.array.max()
+        )
+
+    ctf = abtem.CTF(semiangle_cutoff=20, defocus=50, Cs=1e5)
+    expanded = s_matrix_array.reduce(
+        scan=scans[0], detectors=detector, ctf=ctf, method="expand"
+    )
+    modes = s_matrix_array.reduce(
+        scan=scans[0], detectors=detector, ctf=ctf, method="modes"
+    )
+    assert np.allclose(modes.array, expanded.array, atol=1e-4 * expanded.array.max())
+
+    # complex waves in the absolute frame (registration must match, not just
+    # the intensities)
+    expanded = s_matrix_array.reduce(
+        scan=(5.15, 4.85), detectors=abtem.WavesDetector(), method="expand"
+    )
+    modes = s_matrix_array.reduce(
+        scan=(5.15, 4.85), detectors=abtem.WavesDetector(), method="modes"
+    )
+    assert np.allclose(
+        modes.array, expanded.array, atol=1e-4 * np.abs(expanded.array).max()
+    )
+
+
+def test_upsample_batched_windowed_reduction_matches_loop():
+    # the vectorized (GPU) windowed contraction is exactly the per-position loop
+    potential = _small_potential()
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        window_gpts=24,
+    ).build(lazy=False)
+
+    ctf = abtem.CTF(semiangle_cutoff=20, energy=100e3)
+    values = s_matrix_array._coefficient_values(
+        s_matrix_array._calculate_ctf_coefficients(ctf)
+    )
+    kernel = np.ascontiguousarray(
+        s_matrix_array._window_kernel(values, np.zeros(2)).transpose(1, 2, 0)
+    )
+    u_windows = np.ascontiguousarray(np.asarray(s_matrix_array._u).transpose(1, 2, 0))
+    snapped = np.array([[0, 0], [3, 45], [40, 2], [46, 47], [11, 30]])
+
+    loop = s_matrix_array._reduce_to_waves(u_windows, snapped, kernel)
+    batched = s_matrix_array._reduce_to_waves_batched(u_windows, snapped, kernel)
+    assert np.allclose(loop, batched)
+
+
+def test_upsample_reduction_method_validation():
+    potential = _small_potential()
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2, upsample=True, tolerance=1e-3)
+    full = SMatrix(**kwargs).build(lazy=False)
+    windowed = SMatrix(**kwargs, window_gpts=24).build(lazy=False)
+    detector = abtem.PixelatedDetector(max_angle=None)
+
+    with pytest.raises(ValueError, match="method"):
+        full.reduce(detectors=detector, method="bogus")
+    with pytest.raises(ValueError, match="window_gpts"):
+        windowed.reduce(detectors=detector, method="expand")
+    with pytest.raises(ValueError, match="modes"):
+        full.reduce(detectors=detector, method="modes", max_batch_expansion=16)
+
+
+def test_upsample_lattice_reduction_matches_general():
+    # the lattice (commensurate-scan) reduction must reproduce the general
+    # windowed reduction for tiling scans, partial regions and fractional
+    # scan origins, and must decline scans it cannot represent
+    from abtem.prism.s_matrix import CompressedSMatrixArray
+
+    potential = _small_potential()
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        window_gpts=24,
+    ).build(lazy=False)
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    extent = potential.extent
+    sampling = s_matrix_array.sampling[0]
+
+    scans = [
+        GridScan(start=(0, 0), end=extent, gpts=(16, 16)),  # tiles the grid
+        GridScan(  # partial region, still a whole-pixel step
+            start=(extent[0] * 4 / 64, extent[1] * 8 / 64),
+            end=(extent[0] * 24 / 64, extent[1] * 28 / 64),
+            gpts=(5, 5),
+        ),
+        GridScan(  # fractional origin, applied as a sub-pixel kernel shift
+            start=(sampling * 0.3, sampling * 0.3),
+            end=(sampling * 32.3, sampling * 32.3),
+            gpts=(8, 8),
+        ),
+    ]
+
+    original = CompressedSMatrixArray._lattice_geometry
+    try:
+        for scan in scans:
+            assert original(s_matrix_array, scan) is not None
+            fast = s_matrix_array.reduce(scan=scan, detectors=detector)
+
+            CompressedSMatrixArray._lattice_geometry = (
+                lambda self, scan, warn=False: None
+            )
+            general = s_matrix_array.reduce(scan=scan, detectors=detector)
+            CompressedSMatrixArray._lattice_geometry = original
+
+            assert np.allclose(
+                fast.array, general.array, atol=1e-5 * general.array.max()
+            )
+    finally:
+        CompressedSMatrixArray._lattice_geometry = original
+
+    # scans whose step is not a whole number of pixels fall back and warn
+    incommensurate = GridScan(start=(0, 0), end=extent, gpts=(12, 12))
+    assert s_matrix_array._lattice_geometry(incommensurate) is None
+    with pytest.warns(UserWarning, match="whole number of pixels"):
+        s_matrix_array._lattice_geometry(incommensurate, warn=True)
+
+
+def test_upsample_blend_angle():
+    # blending switches to the plane-wave (PRISM) reduction of the built beams
+    # above the blend angle; 'auto' resolves it from the aliasing limit of the
+    # interpolation, extent / (2 * interpolation * thickness)
+    potential = _small_potential(repetitions=(2, 2, 6))
+    thickness = potential.thickness
+
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        blend_angle="auto",
+    )
+    expected = 1e3 * min(
+        extent / (2 * interpolation * thickness)
+        for extent, interpolation in zip(s_matrix.extent, s_matrix.interpolation)
+    )
+    assert np.isclose(s_matrix._resolved_blend_angle(), expected)
+
+    s_matrix_array = s_matrix.build(lazy=False)
+    assert np.isclose(s_matrix_array.blend_angle, expected)
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+
+    blended = s_matrix_array.reduce(scan=scan, detectors=detector,
+                                    blend_angle=expected)
+    unblended = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
+    plain = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4, blend_angle=0,
+    ).build(lazy=False).reduce(scan=scan, detectors=detector)
+
+    # disabling recovers the plain interpolated reduction exactly
+    assert np.allclose(unblended.array, plain.array, atol=1e-6 * plain.array.max())
+    # the default blend acts through the detector routing; a full diffraction
+    # pattern is not routable, hence the default reduction is the plain
+    # interpolated one and Fourier blending must be requested explicitly
+    default = s_matrix_array.reduce(scan=scan, detectors=detector)
+    assert np.allclose(default.array, plain.array, atol=1e-6 * plain.array.max())
+    # blending changes the high-angle content but not the total intensity much
+    assert not np.allclose(blended.array, plain.array, atol=1e-6 * plain.array.max())
+    assert np.isclose(blended.array.sum(), plain.array.sum(), rtol=0.05)
+
+    # a blend angle beyond the maximum simulated angle is a no-op
+    very_high = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=1e4)
+    assert np.allclose(very_high.array, plain.array, atol=1e-6 * plain.array.max())
+
+    with pytest.raises(ValueError, match="upsample=True"):
+        SMatrix(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20,
+                interpolation=2, blend_angle=10.0)
+
+
+def test_upsample_blend_aperture_and_clamp():
+    # 'aperture' weights the blend by the probe-forming aperture; 'auto' clamps
+    # to the aperture edge (with a warning) when the aliasing angle falls inside
+    # the bright-field disk, where blending would import the periodized ghosts
+    potential = _small_potential(repetitions=(2, 2, 6))
+
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2, upsample=True, tolerance=1e-4)
+    s_matrix_array = SMatrix(**kwargs, blend_angle="aperture").build(lazy=False)
+    assert s_matrix_array.blend_angle == "aperture"
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    # a full diffraction pattern is not routable, hence the Fourier-weighted
+    # blend must be requested explicitly in the reduction
+    blended = s_matrix_array.reduce(scan=scan, detectors=detector,
+                                    blend_angle="aperture")
+    plain = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
+    assert not np.allclose(blended.array, plain.array, atol=1e-6 * plain.array.max())
+    assert np.isclose(blended.array.sum(), plain.array.sum(), rtol=0.05)
+
+    # a thick specimen at a large factor pushes the aliasing angle inside the
+    # disk: 'auto' must clamp to the aperture and warn
+    thick = _small_potential(repetitions=(2, 2, 24))
+    s_matrix = SMatrix(potential=thick, energy=100e3, semiangle_cutoff=20,
+                       interpolation=4, upsample=True, blend_angle="auto")
+    with pytest.warns(UserWarning, match="aliased"):
+        resolved = s_matrix._resolved_blend_angle()
+    assert resolved == "aperture"
+
+
+def test_upsample_composite_blend():
+    # the composite blend reduces the interpolated branch on the full window and
+    # the plane-wave branch on one period of its periodized wave functions,
+    # adding the detected intensities; it requires window-independent detectors
+    potential = _small_potential(repetitions=(2, 2, 6))
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        blend_angle="auto",
+    ).build(lazy=False)
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=15),
+        abtem.AnnularDetector(inner=30, outer=60),
+    ]
+
+    # explicit blend angle between the two detectors, so the first stays the
+    # interpolated reduction and the second becomes the plane-wave branch
+    composite = s_matrix_array.scan(
+        scan=scan, detectors=detectors, blend_angle=25.0,
+        blend_window_gpts="period",
+    )
+    plain = s_matrix_array.scan(scan=scan, detectors=detectors, blend_angle=0)
+
+    # below the blend angle the composite is the interpolated reduction
+    assert np.allclose(
+        composite[0].array, plain[0].array, rtol=0.02
+    )
+    # the high-angle branch changes the dark-field values
+    assert not np.allclose(composite[1].array, plain[1].array, rtol=0.02)
+    assert np.all(composite[1].array >= 0)
+
+    with pytest.raises(NotImplementedError, match="intensity"):
+        s_matrix_array.scan(
+            scan=scan,
+            detectors=abtem.PixelatedDetector(max_angle=None),
+            blend_angle=25.0,
+            blend_window_gpts="period",
+        )
+
+
+def test_upsample_lattice_detection_chunking():
+    # the lattice row block is sized for the matrix products, but the blend and
+    # the detectors transform what it produces, so they walk the block in
+    # smaller chunks; the chunking must not change any measured value
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        window_gpts=32,
+    )
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(16, 16))
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=15),
+        abtem.AnnularDetector(inner=30, outer=60),
+    ]
+
+    for blend in (None, "auto"):
+        s_matrix_array = SMatrix(**kwargs, blend_angle=blend).build(lazy=False)
+        assert s_matrix_array._lattice_geometry(scan) is not None
+
+        whole = s_matrix_array.scan(scan=scan, detectors=detectors)
+
+        # one scan row per detection chunk, the whole scan per row block
+        s_matrix_array._REDUCE_BATCH_BYTES = (
+            scan.gpts[1] * int(np.prod(s_matrix_array.window_gpts)) * 8
+        )
+        chunked = s_matrix_array.scan(scan=scan, detectors=detectors)
+
+        for a, b in zip(whole, chunked):
+            assert np.array_equal(a.array, b.array)
+
+
+def test_upsample_blend_snaps_to_detector_boundary():
+    # above the blend angle the composite reduction is the plane-wave branch
+    # alone, which is the PRISM algorithm exactly. A band straddling the blend
+    # angle would mix the branches, so the angle is snapped down to a boundary
+    # and cut sharply there; every band then lies wholly on one side.
+    from abtem.prism.s_matrix import CompressedSMatrixArray as C
+
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=15),
+        abtem.AnnularDetector(inner=21, outer=50),
+        abtem.AnnularDetector(inner=50, outer=90),
+    ]
+    assert C._snapped_blend_angle(37.5, detectors) == 21.0
+    assert C._snapped_blend_angle(60.0, detectors) == 50.0
+    assert C._snapped_blend_angle(10.0, detectors) == 10.0   # no boundary below
+    assert C._snapped_blend_angle("aperture", detectors) == "aperture"
+    assert C._snapped_blend_angle(None, detectors) is None
+    assert C._snapped_blend_angle(37.5, detectors[1]) == 21.0  # not a list
+
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2)
+    prism = SMatrix(**kwargs).build(lazy=False)
+    cp = SMatrix(**kwargs, upsample=True, tolerance=1e-3,
+                 window_gpts=int(prism.window_gpts[0]) * 2).build(lazy=False)
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    composite = cp.scan(scan=scan, detectors=detectors, blend_angle=37.5,
+                        blend_window_gpts="period")
+    reference = prism.scan(scan=scan, detectors=detectors)
+
+    # snapped to 21 mrad: both dark-field bands sit above it and must be PRISM
+    for a, b in zip(composite[1:], reference[1:]):
+        assert np.allclose(a.array, b.array, rtol=1e-4, atol=1e-9)
+    # the bright field is below it and is the interpolated reduction
+    assert not np.allclose(composite[0].array, reference[0].array, rtol=1e-4)
+
+
+def test_upsample_plane_wave_branch_is_prism():
+    # the plane-wave branch reduced on one interpolation period must BE the
+    # PRISM reduction, at any tolerance: the compression retains the row space
+    # of the built beams whole rather than by singular value
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2)
+    prism = SMatrix(**kwargs).build(lazy=False)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    expected = prism.reduce(scan=scan).array
+
+    for tolerance in (1e-1, 1e-2, 1e-3):
+        cp = SMatrix(**kwargs, upsample=True, tolerance=tolerance,
+                     window_gpts=int(prism.window_gpts[0])).build(lazy=False)
+        # a vanishing blend angle leaves the plane-wave branch alone
+        branch = cp.reduce(scan=scan, blend_angle=1e-6).array
+        error = np.abs(branch - expected).max() / np.abs(expected).max()
+        assert error < 1e-4, f"tolerance {tolerance}: {error}"
+
+
+def test_upsample_blend_taper_routing():
+    # with a taper, a narrow band overlapping [cut - taper, cut] reads a convex
+    # combination of the two branch intensities — the angular density is then
+    # continuous across the cut — while bands clear of the zone stay pure
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4,
+    ).build(lazy=False)
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    cut, taper = 40.0, 8.0
+    rings = [
+        abtem.AnnularDetector(inner=24, outer=32),   # below the zone -> low
+        abtem.AnnularDetector(inner=34, outer=40),   # inside the zone -> taper
+        abtem.AnnularDetector(inner=40, outer=48),   # above the cut -> high
+    ]
+
+    tapered = built.scan(scan=scan, detectors=rings, blend_angle=cut,
+                         blend_taper=taper)
+    sharp = built.scan(scan=scan, detectors=rings, blend_angle=cut)
+
+    # outside the zone the taper changes nothing
+    assert np.allclose(tapered[0].array, sharp[0].array, rtol=1e-5)
+    assert np.allclose(tapered[2].array, sharp[2].array, rtol=1e-5)
+
+    # inside the zone the value lies between the two pure branches
+    low = built.scan(scan=scan, detectors=rings[1], blend_angle=0)
+    high = built._with_window(
+        tuple(-(-g // i) for g, i in zip(built.gpts, built._interpolation))
+    ).reduce(scan=scan, detectors=rings[1], blend_angle=cut - taper,
+             _blend_component="high", _blend_taper=0.0)
+    lower = np.minimum(low.array, high.array) * (1 - 1e-4) - 1e-12
+    upper = np.maximum(low.array, high.array) * (1 + 1e-4) + 1e-12
+    assert np.all(tapered[1].array >= lower)
+    assert np.all(tapered[1].array <= upper)
+    assert not np.allclose(tapered[1].array, sharp[1].array, rtol=1e-5)
+
+
+def test_upsample_lattice_product_chunking():
+    # at small scan steps the lattice reduction's per-offset product tensor is
+    # large; it is processed in row chunks within the batch budget, which must
+    # not change any value — including at step 2, where the sub-step groups
+    # hold half the window each
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-3, window_gpts=32,
+    ).build(lazy=False)
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    for scan_gpts in (32, 16):  # steps 2 and 4 on the 64 grid
+        scan = GridScan(start=(0, 0), end=potential.extent,
+                        gpts=(scan_gpts, scan_gpts))
+        assert built._lattice_geometry(scan) is not None
+
+        whole = built.reduce(scan=scan, detectors=detector)
+        built._REDUCE_BATCH_BYTES = 65536  # a few product rows per chunk
+        chunked = built.reduce(scan=scan, detectors=detector)
+        del built._REDUCE_BATCH_BYTES
+
+        assert np.array_equal(whole.array, chunked.array)
+
+
+def test_commensurate_scan():
+    # GridScan.commensurate steps a whole number of pixels of the grid the
+    # scattering matrix is reduced on, snapping the request to a divisor of
+    # the span, so the lattice reduction always engages
+    potential = _small_potential(repetitions=(2, 2, 3))  # 96 -> reduced grid 64
+    s_matrix = SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20,
+                       interpolation=2, upsample=True, tolerance=1e-3,
+                       window_gpts=32)
+    built = s_matrix.build(lazy=False)
+    assert built.gpts == (64, 64)
+
+    for source in (potential, s_matrix, built):
+        scan = GridScan.commensurate(source, gpts=16)
+        assert scan.gpts == (16, 16)
+        assert np.allclose(scan.end, potential.extent)
+        assert built._lattice_geometry(scan) is not None
+
+    # 64 / 13 is not whole: snapped to the nearest divisor step (4 -> 16 gpts)
+    assert GridScan.commensurate(built, gpts=13).gpts == (16, 16)
+
+    # a requested sampling snaps to the nearest whole-pixel step
+    sampled = GridScan.commensurate(built, sampling=potential.extent[0] / 16.4)
+    assert sampled.gpts == (16, 16)
+
+    # a sub-region with a fractional span: the end moves onto the lattice
+    sub = GridScan.commensurate(built, gpts=4, start=(1.234, 1.234),
+                                end=(1.234 + 3.03, 1.234 + 3.03))
+    pixels = np.asarray(sub.get_positions()) / (potential.extent[0] / 64)
+    steps = np.diff(pixels[:, 0, 0])
+    assert np.allclose(steps, np.round(steps), atol=1e-3)
+    assert built._lattice_geometry(sub) is not None
+
+    with pytest.raises(ValueError):
+        GridScan.commensurate(built)
+    with pytest.raises(ValueError):
+        GridScan.commensurate(built, gpts=8, sampling=1.0)
+
+
+def test_upsample_pixelated_detector_is_stitched():
+    # a pixelated detector straddles the blend angle by construction, so the
+    # pattern is stitched on the full angular grid: the interpolated reduction
+    # below the cut, the plane-wave (PRISM) reduction scattered onto its
+    # lattice pixels at and above it — exact, with zeros in between
+    from abtem.prism.s_matrix import _FullGridPixelatedDetector
+
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2)
+    prism = SMatrix(**kwargs).build(lazy=False)
+    built = SMatrix(**kwargs, upsample=True, tolerance=1e-4,
+                    window_gpts=32).build(lazy=False)
+
+    scan = GridScan.commensurate(built, gpts=4)
+    detector = abtem.PixelatedDetector(max_angle=None)
+    cut = 40.0
+    assert built._routing_sides(cut, [detector]) == ["pattern"]
+
+    stitched = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
+    assert stitched.array.shape[-2:] == tuple(built.gpts)
+    assert np.allclose(stitched.array.sum((-2, -1)), 1.0, atol=0.05)
+
+    reference = prism.reduce(scan=scan, detectors=detector)
+    factor = int(round(reference.angular_sampling[0]
+                       / stitched.angular_sampling[0]))
+    size, period = built.gpts[0], reference.array.shape[-1]
+    index = size // 2 + factor * (np.arange(period) - period // 2)
+    coarse = (np.arange(period) - period // 2) * reference.angular_sampling[0]
+    above = np.hypot(coarse[:, None], coarse[None, :]) >= cut
+
+    lattice_pixels = stitched.array[..., index[:, None], index[None, :]]
+    error = (np.abs(lattice_pixels - reference.array)[..., above].max()
+             / reference.array[..., above].max())
+    assert error < 1e-3
+
+    fine = (np.arange(size) - size // 2) * stitched.angular_sampling[0]
+    theta = np.hypot(fine[:, None], fine[None, :])
+    off_lattice = np.ones((size, size), bool)
+    off_lattice[np.ix_(index, index)] = False
+    assert np.abs(stitched.array[..., off_lattice & (theta >= cut)]).max() == 0.0
+
+    # below the cut the stitched pattern is the interpolated reduction,
+    # detected on the padded grid
+    padded = _FullGridPixelatedDetector(detector, tuple(built.gpts))
+    plain = built.reduce(scan=scan, detectors=padded, blend_angle=0.0)
+    assert plain.angular_sampling == stitched.angular_sampling
+    below = theta < cut
+    assert np.allclose(plain.array[..., below], stitched.array[..., below])
+
+
+def test_upsample_pixelated_patterns_use_the_simulation_grid():
+    # a windowed reduction detects diffraction patterns on the full
+    # simulation grid whatever the blend angle covers: the window is an
+    # internal accuracy device, and its coarser reciprocal sampling is not
+    # one the user asked for. A detector collecting entirely below the cut
+    # used to return window-grid patterns instead, which cannot be binned
+    # onto a multislice comparison.
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4, window_gpts=32,
+    ).build(lazy=False)
+    assert tuple(built.window_gpts) != tuple(built.gpts)
+
+    scan = GridScan.commensurate(built, gpts=4)
+    reference = built._with_window(tuple(built.gpts)).reduce(
+        scan=scan, detectors=abtem.PixelatedDetector(max_angle=None))
+
+    cut = 60.0
+    for max_angle in (None, 30.0):  # below the cut, and straddling it
+        detector = abtem.PixelatedDetector(max_angle=max_angle)
+        assert built._routing_sides(cut, [detector]) == ["pattern"]
+        patterns = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
+        assert np.allclose(patterns.angular_sampling,
+                           reference.angular_sampling)
+
+    # nothing lies above a cut beyond the detected angles, so the pattern is
+    # the interpolated branch alone — on the simulation grid all the same
+    beyond = built.reduce(scan=scan, detectors=abtem.PixelatedDetector(),
+                          blend_angle=1e4)
+    assert np.allclose(beyond.angular_sampling, reference.angular_sampling)
