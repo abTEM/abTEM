@@ -1635,22 +1635,71 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         iy = (xp.arange(window_gpts[1]) - window_gpts[1] // 2) % gpts[1]
         return kernel[:, ix[:, None], iy[None, :]]
 
+    # memory budget of one gathered block in the batched mode contractions;
+    # the modes are chunked so several probe positions fit in every batch even
+    # at large ranks, keeping the device operations big and few
+    _REDUCE_BATCH_BYTES = 2**30
+    _REDUCE_MODE_CHUNK = 64
+
+    def _contract_modes_batched(self, fields, flat_indices, kernel, gather_kernel):
+        """Contract the modes for a batch of probe positions: for every position
+        ``p`` and window pixel ``w``, ``sum_k gathered[p, w, k] * fixed[w, k]``,
+        where the gathered operand is indexed by ``flat_indices[p, w]``.
+
+        ``gather_kernel`` selects which operand is gathered per position: the
+        windows of the left singular vectors (windowed reduction) or the
+        displaced kernel (full-window reduction). The contraction is chunked
+        over the modes first — so the gathered blocks stay within the memory
+        budget at several positions per batch — and accumulated.
+        """
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        num_positions = flat_indices.shape[0]
+        out_shape = flat_indices.shape[1:]
+        num_pixels = int(np.prod(out_shape))
+        num_modes = kernel.shape[-1]
+
+        flat_indices = flat_indices.reshape(num_positions, num_pixels)
+        fields = fields.reshape(-1, num_modes)
+        kernel = kernel.reshape(-1, num_modes)
+
+        waves = xp.zeros((num_positions, num_pixels), dtype=dtype)
+
+        mode_chunk = min(num_modes, self._REDUCE_MODE_CHUNK)
+        max_batch = max(
+            1, int(self._REDUCE_BATCH_BYTES // max(num_pixels * mode_chunk * 8, 1))
+        )
+
+        for k_start in range(0, num_modes, mode_chunk):
+            k_stop = min(k_start + mode_chunk, num_modes)
+            gathered_source = xp.ascontiguousarray(
+                (kernel if gather_kernel else fields)[:, k_start:k_stop]
+            )
+            fixed = xp.ascontiguousarray(
+                (fields if gather_kernel else kernel)[:, k_start:k_stop]
+            )
+            for start in range(0, num_positions, max_batch):
+                stop = min(start + max_batch, num_positions)
+                gathered = gathered_source[flat_indices[start:stop]]
+                waves[start:stop] += xp.einsum(
+                    "pwk,wk->pw", gathered, fixed, optimize=True
+                )
+
+        return waves.reshape((num_positions,) + out_shape)
+
     def _reduce_to_waves_batched(self, u_windows, snapped_pixels, kernel):
         """Vectorized equivalent of :meth:`_reduce_to_waves`: the windows of the
-        left singular vectors are gathered for a batch of probe positions at
-        once and contracted with the kernel in a single einsum.
+        left singular vectors are gathered for batches of probe positions and
+        contracted with the kernel in large batched einsums.
 
         The per-position loop of :meth:`_reduce_to_waves` evaluates thousands of
-        small kernels, which is launch-overhead bound on the GPU; this method
-        trades one extra gathered copy of the windows for large batched device
-        operations. The batch size is limited so the gathered block stays within
-        a fixed memory budget.
+        small kernels, which is launch-overhead bound on the GPU.
         """
         xp = get_array_module(self._device)
 
         gpts = self.gpts
         window_gpts = self.window_gpts
-        num_modes = kernel.shape[-1]
 
         corners = (
             snapped_pixels
@@ -1659,22 +1708,13 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         window_x = (corners[:, 0, None] + xp.arange(window_gpts[0])[None]) % gpts[0]
         window_y = (corners[:, 1, None] + xp.arange(window_gpts[1])[None]) % gpts[1]
+        flat_indices = (
+            window_x[:, :, None] * gpts[1] + window_y[:, None, :]
+        ).astype(np.int32)
 
-        waves = xp.zeros(
-            (len(snapped_pixels),) + window_gpts, dtype=get_dtype(complex=True)
+        return self._contract_modes_batched(
+            u_windows, flat_indices, kernel, gather_kernel=False
         )
-
-        bytes_per_position = int(np.prod(window_gpts)) * num_modes * 8
-        max_batch = max(1, int(2**30 // max(bytes_per_position, 1)))
-
-        for start in range(0, len(snapped_pixels), max_batch):
-            stop = min(start + max_batch, len(snapped_pixels))
-            gathered = u_windows[
-                window_x[start:stop, :, None], window_y[start:stop, None, :]
-            ]
-            waves[start:stop] = xp.einsum("pxyk,xyk->pxy", gathered, kernel)
-
-        return waves
 
     def _reduce_to_waves_absolute(self, u_full, snapped_pixels, kernel):
         """Full-window reduction in the absolute frame: contract the modes with
@@ -1687,24 +1727,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         xp = get_array_module(self._device)
 
         gpts = self.gpts
-        num_modes = kernel.shape[-1]
 
         shift_x = (xp.arange(gpts[0])[None] - snapped_pixels[:, 0, None]) % gpts[0]
         shift_y = (xp.arange(gpts[1])[None] - snapped_pixels[:, 1, None]) % gpts[1]
+        flat_indices = (
+            shift_x[:, :, None] * gpts[1] + shift_y[:, None, :]
+        ).astype(np.int32)
 
-        waves = xp.zeros(
-            (len(snapped_pixels),) + tuple(gpts), dtype=get_dtype(complex=True)
+        return self._contract_modes_batched(
+            u_full, flat_indices, kernel, gather_kernel=True
         )
-
-        bytes_per_position = int(np.prod(gpts)) * num_modes * 8
-        max_batch = max(1, int(2**30 // max(bytes_per_position, 1)))
-
-        for start in range(0, len(snapped_pixels), max_batch):
-            stop = min(start + max_batch, len(snapped_pixels))
-            gathered = kernel[shift_x[start:stop, :, None], shift_y[start:stop, None, :]]
-            waves[start:stop] = xp.einsum("xyk,pxyk->pxy", u_full, gathered)
-
-        return waves
 
     def _reduce_to_waves(self, u_windows, snapped_pixels, kernel):
         """Reduce the compressed scattering matrix to wave functions at the given
