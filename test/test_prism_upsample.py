@@ -727,3 +727,53 @@ def test_upsample_lattice_reduction_matches_general():
     assert s_matrix_array._lattice_geometry(incommensurate) is None
     with pytest.warns(UserWarning, match="whole number of pixels"):
         s_matrix_array._lattice_geometry(incommensurate, warn=True)
+
+
+def test_upsample_blend_angle():
+    # blending switches to the plane-wave (PRISM) reduction of the built beams
+    # above the blend angle; 'auto' resolves it from the aliasing limit of the
+    # interpolation, extent / (2 * interpolation * thickness)
+    potential = _small_potential(repetitions=(2, 2, 6))
+    thickness = potential.thickness
+
+    s_matrix = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        blend_angle="auto",
+    )
+    expected = 1e3 * min(
+        extent / (2 * interpolation * thickness)
+        for extent, interpolation in zip(s_matrix.extent, s_matrix.interpolation)
+    )
+    assert np.isclose(s_matrix._resolved_blend_angle(), expected)
+
+    s_matrix_array = s_matrix.build(lazy=False)
+    assert np.isclose(s_matrix_array.blend_angle, expected)
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+
+    blended = s_matrix_array.reduce(scan=scan, detectors=detector)
+    unblended = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
+    plain = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4,
+    ).build(lazy=False).reduce(scan=scan, detectors=detector)
+
+    # disabling recovers the plain interpolated reduction exactly
+    assert np.allclose(unblended.array, plain.array, atol=1e-6 * plain.array.max())
+    # blending changes the high-angle content but not the total intensity much
+    assert not np.allclose(blended.array, plain.array, atol=1e-6 * plain.array.max())
+    assert np.isclose(blended.array.sum(), plain.array.sum(), rtol=0.05)
+
+    # a blend angle beyond the maximum simulated angle is a no-op
+    very_high = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=1e4)
+    assert np.allclose(very_high.array, plain.array, atol=1e-6 * plain.array.max())
+
+    with pytest.raises(ValueError, match="upsample=True"):
+        SMatrix(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20,
+                interpolation=2, blend_angle=10.0)

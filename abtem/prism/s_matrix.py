@@ -28,7 +28,7 @@ from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble, _wrap_with_array
-from abtem.core.fft import ifft2
+from abtem.core.fft import fft2, ifft2
 from abtem.core.grid import Grid, GridUndefinedError
 from abtem.core.utils import (
     CopyMixin,
@@ -1476,6 +1476,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         window_gpts: tuple[int, int],
         position_quantization: int = None,
         max_batch_expansion: int | str = "auto",
+        blend_angle: float = None,
         device: str = None,
         metadata: dict = None,
         singular_values: np.ndarray = None,
@@ -1486,6 +1487,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self._dense_indices = dense_indices
         self._singular_values = singular_values
         self._max_batch_expansion = max_batch_expansion
+        self._blend_angle = blend_angle
 
         self._grid = Grid(extent=extent, gpts=u.shape[-2:], lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
@@ -1541,6 +1543,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         return self._max_batch_expansion
 
     @property
+    def blend_angle(self) -> float | None:
+        """Scattering angle [mrad] above which the reduction follows the
+        plane-wave (PRISM) reduction of the built beams (None: no blending)."""
+        return self._blend_angle
+
+    @property
     def metadata(self) -> dict:
         self._metadata["energy"] = self.energy
         return self._metadata
@@ -1592,6 +1600,54 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         values = xp.asarray(self._sigma[:, None] * self._vh_dense, dtype=dtype)
         return values * xp.asarray(coefficients, dtype=dtype)[None]
+
+    def _lattice_coefficients(self, coefficients):
+        """CTF coefficients restricted to the built (coarse lattice) plane waves.
+
+        The trigonometric interpolation is interpolatory — the reconstruction at
+        the lattice plane waves equals the built scattering matrix — hence
+        reducing with the restricted (and renormalized) coefficients yields the
+        wave functions of the PRISM algorithm from the same compressed factors.
+        """
+        xp = get_array_module(self._device)
+
+        indices = np.asarray(self._dense_indices)
+        mask = (indices[:, 0] % self._interpolation[0] == 0) & (
+            indices[:, 1] % self._interpolation[1] == 0
+        )
+
+        restricted = coefficients * xp.asarray(mask)
+        return restricted / xp.sqrt(
+            (xp.abs(restricted) ** 2).sum(axis=-1, keepdims=True)
+        )
+
+    def _blend_weight(self, blend_angle: float, window: tuple[int, int]):
+        """Radial Fourier-space weight switching from the interpolated (C-PRISM)
+        wave below ``blend_angle`` to the plane-wave (PRISM) wave above it, with
+        a smooth cosine taper.
+        """
+        xp = get_array_module(self._device)
+
+        wavelength = self.wavelength
+        qx = np.fft.fftfreq(window[0], d=self.sampling[0])
+        qy = np.fft.fftfreq(window[1], d=self.sampling[1])
+        angle = (
+            np.sqrt(qx[:, None] ** 2 + qy[None, :] ** 2) * wavelength * 1e3
+        )  # mrad
+
+        taper = max(2.0, 0.1 * blend_angle)
+        weight = 0.5 * (1.0 + np.cos(np.pi * (angle - blend_angle + taper) / (2 * taper)))
+        weight[angle <= blend_angle - taper] = 1.0
+        weight[angle >= blend_angle + taper] = 0.0
+        return xp.asarray(weight, dtype=get_dtype(complex=False))
+
+    def _blend_wave_batches(self, interpolated, plane_wave, weight):
+        """Combine the two reductions in Fourier space with the radial weight."""
+        interpolated = fft2(interpolated, overwrite_x=True)
+        plane_wave = fft2(plane_wave, overwrite_x=True)
+        interpolated *= weight[None]
+        interpolated += plane_wave * (1.0 - weight)[None]
+        return ifft2(interpolated, overwrite_x=True)
 
     def _window_kernel(self, values, fractional_offset, center: bool = True):
         """The window kernels :math:`B_k` obtained by reducing the dense plane waves
@@ -1866,7 +1922,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         return waves.reshape((num_block * num_y,) + window)
 
     def _lattice_batch_reduce_to_measurements(
-        self, scan, ctf, detectors, lattice, pbar: bool = False
+        self, scan, ctf, detectors, lattice, pbar: bool = False,
+        blend_angle: float = None,
     ):
         """Windowed reduction of a lattice scan (see :meth:`_lattice_waves_block`)."""
         origin, step, scan_shape, offset = lattice
@@ -1905,6 +1962,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     self._coefficient_values(coefficients), offset
                 ).transpose(1, 2, 0)
             )
+            if blend_angle is not None:
+                plane_wave_kernel = xp.ascontiguousarray(
+                    self._window_kernel(
+                        self._coefficient_values(
+                            self._lattice_coefficients(coefficients)
+                        ),
+                        offset,
+                    ).transpose(1, 2, 0)
+                )
+                blend_weight = self._blend_weight(blend_angle, self.window_gpts)
 
             for x_start in range(0, scan_shape[0], num_rows):
                 x_stop = min(x_start + num_rows, scan_shape[0])
@@ -1912,6 +1979,15 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 waves_array = self._lattice_waves_block(
                     u_modes, kernel, origin, step, scan_shape, x_start, x_stop
                 )
+                if blend_angle is not None:
+                    waves_array = self._blend_wave_batches(
+                        waves_array,
+                        self._lattice_waves_block(
+                            u_modes, plane_wave_kernel, origin, step, scan_shape,
+                            x_start, x_stop,
+                        ),
+                        blend_weight,
+                    )
                 waves_array = waves_array.reshape(
                     (1,) * len(sub_ctf.ensemble_shape)
                     + (x_stop - x_start, scan_shape[1])
@@ -2164,6 +2240,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         max_batch_reduction: int,
         pbar: bool = False,
         absolute: bool = False,
+        blend_angle: float = None,
     ) -> tuple[BaseMeasurements | Waves, ...]:
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
@@ -2191,6 +2268,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
 
             values = self._coefficient_values(coefficients)
+            if blend_angle is not None:
+                plane_wave_values = self._coefficient_values(
+                    self._lattice_coefficients(coefficients)
+                )
+                blend_weight = self._blend_weight(blend_angle, self.window_gpts)
 
             for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
                 sub_scan = sub_scan.item()
@@ -2216,14 +2298,26 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                         ).transpose(1, 2, 0)
                     )
                     mask = xp.asarray(inverse == i)
-                    if absolute:
-                        waves_array[mask] = self._reduce_to_waves_absolute(
-                            u_windows, snapped[mask], kernel
+                    reduce_to_waves = (
+                        self._reduce_to_waves_absolute
+                        if absolute
+                        else self._reduce_to_waves
+                    )
+                    new_waves = reduce_to_waves(u_windows, snapped[mask], kernel)
+                    if blend_angle is not None:
+                        plane_wave_kernel = xp.ascontiguousarray(
+                            self._window_kernel(
+                                plane_wave_values, offset, center=not absolute
+                            ).transpose(1, 2, 0)
                         )
-                    else:
-                        waves_array[mask] = self._reduce_to_waves(
-                            u_windows, snapped[mask], kernel
+                        new_waves = self._blend_wave_batches(
+                            new_waves,
+                            reduce_to_waves(
+                                u_windows, snapped[mask], plane_wave_kernel
+                            ),
+                            blend_weight,
                         )
+                    waves_array[mask] = new_waves
 
                 waves_array = waves_array.reshape(
                     (1,) * len(sub_ctf.ensemble_shape) + scan_shape + self.window_gpts
@@ -2385,6 +2479,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         max_batch_reduction: int | str = "auto",
         max_batch_expansion: int | str = None,
         method: str = "auto",
+        blend_angle: float = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -2428,11 +2523,29 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             wave functions are cropped (``window_gpts``), which always contracts
             the modes.
 
+        blend_angle : float, optional
+            Above this scattering angle [mrad] the reduced wave functions follow
+            the plane-wave (PRISM) reduction of the built beams, below it the
+            interpolated (C-PRISM) reduction, with a smooth taper between them.
+            The interpolation is band limited and aliases the contributions of
+            electrons displaced beyond half its period, which harms high-angle
+            detectors; the plane-wave reduction of the same built beams does not,
+            hence blending bounds the high-angle error by that of the PRISM
+            algorithm while keeping the interpolated accuracy at low angles. If
+            not given, the value set on the :class:`.SMatrix` is used ('auto'
+            derives it from the aliasing limit of the interpolation); a
+            non-positive value disables blending.
+
         Returns
         -------
         measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
         """
         self.accelerator.check_is_defined()
+
+        if blend_angle is None:
+            blend_angle = self._blend_angle
+        if blend_angle is not None and blend_angle <= 0:
+            blend_angle = None
 
         if method not in ("auto", "expand", "modes"):
             raise ValueError(
@@ -2468,6 +2581,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     "max_batch_expansion streams the expanded scattering matrix; "
                     "it cannot be combined with method='modes'."
                 )
+
+        if blend_angle is not None and full_window and method == "expand":
+            # the blend combines two kernel reductions, hence needs the mode path
+            method = "modes"
 
         if full_window and method == "expand" and max_batch_expansion == "auto":
             return self._expanded_s_matrix_array().reduce(
@@ -2529,7 +2646,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             )
             if lattice is not None:
                 measurements = self._lattice_batch_reduce_to_measurements(
-                    scan, ctf, detectors, lattice, pbar=pbar
+                    scan, ctf, detectors, lattice, pbar=pbar,
+                    blend_angle=blend_angle,
                 )
             else:
                 measurements = self._batch_reduce_to_measurements(
@@ -2539,6 +2657,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     validated_max_batch_reduction,
                     pbar=pbar,
                     absolute=full_window,
+                    blend_angle=blend_angle,
                 )
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
@@ -2552,6 +2671,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         max_batch_reduction: int | str = "auto",
         max_batch_expansion: int | str = None,
         method: str = "auto",
+        blend_angle: float = None,
     ):
         """
         Reduce the compressed scattering matrix at the positions of a scan.
@@ -2568,6 +2688,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             max_batch_reduction=max_batch_reduction,
             max_batch_expansion=max_batch_expansion,
             method=method,
+            blend_angle=blend_angle,
         )
 
 
@@ -2675,6 +2796,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         interpolation: int | tuple[int, int] = 1,
         upsample: bool = False,
         tolerance: float = 1e-3,
+        blend_angle: float | str = None,
         max_rank: int = None,
         window_gpts: int | tuple[int, int] = None,
         position_quantization: int = None,
@@ -2710,6 +2832,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 name
                 for name, value in (
                     ("max_rank", max_rank),
+                    ("blend_angle", blend_angle),
                     ("position_quantization", position_quantization),
                     (
                         "max_batch_expansion",
@@ -2725,6 +2848,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         self._upsample = bool(upsample)
         self._tolerance = tolerance
+        self._blend_angle = blend_angle
         self._max_rank = max_rank
         self._position_quantization = position_quantization
         self._max_batch_expansion = max_batch_expansion
@@ -2924,6 +3048,39 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         """Number of plane waves expanded at a time by the reduction of the
         compressed scattering matrix; 'auto' materializes the full expansion."""
         return self._max_batch_expansion
+
+    @property
+    def blend_angle(self) -> float | str | None:
+        """Scattering angle [mrad] above which the reduction follows the
+        plane-wave (PRISM) reduction of the built beams; 'auto' derives it from
+        the aliasing limit of the interpolation, None disables blending."""
+        return self._blend_angle
+
+    def _resolved_blend_angle(self) -> float | None:
+        """The blend angle in mrad, resolving 'auto' from the aliasing limit.
+
+        An electron scattered to an angle theta drifts theta * t laterally over
+        the thickness t, and the band-limited interpolation aliases once the
+        drift exceeds half its period extent / interpolation. The interpolated
+        reduction is therefore trusted up to::
+
+            theta_max = min_i extent_i / (2 * interpolation_i * t)
+        """
+        if self._blend_angle is None:
+            return None
+        if not isinstance(self._blend_angle, str):
+            return float(self._blend_angle)
+        if self._blend_angle != "auto":
+            raise ValueError(
+                f"blend_angle must be a number, 'auto' or None; got {self._blend_angle!r}"
+            )
+        thickness = self.potential.thickness if self.potential is not None else 0.0
+        if thickness <= 0.0:
+            return None
+        return 1e3 * min(
+            extent / (2.0 * interpolation * thickness)
+            for extent, interpolation in zip(self.extent, self.interpolation)
+        )
 
     @property
     def _upsample_enabled(self) -> bool:
@@ -3550,6 +3707,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             window_gpts=self.window_gpts,
             position_quantization=self._position_quantization,
             max_batch_expansion=self._max_batch_expansion,
+            blend_angle=self._resolved_blend_angle(),
             device=self.device,
             metadata=metadata,
             singular_values=singular_values,
