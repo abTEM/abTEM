@@ -1656,10 +1656,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             np.sqrt(qx[:, None] ** 2 + qy[None, :] ** 2) * wavelength * 1e3
         )  # mrad
 
-        taper = max(2.0, 0.1 * blend_angle)
-        weight = 0.5 * (1.0 + np.cos(np.pi * (angle - blend_angle + taper) / (2 * taper)))
+        # the blend angle is an upper bound on the validity of the
+        # interpolation, hence the taper ends AT it rather than straddling it
+        taper = max(4.0, 0.2 * blend_angle)
+        weight = 0.5 * (
+            1.0 + np.cos(np.pi * (angle - blend_angle + taper) / taper)
+        )
         weight[angle <= blend_angle - taper] = 1.0
-        weight[angle >= blend_angle + taper] = 0.0
+        weight[angle >= blend_angle] = 0.0
         return xp.asarray(weight, dtype=get_dtype(complex=False))
 
     def _blend_wave_batches(self, interpolated, plane_wave, weight):
@@ -1984,9 +1988,13 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 ).transpose(1, 2, 0)
             )
             if blend_angle is not None:
+                plane_wave_scale = np.sqrt(
+                    np.prod(self.gpts) / np.prod(self.window_gpts)
+                )
                 plane_wave_kernel = xp.ascontiguousarray(
                     self._window_kernel(
-                        self._coefficient_values(
+                        plane_wave_scale
+                        * self._coefficient_values(
                             self._lattice_coefficients(coefficients)
                         ),
                         offset,
@@ -2290,7 +2298,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
             values = self._coefficient_values(coefficients)
             if blend_angle is not None:
-                plane_wave_values = self._coefficient_values(
+                # the plane-wave reduction spreads a unit probe over
+                # prod(interpolation) periodized copies; a window holds
+                # window / gpts of them, hence the amplitude is rescaled so the
+                # in-window intensity matches the interpolated branch (exact
+                # when the window is a multiple of the period gpts /
+                # interpolation, unity for the full window)
+                plane_wave_scale = np.sqrt(
+                    np.prod(self.gpts) / np.prod(self.window_gpts)
+                )
+                plane_wave_values = plane_wave_scale * self._coefficient_values(
                     self._lattice_coefficients(coefficients)
                 )
                 blend_weight = self._blend_weight(blend_angle, self.window_gpts)
