@@ -1205,6 +1205,20 @@ class FieldArray(BaseField, ArrayObject):
         kwargs["array"] = array
         kwargs["slice_thickness"] = slice_thickness
         kwargs["sampling"] = None
+
+        # the exit planes index the slices, hence they have to be mapped into the
+        # sliced potential; those falling outside it are dropped, and if none
+        # remain the exit plane defaults to the last slice of the new potential
+        selected = np.atleast_1d(
+            np.arange(potential_array.num_slices)[slic_items[0]]
+        )
+        exit_planes = tuple(
+            int(np.flatnonzero(selected == plane)[0])
+            for plane in potential_array.exit_planes
+            if plane in selected
+        )
+        kwargs["exit_planes"] = exit_planes if exit_planes else None
+
         return potential_array.__class__(**kwargs)
 
     def tile(self, repetitions: tuple[int, int] | tuple[int, int, int]):
