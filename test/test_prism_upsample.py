@@ -777,3 +777,31 @@ def test_upsample_blend_angle():
     with pytest.raises(ValueError, match="upsample=True"):
         SMatrix(extent=20, gpts=128, energy=100e3, semiangle_cutoff=20,
                 interpolation=2, blend_angle=10.0)
+
+
+def test_upsample_blend_aperture_and_clamp():
+    # 'aperture' weights the blend by the probe-forming aperture; 'auto' clamps
+    # to the aperture edge (with a warning) when the aliasing angle falls inside
+    # the bright-field disk, where blending would import the periodized ghosts
+    potential = _small_potential(repetitions=(2, 2, 6))
+
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2, upsample=True, tolerance=1e-4)
+    s_matrix_array = SMatrix(**kwargs, blend_angle="aperture").build(lazy=False)
+    assert s_matrix_array.blend_angle == "aperture"
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    blended = s_matrix_array.reduce(scan=scan, detectors=detector)
+    plain = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
+    assert not np.allclose(blended.array, plain.array, atol=1e-6 * plain.array.max())
+    assert np.isclose(blended.array.sum(), plain.array.sum(), rtol=0.05)
+
+    # a thick specimen at a large factor pushes the aliasing angle inside the
+    # disk: 'auto' must clamp to the aperture and warn
+    thick = _small_potential(repetitions=(2, 2, 24))
+    s_matrix = SMatrix(potential=thick, energy=100e3, semiangle_cutoff=20,
+                       interpolation=4, upsample=True, blend_angle="auto")
+    with pytest.warns(UserWarning, match="aliased"):
+        resolved = s_matrix._resolved_blend_angle()
+    assert resolved == "aperture"

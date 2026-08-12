@@ -1621,12 +1621,33 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             (xp.abs(restricted) ** 2).sum(axis=-1, keepdims=True)
         )
 
-    def _blend_weight(self, blend_angle: float, window: tuple[int, int]):
+    def _blend_weight(self, blend_angle, window: tuple[int, int]):
         """Radial Fourier-space weight switching from the interpolated (C-PRISM)
         wave below ``blend_angle`` to the plane-wave (PRISM) wave above it, with
         a smooth cosine taper.
+
+        ``blend_angle='aperture'`` uses the amplitude of the probe-forming
+        aperture as the weight instead: the interpolated wave inside the
+        bright-field disk, the plane-wave reduction outside it, with the soft
+        aperture edge as the transition.
         """
         xp = get_array_module(self._device)
+
+        if isinstance(blend_angle, str):
+            if blend_angle != "aperture":
+                raise ValueError(
+                    f"blend_angle must be a number, 'aperture' or None; "
+                    f"got {blend_angle!r}"
+                )
+            probe = self.dummy_probes()
+            probe.grid.check_is_defined()
+            kernel = np.abs(np.asarray(probe.aperture._evaluate_kernel(probe)))
+            if kernel.shape != tuple(window):
+                raise RuntimeError(
+                    "aperture weight does not match the reduction window"
+                )
+            kernel /= kernel.max()
+            return xp.asarray(kernel, dtype=get_dtype(complex=False))
 
         wavelength = self.wavelength
         qx = np.fft.fftfreq(window[0], d=self.sampling[0])
@@ -2544,7 +2565,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         if blend_angle is None:
             blend_angle = self._blend_angle
-        if blend_angle is not None and blend_angle <= 0:
+        if (
+            blend_angle is not None
+            and not isinstance(blend_angle, str)
+            and blend_angle <= 0
+        ):
             blend_angle = None
 
         if method not in ("auto", "expand", "modes"):
@@ -3070,17 +3095,34 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             return None
         if not isinstance(self._blend_angle, str):
             return float(self._blend_angle)
+        if self._blend_angle == "aperture":
+            return "aperture"
         if self._blend_angle != "auto":
             raise ValueError(
-                f"blend_angle must be a number, 'auto' or None; got {self._blend_angle!r}"
+                f"blend_angle must be a number, 'auto', 'aperture' or None; "
+                f"got {self._blend_angle!r}"
             )
         thickness = self.potential.thickness if self.potential is not None else 0.0
         if thickness <= 0.0:
             return None
-        return 1e3 * min(
+        angle = 1e3 * min(
             extent / (2.0 * interpolation * thickness)
             for extent, interpolation in zip(self.extent, self.interpolation)
         )
+        if angle < self.semiangle_cutoff:
+            # blending below the bright-field disk imports the periodized ghost
+            # probes of the plane-wave reduction; clamp to the aperture edge and
+            # warn that the interpolation is aliased inside the disk itself
+            warnings.warn(
+                "The interpolation of the compressed scattering matrix is "
+                f"aliased above {angle:.1f} mrad, inside the bright-field disk "
+                f"({self.semiangle_cutoff:.1f} mrad): the interpolation factor "
+                "is too large for this thickness and the accuracy will be "
+                "degraded at every angle. The blend is clamped to the aperture "
+                "edge."
+            )
+            return "aperture"
+        return angle
 
     @property
     def _upsample_enabled(self) -> bool:
