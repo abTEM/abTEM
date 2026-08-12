@@ -574,3 +574,96 @@ def test_upsample_singular_values_spectrum():
     )
     assert np.all(np.diff(singular_values) <= 0)
     assert singular_values[s_matrix_array.rank - 1] >= 1e-2 * singular_values[0]
+
+
+def test_upsample_modes_reduction_matches_expand():
+    # the full-window mode contraction (the GPU path) must match the expanded
+    # reduction to floating point precision, for commensurate, incommensurate
+    # and off-grid positions, aberrated CTFs, and the complex wave functions
+    potential = _small_potential()
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+    ).build(lazy=False)
+    detector = abtem.PixelatedDetector(max_angle=None)
+
+    scans = [
+        GridScan(start=(0, 0), end=potential.extent, gpts=(3, 3)),
+        GridScan(start=(0.3, 0.11), end=(9.1, 8.7), gpts=(2, 3)),
+        CustomScan(np.array([[1.234, 2.345], [3.001, 0.777]])),
+    ]
+    for scan in scans:
+        expanded = s_matrix_array.reduce(scan=scan, detectors=detector, method="expand")
+        modes = s_matrix_array.reduce(scan=scan, detectors=detector, method="modes")
+        assert np.allclose(
+            modes.array, expanded.array, atol=1e-4 * expanded.array.max()
+        )
+
+    ctf = abtem.CTF(semiangle_cutoff=20, defocus=50, Cs=1e5)
+    expanded = s_matrix_array.reduce(
+        scan=scans[0], detectors=detector, ctf=ctf, method="expand"
+    )
+    modes = s_matrix_array.reduce(
+        scan=scans[0], detectors=detector, ctf=ctf, method="modes"
+    )
+    assert np.allclose(modes.array, expanded.array, atol=1e-4 * expanded.array.max())
+
+    # complex waves in the absolute frame (registration must match, not just
+    # the intensities)
+    expanded = s_matrix_array.reduce(
+        scan=(5.15, 4.85), detectors=abtem.WavesDetector(), method="expand"
+    )
+    modes = s_matrix_array.reduce(
+        scan=(5.15, 4.85), detectors=abtem.WavesDetector(), method="modes"
+    )
+    assert np.allclose(
+        modes.array, expanded.array, atol=1e-4 * np.abs(expanded.array).max()
+    )
+
+
+def test_upsample_batched_windowed_reduction_matches_loop():
+    # the vectorized (GPU) windowed contraction is exactly the per-position loop
+    potential = _small_potential()
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        window_gpts=24,
+    ).build(lazy=False)
+
+    ctf = abtem.CTF(semiangle_cutoff=20, energy=100e3)
+    values = s_matrix_array._coefficient_values(
+        s_matrix_array._calculate_ctf_coefficients(ctf)
+    )
+    kernel = np.ascontiguousarray(
+        s_matrix_array._window_kernel(values, np.zeros(2)).transpose(1, 2, 0)
+    )
+    u_windows = np.ascontiguousarray(np.asarray(s_matrix_array._u).transpose(1, 2, 0))
+    snapped = np.array([[0, 0], [3, 45], [40, 2], [46, 47], [11, 30]])
+
+    loop = s_matrix_array._reduce_to_waves(u_windows, snapped, kernel)
+    batched = s_matrix_array._reduce_to_waves_batched(u_windows, snapped, kernel)
+    assert np.allclose(loop, batched)
+
+
+def test_upsample_reduction_method_validation():
+    potential = _small_potential()
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2, upsample=True, tolerance=1e-3)
+    full = SMatrix(**kwargs).build(lazy=False)
+    windowed = SMatrix(**kwargs, window_gpts=24).build(lazy=False)
+    detector = abtem.PixelatedDetector(max_angle=None)
+
+    with pytest.raises(ValueError, match="method"):
+        full.reduce(detectors=detector, method="bogus")
+    with pytest.raises(ValueError, match="window_gpts"):
+        windowed.reduce(detectors=detector, method="expand")
+    with pytest.raises(ValueError, match="modes"):
+        full.reduce(detectors=detector, method="modes", max_batch_expansion=16)

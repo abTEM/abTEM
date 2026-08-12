@@ -1593,9 +1593,15 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         values = xp.asarray(self._sigma[:, None] * self._vh_dense, dtype=dtype)
         return values * xp.asarray(coefficients, dtype=dtype)[None]
 
-    def _window_kernel(self, values, fractional_offset):
+    def _window_kernel(self, values, fractional_offset, center: bool = True):
         """The window kernels :math:`B_k` obtained by reducing the dense plane waves
-        for a probe displaced by a fraction of a pixel."""
+        for a probe displaced by a fraction of a pixel.
+
+        With ``center=True`` (default) the kernel is cropped to the reduction
+        window with the probe at its center; with ``center=False`` the kernel is
+        returned on the full grid indexed by the displacement from the probe
+        (used by the full-window mode reduction, which keeps the absolute frame).
+        """
         xp = get_array_module(self._device)
         dtype = get_dtype(complex=True)
 
@@ -1622,9 +1628,83 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         kernel = ifft2(scattered, overwrite_x=True) * normalization
 
+        if not center:
+            return kernel
+
         ix = (xp.arange(window_gpts[0]) - window_gpts[0] // 2) % gpts[0]
         iy = (xp.arange(window_gpts[1]) - window_gpts[1] // 2) % gpts[1]
         return kernel[:, ix[:, None], iy[None, :]]
+
+    def _reduce_to_waves_batched(self, u_windows, snapped_pixels, kernel):
+        """Vectorized equivalent of :meth:`_reduce_to_waves`: the windows of the
+        left singular vectors are gathered for a batch of probe positions at
+        once and contracted with the kernel in a single einsum.
+
+        The per-position loop of :meth:`_reduce_to_waves` evaluates thousands of
+        small kernels, which is launch-overhead bound on the GPU; this method
+        trades one extra gathered copy of the windows for large batched device
+        operations. The batch size is limited so the gathered block stays within
+        a fixed memory budget.
+        """
+        xp = get_array_module(self._device)
+
+        gpts = self.gpts
+        window_gpts = self.window_gpts
+        num_modes = kernel.shape[-1]
+
+        corners = (
+            snapped_pixels
+            - xp.asarray((window_gpts[0] // 2, window_gpts[1] // 2))[None]
+        ) % xp.asarray(gpts)[None]
+
+        window_x = (corners[:, 0, None] + xp.arange(window_gpts[0])[None]) % gpts[0]
+        window_y = (corners[:, 1, None] + xp.arange(window_gpts[1])[None]) % gpts[1]
+
+        waves = xp.zeros(
+            (len(snapped_pixels),) + window_gpts, dtype=get_dtype(complex=True)
+        )
+
+        bytes_per_position = int(np.prod(window_gpts)) * num_modes * 8
+        max_batch = max(1, int(2**30 // max(bytes_per_position, 1)))
+
+        for start in range(0, len(snapped_pixels), max_batch):
+            stop = min(start + max_batch, len(snapped_pixels))
+            gathered = u_windows[
+                window_x[start:stop, :, None], window_y[start:stop, None, :]
+            ]
+            waves[start:stop] = xp.einsum("pxyk,xyk->pxy", gathered, kernel)
+
+        return waves
+
+    def _reduce_to_waves_absolute(self, u_full, snapped_pixels, kernel):
+        """Full-window reduction in the absolute frame: contract the modes with
+        the kernel displaced to each probe position.
+
+        ``kernel`` is the uncentered kernel on the full grid (mode axis last),
+        indexed by the displacement from the probe; the result matches the
+        reduction of the expanded scattering matrix to floating point precision.
+        """
+        xp = get_array_module(self._device)
+
+        gpts = self.gpts
+        num_modes = kernel.shape[-1]
+
+        shift_x = (xp.arange(gpts[0])[None] - snapped_pixels[:, 0, None]) % gpts[0]
+        shift_y = (xp.arange(gpts[1])[None] - snapped_pixels[:, 1, None]) % gpts[1]
+
+        waves = xp.zeros(
+            (len(snapped_pixels),) + tuple(gpts), dtype=get_dtype(complex=True)
+        )
+
+        bytes_per_position = int(np.prod(gpts)) * num_modes * 8
+        max_batch = max(1, int(2**30 // max(bytes_per_position, 1)))
+
+        for start in range(0, len(snapped_pixels), max_batch):
+            stop = min(start + max_batch, len(snapped_pixels))
+            gathered = kernel[shift_x[start:stop, :, None], shift_y[start:stop, None, :]]
+            waves[start:stop] = xp.einsum("xyk,pxyk->pxy", u_full, gathered)
+
+        return waves
 
     def _reduce_to_waves(self, u_windows, snapped_pixels, kernel):
         """Reduce the compressed scattering matrix to wave functions at the given
@@ -1642,6 +1722,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             (window_gpts_x, window_gpts_y, K).
         """
         xp = get_array_module(self._device)
+
+        if xp is not np:
+            # per-position loops are launch-overhead bound on the GPU
+            return self._reduce_to_waves_batched(u_windows, snapped_pixels, kernel)
 
         gpts = self.gpts
         window_gpts = self.window_gpts
@@ -1794,6 +1878,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         detectors: list[BaseDetector],
         max_batch_reduction: int,
         pbar: bool = False,
+        absolute: bool = False,
     ) -> tuple[BaseMeasurements | Waves, ...]:
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
@@ -1841,12 +1926,19 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 )
                 for i, offset in enumerate(unique_offsets):
                     kernel = xp.ascontiguousarray(
-                        self._window_kernel(values, offset).transpose(1, 2, 0)
+                        self._window_kernel(
+                            values, offset, center=not absolute
+                        ).transpose(1, 2, 0)
                     )
                     mask = xp.asarray(inverse == i)
-                    waves_array[mask] = self._reduce_to_waves(
-                        u_windows, snapped[mask], kernel
-                    )
+                    if absolute:
+                        waves_array[mask] = self._reduce_to_waves_absolute(
+                            u_windows, snapped[mask], kernel
+                        )
+                    else:
+                        waves_array[mask] = self._reduce_to_waves(
+                            u_windows, snapped[mask], kernel
+                        )
 
                 waves_array = waves_array.reshape(
                     (1,) * len(sub_ctf.ensemble_shape) + scan_shape + self.window_gpts
@@ -2007,6 +2099,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         detectors: BaseDetector | list[BaseDetector] = None,
         max_batch_reduction: int | str = "auto",
         max_batch_expansion: int | str = None,
+        method: str = "auto",
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -2033,7 +2126,22 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             instead, bounding the memory at one batch of plane waves plus one batch
             of reduced wave functions, at the cost of repeating the expansion for
             every batch of probe positions. If not given (default), the value set
-            on the :class:`.SMatrix` is used.
+            on the :class:`.SMatrix` is used. Only used with ``method='expand'``.
+        method : {'auto', 'expand', 'modes'}, optional
+            How the full-window reduction is evaluated. ``'expand'`` expands the
+            compressed factorization to the interpolation-(1, 1) scattering matrix
+            and reduces it with one large matrix product per batch of probe
+            positions — high arithmetic intensity, fastest on the CPU, but with a
+            cost proportional to the number of dense plane waves. ``'modes'``
+            contracts the retained modes directly against a probe-displaced
+            reduction kernel — a cost proportional to the number of modes (usually
+            far fewer than the plane waves), fastest on the GPU where the
+            contraction saturates memory bandwidth. Both produce identical wave
+            functions to floating point precision. ``'auto'`` (default) selects
+            'modes' on the GPU and 'expand' on the CPU, unless streaming was
+            requested through ``max_batch_expansion``. Ignored when the reduced
+            wave functions are cropped (``window_gpts``), which always contracts
+            the modes.
 
         Returns
         -------
@@ -2041,21 +2149,42 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         """
         self.accelerator.check_is_defined()
 
+        if method not in ("auto", "expand", "modes"):
+            raise ValueError(
+                f"method must be 'auto', 'expand' or 'modes'; got {method!r}"
+            )
+
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion
 
         full_window = tuple(self.window_gpts) == tuple(self.gpts)
 
-        if not full_window and max_batch_expansion != "auto":
-            raise ValueError(
-                "max_batch_expansion applies to the reduction of the expanded "
-                "scattering matrix; it cannot be combined with window_gpts."
-            )
+        if not full_window:
+            if max_batch_expansion != "auto":
+                raise ValueError(
+                    "max_batch_expansion applies to the reduction of the expanded "
+                    "scattering matrix; it cannot be combined with window_gpts."
+                )
+            if method == "expand":
+                raise ValueError(
+                    "method='expand' applies to the full-window reduction; with "
+                    "window_gpts the modes are always contracted directly."
+                )
+        else:
+            if method == "auto":
+                if max_batch_expansion != "auto":
+                    method = "expand"
+                elif self._device == "gpu":
+                    method = "modes"
+                else:
+                    method = "expand"
+            if method == "modes" and max_batch_expansion != "auto":
+                raise ValueError(
+                    "max_batch_expansion streams the expanded scattering matrix; "
+                    "it cannot be combined with method='modes'."
+                )
 
-        if full_window and max_batch_expansion == "auto":
-            # the reduction of the expanded scattering matrix is a large matrix
-            # product with high arithmetic intensity, which is much faster than
-            # contracting the compressed modes at every probe position
+        if full_window and method == "expand" and max_batch_expansion == "auto":
             return self._expanded_s_matrix_array().reduce(
                 scan=scan,
                 ctf=ctf,
@@ -2093,7 +2222,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         pbar = config.get("diagnostics.task_progress", False)
 
-        if full_window:
+        if full_window and method == "expand":
             if max_batch_reduction == "auto":
                 # the expansion is repeated for every batch of probe positions
                 # with a relative matrix product overhead of rank / batch size;
@@ -2111,7 +2240,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             )
         else:
             measurements = self._batch_reduce_to_measurements(
-                scan, ctf, detectors, validated_max_batch_reduction, pbar=pbar
+                scan,
+                ctf,
+                detectors,
+                validated_max_batch_reduction,
+                pbar=pbar,
+                absolute=full_window,
             )
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
@@ -2124,6 +2258,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         ctf: CTF = None,
         max_batch_reduction: int | str = "auto",
         max_batch_expansion: int | str = None,
+        method: str = "auto",
     ):
         """
         Reduce the compressed scattering matrix at the positions of a scan.
@@ -2139,6 +2274,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             ctf=ctf,
             max_batch_reduction=max_batch_reduction,
             max_batch_expansion=max_batch_expansion,
+            method=method,
         )
 
 
