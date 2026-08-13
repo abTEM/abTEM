@@ -1419,6 +1419,10 @@ _SMOOTH_PLATEAU_LIMIT = 0.95
 # hurts at 0.31) and the maximum itself (above it nothing folds and there is
 # nothing to suppress)
 _SMOOTH_REGIME_FRACTION = 0.5
+# ... and below this fraction of the maximum: near it almost nothing folds,
+# and the window only nibbles the signal edge (measured neutral-to-slightly
+# -worse at 0.92)
+_SMOOTH_REGIME_CEILING = 0.85
 # the window's plateau covers the drift of content up to this multiple of the
 # aperture — the bright-field and low-angle dark-field range the interpolated
 # branch is responsible for. Independent of the detectors, so that the same
@@ -1727,7 +1731,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             gpts / (2.0 * extent) for gpts, extent in zip(self.gpts, self.extent)
         )
         if not (
-            _SMOOTH_REGIME_FRACTION * simulated <= self._aliasing_angle < simulated
+            _SMOOTH_REGIME_FRACTION * simulated
+            <= self._aliasing_angle
+            < _SMOOTH_REGIME_CEILING * simulated
         ):
             return None
         serve = _SMOOTH_SERVE_APERTURES * float(self._semiangle_cutoff)
@@ -3877,7 +3883,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             self.extent, self.downsampled_gpts, self.interpolation
         ):
             n = int(np.ceil(2.0 * half_extent / (extent / gpts) / 16.0)) * 16
-            n = max(n, safe_ceiling_int(gpts / interpolation))
+            # at a window of exactly one period the reduction loses its
+            # bright-field advantage over PRISM (measured +7% at any
+            # thickness); keep at least 1.4 periods
+            period = safe_ceiling_int(gpts / interpolation)
+            n = max(n, int(np.ceil(1.4 * period / 16.0)) * 16)
             window += (min(n, gpts),)
         return window
 
