@@ -1722,7 +1722,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # probe is unity.
         normalization = np.prod(gpts) * np.sqrt(np.prod(gpts) / np.prod(window_gpts))
 
-        kernel = ifft2(scattered, overwrite_x=True) * normalization
+        kernel = ifft2(scattered, overwrite_x=True)
+        kernel *= get_dtype(complex=False)(normalization)
 
         if not center:
             return kernel
@@ -2004,8 +2005,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 ).transpose(1, 2, 0)
             )
             if blend_angle is not None:
-                plane_wave_scale = np.sqrt(
-                    np.prod(self.gpts) / np.prod(self.window_gpts)
+                plane_wave_scale = get_dtype(complex=False)(
+                    np.sqrt(np.prod(self.gpts) / np.prod(self.window_gpts))
                 )
                 plane_wave_kernel = xp.ascontiguousarray(
                     self._window_kernel(
@@ -2322,8 +2323,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 # in-window intensity matches the interpolated branch (exact
                 # when the window is a multiple of the period gpts /
                 # interpolation, unity for the full window)
-                plane_wave_scale = np.sqrt(
-                    np.prod(self.gpts) / np.prod(self.window_gpts)
+                plane_wave_scale = get_dtype(complex=False)(
+                    np.sqrt(np.prod(self.gpts) / np.prod(self.window_gpts))
                 )
                 plane_wave_values = plane_wave_scale * self._coefficient_values(
                     self._lattice_coefficients(coefficients)
@@ -2790,6 +2791,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             blend_angle=blend_angle,
             _blend_component="low",
         )
+
+        if self._device == "gpu" and cp is not None:
+            cp.get_default_memory_pool().free_all_blocks()
 
         high_array = self.__class__(
             u=self._u,
@@ -3552,7 +3556,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         functions = functions.reshape((-1,) + shape)
 
-        coefficients = xp.fft.fft2(functions, axes=(-2, -1)) / np.prod(shape)
+        coefficients = xp.fft.fft2(functions, axes=(-2, -1))
+        coefficients /= get_dtype(complex=False)(np.prod(shape))
 
         kernels = ()
         for i, (bound, length) in enumerate(zip(bounds, shape)):
