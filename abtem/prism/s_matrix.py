@@ -44,6 +44,8 @@ from abtem.detectors import (
     AnnularDetector,
     BaseDetector,
     FlexibleAnnularDetector,
+    PixelatedDetector,
+    SegmentedDetector,
     WavesDetector,
     validate_detectors,
 )
@@ -1393,7 +1395,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 # larger. The far corners of the bounding rectangle are dropped, which reduces the
 # number of multislice runs at large interpolation factors without affecting the
 # accuracy of the reduction.
-_COARSE_SUPPORT_MARGIN = 0.45
+_COARSE_SUPPORT_MARGIN = 0.15
 
 
 def _dense_wave_vector_indices(
@@ -1794,7 +1796,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     # ... but never larger than the device can hold: detecting a block also
     # holds its Fourier transform, the transform work area and the detected
     # intensity, so the peak is a few times the block itself
-    _REDUCE_GPU_MEMORY_FRACTION = 0.2
+    _REDUCE_GPU_MEMORY_FRACTION = 0.35
 
     def _reduce_memory_budget(self):
         """Bytes that one reduced block of wave functions may occupy.
@@ -2720,6 +2722,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         """
         self.accelerator.check_is_defined()
 
+        explicit_blend = blend_angle is not None
         if blend_angle is None:
             blend_angle = self._blend_angle
         if (
@@ -2743,6 +2746,26 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 blend_angle=blend_angle,
                 blend_window_gpts=blend_window_gpts,
             )
+
+        if blend_angle is not None and _blend_component is None:
+            cut = (
+                float(self._semiangle_cutoff)
+                if isinstance(blend_angle, str)
+                else blend_angle
+            )
+            if detectors is not None:
+                routed = self._routed_reduce(
+                    scan, ctf, detectors, cut, max_batch_reduction, method
+                )
+                if routed is not None:
+                    return routed
+            if not explicit_blend:
+                # the default blend acts only through the routing: when the
+                # detectors are not routable (a band straddles the cut, or the
+                # output is wave functions or a full diffraction pattern) the
+                # reduction is the plain interpolated one, and blending must be
+                # requested explicitly
+                blend_angle = None
 
         if method not in ("auto", "expand", "modes"):
             raise ValueError(
@@ -2863,6 +2886,117 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         return _wrap_measurements(measurements)
+
+    def _routing_sides(self, cut, detectors):
+        """Which branch each detector reads from, or None when not routable.
+
+        A detector collecting only below the blend angle reads the interpolated
+        reduction, one collecting only above it the plane-wave (PRISM)
+        reduction; nothing is mixed, so no Fourier weighting is needed. A
+        detector straddling the cut, or one whose collection range is not an
+        angular band, is not routable.
+        """
+        sides = []
+        for detector in detectors:
+            if isinstance(detector, (AnnularDetector, SegmentedDetector)):
+                outer = detector.outer
+                inner = detector.inner
+                if outer is not None and outer <= cut:
+                    sides.append("low")
+                elif inner is not None and inner >= cut:
+                    sides.append("high")
+                else:
+                    return None
+            elif isinstance(detector, PixelatedDetector):
+                max_angle = detector.max_angle
+                if isinstance(max_angle, (int, float)) and max_angle <= cut:
+                    sides.append("low")
+                else:
+                    return None
+            else:
+                return None
+        return sides
+
+    def _routed_reduce(
+        self, scan, ctf, detectors, blend_angle, max_batch_reduction, method
+    ):
+        """Route each detector to the branch its band lies in, or return None.
+
+        The blend angle is snapped to a detector boundary, so that every
+        detector band lies wholly below or above it: the bands below read the
+        interpolated (C-PRISM) reduction on this array's window, the bands
+        above the plane-wave reduction on one interpolation period — the
+        window and the algorithm of PRISM. This is the composite blend without
+        any Fourier weighting, possible whenever no band straddles the cut.
+        """
+        single = not isinstance(detectors, (list, tuple))
+        detectors = [detectors] if single else list(detectors)
+
+        cut = self._snapped_blend_angle(blend_angle, detectors)
+        sides = self._routing_sides(cut, detectors)
+        if sides is None:
+            return None
+
+        def measure(component, subset):
+            if component == "low":
+                measurements = self.reduce(
+                    scan=scan,
+                    ctf=ctf,
+                    detectors=subset,
+                    max_batch_reduction=max_batch_reduction,
+                    method=method,
+                    blend_angle=0.0,
+                )
+            else:
+                period = tuple(
+                    min(-(-g // i), g)
+                    for g, i in zip(self.gpts, self._interpolation)
+                )
+                measurements = self._with_window(period).reduce(
+                    scan=scan,
+                    ctf=ctf,
+                    detectors=subset,
+                    max_batch_reduction=max_batch_reduction,
+                    blend_angle=cut,
+                    _blend_component="high",
+                    _blend_taper=0.0,
+                )
+            if not isinstance(measurements, (list, tuple)):
+                measurements = [measurements]
+            return list(measurements)
+
+        ordered = [None] * len(detectors)
+        for component in ("low", "high"):
+            subset = [d for d, side in zip(detectors, sides) if side == component]
+            if not subset:
+                continue
+            for index, measurement in zip(
+                (i for i, side in enumerate(sides) if side == component),
+                measure(component, subset),
+            ):
+                ordered[index] = measurement
+
+        return ordered[0] if single else _wrap_measurements(ordered)
+
+    def _with_window(self, window_gpts):
+        """A view of this compressed scattering matrix with another reduction
+        window; the factors are shared, not copied."""
+        return self.__class__(
+            u=self._u,
+            sigma=self._sigma,
+            vh_dense=self._vh_dense,
+            dense_indices=self._dense_indices,
+            semiangle_cutoff=self._semiangle_cutoff,
+            energy=self.energy,
+            extent=self.extent,
+            interpolation=self._interpolation,
+            window_gpts=window_gpts,
+            position_quantization=self._position_quantization,
+            blend_angle=self._blend_angle,
+            device=self._device,
+            metadata=self._metadata,
+            singular_values=self._singular_values,
+        )
 
     def _composite_blend_reduce(
         self,
@@ -3041,13 +3175,25 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     max_rank : int, optional
         Maximum number of modes retained by the compression when ``upsample=True``.
         If None (default), the rank is set adaptively by the tolerance.
-    window_gpts : one or two int, optional
+    blend_angle : float or str, optional
+        Scattering angle [mrad] above which the reduction of the compressed
+        scattering matrix follows the plane-wave (PRISM) reduction of the built
+        beams, below which the interpolated (C-PRISM) reduction. Acts through
+        the detector routing of the reduction: the angle is snapped down to a
+        detector collection boundary and each detector reads the branch its
+        band lies in, guaranteeing the dark-field bands match the PRISM
+        algorithm. 'auto' (default with ``upsample=True``) derives the angle
+        from the aliasing limit of the interpolation,
+        ``extent / (2 * interpolation * thickness)``; a number fixes it;
+        0 disables blending. Only used when ``upsample=True``.
+    window_gpts : one or two int or 'full', optional
         The number of grid points describing the cropping window of the wave
         functions reduced from the compressed scattering matrix. Only used when
-        ``upsample=True``; if None (default), the reduced wave functions are not
-        cropped. Unlike the PRISM cropping window, this window is decoupled from
-        the interpolation factor; a window a few times larger than the scattered
-        probe may be used to speed up the reduction at any interpolation factor.
+        ``upsample=True``. If None (default), the window is inferred from the
+        specimen and the probe (the probe tails plus the beam spreading over
+        the thickness), falling back to the full grid when there is no
+        potential; 'full' disables cropping. Unlike the PRISM cropping window,
+        this window is decoupled from the interpolation factor.
     position_quantization : int, optional
         If given, the fractional part of the probe positions is quantized to this
         number of fractions of a pixel, limiting the number of reduction kernels
@@ -3149,6 +3295,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         self._upsample = bool(upsample)
         self._tolerance = tolerance
+        # the blend against the plane-wave (PRISM) reduction is on by default:
+        # it acts through the detector routing of the reduction, which uses the
+        # interpolated wave functions below the blend angle and the plane-wave
+        # reduction above it; pass 0 to disable
+        if upsample and blend_angle is None:
+            blend_angle = "auto"
         self._blend_angle = blend_angle
         self._max_rank = max_rank
         self._position_quantization = position_quantization
@@ -3162,6 +3314,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # derived PRISM cropping window back through this argument) round-trip
         if not upsample:
             window_gpts = None
+        elif isinstance(window_gpts, str):
+            if window_gpts != "full":
+                raise ValueError(
+                    f"window_gpts must be an int, a pair of ints, 'full' or "
+                    f"None (automatic); got {window_gpts!r}"
+                )
         elif window_gpts is not None:
             if np.isscalar(window_gpts):
                 window_gpts = (int(window_gpts),) * 2
@@ -3170,7 +3328,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             if window_gpts == tuple(self.downsampled_gpts):
                 # a window covering the full grid is no window; copies pass the
                 # derived full-grid window back through this argument
-                window_gpts = None
+                window_gpts = "full"
             elif max_batch_expansion != "auto":
                 raise ValueError(
                     "max_batch_expansion applies to the reduction of the expanded "
@@ -3447,13 +3605,48 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         else:
             return self.gpts
 
+    # empirical extent of the reduced wave functions, calibrated against
+    # multislice on thick cells: the exit wave spreads by roughly twice
+    # thickness x aperture through multiple scattering, and the aperture-limited
+    # probe carries tails of several Airy lobes
+    _WINDOW_SPREAD_FACTOR = 2.0
+    _WINDOW_TAIL_LOBES = 6.0
+
+    def _auto_window_gpts(self):
+        """The cropping window inferred from the specimen and the probe, or None
+        (the full grid) when there is no potential to infer it from."""
+        if self._potential is None:
+            return None
+
+        thickness = self._potential.thickness
+        alpha = self._semiangle_cutoff * 1e-3
+        if alpha <= 0.0 or thickness is None:
+            return None
+
+        half_extent = (
+            self._WINDOW_SPREAD_FACTOR * thickness * alpha
+            + self._WINDOW_TAIL_LOBES * self.wavelength / alpha
+        )
+
+        window = ()
+        for extent, gpts, interpolation in zip(
+            self.extent, self.downsampled_gpts, self.interpolation
+        ):
+            n = int(np.ceil(2.0 * half_extent / (extent / gpts) / 16.0)) * 16
+            n = max(n, safe_ceiling_int(gpts / interpolation))
+            window += (min(n, gpts),)
+        return window
+
     @property
     def window_gpts(self):
         """The number of grid points describing the cropping window of the reduced
         wave functions."""
         if self._upsample:
-            if self._window_gpts is None:
+            if self._window_gpts == "full":
                 return self.downsampled_gpts
+            if self._window_gpts is None:
+                window = self._auto_window_gpts()
+                return self.downsampled_gpts if window is None else window
 
             return (
                 min(self._window_gpts[0], self.downsampled_gpts[0]),

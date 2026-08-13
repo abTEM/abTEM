@@ -769,15 +769,21 @@ def test_upsample_blend_angle():
     detector = abtem.PixelatedDetector(max_angle=None)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
 
-    blended = s_matrix_array.reduce(scan=scan, detectors=detector)
+    blended = s_matrix_array.reduce(scan=scan, detectors=detector,
+                                    blend_angle=expected)
     unblended = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
     plain = SMatrix(
         potential=potential, energy=100e3, semiangle_cutoff=20,
-        interpolation=2, upsample=True, tolerance=1e-4,
+        interpolation=2, upsample=True, tolerance=1e-4, blend_angle=0,
     ).build(lazy=False).reduce(scan=scan, detectors=detector)
 
     # disabling recovers the plain interpolated reduction exactly
     assert np.allclose(unblended.array, plain.array, atol=1e-6 * plain.array.max())
+    # the default blend acts through the detector routing; a full diffraction
+    # pattern is not routable, hence the default reduction is the plain
+    # interpolated one and Fourier blending must be requested explicitly
+    default = s_matrix_array.reduce(scan=scan, detectors=detector)
+    assert np.allclose(default.array, plain.array, atol=1e-6 * plain.array.max())
     # blending changes the high-angle content but not the total intensity much
     assert not np.allclose(blended.array, plain.array, atol=1e-6 * plain.array.max())
     assert np.isclose(blended.array.sum(), plain.array.sum(), rtol=0.05)
@@ -804,7 +810,10 @@ def test_upsample_blend_aperture_and_clamp():
 
     detector = abtem.PixelatedDetector(max_angle=None)
     scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
-    blended = s_matrix_array.reduce(scan=scan, detectors=detector)
+    # a full diffraction pattern is not routable, hence the Fourier-weighted
+    # blend must be requested explicitly in the reduction
+    blended = s_matrix_array.reduce(scan=scan, detectors=detector,
+                                    blend_angle="aperture")
     plain = s_matrix_array.reduce(scan=scan, detectors=detector, blend_angle=0)
     assert not np.allclose(blended.array, plain.array, atol=1e-6 * plain.array.max())
     assert np.isclose(blended.array.sum(), plain.array.sum(), rtol=0.05)
