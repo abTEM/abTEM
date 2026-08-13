@@ -851,3 +851,39 @@ def test_upsample_composite_blend():
             blend_angle=25.0,
             blend_window_gpts="period",
         )
+
+
+def test_upsample_lattice_detection_chunking():
+    # the lattice row block is sized for the matrix products, but the blend and
+    # the detectors transform what it produces, so they walk the block in
+    # smaller chunks; the chunking must not change any measured value
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        window_gpts=32,
+    )
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(16, 16))
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=15),
+        abtem.AnnularDetector(inner=30, outer=60),
+    ]
+
+    for blend in (None, "auto"):
+        s_matrix_array = SMatrix(**kwargs, blend_angle=blend).build(lazy=False)
+        assert s_matrix_array._lattice_geometry(scan) is not None
+
+        whole = s_matrix_array.scan(scan=scan, detectors=detectors)
+
+        # one scan row per detection chunk, the whole scan per row block
+        s_matrix_array._REDUCE_BATCH_BYTES = (
+            scan.gpts[1] * int(np.prod(s_matrix_array.window_gpts)) * 8
+        )
+        chunked = s_matrix_array.scan(scan=scan, detectors=detectors)
+
+        for a, b in zip(whole, chunked):
+            assert np.array_equal(a.array, b.array)

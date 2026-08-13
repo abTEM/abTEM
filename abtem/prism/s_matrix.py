@@ -2025,6 +2025,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         row_bytes = scan_shape[1] * int(np.prod(window)) * 8
         num_rows = max(1, int(budget // max(row_bytes, 1)))
         num_rows = min(num_rows, scan_shape[0])
+        detect_rows = max(1, int(self._REDUCE_BATCH_BYTES // max(row_bytes, 1)))
+        detect_rows = min(detect_rows, num_rows)
 
         keep_interpolated, keep_plane_wave = self._blend_branches(
             blend_angle, blend_component
@@ -2067,49 +2069,67 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             for x_start in range(0, scan_shape[0], num_rows):
                 x_stop = min(x_start + num_rows, scan_shape[0])
 
-                waves_array = (
+                interpolated = (
                     self._lattice_waves_block(
                         u_modes, kernel, origin, step, scan_shape, x_start, x_stop
                     )
                     if keep_interpolated
                     else None
                 )
-                if blend_angle is not None:
-                    waves_array = self._blend_wave_batches(
-                        waves_array,
-                        self._lattice_waves_block(
-                            u_modes, plane_wave_kernel, origin, step, scan_shape,
-                            x_start, x_stop,
-                        )
-                        if keep_plane_wave
-                        else None,
-                        blend_weight,
-                        component=blend_component,
+                plane_wave = (
+                    self._lattice_waves_block(
+                        u_modes, plane_wave_kernel, origin, step, scan_shape,
+                        x_start, x_stop,
                     )
-                waves_array = waves_array.reshape(
-                    (1,) * len(sub_ctf.ensemble_shape)
-                    + (x_stop - x_start, scan_shape[1])
-                    + window
+                    if keep_plane_wave
+                    else None
                 )
 
-                ensemble_axes_metadata = [
-                    UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
-                ] + [ScanAxis(), ScanAxis()]
+                # the row block is sized for the matrix products; the blend and
+                # the detectors transform what it produces, which needs the
+                # transform, its work area and the detected intensity live at
+                # once, so they walk the block in plain-budget chunks
+                for start in range(x_start, x_stop, detect_rows):
+                    stop = min(start + detect_rows, x_stop)
+                    rows = slice(
+                        (start - x_start) * scan_shape[1],
+                        (stop - x_start) * scan_shape[1],
+                    )
 
-                waves = Waves(
-                    waves_array,
-                    sampling=tuple(self.sampling),
-                    energy=self.energy,
-                    ensemble_axes_metadata=ensemble_axes_metadata,
-                    metadata=self.metadata,
-                )
+                    waves_array = interpolated[rows] if keep_interpolated else None
+                    if blend_angle is not None:
+                        waves_array = self._blend_wave_batches(
+                            waves_array,
+                            plane_wave[rows] if keep_plane_wave else None,
+                            blend_weight,
+                            component=blend_component,
+                        )
+                    waves_array = waves_array.reshape(
+                        (1,) * len(sub_ctf.ensemble_shape)
+                        + (stop - start, scan_shape[1])
+                        + window
+                    )
 
-                indices = ctf_slics + (slice(x_start, x_stop),)
+                    ensemble_axes_metadata = [
+                        UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
+                    ] + [ScanAxis(), ScanAxis()]
 
-                pbar.update_if_exists((x_stop - x_start) * scan_shape[1])
+                    waves = Waves(
+                        waves_array,
+                        sampling=tuple(self.sampling),
+                        energy=self.energy,
+                        ensemble_axes_metadata=ensemble_axes_metadata,
+                        metadata=self.metadata,
+                    )
 
-                for detector, measurement in zip(detectors, measurements):
-                    measurement.array[indices] = detector.detect(waves).array
+                    indices = ctf_slics + (slice(start, stop),)
+
+                    pbar.update_if_exists((stop - start) * scan_shape[1])
+
+                    for detector, measurement in zip(detectors, measurements):
+                        measurement.array[indices] = detector.detect(waves).array
+
+                del interpolated, plane_wave
 
         pbar.close_if_exists()
 
