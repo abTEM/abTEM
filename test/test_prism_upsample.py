@@ -805,3 +805,49 @@ def test_upsample_blend_aperture_and_clamp():
     with pytest.warns(UserWarning, match="aliased"):
         resolved = s_matrix._resolved_blend_angle()
     assert resolved == "aperture"
+
+
+def test_upsample_composite_blend():
+    # the composite blend reduces the interpolated branch on the full window and
+    # the plane-wave branch on one period of its periodized wave functions,
+    # adding the detected intensities; it requires window-independent detectors
+    potential = _small_potential(repetitions=(2, 2, 6))
+    s_matrix_array = SMatrix(
+        potential=potential,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=2,
+        upsample=True,
+        tolerance=1e-4,
+        blend_angle="auto",
+    ).build(lazy=False)
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=15),
+        abtem.AnnularDetector(inner=30, outer=60),
+    ]
+
+    # explicit blend angle between the two detectors, so the first stays the
+    # interpolated reduction and the second becomes the plane-wave branch
+    composite = s_matrix_array.scan(
+        scan=scan, detectors=detectors, blend_angle=25.0,
+        blend_window_gpts="period",
+    )
+    plain = s_matrix_array.scan(scan=scan, detectors=detectors, blend_angle=0)
+
+    # below the blend angle the composite is the interpolated reduction
+    assert np.allclose(
+        composite[0].array, plain[0].array, rtol=0.02
+    )
+    # the high-angle branch changes the dark-field values
+    assert not np.allclose(composite[1].array, plain[1].array, rtol=0.02)
+    assert np.all(composite[1].array >= 0)
+
+    with pytest.raises(NotImplementedError, match="intensity"):
+        s_matrix_array.scan(
+            scan=scan,
+            detectors=abtem.PixelatedDetector(max_angle=None),
+            blend_angle=25.0,
+            blend_window_gpts="period",
+        )

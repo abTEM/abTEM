@@ -1666,8 +1666,23 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         weight[angle >= blend_angle] = 0.0
         return xp.asarray(weight, dtype=get_dtype(complex=False))
 
-    def _blend_wave_batches(self, interpolated, plane_wave, weight):
-        """Combine the two reductions in Fourier space with the radial weight."""
+    def _blend_wave_batches(self, interpolated, plane_wave, weight, component=None):
+        """Combine the two reductions in Fourier space with the radial weight.
+
+        ``component='low'`` returns the interpolated branch alone weighted by
+        ``sqrt(weight)``, ``component='high'`` the plane-wave branch alone
+        weighted by ``sqrt(1 - weight)``: detecting the two and summing the
+        measurements blends the intensities instead of the amplitudes, which
+        permits a different reduction window per branch.
+        """
+        if component == "low":
+            interpolated = fft2(interpolated, overwrite_x=True)
+            interpolated *= np.sqrt(weight)[None]
+            return ifft2(interpolated, overwrite_x=True)
+        if component == "high":
+            plane_wave = fft2(plane_wave, overwrite_x=True)
+            plane_wave *= np.sqrt(1.0 - weight)[None]
+            return ifft2(plane_wave, overwrite_x=True)
         interpolated = fft2(interpolated, overwrite_x=True)
         plane_wave = fft2(plane_wave, overwrite_x=True)
         interpolated *= weight[None]
@@ -1949,6 +1964,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     def _lattice_batch_reduce_to_measurements(
         self, scan, ctf, detectors, lattice, pbar: bool = False,
         blend_angle: float = None,
+        blend_component: str = None,
     ):
         """Windowed reduction of a lattice scan (see :meth:`_lattice_waves_block`)."""
         origin, step, scan_shape, offset = lattice
@@ -2016,6 +2032,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                             x_start, x_stop,
                         ),
                         blend_weight,
+                        component=blend_component,
                     )
                 waves_array = waves_array.reshape(
                     (1,) * len(sub_ctf.ensemble_shape)
@@ -2270,6 +2287,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         pbar: bool = False,
         absolute: bool = False,
         blend_angle: float = None,
+        blend_component: str = None,
     ) -> tuple[BaseMeasurements | Waves, ...]:
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
@@ -2354,6 +2372,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                                 u_windows, snapped[mask], plane_wave_kernel
                             ),
                             blend_weight,
+                            component=blend_component,
                         )
                     waves_array[mask] = new_waves
 
@@ -2518,6 +2537,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         max_batch_expansion: int | str = None,
         method: str = "auto",
         blend_angle: float = None,
+        blend_window_gpts: int | tuple[int, int] | str = None,
+        _blend_component: str = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -2588,6 +2609,21 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             and blend_angle <= 0
         ):
             blend_angle = None
+
+        if (
+            blend_window_gpts is not None
+            and blend_angle is not None
+            and _blend_component is None
+        ):
+            return self._composite_blend_reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                method=method,
+                blend_angle=blend_angle,
+                blend_window_gpts=blend_window_gpts,
+            )
 
         if method not in ("auto", "expand", "modes"):
             raise ValueError(
@@ -2690,6 +2726,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 measurements = self._lattice_batch_reduce_to_measurements(
                     scan, ctf, detectors, lattice, pbar=pbar,
                     blend_angle=blend_angle,
+                    blend_component=_blend_component,
                 )
             else:
                 measurements = self._batch_reduce_to_measurements(
@@ -2700,10 +2737,99 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     pbar=pbar,
                     absolute=full_window,
                     blend_angle=blend_angle,
+                    blend_component=_blend_component,
                 )
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         return _wrap_measurements(measurements)
+
+    def _composite_blend_reduce(
+        self,
+        scan,
+        ctf,
+        detectors,
+        max_batch_reduction,
+        method,
+        blend_angle,
+        blend_window_gpts,
+    ):
+        """Blend the intensities of two reductions with different windows.
+
+        The interpolated branch is reduced on this array's own (typically full)
+        window, weighted by ``sqrt(weight)`` in Fourier space; the plane-wave
+        branch is reduced on ``blend_window_gpts`` — ``'period'`` selects one
+        period ``gpts / interpolation`` of its periodized wave functions, the
+        window the PRISM algorithm itself uses, which restores the local
+        high-angle signal that the full-grid periodized field averages over its
+        copies — weighted by ``sqrt(1 - weight)``. The detected intensities add,
+        hence the detectors must be intensity-valued (not :class:`WavesDetector`)
+        and produce window-independent shapes (annular and radial detectors; the
+        diffraction patterns of the two branches have different samplings).
+        """
+        if isinstance(blend_window_gpts, str):
+            if blend_window_gpts != "period":
+                raise ValueError(
+                    "blend_window_gpts must be an int, a pair of ints or "
+                    f"'period'; got {blend_window_gpts!r}"
+                )
+            window = tuple(
+                min(-(-g // i), g)
+                for g, i in zip(self.gpts, self._interpolation)
+            )
+        elif np.isscalar(blend_window_gpts):
+            window = (int(blend_window_gpts),) * 2
+        else:
+            window = tuple(int(n) for n in blend_window_gpts)
+
+        low = self.reduce(
+            scan=scan,
+            ctf=ctf,
+            detectors=detectors,
+            max_batch_reduction=max_batch_reduction,
+            method=method,
+            blend_angle=blend_angle,
+            _blend_component="low",
+        )
+
+        high_array = self.__class__(
+            u=self._u,
+            sigma=self._sigma,
+            vh_dense=self._vh_dense,
+            dense_indices=self._dense_indices,
+            semiangle_cutoff=self._semiangle_cutoff,
+            energy=self.energy,
+            extent=self.extent,
+            interpolation=self._interpolation,
+            window_gpts=window,
+            position_quantization=self._position_quantization,
+            blend_angle=self._blend_angle,
+            device=self._device,
+            metadata=self._metadata,
+            singular_values=self._singular_values,
+        )
+        high = high_array.reduce(
+            scan=scan,
+            ctf=ctf,
+            detectors=detectors,
+            max_batch_reduction=max_batch_reduction,
+            blend_angle=blend_angle,
+            _blend_component="high",
+        )
+
+        low_list, high_list = ensure_list(low), ensure_list(high)
+        for low_measurement, high_measurement in zip(low_list, high_list):
+            if np.iscomplexobj(low_measurement.array) or (
+                low_measurement.array.shape != high_measurement.array.shape
+            ):
+                raise NotImplementedError(
+                    "blend_window_gpts adds the detected intensities of the "
+                    "two branches, hence it requires intensity-valued "
+                    "detectors whose measurements do not depend on the "
+                    "reduction window (for example annular detectors)."
+                )
+            low_measurement.array[:] += high_measurement.array
+
+        return low if not isinstance(low, list) else _wrap_measurements(low_list)
 
     def scan(
         self,
@@ -2714,6 +2840,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         max_batch_expansion: int | str = None,
         method: str = "auto",
         blend_angle: float = None,
+        blend_window_gpts: int | tuple[int, int] | str = None,
     ):
         """
         Reduce the compressed scattering matrix at the positions of a scan.
@@ -2731,6 +2858,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             max_batch_expansion=max_batch_expansion,
             method=method,
             blend_angle=blend_angle,
+            blend_window_gpts=blend_window_gpts,
         )
 
 
