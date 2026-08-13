@@ -1395,7 +1395,7 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 # larger. The far corners of the bounding rectangle are dropped, which reduces the
 # number of multislice runs at large interpolation factors without affecting the
 # accuracy of the reduction.
-_COARSE_SUPPORT_MARGIN = 0.15
+_COARSE_SUPPORT_MARGIN = 0.0
 
 
 def _dense_wave_vector_indices(
