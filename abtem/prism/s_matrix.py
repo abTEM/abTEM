@@ -1666,6 +1666,18 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         weight[angle >= blend_angle] = 0.0
         return xp.asarray(weight, dtype=get_dtype(complex=False))
 
+    @staticmethod
+    def _blend_branches(blend_angle, blend_component):
+        """Which of the two blended reductions the result actually needs.
+
+        Selecting a component keeps a single branch, so the other one — and the
+        window kernel it would be reduced with — is never evaluated.
+        """
+        return (
+            blend_component != "high",
+            blend_angle is not None and blend_component != "low",
+        )
+
     def _blend_wave_batches(self, interpolated, plane_wave, weight, component=None):
         """Combine the two reductions in Fourier space with the radial weight.
 
@@ -1673,7 +1685,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         ``sqrt(weight)``, ``component='high'`` the plane-wave branch alone
         weighted by ``sqrt(1 - weight)``: detecting the two and summing the
         measurements blends the intensities instead of the amplitudes, which
-        permits a different reduction window per branch.
+        permits a different reduction window per branch. The branch a component
+        discards may be given as ``None`` (see :meth:`_blend_branches`).
         """
         if component == "low":
             interpolated = fft2(interpolated, overwrite_x=True)
@@ -1740,6 +1753,23 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     # the lattice reduction re-gathers a halo of window / step scan rows per
     # row block, hence the device rows blocks are several times larger
     _REDUCE_GPU_ROW_BLOCK_FACTOR = 8
+    # ... but never larger than the device can hold: detecting a block also
+    # holds its Fourier transform, the transform work area and the detected
+    # intensity, so the peak is a few times the block itself
+    _REDUCE_GPU_MEMORY_FRACTION = 0.2
+
+    def _reduce_memory_budget(self):
+        """Bytes that one reduced block of wave functions may occupy.
+
+        Unbounded on the host; on the device a fraction of the memory that is
+        actually free, counting the blocks the memory pool holds but is not
+        using.
+        """
+        if self._device != "gpu" or cp is None:
+            return np.inf
+
+        free = cp.cuda.Device().mem_info[0] + cp.get_default_memory_pool().free_bytes()
+        return int(free * self._REDUCE_GPU_MEMORY_FRACTION)
 
     def _contract_modes_batched(self, fields, flat_indices, kernel, gather_kernel):
         """Contract the modes for a batch of probe positions: for every position
@@ -1991,9 +2021,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         budget = self._REDUCE_BATCH_BYTES * (
             self._REDUCE_GPU_ROW_BLOCK_FACTOR if self._device == "gpu" else 2
         )
+        budget = min(budget, self._reduce_memory_budget())
         row_bytes = scan_shape[1] * int(np.prod(window)) * 8
         num_rows = max(1, int(budget // max(row_bytes, 1)))
         num_rows = min(num_rows, scan_shape[0])
+
+        keep_interpolated, keep_plane_wave = self._blend_branches(
+            blend_angle, blend_component
+        )
 
         pbar = TqdmWrapper(
             enabled=pbar,
@@ -2006,12 +2041,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             sub_ctf = sub_ctf.item()
             coefficients = self._calculate_ctf_coefficients(sub_ctf)
             coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
-            kernel = xp.ascontiguousarray(
-                self._window_kernel(
-                    self._coefficient_values(coefficients), offset
-                ).transpose(1, 2, 0)
-            )
-            if blend_angle is not None:
+            kernel = plane_wave_kernel = None
+            if keep_interpolated:
+                kernel = xp.ascontiguousarray(
+                    self._window_kernel(
+                        self._coefficient_values(coefficients), offset
+                    ).transpose(1, 2, 0)
+                )
+            if keep_plane_wave:
                 plane_wave_scale = get_dtype(complex=False)(
                     np.sqrt(np.prod(self.gpts) / np.prod(self.window_gpts))
                 )
@@ -2024,13 +2061,18 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                         offset,
                     ).transpose(1, 2, 0)
                 )
+            if blend_angle is not None:
                 blend_weight = self._blend_weight(blend_angle, self.window_gpts)
 
             for x_start in range(0, scan_shape[0], num_rows):
                 x_stop = min(x_start + num_rows, scan_shape[0])
 
-                waves_array = self._lattice_waves_block(
-                    u_modes, kernel, origin, step, scan_shape, x_start, x_stop
+                waves_array = (
+                    self._lattice_waves_block(
+                        u_modes, kernel, origin, step, scan_shape, x_start, x_stop
+                    )
+                    if keep_interpolated
+                    else None
                 )
                 if blend_angle is not None:
                     waves_array = self._blend_wave_batches(
@@ -2038,7 +2080,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                         self._lattice_waves_block(
                             u_modes, plane_wave_kernel, origin, step, scan_shape,
                             x_start, x_stop,
-                        ),
+                        )
+                        if keep_plane_wave
+                        else None,
                         blend_weight,
                         component=blend_component,
                     )
@@ -2315,6 +2359,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         sampling = xp.asarray(self.sampling)
 
+        keep_interpolated, keep_plane_wave = self._blend_branches(
+            blend_angle, blend_component
+        )
+
         for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
             sub_ctf = sub_ctf.item()
             coefficients = self._calculate_ctf_coefficients(sub_ctf)
@@ -2323,7 +2371,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
 
             values = self._coefficient_values(coefficients)
-            if blend_angle is not None:
+            if keep_plane_wave:
                 # the plane-wave reduction spreads a unit probe over
                 # prod(interpolation) periodized copies; a window holds
                 # window / gpts of them, hence the amplitude is rescaled so the
@@ -2336,6 +2384,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 plane_wave_values = plane_wave_scale * self._coefficient_values(
                     self._lattice_coefficients(coefficients)
                 )
+            if blend_angle is not None:
                 blend_weight = self._blend_weight(blend_angle, self.window_gpts)
 
             for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
@@ -2356,29 +2405,26 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     dtype=get_dtype(complex=True),
                 )
                 for i, offset in enumerate(unique_offsets):
-                    kernel = xp.ascontiguousarray(
-                        self._window_kernel(
-                            values, offset, center=not absolute
-                        ).transpose(1, 2, 0)
-                    )
                     mask = xp.asarray(inverse == i)
                     reduce_to_waves = (
                         self._reduce_to_waves_absolute
                         if absolute
                         else self._reduce_to_waves
                     )
-                    new_waves = reduce_to_waves(u_windows, snapped[mask], kernel)
-                    if blend_angle is not None:
-                        plane_wave_kernel = xp.ascontiguousarray(
+
+                    def branch(branch_values):
+                        kernel = xp.ascontiguousarray(
                             self._window_kernel(
-                                plane_wave_values, offset, center=not absolute
+                                branch_values, offset, center=not absolute
                             ).transpose(1, 2, 0)
                         )
+                        return reduce_to_waves(u_windows, snapped[mask], kernel)
+
+                    new_waves = branch(values) if keep_interpolated else None
+                    if blend_angle is not None:
                         new_waves = self._blend_wave_batches(
                             new_waves,
-                            reduce_to_waves(
-                                u_windows, snapped[mask], plane_wave_kernel
-                            ),
+                            branch(plane_wave_values) if keep_plane_wave else None,
                             blend_weight,
                             component=blend_component,
                         )
