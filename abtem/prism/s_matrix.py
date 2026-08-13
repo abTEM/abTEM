@@ -2658,6 +2658,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         method: str = "auto",
         blend_angle: float = None,
         blend_window_gpts: int | tuple[int, int] | str = None,
+        blend_taper: float = None,
         _blend_component: str = None,
         _blend_taper: float = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
@@ -2745,6 +2746,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 method=method,
                 blend_angle=blend_angle,
                 blend_window_gpts=blend_window_gpts,
+                blend_taper=0.0 if blend_taper is None else blend_taper,
             )
 
         if blend_angle is not None and _blend_component is None:
@@ -2755,7 +2757,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             )
             if detectors is not None:
                 routed = self._routed_reduce(
-                    scan, ctf, detectors, cut, max_batch_reduction, method
+                    scan, ctf, detectors, cut, max_batch_reduction, method,
+                    blend_taper=0.0 if blend_taper is None else blend_taper,
                 )
                 if routed is not None:
                     return routed
@@ -2766,6 +2769,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 # reduction is the plain interpolated one, and blending must be
                 # requested explicitly
                 blend_angle = None
+
+        if _blend_taper is None and blend_taper is not None:
+            _blend_taper = blend_taper
 
         if method not in ("auto", "expand", "modes"):
             raise ValueError(
@@ -2887,24 +2893,31 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
         return _wrap_measurements(measurements)
 
-    def _routing_sides(self, cut, detectors):
+    def _routing_sides(self, cut, detectors, taper: float = 0.0):
         """Which branch each detector reads from, or None when not routable.
 
         A detector collecting only below the blend angle reads the interpolated
         reduction, one collecting only above it the plane-wave (PRISM)
-        reduction; nothing is mixed, so no Fourier weighting is needed. A
-        detector straddling the cut, or one whose collection range is not an
-        angular band, is not routable.
+        reduction; nothing is mixed, so no Fourier weighting is needed. With a
+        taper, a band overlapping the taper zone ``[cut - taper, cut]`` reads
+        the tapered combination of the two intensities, which makes the
+        underlying angular density continuous across the cut. A detector
+        straddling the cut without a taper, or one whose collection range is
+        not an angular band, is not routable.
         """
         sides = []
         for detector in detectors:
             if isinstance(detector, (AnnularDetector, SegmentedDetector)):
                 outer = detector.outer
                 inner = detector.inner
-                if outer is not None and outer <= cut:
+                if outer is not None and outer <= cut - taper:
                     sides.append("low")
                 elif inner is not None and inner >= cut:
                     sides.append("high")
+                elif taper > 0.0 and inner is not None and outer is not None:
+                    sides.append("taper")
+                elif outer is not None and outer <= cut:
+                    sides.append("low")
                 else:
                     return None
             elif isinstance(detector, PixelatedDetector):
@@ -2918,7 +2931,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         return sides
 
     def _routed_reduce(
-        self, scan, ctf, detectors, blend_angle, max_batch_reduction, method
+        self, scan, ctf, detectors, blend_angle, max_batch_reduction, method,
+        blend_taper: float = 0.0,
     ):
         """Route each detector to the branch its band lies in, or return None.
 
@@ -2933,12 +2947,24 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         detectors = [detectors] if single else list(detectors)
 
         cut = self._snapped_blend_angle(blend_angle, detectors)
-        sides = self._routing_sides(cut, detectors)
+        sides = self._routing_sides(cut, detectors, taper=blend_taper)
         if sides is None:
             return None
 
         def measure(component, subset):
-            if component == "low":
+            if component == "taper":
+                measurements = self._composite_blend_reduce(
+                    scan=scan,
+                    ctf=ctf,
+                    detectors=subset,
+                    max_batch_reduction=max_batch_reduction,
+                    method=method,
+                    blend_angle=cut,
+                    blend_window_gpts="period",
+                    blend_taper=blend_taper,
+                    snap=False,
+                )
+            elif component == "low":
                 measurements = self.reduce(
                     scan=scan,
                     ctf=ctf,
@@ -2966,7 +2992,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             return list(measurements)
 
         ordered = [None] * len(detectors)
-        for component in ("low", "high"):
+        for component in ("low", "high", "taper"):
             subset = [d for d, side in zip(detectors, sides) if side == component]
             if not subset:
                 continue
@@ -3007,6 +3033,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         method,
         blend_angle,
         blend_window_gpts,
+        blend_taper: float = 0.0,
+        snap: bool = True,
     ):
         """Blend the intensities of two reductions with different windows.
 
@@ -3036,10 +3064,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         else:
             window = tuple(int(n) for n in blend_window_gpts)
 
-        # snap to a collection boundary and cut sharply there, so that no
-        # detector band straddles the blend: every band is either the plane-wave
-        # (PRISM) reduction exactly, or the interpolated one
-        blend_angle = self._snapped_blend_angle(blend_angle, detectors)
+        # snap to a collection boundary, so that no detector band straddles
+        # the blend without a taper: every band is either the plane-wave
+        # (PRISM) reduction exactly, or the interpolated one, or (inside the
+        # taper zone) a convex combination of the two intensities
+        if snap:
+            blend_angle = self._snapped_blend_angle(blend_angle, detectors)
 
         low = self.reduce(
             scan=scan,
@@ -3049,7 +3079,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             method=method,
             blend_angle=blend_angle,
             _blend_component="low",
-            _blend_taper=0.0,
+            _blend_taper=blend_taper,
         )
 
         if self._device == "gpu" and cp is not None:
@@ -3078,7 +3108,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             max_batch_reduction=max_batch_reduction,
             blend_angle=blend_angle,
             _blend_component="high",
-            _blend_taper=0.0,
+            _blend_taper=blend_taper,
         )
 
         low_list, high_list = ensure_list(low), ensure_list(high)
@@ -3106,6 +3136,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         method: str = "auto",
         blend_angle: float = None,
         blend_window_gpts: int | tuple[int, int] | str = None,
+        blend_taper: float = None,
     ):
         """
         Reduce the compressed scattering matrix at the positions of a scan.
@@ -3124,6 +3155,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             method=method,
             blend_angle=blend_angle,
             blend_window_gpts=blend_window_gpts,
+            blend_taper=blend_taper,
         )
 
 

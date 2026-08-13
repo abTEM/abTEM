@@ -966,3 +966,42 @@ def test_upsample_plane_wave_branch_is_prism():
         branch = cp.reduce(scan=scan, blend_angle=1e-6).array
         error = np.abs(branch - expected).max() / np.abs(expected).max()
         assert error < 1e-4, f"tolerance {tolerance}: {error}"
+
+
+def test_upsample_blend_taper_routing():
+    # with a taper, a narrow band overlapping [cut - taper, cut] reads a convex
+    # combination of the two branch intensities — the angular density is then
+    # continuous across the cut — while bands clear of the zone stay pure
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4,
+    ).build(lazy=False)
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    cut, taper = 40.0, 8.0
+    rings = [
+        abtem.AnnularDetector(inner=24, outer=32),   # below the zone -> low
+        abtem.AnnularDetector(inner=34, outer=40),   # inside the zone -> taper
+        abtem.AnnularDetector(inner=40, outer=48),   # above the cut -> high
+    ]
+
+    tapered = built.scan(scan=scan, detectors=rings, blend_angle=cut,
+                         blend_taper=taper)
+    sharp = built.scan(scan=scan, detectors=rings, blend_angle=cut)
+
+    # outside the zone the taper changes nothing
+    assert np.allclose(tapered[0].array, sharp[0].array, rtol=1e-5)
+    assert np.allclose(tapered[2].array, sharp[2].array, rtol=1e-5)
+
+    # inside the zone the value lies between the two pure branches
+    low = built.scan(scan=scan, detectors=rings[1], blend_angle=0)
+    high = built._with_window(
+        tuple(-(-g // i) for g, i in zip(built.gpts, built._interpolation))
+    ).reduce(scan=scan, detectors=rings[1], blend_angle=cut - taper,
+             _blend_component="high", _blend_taper=0.0)
+    lower = np.minimum(low.array, high.array) * (1 - 1e-4) - 1e-12
+    upper = np.maximum(low.array, high.array) * (1 + 1e-4) + 1e-12
+    assert np.all(tapered[1].array >= lower)
+    assert np.all(tapered[1].array <= upper)
+    assert not np.allclose(tapered[1].array, sharp[1].array, rtol=1e-5)
