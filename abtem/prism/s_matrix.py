@@ -1797,7 +1797,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     # ... but never larger than the device can hold: detecting a block also
     # holds its Fourier transform, the transform work area and the detected
     # intensity, so the peak is a few times the block itself
-    _REDUCE_GPU_MEMORY_FRACTION = 0.35
+    _REDUCE_GPU_MEMORY_FRACTION = 0.5
 
     def _reduce_memory_budget(self):
         """Bytes that one reduced block of wave functions may occupy.
@@ -3714,9 +3714,11 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             n = int(np.ceil(2.0 * half_extent / (extent / gpts) / 16.0)) * 16
             # at a window of exactly one period the reduction loses its
             # bright-field advantage over PRISM (measured +7% at any
-            # thickness); keep at least 1.4 periods
+            # thickness); at 1.75 periods the bright-field error reaches its
+            # floor (measured 0.06% on the Ge benchmark cell, where 1.4
+            # periods gives 0.2-0.4%)
             period = safe_ceiling_int(gpts / interpolation)
-            n = max(n, int(np.ceil(1.4 * period / 16.0)) * 16)
+            n = max(n, int(np.ceil(1.75 * period / 16.0)) * 16)
             window += (min(n, gpts),)
         return window
 
