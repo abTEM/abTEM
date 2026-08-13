@@ -1396,6 +1396,10 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 # number of multislice runs at large interpolation factors without affecting the
 # accuracy of the reduction.
 _COARSE_SUPPORT_MARGIN = 0.0
+# (plateau, edge) of the drift-space apodization of the smooth interpolant used
+# by the interpolated branch of the reduction, or None to use the plain (box)
+# trigonometric interpolant everywhere; see _interpolate_beam_functions
+_SMOOTH_APODIZATION = (0.6, 0.3)
 
 
 def _dense_wave_vector_indices(
@@ -1482,12 +1486,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         device: str = None,
         metadata: dict = None,
         singular_values: np.ndarray = None,
+        smooth_values: np.ndarray = None,
     ):
         self._u = u
         self._sigma = sigma
         self._vh_dense = vh_dense
         self._dense_indices = dense_indices
         self._singular_values = singular_values
+        self._smooth_values = smooth_values
         self._max_batch_expansion = max_batch_expansion
         self._blend_angle = blend_angle
 
@@ -1595,12 +1601,20 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         array = array / xp.sqrt((xp.abs(array) ** 2).sum(axis=-1, keepdims=True))
         return array
 
-    def _coefficient_values(self, coefficients):
-        """The dense plane-wave amplitudes of each mode of the expansion."""
+    def _coefficient_values(self, coefficients, smooth: bool = False):
+        """The dense plane-wave amplitudes of each mode of the expansion.
+
+        ``smooth=True`` selects the amplitudes of the apodized interpolant when
+        they are stored — the interpolated branch of the reduction — while the
+        exact (box) amplitudes make the plane-wave branch the PRISM algorithm.
+        """
         xp = get_array_module(self._device)
         dtype = get_dtype(complex=True)
 
-        values = xp.asarray(self._sigma[:, None] * self._vh_dense, dtype=dtype)
+        if smooth and self._smooth_values is not None:
+            values = xp.asarray(self._smooth_values, dtype=dtype)
+        else:
+            values = xp.asarray(self._sigma[:, None] * self._vh_dense, dtype=dtype)
         return values * xp.asarray(coefficients, dtype=dtype)[None]
 
     def _lattice_coefficients(self, coefficients):
@@ -2088,7 +2102,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             if keep_interpolated:
                 kernel = xp.ascontiguousarray(
                     self._window_kernel(
-                        self._coefficient_values(coefficients), offset
+                        self._coefficient_values(coefficients, smooth=True), offset
                     ).transpose(1, 2, 0)
                 )
             if keep_plane_wave:
@@ -2336,9 +2350,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         gpts = self.gpts
         extent = self.extent
 
-        values = xp.asarray(
-            self._sigma[:, None] * self._vh_dense[:, start:stop], dtype=dtype
-        )
+        if self._smooth_values is not None:
+            values = xp.asarray(self._smooth_values[:, start:stop], dtype=dtype)
+        else:
+            values = xp.asarray(
+                self._sigma[:, None] * self._vh_dense[:, start:stop], dtype=dtype
+            )
         u = xp.asarray(self._u).reshape(self.rank, -1)
         slab = (values.T @ u).reshape((-1,) + tuple(gpts))
 
@@ -2434,7 +2451,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             # the generated blocks contain a single ensemble member
             coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
 
-            values = self._coefficient_values(coefficients)
+            values = self._coefficient_values(coefficients, smooth=True)
             if keep_plane_wave:
                 # the plane-wave reduction spreads a unit probe over
                 # prod(interpolation) periodized copies; a window holds
@@ -3022,6 +3039,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             device=self._device,
             metadata=self._metadata,
             singular_values=self._singular_values,
+            smooth_values=self._smooth_values,
         )
 
     def _composite_blend_reduce(
@@ -3100,6 +3118,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             device=self._device,
             metadata=self._metadata,
             singular_values=self._singular_values,
+            smooth_values=self._smooth_values,
         )
         high = high_array.reduce(
             scan=scan,
@@ -3889,7 +3908,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         rectangle_to_kept[np.flatnonzero(kept.ravel())] = np.arange(int(kept.sum()))
         return rectangle_to_kept[nearest_flat]
 
-    def _interpolate_beam_functions(self, functions, dense_indices) -> np.ndarray:
+    def _interpolate_beam_functions(
+        self, functions, dense_indices, apodization=None
+    ) -> np.ndarray:
         """Trigonometric interpolation of functions of the coarse plane waves
         (given as rows over the coarse rectangle) to the dense plane-wave
         expansion.
@@ -3920,6 +3941,38 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         coefficients = xp.fft.fft2(functions, axes=(-2, -1))
         coefficients /= get_dtype(complex=False)(np.prod(shape))
+
+        # The fft coefficients live in drift space: coefficient m carries the
+        # content of electrons displaced laterally by m / length periods of
+        # extent / interpolation. The plain interpolant weights them with a
+        # sharp box over one period; an apodization rolls the weight off
+        # smoothly toward the period boundary, where the content is aliased
+        # (drift beyond half a period folds back), trading its broadband
+        # ringing for a smooth attenuation. None keeps the box.
+        if apodization is not None:
+            plateau, edge = apodization
+            for axis, length, interpolation in zip(
+                (-2, -1), shape, self.interpolation
+            ):
+                if interpolation == 1:
+                    # nothing is aliased along an uninterpolated axis
+                    continue
+                xi = np.abs(np.fft.fftfreq(length))
+                window = np.ones(length)
+                roll = xi > plateau / 2.0
+                window[roll] = 0.5 * (
+                    1.0
+                    + np.cos(
+                        np.pi * (xi[roll] - plateau / 2.0) / (0.5 - plateau / 2.0)
+                    )
+                )
+                window = edge + (1.0 - edge) * window
+                orientation = (
+                    (slice(None), None) if axis == -2 else (None, slice(None))
+                )
+                coefficients *= xp.asarray(
+                    window[orientation], dtype=get_dtype(complex=False)
+                )
 
         kernels = ()
         for i, (bound, length) in enumerate(zip(bounds, shape)):
@@ -4108,12 +4161,28 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         vh_dense = amplitudes / xp.clip(sigma, 1e-30, None)[:, None]
         singular_values = spectrum
 
+        # the same modes carry a second set of dense amplitudes from the
+        # apodized (smooth) interpolant, used by the interpolated branch of the
+        # reduction; the exact (box) amplitudes above are what make the
+        # plane-wave branch the PRISM algorithm
+        smooth_values = None
+        if _SMOOTH_APODIZATION is not None and max(self.interpolation) > 1:
+            projected_smooth = self._interpolate_beam_functions(
+                xp.ascontiguousarray(beam_factor.T),
+                xp.asarray(dense_indices),
+                apodization=_SMOOTH_APODIZATION,
+            ).T
+            smooth_values = xp.ascontiguousarray(
+                (projected_smooth.astype(dtype) @ w.conj().T).T
+            )
+
         # add the propagation phase back on the dense plane waves
         dense_wave_vectors = xp.asarray(dense_indices, dtype=np.float32)
         dense_wave_vectors = dense_wave_vectors / xp.asarray(extent, dtype=np.float32)
-        vh_dense = vh_dense * self._defocus_phase(dense_wave_vectors)[None].astype(
-            dtype
-        )
+        defocus_phase = self._defocus_phase(dense_wave_vectors)[None].astype(dtype)
+        vh_dense = vh_dense * defocus_phase
+        if smooth_values is not None:
+            smooth_values = smooth_values * defocus_phase
 
         return (
             u,
@@ -4121,6 +4190,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             vh_dense.astype(dtype),
             dense_indices,
             singular_values.astype(get_dtype(complex=False)),
+            None if smooth_values is None else smooth_values.astype(dtype),
         )
 
     def build(
@@ -4291,8 +4361,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 flush=True,
             )
 
-        u, sigma, vh_dense, dense_indices, singular_values = self._compress(
-            compress_array
+        u, sigma, vh_dense, dense_indices, singular_values, smooth_values = (
+            self._compress(compress_array)
         )
 
         if pbar:
@@ -4314,6 +4384,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             device=self.device,
             metadata=metadata,
             singular_values=singular_values,
+            smooth_values=smooth_values,
         )
 
     def scan(
