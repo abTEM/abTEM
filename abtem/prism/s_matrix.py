@@ -1737,6 +1737,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     # at large ranks, keeping the device operations big and few
     _REDUCE_BATCH_BYTES = 2**30
     _REDUCE_MODE_CHUNK = 64
+    # the lattice reduction re-gathers a halo of window / step scan rows per
+    # row block, hence the device rows blocks are several times larger
+    _REDUCE_GPU_ROW_BLOCK_FACTOR = 8
 
     def _contract_modes_batched(self, fields, flat_indices, kernel, gather_kernel):
         """Contract the modes for a batch of probe positions: for every position
@@ -1985,7 +1988,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         # within a fixed budget; larger blocks amortize the halo of window /
         # step rows that neighbouring blocks re-gather and re-multiply, hence
         # the device budget is set several times higher than the host one
-        budget = self._REDUCE_BATCH_BYTES * (8 if self._device == "gpu" else 2)
+        budget = self._REDUCE_BATCH_BYTES * (
+            self._REDUCE_GPU_ROW_BLOCK_FACTOR if self._device == "gpu" else 2
+        )
         row_bytes = scan_shape[1] * int(np.prod(window)) * 8
         num_rows = max(1, int(budget // max(row_bytes, 1)))
         num_rows = min(num_rows, scan_shape[0])
