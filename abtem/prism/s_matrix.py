@@ -1982,10 +1982,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         window = self.window_gpts
 
         # block the scan rows so the reduced wave functions of one block stay
-        # within a fixed budget; larger blocks amortize the halo of window rows
-        # shared by neighbouring positions
+        # within a fixed budget; larger blocks amortize the halo of window /
+        # step rows that neighbouring blocks re-gather and re-multiply, hence
+        # the device budget is set several times higher than the host one
+        budget = self._REDUCE_BATCH_BYTES * (8 if self._device == "gpu" else 2)
         row_bytes = scan_shape[1] * int(np.prod(window)) * 8
-        num_rows = max(1, int(self._REDUCE_BATCH_BYTES * 2 // max(row_bytes, 1)))
+        num_rows = max(1, int(budget // max(row_bytes, 1)))
         num_rows = min(num_rows, scan_shape[0])
 
         pbar = TqdmWrapper(
