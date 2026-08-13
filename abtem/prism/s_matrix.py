@@ -1397,9 +1397,13 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 # accuracy of the reduction.
 _COARSE_SUPPORT_MARGIN = 0.0
 # (plateau, edge) of the drift-space apodization of the smooth interpolant used
-# by the interpolated branch of the reduction, or None to use the plain (box)
-# trigonometric interpolant everywhere; see _interpolate_beam_functions
-_SMOOTH_APODIZATION = (0.6, 0.3)
+# by the interpolated branch of the reduction, or None (default) for the plain
+# (box) trigonometric interpolant. A window helps thin specimens, where the
+# drifted signal occupies the plateau and only aliased junk is attenuated, but
+# on thick specimens the signal fills the whole period and the roll-off eats
+# it (measured: Si t=54 A improved 5x, Ge t=198 A regressed 3x), hence the box
+# is the default; see _interpolate_beam_functions
+_SMOOTH_APODIZATION = None
 
 
 def _dense_wave_vector_indices(
