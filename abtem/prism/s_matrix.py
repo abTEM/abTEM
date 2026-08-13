@@ -1396,38 +1396,12 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
 # number of multislice runs at large interpolation factors without affecting the
 # accuracy of the reduction.
 _COARSE_SUPPORT_MARGIN = 0.0
-# Apodization of the interpolant used by the interpolated branch of the
-# reduction. "adaptive" (default) sets the flat plateau of a Tukey window to
-# the fraction of the drift period genuinely occupied by the content the
-# branch serves — the routing cut over the aliasing angle — so that only
-# content beyond it is rolled off: on thin specimens (occupancy well below
-# one) this suppresses the folded junk that the sharp interpolant rings
-# across the band, while on thick specimens (occupancy near one) it degrades
-# into the plain interpolant, which is optimal there because the signal fills
-# the whole period. None forces the plain (box) interpolant; a (plateau,
-# edge) pair fixes the window.
-_SMOOTH_APODIZATION = "adaptive"
-# the window's endpoint value at the period boundary
-_SMOOTH_EDGE = 0.25
-# occupancies above this use the plain interpolant outright
-_SMOOTH_PLATEAU_LIMIT = 0.95
-# the window only helps in the thin regime, where the folds are a minority
-# contamination: it engages when the aliasing angle lies between this fraction
-# of the maximum simulated angle (below it most of the simulated scattering
-# drifts beyond the period — the folded content is the signal itself, kept
-# wrap-consistently by the plain interpolant; measured: helps at 0.62,
-# hurts at 0.31) and the maximum itself (above it nothing folds and there is
-# nothing to suppress)
-_SMOOTH_REGIME_FRACTION = 0.5
-# ... and below this fraction of the maximum: near it almost nothing folds,
-# and the window only nibbles the signal edge (measured neutral-to-slightly
-# -worse at 0.92)
-_SMOOTH_REGIME_CEILING = 0.85
-# the window's plateau covers the drift of content up to this multiple of the
-# aperture — the bright-field and low-angle dark-field range the interpolated
-# branch is responsible for. Independent of the detectors, so that the same
-# quantity measured through different detector sets uses the same kernel
-_SMOOTH_SERVE_APERTURES = 2.5
+# Optional (plateau, edge) Tukey apodization of the interpolant used by the
+# interpolated branch of the reduction, or None (default) for the plain
+# trigonometric interpolant. The window can improve thin specimens where the
+# aliased folds are a minority contamination, but no setting generalizes
+# across thicknesses, hence it is strictly opt-in.
+_SMOOTH_APODIZATION = None
 
 
 def _dense_wave_vector_indices(
@@ -1712,48 +1686,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             self._apodized_cache = {key: xp.ascontiguousarray(values)}
         return self._apodized_cache[key]
 
-    def _smooth_plateau(self, cut=None) -> float | None:
-        """The Tukey plateau of the interpolated branch, or None for the plain
-        interpolant: the fraction of the drift period occupied by the content
-        the branch serves, up to a fixed multiple of the aperture. Independent
-        of the detectors and of ``cut``."""
+    def _smooth_window(self, cut=None):
+        """The (plateau, edge) of the interpolated branch's window, or None
+        (default) for the plain interpolant."""
         if (
             _SMOOTH_APODIZATION is None
             or self._drift_spectrum is None
             or self._dense_phase is None
         ):
             return None
-        if isinstance(_SMOOTH_APODIZATION, tuple):
-            return _SMOOTH_APODIZATION[0]
-        if self._aliasing_angle is None or self._aliasing_angle <= 0:
-            return None
-        simulated = 1e3 * self.wavelength * min(
-            gpts / (2.0 * extent) for gpts, extent in zip(self.gpts, self.extent)
-        )
-        if not (
-            _SMOOTH_REGIME_FRACTION * simulated
-            <= self._aliasing_angle
-            < _SMOOTH_REGIME_CEILING * simulated
-        ):
-            return None
-        serve = _SMOOTH_SERVE_APERTURES * float(self._semiangle_cutoff)
-        plateau = serve / float(self._aliasing_angle)
-        if plateau >= _SMOOTH_PLATEAU_LIMIT:
-            return None
-        return max(plateau, 0.05)
-
-    def _smooth_window(self, cut):
-        """The (plateau, edge) of the interpolated branch's window, or None for
-        the plain interpolant."""
-        plateau = self._smooth_plateau(cut)
-        if plateau is None:
-            return None
-        edge = (
-            _SMOOTH_APODIZATION[1]
-            if isinstance(_SMOOTH_APODIZATION, tuple)
-            else _SMOOTH_EDGE
-        )
-        return plateau, edge
+        return _SMOOTH_APODIZATION
 
     def _coefficient_values(self, coefficients, smooth: bool = False, cut=None):
         """The dense plane-wave amplitudes of each mode of the expansion.
