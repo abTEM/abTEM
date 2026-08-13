@@ -555,8 +555,12 @@ def test_upsample_streamed_expansion_validation():
 
 
 def test_upsample_singular_values_spectrum():
-    # the full spectrum is kept for choosing the tolerance; it extends the
-    # retained singular values and is sorted in descending order
+    # the full spectrum is kept for choosing the tolerance and is sorted in
+    # descending order. The retained modes are NOT the leading singular vectors
+    # — the row space of the built beams is retained whole so that the
+    # plane-wave branch is exact — so their amplitudes track the spectrum
+    # without reproducing it, and carry no more energy than the optimal
+    # subspace of the same size.
     potential = _small_potential()
     s_matrix_array = SMatrix(
         potential=potential,
@@ -568,12 +572,20 @@ def test_upsample_singular_values_spectrum():
     ).build(lazy=False)
 
     singular_values = s_matrix_array.singular_values
-    assert len(singular_values) >= s_matrix_array.rank
-    assert np.allclose(
-        singular_values[: s_matrix_array.rank], s_matrix_array.sigma
-    )
+    sigma = s_matrix_array.sigma
+    rank = s_matrix_array.rank
+
+    assert len(singular_values) >= rank
     assert np.all(np.diff(singular_values) <= 0)
-    assert singular_values[s_matrix_array.rank - 1] >= 1e-2 * singular_values[0]
+    assert np.all(np.diff(sigma) <= 0)
+    assert np.isclose(sigma[0], singular_values[0], rtol=1e-3)
+
+    optimal = float((singular_values[:rank] ** 2).sum())
+    assert float((sigma**2).sum()) <= optimal * (1.0 + 1e-5)
+    assert float((sigma**2).sum()) >= optimal * 0.99
+    # every mode above the tolerance is retained; the rank exceeds that count
+    # because the built beams' row space is kept whole
+    assert rank >= int((singular_values >= 1e-2 * singular_values[0]).sum())
 
 
 def test_upsample_modes_reduction_matches_expand():
@@ -887,3 +899,61 @@ def test_upsample_lattice_detection_chunking():
 
         for a, b in zip(whole, chunked):
             assert np.array_equal(a.array, b.array)
+
+
+def test_upsample_blend_snaps_to_detector_boundary():
+    # above the blend angle the composite reduction is the plane-wave branch
+    # alone, which is the PRISM algorithm exactly. A band straddling the blend
+    # angle would mix the branches, so the angle is snapped down to a boundary
+    # and cut sharply there; every band then lies wholly on one side.
+    from abtem.prism.s_matrix import CompressedSMatrixArray as C
+
+    detectors = [
+        abtem.AnnularDetector(inner=0, outer=15),
+        abtem.AnnularDetector(inner=21, outer=50),
+        abtem.AnnularDetector(inner=50, outer=90),
+    ]
+    assert C._snapped_blend_angle(37.5, detectors) == 21.0
+    assert C._snapped_blend_angle(60.0, detectors) == 50.0
+    assert C._snapped_blend_angle(10.0, detectors) == 10.0   # no boundary below
+    assert C._snapped_blend_angle("aperture", detectors) == "aperture"
+    assert C._snapped_blend_angle(None, detectors) is None
+    assert C._snapped_blend_angle(37.5, detectors[1]) == 21.0  # not a list
+
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2)
+    prism = SMatrix(**kwargs).build(lazy=False)
+    cp = SMatrix(**kwargs, upsample=True, tolerance=1e-3,
+                 window_gpts=int(prism.window_gpts[0]) * 2).build(lazy=False)
+
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    composite = cp.scan(scan=scan, detectors=detectors, blend_angle=37.5,
+                        blend_window_gpts="period")
+    reference = prism.scan(scan=scan, detectors=detectors)
+
+    # snapped to 21 mrad: both dark-field bands sit above it and must be PRISM
+    for a, b in zip(composite[1:], reference[1:]):
+        assert np.allclose(a.array, b.array, rtol=1e-4, atol=1e-9)
+    # the bright field is below it and is the interpolated reduction
+    assert not np.allclose(composite[0].array, reference[0].array, rtol=1e-4)
+
+
+def test_upsample_plane_wave_branch_is_prism():
+    # the plane-wave branch reduced on one interpolation period must BE the
+    # PRISM reduction, at any tolerance: the compression retains the row space
+    # of the built beams whole rather than by singular value
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2)
+    prism = SMatrix(**kwargs).build(lazy=False)
+    scan = GridScan(start=(0, 0), end=potential.extent, gpts=(4, 4))
+    expected = prism.reduce(scan=scan).array
+
+    for tolerance in (1e-1, 1e-2, 1e-3):
+        cp = SMatrix(**kwargs, upsample=True, tolerance=tolerance,
+                     window_gpts=int(prism.window_gpts[0])).build(lazy=False)
+        # a vanishing blend angle leaves the plane-wave branch alone
+        branch = cp.reduce(scan=scan, blend_angle=1e-6).array
+        error = np.abs(branch - expected).max() / np.abs(expected).max()
+        assert error < 1e-4, f"tolerance {tolerance}: {error}"

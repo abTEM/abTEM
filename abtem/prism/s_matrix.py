@@ -1621,7 +1621,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             (xp.abs(restricted) ** 2).sum(axis=-1, keepdims=True)
         )
 
-    def _blend_weight(self, blend_angle, window: tuple[int, int]):
+    def _blend_weight(self, blend_angle, window: tuple[int, int], taper=None):
         """Radial Fourier-space weight switching from the interpolated (C-PRISM)
         wave below ``blend_angle`` to the plane-wave (PRISM) wave above it, with
         a smooth cosine taper.
@@ -1658,13 +1658,51 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         # the blend angle is an upper bound on the validity of the
         # interpolation, hence the taper ends AT it rather than straddling it
-        taper = max(4.0, 0.2 * blend_angle)
-        weight = 0.5 * (
-            1.0 + np.cos(np.pi * (angle - blend_angle + taper) / taper)
-        )
-        weight[angle <= blend_angle - taper] = 1.0
-        weight[angle >= blend_angle] = 0.0
+        if taper is None:
+            taper = max(4.0, 0.2 * blend_angle)
+
+        if taper <= 0.0:
+            # a sharp cut, used when the blend angle has been snapped to a
+            # detector boundary: a taper would reach back into the band below
+            # and mix the branches inside it
+            weight = (angle < blend_angle).astype(np.float64)
+        else:
+            weight = 0.5 * (
+                1.0 + np.cos(np.pi * (angle - blend_angle + taper) / taper)
+            )
+            weight[angle <= blend_angle - taper] = 1.0
+            weight[angle >= blend_angle] = 0.0
         return xp.asarray(weight, dtype=get_dtype(complex=False))
+
+    @staticmethod
+    def _snapped_blend_angle(blend_angle, detectors):
+        """The blend angle lowered to a detector collection boundary.
+
+        Above the blend angle the reduction is the plane-wave branch alone,
+        which is the PRISM algorithm exactly; below it the interpolated branch
+        takes over. A detector whose collection range straddles the blend angle
+        therefore mixes the two, and is the only way the blended reduction can
+        come out worse than PRISM on a band. Snapping the angle down to the
+        nearest boundary leaves every band wholly on one side: the bands above
+        are PRISM, the bands below are the interpolated reduction.
+        """
+        if blend_angle is None or isinstance(blend_angle, str):
+            return blend_angle
+
+        if detectors is None:
+            return blend_angle
+        if not isinstance(detectors, (list, tuple)):
+            detectors = [detectors]
+
+        bounds = set()
+        for detector in detectors:
+            for name in ("inner", "outer"):
+                value = getattr(detector, name, None)
+                if value is not None and np.isfinite(value):
+                    bounds.add(float(value))
+
+        below = [value for value in bounds if 0.0 < value <= blend_angle]
+        return max(below) if below else blend_angle
 
     @staticmethod
     def _blend_branches(blend_angle, blend_component):
@@ -1999,6 +2037,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self, scan, ctf, detectors, lattice, pbar: bool = False,
         blend_angle: float = None,
         blend_component: str = None,
+        blend_taper: float = None,
     ):
         """Windowed reduction of a lattice scan (see :meth:`_lattice_waves_block`)."""
         origin, step, scan_shape, offset = lattice
@@ -2064,7 +2103,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     ).transpose(1, 2, 0)
                 )
             if blend_angle is not None:
-                blend_weight = self._blend_weight(blend_angle, self.window_gpts)
+                blend_weight = self._blend_weight(
+                    blend_angle, self.window_gpts, taper=blend_taper
+                )
 
             for x_start in range(0, scan_shape[0], num_rows):
                 x_stop = min(x_start + num_rows, scan_shape[0])
@@ -2360,6 +2401,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         absolute: bool = False,
         blend_angle: float = None,
         blend_component: str = None,
+        blend_taper: float = None,
     ) -> tuple[BaseMeasurements | Waves, ...]:
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
@@ -2405,7 +2447,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     self._lattice_coefficients(coefficients)
                 )
             if blend_angle is not None:
-                blend_weight = self._blend_weight(blend_angle, self.window_gpts)
+                blend_weight = self._blend_weight(
+                    blend_angle, self.window_gpts, taper=blend_taper
+                )
 
             for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
                 sub_scan = sub_scan.item()
@@ -2613,6 +2657,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         blend_angle: float = None,
         blend_window_gpts: int | tuple[int, int] | str = None,
         _blend_component: str = None,
+        _blend_taper: float = None,
     ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -2801,6 +2846,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     scan, ctf, detectors, lattice, pbar=pbar,
                     blend_angle=blend_angle,
                     blend_component=_blend_component,
+                    blend_taper=_blend_taper,
                 )
             else:
                 measurements = self._batch_reduce_to_measurements(
@@ -2812,6 +2858,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     absolute=full_window,
                     blend_angle=blend_angle,
                     blend_component=_blend_component,
+                    blend_taper=_blend_taper,
                 )
 
         measurements = [measurement.squeeze(squeeze) for measurement in measurements]
@@ -2855,6 +2902,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         else:
             window = tuple(int(n) for n in blend_window_gpts)
 
+        # snap to a collection boundary and cut sharply there, so that no
+        # detector band straddles the blend: every band is either the plane-wave
+        # (PRISM) reduction exactly, or the interpolated one
+        blend_angle = self._snapped_blend_angle(blend_angle, detectors)
+
         low = self.reduce(
             scan=scan,
             ctf=ctf,
@@ -2863,6 +2915,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             method=method,
             blend_angle=blend_angle,
             _blend_component="low",
+            _blend_taper=0.0,
         )
 
         if self._device == "gpu" and cp is not None:
@@ -2891,6 +2944,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             max_batch_reduction=max_batch_reduction,
             blend_angle=blend_angle,
             _blend_component="high",
+            _blend_taper=0.0,
         )
 
         low_list, high_list = ensure_list(low), ensure_list(high)
@@ -3344,6 +3398,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 "edge."
             )
             return "aperture"
+
+        # theta_max bounds where the interpolation is *valid*, which is the
+        # right default when the goal is accuracy against multislice: below it
+        # the extra beams carry real information and usually beat the sparse
+        # plane-wave sampling. It does not, however, promise the interpolated
+        # reduction beats PRISM on every band below it. Pass
+        # ``blend_angle='aperture'`` to confine the interpolation to the
+        # bright-field disk, which trades some low-angle accuracy for
+        # PRISM-or-better on every dark-field band of any specimen.
+        return angle
         return angle
 
     @property
@@ -3740,8 +3804,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         eigenvalues = xp.clip(eigenvalues[::-1], 0.0, None)
         eigenvectors = eigenvectors[:, ::-1]
 
-        floor = max((0.1 * self._tolerance) ** 2, 1e-14)
-        keep = max(1, int((eigenvalues > eigenvalues[0] * floor).sum()))
+        # a round-off floor only: the tolerance must not truncate here, or the
+        # row space of the built beams is already incomplete before the
+        # interpolation and the plane-wave branch stops being exact
+        keep = max(1, int((eigenvalues > eigenvalues[0] * 1e-14).sum()))
         singular_values = xp.sqrt(eigenvalues[:keep])
 
         # L = V diag(s) and Q = diag(1 / s) V^H T, with T = L Q exact on the
@@ -3757,18 +3823,65 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             xp.ascontiguousarray(beam_factor.T), xp.asarray(dense_indices)
         ).T
         projected = xp.ascontiguousarray(projected.astype(dtype))
-        u_dense, sigma, wh = xp.linalg.svd(projected, full_matrices=False)
 
-        rank = max(1, int((sigma >= self._tolerance * sigma[0]).sum()))
+        # The retained subspace is chosen in two parts rather than by singular
+        # value alone. The plane-wave (PRISM) branch of the reduction uses only
+        # the rows of the dense expansion that coincide with built beams, so
+        # their row space is retained WHOLE; the leading directions of what is
+        # left over are then retained by tolerance. This makes the plane-wave
+        # branch exact at any tolerance — the blended reduction is bounded by
+        # PRISM on every band it covers — while the tolerance still controls the
+        # cost of the interpolated part.
+        moment = projected.conj().T @ projected
+
+        def leading(hermitian, threshold):
+            values, vectors = xp.linalg.eigh(hermitian)
+            values = xp.clip(values[::-1], 0.0, None)
+            count = int((xp.sqrt(values) >= threshold).sum())
+            return vectors[:, ::-1][:, :count].T.conj(), xp.sqrt(values)
+
+        _, spectrum = leading(moment, 0.0)
+        largest = float(spectrum[0]) if len(spectrum) else 0.0
+
+        lattice = (dense_indices[:, 0] % self._interpolation[0] == 0) & (
+            dense_indices[:, 1] % self._interpolation[1] == 0
+        )
+        # the floor sits above the single-precision noise of the coarse matrix
+        # (~1e-7 relative) and far below any usable tolerance, so the row space
+        # is captured whole without admitting round-off directions
+        lattice_rows = projected[xp.asarray(lattice)]
+        lattice_basis, _ = leading(
+            lattice_rows.conj().T @ lattice_rows, largest * 1e-6
+        )
+
+        # what the built beams do not already span, by tolerance
+        residual = xp.eye(moment.shape[0], dtype=dtype)
+        residual = residual - lattice_basis.conj().T @ lattice_basis
+        extra_basis, _ = leading(
+            residual @ moment @ residual, self._tolerance * largest
+        )
+
+        w = xp.concatenate([lattice_basis, extra_basis], axis=0)
+
+        # order the retained modes by how much of the expansion they carry, so
+        # that a rank cap keeps the largest and the reported spectrum descends
+        amplitudes = xp.ascontiguousarray((projected @ w.conj().T).T)
+        order = xp.argsort(xp.linalg.norm(amplitudes, axis=1))[::-1]
         if self._max_rank is not None:
-            rank = min(rank, self._max_rank)
+            order = order[: max(1, self._max_rank)]
+        w, amplitudes = w[order], xp.ascontiguousarray(amplitudes[order])
+        rank = max(1, len(w))
 
         # U = W Q = (W diag(1 / s) V^H) T without ever materializing Q
         project = (
-            wh[:rank] * (1.0 / singular_values)[None].astype(dtype)
+            w * (1.0 / singular_values)[None].astype(dtype)
         ) @ eigenvectors[:, :keep].T.conj().astype(dtype)
         u = (project @ matrix).reshape((rank,) + tuple(gpts))
-        vh_dense = xp.ascontiguousarray(u_dense[:, :rank].T)
+
+        # the dense plane-wave amplitudes of each retained mode
+        sigma = xp.linalg.norm(amplitudes, axis=1)
+        vh_dense = amplitudes / xp.clip(sigma, 1e-30, None)[:, None]
+        singular_values = spectrum
 
         # add the propagation phase back on the dense plane waves
         dense_wave_vectors = xp.asarray(dense_indices, dtype=np.float32)
@@ -3782,7 +3895,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             sigma[:rank].astype(get_dtype(complex=False)),
             vh_dense.astype(dtype),
             dense_indices,
-            sigma.astype(get_dtype(complex=False)),
+            singular_values.astype(get_dtype(complex=False)),
         )
 
     def build(
