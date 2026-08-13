@@ -2014,25 +2014,71 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
                 modes = u_modes[index_x][:, index_y]
                 block_kernel = kernel[xp.asarray(select_x)][:, xp.asarray(select_y)]
+                kernel_matrix = block_kernel.reshape(-1, num_modes).T
 
-                product = (
-                    modes.reshape(-1, num_modes)
-                    @ block_kernel.reshape(-1, num_modes).T
-                ).reshape(
-                    len(index_x), len(index_y), len(select_x), len(select_y)
+                # the product holds every (grid row, grid column, window
+                # offset) combination; at small scan steps its row size is
+                # large (the sub-step groups hold window / step offsets each),
+                # so the rows are processed in chunks within the batch budget
+                # rather than materialized whole
+                row_bytes = (
+                    len(index_y) * len(select_x) * len(select_y) * 8
                 )
+                capacity = max(1, int(self._REDUCE_BATCH_BYTES // row_bytes))
 
-                waves[
-                    :,
-                    :,
-                    xp.asarray(select_x)[:, None],
-                    xp.asarray(select_y)[None, :],
-                ] = product[
-                    row_index[:, None, :, None],
-                    column_index[None, :, None, :],
-                    xp.arange(len(select_x))[None, None, :, None],
-                    xp.arange(len(select_y))[None, None, None, :],
-                ]
+                if capacity >= len(index_x):
+                    product = (
+                        modes.reshape(-1, num_modes) @ kernel_matrix
+                    ).reshape(
+                        len(index_x), len(index_y), len(select_x), len(select_y)
+                    )
+
+                    waves[
+                        :,
+                        :,
+                        xp.asarray(select_x)[:, None],
+                        xp.asarray(select_y)[None, :],
+                    ] = product[
+                        row_index[:, None, :, None],
+                        column_index[None, :, None, :],
+                        xp.arange(len(select_x))[None, None, :, None],
+                        xp.arange(len(select_y))[None, None, None, :],
+                    ]
+                    continue
+
+                columns = xp.arange(num_y)
+                offsets = xp.arange(len(select_y))
+                select_x = xp.asarray(select_x)
+                select_y = xp.asarray(select_y)
+                for chunk_start in range(0, len(index_x), capacity):
+                    chunk_stop = min(chunk_start + capacity, len(index_x))
+                    product = (
+                        modes[chunk_start:chunk_stop].reshape(-1, num_modes)
+                        @ kernel_matrix
+                    ).reshape(
+                        chunk_stop - chunk_start,
+                        len(index_y),
+                        len(select_x),
+                        len(select_y),
+                    )
+
+                    inside = (row_index >= chunk_start) & (row_index < chunk_stop)
+                    block_rows, window_rows = xp.nonzero(inside)
+                    if not len(block_rows):
+                        continue
+                    waves[
+                        block_rows[:, None, None],
+                        columns[None, :, None],
+                        select_x[window_rows][:, None, None],
+                        select_y[None, None, :],
+                    ] = product[
+                        (row_index[block_rows, window_rows] - chunk_start)[
+                            :, None, None
+                        ],
+                        column_index[None, :, :],
+                        window_rows[:, None, None],
+                        offsets[None, None, :],
+                    ]
 
         return waves.reshape((num_block * num_y,) + window)
 

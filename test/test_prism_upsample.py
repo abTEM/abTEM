@@ -1005,3 +1005,28 @@ def test_upsample_blend_taper_routing():
     assert np.all(tapered[1].array >= lower)
     assert np.all(tapered[1].array <= upper)
     assert not np.allclose(tapered[1].array, sharp[1].array, rtol=1e-5)
+
+
+def test_upsample_lattice_product_chunking():
+    # at small scan steps the lattice reduction's per-offset product tensor is
+    # large; it is processed in row chunks within the batch budget, which must
+    # not change any value — including at step 2, where the sub-step groups
+    # hold half the window each
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-3, window_gpts=32,
+    ).build(lazy=False)
+
+    detector = abtem.PixelatedDetector(max_angle=None)
+    for scan_gpts in (32, 16):  # steps 2 and 4 on the 64 grid
+        scan = GridScan(start=(0, 0), end=potential.extent,
+                        gpts=(scan_gpts, scan_gpts))
+        assert built._lattice_geometry(scan) is not None
+
+        whole = built.reduce(scan=scan, detectors=detector)
+        built._REDUCE_BATCH_BYTES = 65536  # a few product rows per chunk
+        chunked = built.reduce(scan=scan, detectors=detector)
+        del built._REDUCE_BATCH_BYTES
+
+        assert np.array_equal(whole.array, chunked.array)
