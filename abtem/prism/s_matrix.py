@@ -1424,6 +1424,72 @@ def _dense_wave_vector_indices(
     return np.stack([n, m], axis=-1).astype(int)
 
 
+class _FullGridPixelatedDetector(PixelatedDetector):
+    """Pixelated detection on a fixed real-space grid.
+
+    Window-reduced wave functions are zero-padded to the full simulation grid
+    before the diffraction patterns are computed, so the patterns of
+    differently windowed reductions share one angular grid (the intensity of a
+    diffraction pattern does not depend on where the window sits in the padded
+    frame). This is what lets the two branches of a blended reduction be
+    detected separately and their intensities added per pixel.
+    """
+
+    def __init__(self, detector: PixelatedDetector, gpts: tuple[int, int]):
+        if not detector.reciprocal_space:
+            raise ValueError(
+                "padding pixelated detection to the full grid requires "
+                "reciprocal-space output"
+            )
+        self._pad_gpts = tuple(int(n) for n in gpts)
+        super().__init__(
+            max_angle=detector.max_angle,
+            resample=detector.resample,
+            reciprocal_space=detector.reciprocal_space,
+            to_cpu=detector.to_cpu,
+            url=detector.url,
+        )
+
+    def _padded(self, waves):
+        if tuple(waves.gpts) == self._pad_gpts:
+            return waves
+        if isinstance(waves, Waves):
+            xp = get_array_module(waves.array)
+            array = xp.zeros(
+                waves.array.shape[:-2] + self._pad_gpts, dtype=waves.array.dtype
+            )
+            # a unit probe carries a real-space power of 1 / grid size, so the
+            # window field is rescaled to the convention of the padded grid
+            scale = np.sqrt(
+                np.prod(waves.gpts) / np.prod(self._pad_gpts)
+            ).astype(get_dtype(complex=False))
+            array[..., : waves.gpts[0], : waves.gpts[1]] = waves.array * scale
+            return Waves(
+                array,
+                sampling=tuple(waves._valid_sampling),
+                energy=waves.energy,
+                ensemble_axes_metadata=waves.ensemble_axes_metadata,
+                metadata=waves.metadata,
+            )
+        # padding extends the extent at fixed sampling — setting only the gpts
+        # would instead refine the window and mislabel the angular sampling
+        waves = waves.copy()
+        waves.extent = tuple(
+            s * n for s, n in zip(waves._valid_sampling, self._pad_gpts)
+        )
+        waves.gpts = self._pad_gpts
+        return waves
+
+    def angular_limits(self, waves):
+        return super().angular_limits(self._padded(waves))
+
+    def _new_sampling_and_gpts(self, waves):
+        return super()._new_sampling_and_gpts(self._padded(waves))
+
+    def _calculate_new_array(self, waves):
+        return super()._calculate_new_array(self._padded(waves))
+
+
 class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     """
     A compressed scattering matrix defined by its truncated singular value
@@ -1897,7 +1963,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         ):
             return None
 
-        if any(abs(value - round(value)) > 1e-6 for value in step):
+        # the positions are stored in single precision, so the wholeness of
+        # the step can only be resolved relative to its magnitude
+        if any(
+            abs(value - round(value)) > 1e-5 * max(1.0, abs(value))
+            for value in step
+        ):
             if warn:
                 suggestion = tuple(
                     min(
@@ -1912,7 +1983,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     "compressed scattering matrix falls back to its general "
                     "(much slower) implementation. Choose a scan whose step "
                     "divides the grid — for this scattering matrix "
-                    f"{self.gpts} — for example gpts={suggestion}.",
+                    f"{self.gpts} — for example gpts={suggestion}, or build "
+                    "the scan with GridScan.commensurate(potential, ...).",
                     stacklevel=3,
                 )
             return None
@@ -2971,8 +3043,17 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     return None
             elif isinstance(detector, PixelatedDetector):
                 max_angle = detector.max_angle
-                if isinstance(max_angle, (int, float)) and max_angle <= cut:
+                divisible = all(
+                    g % i == 0 for g, i in zip(self.gpts, self._interpolation)
+                )
+                if isinstance(max_angle, (int, float)) and max_angle <= cut - taper:
                     sides.append("low")
+                elif detector.reciprocal_space and not detector.resample and (
+                    divisible and tuple(self.window_gpts) != tuple(self.gpts)
+                ):
+                    # a pattern straddles the cut by construction; it is
+                    # stitched from the two branches on the full angular grid
+                    sides.append("pattern")
                 else:
                     return None
             else:
@@ -3001,7 +3082,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             return None
 
         def measure(component, subset):
-            if component == "taper":
+            if component == "pattern":
+                measurements = self._stitched_pattern_reduce(
+                    scan, ctf, subset, cut, max_batch_reduction, method
+                )
+            elif component == "taper":
                 measurements = self._composite_blend_reduce(
                     scan=scan,
                     ctf=ctf,
@@ -3041,7 +3126,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             return list(measurements)
 
         ordered = [None] * len(detectors)
-        for component in ("low", "high", "taper"):
+        for component in ("low", "high", "taper", "pattern"):
             subset = [d for d, side in zip(detectors, sides) if side == component]
             if not subset:
                 continue
@@ -3052,6 +3137,102 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 ordered[index] = measurement
 
         return ordered[0] if single else _wrap_measurements(ordered)
+
+    def _stitched_pattern_reduce(
+        self, scan, ctf, detectors, cut, max_batch_reduction, method
+    ):
+        """Diffraction patterns stitched from the two branches of the blend.
+
+        Below the cut the pattern is the interpolated reduction of this
+        array's window, detected on the full simulation grid (the window is
+        zero-padded, which leaves the pattern of an isolated probe
+        unchanged). At and above the cut it is the plane-wave (PRISM)
+        reduction: the plane-wave field is periodic with one period
+        ``gpts / interpolation``, so its full-grid pattern is its period-grid
+        pattern scattered onto every interpolation-th pixel, exactly — zeros
+        in between, no interpolation smearing of the Bragg reflections. The
+        stitch is sharp at the cut; a blend taper does not apply to patterns.
+        """
+        padded = [
+            _FullGridPixelatedDetector(detector, tuple(self.gpts))
+            for detector in detectors
+        ]
+        low_list = ensure_list(
+            self.reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=padded,
+                max_batch_reduction=max_batch_reduction,
+                method=method,
+                blend_angle=0.0,
+            )
+        )
+
+        period = tuple(g // i for g, i in zip(self.gpts, self._interpolation))
+        # a vanishing blend angle keeps the plane-wave branch whole except at
+        # the zero-frequency pixel, which lies far below any usable cut
+        high_list = ensure_list(
+            self._with_window(period).reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                blend_angle=1e-12,
+                _blend_component="high",
+                _blend_taper=0.0,
+            )
+        )
+
+        return [
+            self._stitch_patterns(low, high, cut)
+            for low, high in zip(low_list, high_list)
+        ]
+
+    @staticmethod
+    def _stitch_patterns(low, high, cut):
+        """Paste the plane-wave pattern onto the interpolated one at and above
+        the cut.
+
+        Both patterns are fftshifted and centered on the zero-frequency pixel,
+        and a pixel of the coarse (period-grid) pattern subtends the same
+        angle as its lattice pixel on the fine grid, so the radial masks of
+        the two grids agree exactly.
+        """
+        xp = get_array_module(low.array)
+
+        def centered_axes(measurement):
+            return tuple(
+                (np.arange(n) - n // 2) * sampling
+                for n, sampling in zip(
+                    measurement.array.shape[-2:], measurement.angular_sampling
+                )
+            )
+
+        fine_x, fine_y = centered_axes(low)
+        low.array[
+            ..., xp.asarray(np.hypot(fine_x[:, None], fine_y[None, :]) >= cut)
+        ] = 0.0
+
+        coarse_x, coarse_y = centered_axes(high)
+        factors = tuple(
+            int(round(high.angular_sampling[i] / low.angular_sampling[i]))
+            for i in (0, 1)
+        )
+        index_x = low.array.shape[-2] // 2 + factors[0] * (
+            np.arange(high.array.shape[-2]) - high.array.shape[-2] // 2
+        )
+        index_y = low.array.shape[-1] // 2 + factors[1] * (
+            np.arange(high.array.shape[-1]) - high.array.shape[-1] // 2
+        )
+        keep = np.hypot(coarse_x[:, None], coarse_y[None, :]) >= cut
+        keep &= (index_x >= 0)[:, None] & (index_x < low.array.shape[-2])[:, None]
+        keep &= (index_y >= 0)[None, :] & (index_y < low.array.shape[-1])[None, :]
+
+        rows, cols = np.nonzero(keep)
+        low.array[
+            ..., xp.asarray(index_x[rows]), xp.asarray(index_y[cols])
+        ] = high.array[..., xp.asarray(rows), xp.asarray(cols)]
+        return low
 
     def _with_window(self, window_gpts):
         """A view of this compressed scattering matrix with another reduction
@@ -3646,7 +3827,6 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # ``blend_angle='aperture'`` to confine the interpolation to the
         # bright-field disk, which trades some low-angle accuracy for
         # PRISM-or-better on every dark-field band of any specimen.
-        return angle
         return angle
 
     @property

@@ -1030,3 +1030,92 @@ def test_upsample_lattice_product_chunking():
         del built._REDUCE_BATCH_BYTES
 
         assert np.array_equal(whole.array, chunked.array)
+
+
+def test_commensurate_scan():
+    # GridScan.commensurate steps a whole number of pixels of the grid the
+    # scattering matrix is reduced on, snapping the request to a divisor of
+    # the span, so the lattice reduction always engages
+    potential = _small_potential(repetitions=(2, 2, 3))  # 96 -> reduced grid 64
+    s_matrix = SMatrix(potential=potential, energy=100e3, semiangle_cutoff=20,
+                       interpolation=2, upsample=True, tolerance=1e-3,
+                       window_gpts=32)
+    built = s_matrix.build(lazy=False)
+    assert built.gpts == (64, 64)
+
+    for source in (potential, s_matrix, built):
+        scan = GridScan.commensurate(source, gpts=16)
+        assert scan.gpts == (16, 16)
+        assert np.allclose(scan.end, potential.extent)
+        assert built._lattice_geometry(scan) is not None
+
+    # 64 / 13 is not whole: snapped to the nearest divisor step (4 -> 16 gpts)
+    assert GridScan.commensurate(built, gpts=13).gpts == (16, 16)
+
+    # a requested sampling snaps to the nearest whole-pixel step
+    sampled = GridScan.commensurate(built, sampling=potential.extent[0] / 16.4)
+    assert sampled.gpts == (16, 16)
+
+    # a sub-region with a fractional span: the end moves onto the lattice
+    sub = GridScan.commensurate(built, gpts=4, start=(1.234, 1.234),
+                                end=(1.234 + 3.03, 1.234 + 3.03))
+    pixels = np.asarray(sub.get_positions()) / (potential.extent[0] / 64)
+    steps = np.diff(pixels[:, 0, 0])
+    assert np.allclose(steps, np.round(steps), atol=1e-3)
+    assert built._lattice_geometry(sub) is not None
+
+    with pytest.raises(ValueError):
+        GridScan.commensurate(built)
+    with pytest.raises(ValueError):
+        GridScan.commensurate(built, gpts=8, sampling=1.0)
+
+
+def test_upsample_pixelated_detector_is_stitched():
+    # a pixelated detector straddles the blend angle by construction, so the
+    # pattern is stitched on the full angular grid: the interpolated reduction
+    # below the cut, the plane-wave (PRISM) reduction scattered onto its
+    # lattice pixels at and above it — exact, with zeros in between
+    from abtem.prism.s_matrix import _FullGridPixelatedDetector
+
+    potential = _small_potential(repetitions=(2, 2, 6))
+    kwargs = dict(potential=potential, energy=100e3, semiangle_cutoff=20,
+                  interpolation=2)
+    prism = SMatrix(**kwargs).build(lazy=False)
+    built = SMatrix(**kwargs, upsample=True, tolerance=1e-4,
+                    window_gpts=32).build(lazy=False)
+
+    scan = GridScan.commensurate(built, gpts=4)
+    detector = abtem.PixelatedDetector(max_angle=None)
+    cut = 40.0
+    assert built._routing_sides(cut, [detector]) == ["pattern"]
+
+    stitched = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
+    assert stitched.array.shape[-2:] == tuple(built.gpts)
+    assert np.allclose(stitched.array.sum((-2, -1)), 1.0, atol=0.05)
+
+    reference = prism.reduce(scan=scan, detectors=detector)
+    factor = int(round(reference.angular_sampling[0]
+                       / stitched.angular_sampling[0]))
+    size, period = built.gpts[0], reference.array.shape[-1]
+    index = size // 2 + factor * (np.arange(period) - period // 2)
+    coarse = (np.arange(period) - period // 2) * reference.angular_sampling[0]
+    above = np.hypot(coarse[:, None], coarse[None, :]) >= cut
+
+    lattice_pixels = stitched.array[..., index[:, None], index[None, :]]
+    error = (np.abs(lattice_pixels - reference.array)[..., above].max()
+             / reference.array[..., above].max())
+    assert error < 1e-3
+
+    fine = (np.arange(size) - size // 2) * stitched.angular_sampling[0]
+    theta = np.hypot(fine[:, None], fine[None, :])
+    off_lattice = np.ones((size, size), bool)
+    off_lattice[np.ix_(index, index)] = False
+    assert np.abs(stitched.array[..., off_lattice & (theta >= cut)]).max() == 0.0
+
+    # below the cut the stitched pattern is the interpolated reduction,
+    # detected on the padded grid
+    padded = _FullGridPixelatedDetector(detector, tuple(built.gpts))
+    plain = built.reduce(scan=scan, detectors=padded, blend_angle=0.0)
+    assert plain.angular_sampling == stitched.angular_sampling
+    below = theta < cut
+    assert np.allclose(plain.array[..., below], stitched.array[..., below])
