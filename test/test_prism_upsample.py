@@ -1119,3 +1119,36 @@ def test_upsample_pixelated_detector_is_stitched():
     assert plain.angular_sampling == stitched.angular_sampling
     below = theta < cut
     assert np.allclose(plain.array[..., below], stitched.array[..., below])
+
+
+def test_upsample_pixelated_patterns_use_the_simulation_grid():
+    # a windowed reduction detects diffraction patterns on the full
+    # simulation grid whatever the blend angle covers: the window is an
+    # internal accuracy device, and its coarser reciprocal sampling is not
+    # one the user asked for. A detector collecting entirely below the cut
+    # used to return window-grid patterns instead, which cannot be binned
+    # onto a multislice comparison.
+    potential = _small_potential(repetitions=(2, 2, 6))
+    built = SMatrix(
+        potential=potential, energy=100e3, semiangle_cutoff=20,
+        interpolation=2, upsample=True, tolerance=1e-4, window_gpts=32,
+    ).build(lazy=False)
+    assert tuple(built.window_gpts) != tuple(built.gpts)
+
+    scan = GridScan.commensurate(built, gpts=4)
+    reference = built._with_window(tuple(built.gpts)).reduce(
+        scan=scan, detectors=abtem.PixelatedDetector(max_angle=None))
+
+    cut = 60.0
+    for max_angle in (None, 30.0):  # below the cut, and straddling it
+        detector = abtem.PixelatedDetector(max_angle=max_angle)
+        assert built._routing_sides(cut, [detector]) == ["pattern"]
+        patterns = built.reduce(scan=scan, detectors=detector, blend_angle=cut)
+        assert np.allclose(patterns.angular_sampling,
+                           reference.angular_sampling)
+
+    # nothing lies above a cut beyond the detected angles, so the pattern is
+    # the interpolated branch alone — on the simulation grid all the same
+    beyond = built.reduce(scan=scan, detectors=abtem.PixelatedDetector(),
+                          blend_angle=1e4)
+    assert np.allclose(beyond.angular_sampling, reference.angular_sampling)

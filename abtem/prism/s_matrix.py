@@ -3046,13 +3046,19 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 divisible = all(
                     g % i == 0 for g, i in zip(self.gpts, self._interpolation)
                 )
-                if isinstance(max_angle, (int, float)) and max_angle <= cut - taper:
-                    sides.append("low")
-                elif detector.reciprocal_space and not detector.resample and (
-                    divisible and tuple(self.window_gpts) != tuple(self.gpts)
-                ):
-                    # a pattern straddles the cut by construction; it is
-                    # stitched from the two branches on the full angular grid
+                if tuple(self.window_gpts) == tuple(self.gpts):
+                    # the patterns are already on the simulation grid
+                    if isinstance(max_angle, (int, float)) and (
+                        max_angle <= cut - taper
+                    ):
+                        sides.append("low")
+                    else:
+                        return None
+                elif detector.reciprocal_space and not detector.resample and divisible:
+                    # patterns of a windowed reduction are always detected on
+                    # the full grid, whether or not the cut falls inside them:
+                    # the window is an internal accuracy device, and its
+                    # reciprocal sampling is not one a user asked for
                     sides.append("pattern")
                 else:
                     return None
@@ -3167,6 +3173,18 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 blend_angle=0.0,
             )
         )
+
+        # a cut beyond the largest detected angle leaves nothing to paste, so
+        # the plane-wave branch is not reduced at all
+        if not any(
+            np.hypot(
+                (measurement.array.shape[-2] // 2) * measurement.angular_sampling[0],
+                (measurement.array.shape[-1] // 2) * measurement.angular_sampling[1],
+            )
+            >= cut
+            for measurement in low_list
+        ):
+            return low_list
 
         if self._device == "gpu" and cp is not None:
             cp.get_default_memory_pool().free_all_blocks()
