@@ -3168,6 +3168,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             )
         )
 
+        if self._device == "gpu" and cp is not None:
+            cp.get_default_memory_pool().free_all_blocks()
+
         period = tuple(g // i for g, i in zip(self.gpts, self._interpolation))
         # a vanishing blend angle keeps the plane-wave branch whole except at
         # the zero-frequency pixel, which lies far below any usable cut
