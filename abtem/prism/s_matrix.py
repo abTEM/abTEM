@@ -1631,14 +1631,22 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
     @property
     def rank(self) -> int:
-        """Number of retained modes."""
+        """Number of retained modes.
+
+        At least the number of built beams — their row space is retained whole
+        so that the plane-wave branch of the reduction is the PRISM algorithm
+        exactly — unless ``max_rank`` was given. The stored modes and the
+        reduction both scale with it."""
         return len(self._sigma)
 
     @property
     def singular_values(self) -> np.ndarray:
         """The full singular-value spectrum of the interpolated operator,
         including the modes truncated by ``tolerance`` and ``max_rank``. Useful
-        for choosing the tolerance; the retained part is :attr:`sigma`."""
+        for choosing either: where the spectrum falls off is the intrinsic
+        dimensionality of the specimen, and the rank may be cut towards it for
+        proportional savings in memory and reduction time. The retained part is
+        :attr:`sigma`."""
         if self._singular_values is None:
             return self._sigma
         return self._singular_values
@@ -3503,14 +3511,31 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         matrix. At an interpolation factor of 1 the expansion is already complete
         and this option has no effect. Default is False.
     tolerance : float, optional
-        Relative singular value threshold of the adaptive truncation performed when
-        ``upsample=True``. All modes with singular values within this factor of the
-        largest singular value of the interpolated scattering matrix are retained
-        (default is 1e-3). Decrease for higher accuracy at increased cost of the
-        reduction. Ignored when ``upsample=False``.
+        Relative singular value threshold applied when ``upsample=True`` to the
+        part of the interpolated scattering matrix that the built beams do not
+        already span (default is 1e-3). Decrease for higher accuracy at
+        increased cost of the reduction. Ignored when ``upsample=False``.
+
+        Note that this does not set the rank on its own. The row space of the
+        built beams is retained whole, which is what makes the plane-wave
+        branch of the reduction the PRISM algorithm exactly, so the rank is at
+        least the number of built beams however large the tolerance. Use
+        ``max_rank`` to go below that.
     max_rank : int, optional
-        Maximum number of modes retained by the compression when ``upsample=True``.
-        If None (default), the rank is set adaptively by the tolerance.
+        Maximum number of modes retained by the compression when
+        ``upsample=True``, keeping those carrying the largest amplitude. If
+        None (default) every mode described above is retained.
+
+        This is the parameter that trades accuracy for the memory and the
+        reduction time, both of which are proportional to the rank: the modes
+        are the bulk of the stored scattering matrix, and the reduction
+        contracts them. It is worth setting when the beams outnumber the
+        intrinsic dimensionality of the specimen, which is the case at small
+        interpolation factors — halving the rank of a factor-2 expansion costs
+        a few percent of the error on the cells measured, while at factor 4
+        there is little to no slack and truncating is expensive. Inspect
+        :attr:`CompressedSMatrixArray.singular_values` to see where the
+        spectrum of a given specimen falls off.
     blend_angle : float or str, optional
         Scattering angle [mrad] above which the reduction of the compressed
         scattering matrix follows the plane-wave (PRISM) reduction of the built
@@ -3825,12 +3850,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     @property
     def tolerance(self) -> float:
-        """Relative singular value threshold of the adaptive truncation."""
+        """Relative singular value threshold applied to the part of the
+        interpolated scattering matrix that the built beams do not already
+        span. The row space of the built beams is retained whole regardless, so
+        this does not lower the rank below their number — see
+        :attr:`max_rank`."""
         return self._tolerance
 
     @property
     def max_rank(self) -> int | None:
-        """Maximum number of retained modes."""
+        """Maximum number of retained modes, or None to keep every one.
+
+        The rank sets both the memory of the compressed scattering matrix and
+        the cost of its reduction, and is the parameter to lower on a small
+        device."""
         return self._max_rank
 
     @property
