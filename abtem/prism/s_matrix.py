@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import operator
 import warnings
@@ -1680,9 +1681,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
     def wave_vectors(self) -> np.ndarray:
         """The wave vectors of the dense plane-wave expansion."""
         extent = self.extent
-        wave_vectors = self._dense_indices.astype(np.float32)
-        wave_vectors[:, 0] /= np.float32(extent[0])
-        wave_vectors[:, 1] /= np.float32(extent[1])
+        dtype = get_dtype(complex=False)
+        wave_vectors = self._dense_indices.astype(dtype)
+        wave_vectors[:, 0] /= dtype(extent[0])
+        wave_vectors[:, 1] /= dtype(extent[1])
         return wave_vectors
 
     @property
@@ -2512,8 +2514,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         slab = (values.T @ u).reshape((-1,) + tuple(gpts))
 
         wave_vectors = xp.asarray(self.wave_vectors[start:stop])
-        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
-        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+        real_dtype = get_dtype(complex=False)
+        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=real_dtype)
+        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=real_dtype)
         slab *= complex_exponential(
             2.0 * xp.pi * wave_vectors[:, 0, None, None] * x[:, None]
         ) * complex_exponential(
@@ -2553,7 +2556,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         self._s_matrix_array = SMatrixArray(
             array,
-            wave_vectors=np.asarray(self.wave_vectors, dtype=np.float64),
+            # the reduction multiplies these into the plane-wave coefficients,
+            # so anything wider than the working precision promotes the whole
+            # reduction (and doubles its memory)
+            wave_vectors=np.asarray(
+                self.wave_vectors, dtype=get_dtype(complex=False)
+            ),
             semiangle_cutoff=self.semiangle_cutoff,
             energy=self.energy,
             interpolation=(1, 1),
@@ -2634,6 +2642,10 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 scan_shape = positions.shape[:-1]
                 positions = positions.reshape((-1, 2))
 
+                # in double precision independently of ``config['precision']``:
+                # the positions are grouped by their fractional pixel offset
+                # rounded to 1e-4 pixels, which single-precision positions of a
+                # large cell cannot resolve
                 pixel_positions = positions.astype(np.float64) / sampling
 
                 snapped, unique_offsets, inverse = self._group_by_fractional_offset(
@@ -3642,6 +3654,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     ("max_rank", max_rank),
                     ("blend_angle", blend_angle),
                     ("position_quantization", position_quantization),
+                    ("window_gpts", window_gpts),
                     (
                         "max_batch_expansion",
                         None if max_batch_expansion == "auto" else max_batch_expansion,
@@ -3671,11 +3684,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # self._beam_tilt = BeamTilt(tilt=tilt)
 
         # window_gpts is only used by the compressed (upsampled) reduction; it is
-        # not stored otherwise, so that copies of an SMatrix (which pass the
-        # derived PRISM cropping window back through this argument) round-trip
-        if not upsample:
-            window_gpts = None
-        elif isinstance(window_gpts, str):
+        # rejected above otherwise. Copies pass back the value given here rather
+        # than the derived window (see :meth:`_copy_kwargs`), so a PRISM
+        # scattering matrix round-trips without tripping that rejection.
+        if isinstance(window_gpts, str):
             if window_gpts != "full":
                 raise ValueError(
                     f"window_gpts must be an int, a pair of ints, 'full' or "
@@ -3709,6 +3721,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 "The interpolation factor does not exactly divide 'gpts', normalization "
                 "may not be exactly preserved."
             )
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        """The constructor arguments of this scattering matrix.
+
+        ``window_gpts`` is passed back as it was given rather than as the
+        derived cropping window: the window is derived from the specimen and
+        the probe when it is not given, and copying the derived value would
+        both pin it and make a copy of a PRISM scattering matrix (where the
+        window is an internal quantity) look like a user request.
+        """
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        if "window_gpts" in kwargs:
+            kwargs["window_gpts"] = copy.deepcopy(self._window_gpts)
+        return kwargs
 
     @property
     def base_shape(self) -> tuple[int, int, int]:
@@ -3788,13 +3814,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         if self._upsample_enabled:
             bounds = self._coarse_bounds()
 
-            n = np.arange(-bounds[0], bounds[0] + 1, dtype=np.float32)
-            m = np.arange(-bounds[1], bounds[1] + 1, dtype=np.float32)
+            dtype = get_dtype(complex=False)
+            n = np.arange(-bounds[0], bounds[0] + 1, dtype=dtype)
+            m = np.arange(-bounds[1], bounds[1] + 1, dtype=dtype)
 
             w, h = self.extent
 
-            kx = n / w * np.float32(self.interpolation[0])
-            ky = m / h * np.float32(self.interpolation[1])
+            kx = n / w * dtype(self.interpolation[0])
+            ky = m / h * dtype(self.interpolation[1])
 
             kx, ky = np.meshgrid(kx, ky, indexing="ij")
 
@@ -3813,8 +3840,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         w, h = self.extent
 
-        kx = n / w * np.float32(self.interpolation[0])
-        ky = m / h * np.float32(self.interpolation[1])
+        dtype = get_dtype(complex=False)
+        kx = n / w * dtype(self.interpolation[0])
+        ky = m / h * dtype(self.interpolation[1])
 
         xp = get_array_module(self.device)
         return xp.asarray([kx, ky]).T
@@ -4372,8 +4400,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         extent = self.extent
 
         wave_vectors = self.wave_vectors
-        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
-        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+        real_dtype = get_dtype(complex=False)
+        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=real_dtype)
+        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=real_dtype)
 
         array = array.reshape((-1,) + tuple(gpts))
 
@@ -4395,7 +4424,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # variation of the phase-removed matrix; it is added back below
         defocus_phase = self._defocus_phase(wave_vectors).conj()
 
-        normalization = np.prod(self.interpolation).astype(np.float32)
+        normalization = np.prod(self.interpolation).astype(real_dtype)
         max_batch = max(1, int(256**3 / np.prod(gpts)))
         for start in range(0, len(array), max_batch):
             chunk = slice(start, start + max_batch)
@@ -4413,10 +4442,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # factorization: the tall QR is far slower than the two matrix products
         # this costs (measured 5-14x) and materializes Q, a full extra copy of
         # the scattering matrix, whereas here Q is contracted on the fly. The
-        # Gram matrix is accumulated in double precision so that its
-        # eigenvalues resolve the singular values down to the smallest
-        # supported tolerance, and the eigenvalues near the round-off floor
-        # (the coarse expansion is rank deficient) are dropped.
+        # Gram matrix is accumulated in double precision independently of
+        # ``config['precision']``: its eigenvalues are the SQUARES of the
+        # singular values, so single precision would resolve the spectrum only
+        # to ~1e-3 relative, well above the smallest supported tolerance. The
+        # eigenvalues near the round-off floor (the coarse expansion is rank
+        # deficient) are dropped.
         gram = xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
         pixel_batch = max(1, int(256**3 / max(len(matrix), 1)))
         for start in range(0, matrix.shape[1], pixel_batch):
@@ -4507,8 +4538,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         singular_values = spectrum
 
         # add the propagation phase back on the dense plane waves
-        dense_wave_vectors = xp.asarray(dense_indices, dtype=np.float32)
-        dense_wave_vectors = dense_wave_vectors / xp.asarray(extent, dtype=np.float32)
+        dense_wave_vectors = xp.asarray(dense_indices, dtype=real_dtype)
+        dense_wave_vectors = dense_wave_vectors / xp.asarray(
+            extent, dtype=real_dtype
+        )
         vh_dense = vh_dense * self._defocus_phase(dense_wave_vectors)[None].astype(
             dtype
         )
