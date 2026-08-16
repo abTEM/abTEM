@@ -744,8 +744,12 @@ def test_upsample_lattice_reduction_matches_general():
 def test_upsample_blend_angle():
     # blending switches to the plane-wave (PRISM) reduction of the built beams
     # above the blend angle; 'auto' resolves it from the aliasing limit of the
-    # interpolation, extent / (2 * interpolation * thickness)
-    potential = _small_potential(repetitions=(2, 2, 6))
+    # interpolation. The beams are referenced to the middle of the specimen,
+    # which centres the tilt spectrum, hence the limit is
+    # extent / (interpolation * thickness) — twice the uncentred one.
+    # thick enough that the centred limit still falls inside the simulated
+    # angular range, where blending is not a no-op
+    potential = _small_potential(repetitions=(2, 2, 16))
     thickness = potential.thickness
 
     s_matrix = SMatrix(
@@ -758,10 +762,16 @@ def test_upsample_blend_angle():
         blend_angle="auto",
     )
     expected = 1e3 * min(
-        extent / (2 * interpolation * thickness)
+        extent / (interpolation * thickness)
         for extent, interpolation in zip(s_matrix.extent, s_matrix.interpolation)
     )
     assert np.isclose(s_matrix._resolved_blend_angle(), expected)
+    # centring the tilt spectrum is what buys the factor of two
+    uncentred = 1e3 * min(
+        extent / (2 * interpolation * thickness)
+        for extent, interpolation in zip(s_matrix.extent, s_matrix.interpolation)
+    )
+    assert np.isclose(expected, 2 * uncentred)
 
     s_matrix_array = s_matrix.build(lazy=False)
     assert np.isclose(s_matrix_array.blend_angle, expected)
@@ -776,6 +786,7 @@ def test_upsample_blend_angle():
         potential=potential, energy=100e3, semiangle_cutoff=20,
         interpolation=2, upsample=True, tolerance=1e-4, blend_angle=0,
     ).build(lazy=False).reduce(scan=scan, detectors=detector)
+    assert expected < 1e3 * min(s_matrix_array.dummy_probes().cutoff_angles)
 
     # disabling recovers the plain interpolated reduction exactly
     assert np.allclose(unblended.array, plain.array, atol=1e-6 * plain.array.max())
@@ -820,7 +831,7 @@ def test_upsample_blend_aperture_and_clamp():
 
     # a thick specimen at a large factor pushes the aliasing angle inside the
     # disk: 'auto' must clamp to the aperture and warn
-    thick = _small_potential(repetitions=(2, 2, 24))
+    thick = _small_potential(repetitions=(2, 2, 48))
     s_matrix = SMatrix(potential=thick, energy=100e3, semiangle_cutoff=20,
                        interpolation=4, upsample=True, blend_angle="auto")
     with pytest.warns(UserWarning, match="aliased"):

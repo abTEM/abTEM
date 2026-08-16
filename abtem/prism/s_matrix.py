@@ -29,7 +29,7 @@ from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble, _wrap_with_array
 from abtem.core.fft import fft2, ifft2
-from abtem.core.grid import Grid, GridUndefinedError
+from abtem.core.grid import Grid, GridUndefinedError, spatial_frequencies
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -1550,6 +1550,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         device: str = None,
         metadata: dict = None,
         singular_values: np.ndarray = None,
+        reference_depth: float = 0.0,
     ):
         self._u = u
         self._sigma = sigma
@@ -1558,6 +1559,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self._singular_values = singular_values
         self._max_batch_expansion = max_batch_expansion
         self._blend_angle = blend_angle
+        self._reference_depth = float(reference_depth)
 
         self._grid = Grid(extent=extent, gpts=u.shape[-2:], lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
@@ -1568,6 +1570,41 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         self._position_quantization = position_quantization
         self._device = validate_device(device)
         self._metadata = {} if metadata is None else metadata
+
+    @staticmethod
+    def _detects_the_wave(detectors) -> bool:
+        """Whether any detector reads the wave rather than its diffracted
+        intensity.
+
+        The beams are referenced to a depth inside the specimen (see
+        :meth:`SMatrix._reference_depth`), so the reduced wave is the exit wave
+        propagated to that depth. A reciprocal-space intensity does not see the
+        difference — the reference is a phase in ``q`` — but a wave function or
+        a real-space intensity does, and is propagated back to the exit
+        surface first.
+        """
+        for detector in ensure_list(detectors):
+            if isinstance(detector, WavesDetector):
+                return True
+            if isinstance(detector, PixelatedDetector) and not (
+                detector.reciprocal_space
+            ):
+                return True
+        return False
+
+    def _to_exit_reference(self, array):
+        """Propagate reduced waves from the reference depth to the exit surface."""
+        if self._reference_depth == 0.0:
+            return array
+        xp = get_array_module(array)
+        gpts = array.shape[-2:]
+        sampling = tuple(e / n for e, n in zip(self.extent, self.gpts))
+        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        propagator = complex_exponential(
+            -np.pi * self.wavelength * self._reference_depth
+            * (kx[:, None] ** 2 + ky[None] ** 2)
+        ).astype(get_dtype(complex=True))
+        return ifft2(fft2(array) * propagator)
 
     @property
     def ensemble_axes_metadata(self) -> list[AxisMetadata]:
@@ -2278,6 +2315,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                         UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
                     ] + [ScanAxis(), ScanAxis()]
 
+                    if self._detects_the_wave(detectors):
+                        waves_array = self._to_exit_reference(waves_array)
+
                     waves = Waves(
                         waves_array,
                         sampling=tuple(self.sampling),
@@ -2496,7 +2536,12 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         max_batch = max(1, int(256**3 / np.prod(gpts)))
         for start in range(0, n_dense, max_batch):
             stop = min(start + max_batch, n_dense)
-            array[start:stop] = self._expanded_slab(start, stop, xp, dtype)
+            slab = self._expanded_slab(start, stop, xp, dtype)
+            # the expanded beams carry their tilt ramp, so the reference depth
+            # is undone here beam by beam and this matrix describes the exit
+            # surface — it is handed to the plain scattering-matrix reduction,
+            # which knows nothing of the reference
+            array[start:stop] = self._to_exit_reference(slab)
 
         self._s_matrix_array = SMatrixArray(
             array,
@@ -2626,6 +2671,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 ]
                 ensemble_axes_metadata += [ScanAxis() for _ in range(len(scan_shape))]
 
+                if self._detects_the_wave(detectors):
+                    waves_array = self._to_exit_reference(waves_array)
+
                 waves = Waves(
                     waves_array,
                     sampling=tuple(self.sampling),
@@ -2749,6 +2797,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 ensemble_axes_metadata += [
                     ScanAxis() for _ in range(len(sub_scan.shape))
                 ]
+
+                if self._detects_the_wave(detectors):
+                    waves_array = self._to_exit_reference(waves_array)
 
                 waves = Waves(
                     waves_array,
@@ -3273,6 +3324,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             device=self._device,
             metadata=self._metadata,
             singular_values=self._singular_values,
+            reference_depth=self._reference_depth,
         )
 
     def _composite_blend_reduce(
@@ -3351,6 +3403,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             device=self._device,
             metadata=self._metadata,
             singular_values=self._singular_values,
+            reference_depth=self._reference_depth,
         )
         high = high_array.reduce(
             scan=scan,
@@ -3822,8 +3875,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         thickness = self.potential.thickness if self.potential is not None else 0.0
         if thickness <= 0.0:
             return None
+        # the beams are referenced to the middle of the specimen, which centres
+        # the tilt spectrum on zero: the drift the interpolation must resolve
+        # spans +/- theta t / 2 rather than [0, theta t], so the same beams
+        # reach twice the angle (see :meth:`_reference_depth`)
+        centred = 2.0 if self._reference_depth > 0.0 else 1.0
         angle = 1e3 * min(
-            extent / (2.0 * interpolation * thickness)
+            centred * extent / (2.0 * interpolation * thickness)
             for extent, interpolation in zip(self.extent, self.interpolation)
         )
         if angle < self.semiangle_cutoff:
@@ -4204,6 +4262,27 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             :, dense_indices[:, 0] + offset[0], dense_indices[:, 1] + offset[1]
         ]
 
+    @property
+    def _reference_depth(self) -> float:
+        """The depth the beams are referenced to for the interpolation [Å].
+
+        The tilt dependence of a beam is a shear of the specimen: scattering at
+        depth ``z`` to a frequency ``q`` displaces laterally by
+        ``lambda (t - z) q`` before it reaches the exit surface, so the
+        interpolated function of the tilt has a spectrum occupying
+        ``[0, lambda t q]`` — one sided, anchored at zero. Trigonometric
+        interpolation resolves a spectrum spanning one period ``extent /
+        interpolation`` *centred* on zero, hence half of that budget is spent
+        on an empty half interval.
+
+        Referencing the beams to the middle of the specimen (a Fresnel
+        propagation, undone after the compression) centres the spectrum on
+        zero and doubles the scattering angle the same beams interpolate
+        without aliasing.
+        """
+        thickness = self.potential.thickness if self.potential is not None else 0.0
+        return 0.5 * thickness
+
     def _defocus_phase(self, wave_vectors) -> np.ndarray:
         """The propagation (defocus) phase :math:`\\exp(-i \\pi \\lambda t |k|^2)`
         accumulated by each plane wave propagating through the cell of thickness
@@ -4222,8 +4301,24 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         wavelength = self.wavelength
         squared_wave_vectors = wave_vectors[..., 0] ** 2 + wave_vectors[..., 1] ** 2
         return complex_exponential(
-            -np.pi * wavelength * thickness * squared_wave_vectors
+            -np.pi
+            * wavelength
+            * (thickness - self._reference_depth)
+            * squared_wave_vectors
         )
+
+    def _reference_propagator(self, gpts, xp, sign: float):
+        """The Fresnel propagator moving the beams to the reference depth.
+
+        The beams are given on the downsampled grid, whose sampling follows
+        from their own number of grid points rather than from this object.
+        """
+        sampling = tuple(e / n for e, n in zip(self.extent, gpts))
+        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        squared = kx[:, None] ** 2 + ky[None] ** 2
+        return complex_exponential(
+            sign * np.pi * self.wavelength * self._reference_depth * squared
+        ).astype(get_dtype(complex=True))
 
     def _compress(self, array) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Phase removal, interpolation to the dense plane-wave expansion and
@@ -4248,6 +4343,20 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
 
         array = array.reshape((-1,) + tuple(gpts))
+
+        # reference the beams to the middle of the specimen, which centres the
+        # tilt spectrum the interpolation has to resolve (see
+        # :meth:`_reference_depth`). The propagator does not commute with the
+        # tilt ramp, so it cannot be undone beam by beam; it is left in place
+        # and the reduction inherits it, which is exact because the propagator
+        # is the same for every beam: the reduced wave is the exit wave of the
+        # probe propagated to the same depth. Diffraction patterns are
+        # unchanged by it, and a cropped one is improved — the drift of the
+        # reduced wave is halved, so less of it is lost to the window.
+        if self._reference_depth > 0.0:
+            array = ifft2(
+                fft2(array) * self._reference_propagator(gpts, xp, 1.0)[None]
+            )
 
         # the conjugate of the propagation phase flattens the quadratic phase
         # variation of the phase-removed matrix; it is added back below
@@ -4570,6 +4679,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             device=self.device,
             metadata=metadata,
             singular_values=singular_values,
+            reference_depth=self._reference_depth,
         )
 
     def scan(
