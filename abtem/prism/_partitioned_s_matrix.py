@@ -1,3 +1,14 @@
+"""Partitioned PRISM helpers.
+
+Nothing in the package imports this module at present, and ``remove_tilt`` and
+``interpolate_full`` call ``CTF.evaluate``, which no longer exists, so they
+raise on their first use. The azimuthal angle below is nevertheless written in
+the convention of :func:`abtem.core.grid.polar_spatial_frequencies`, ie.
+``arctan2(ky, kx)``, so that whoever revives this module starts from the same
+convention as the rest of the package. There is no test of it here for the same
+reason there are no other tests of this module: it cannot be called.
+"""
+
 import numba as nb
 import numpy as np
 
