@@ -498,7 +498,36 @@ class LobatoParametrization(Parametrization):
     ):
         super().__init__(parameters=parameters, sigmas=sigmas)
 
-    def fit(self, Z, k, f, guess=None):
+    def fit(self, Z, k, f, guess=None, regularization=0.0):
+        """
+        Fit the scattering factor functional form to data.
+
+        Parameters
+        ----------
+        Z : int
+            Atomic number the fit is stored under.
+        k : np.ndarray
+            Sample points in reciprocal space [1/Å].
+        f : np.ndarray
+            Scattering factor values at `k`.
+        guess : np.ndarray, optional
+            Initial parameter guess. Defaults to this element's own tabulated
+            parameters if already present, else the reference `lobato.json`
+            values.
+        regularization : float, optional
+            Weight of an L2 penalty pulling the fit towards `guess`. The
+            10-parameter functional form has near-degenerate parameter
+            directions -- pairs of large, nearly-cancelling terms that barely
+            affect the fitted curve in `k`-space but can shift the
+            reconstructed real-space potential substantially near `r = 0`.
+            An unregularized fit (the default, `0.0`) is appropriate when
+            `f` is essentially exact (e.g. refitting tabulated values through
+            the same functional form); a small positive value (e.g. `0.05`)
+            stabilizes those directions when `f` carries its own numerical
+            noise (e.g. from `GPAWParametrization`), at the cost of biasing
+            the fit towards `guess`.
+        """
+
         def reshape_parameters(p):
             p = p.reshape((2, 5))
             return p
@@ -507,14 +536,6 @@ class LobatoParametrization(Parametrization):
             p = p.copy()
             p[1, :] = np.abs(p[1, :])
             return p
-
-        def make_residuals_func(k2, target, func):
-            def residuals_func(p):
-                p = reshape_parameters(p)
-                p = apply_constraint(p)
-                return target - func(k2, p)
-
-            return residuals_func
 
         if guess is None:
             if chemical_symbols[Z] in self.parameters:
@@ -525,10 +546,18 @@ class LobatoParametrization(Parametrization):
                 )
 
         func = self._functions["scattering_factor"]
+        k2 = k**2
+        guess_flat = guess.ravel()
 
-        residuals_func = make_residuals_func(k**2, f, func)
+        def residuals_func(p):
+            pr = apply_constraint(reshape_parameters(p))
+            data_residuals = f - func(k2, pr)
+            if regularization:
+                reg_residuals = regularization * (p - guess_flat)
+                return np.concatenate([data_residuals, reg_residuals])
+            return data_residuals
 
-        result = least_squares(residuals_func, guess.ravel())
+        result = least_squares(residuals_func, guess_flat)
         p_optimal = reshape_parameters(result.x)
         p_optimal = apply_constraint(p_optimal)
         self.parameters[chemical_symbols[Z]] = p_optimal

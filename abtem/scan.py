@@ -881,7 +881,15 @@ class GridScan(HasGrid2DMixin, BaseScan):
 
         if self._start is not None and self._end is not None:
             extent = (self._end[0] - self._start[0], self._end[1] - self._start[1])
-            if all(d <= 0.0 for d in extent):
+
+            # A scan with a single position along every axis is degenerate: its extent
+            # is zero, but the position is still well defined. This occurs both for a
+            # user-defined one-point scan and when such a scan is partitioned into
+            # blocks for lazy evaluation.
+            single_point = gpts is not None and bool(np.all(np.array(gpts) == 1))
+            degenerate = all(d == 0.0 for d in extent)
+
+            if all(d <= 0.0 for d in extent) and not (degenerate and single_point):
                 raise ValueError(f"scan extent must be positive, got {extent}")
         else:
             extent = None

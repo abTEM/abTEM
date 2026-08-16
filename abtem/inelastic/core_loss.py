@@ -4,6 +4,7 @@ import contextlib
 import itertools
 import os
 from abc import ABCMeta, abstractmethod
+from bisect import bisect_left
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -11,25 +12,17 @@ from ase import Atom, Atoms, units
 from ase.data import chemical_symbols
 from numba import jit
 from scipy.interpolate import interp1d
+from scipy.special import spherical_jn
 
-# ---------
-# This is a version check for scipy >=v1.17.0
-from importlib.metadata import version, PackageNotFoundError
-from packaging.version import Version
 try:
-    import scipy
-    _SCIPY_VERSION = Version(version("scipy"))
-except PackageNotFoundError:
-    scipy = None
-    _SCIPY_VERSION = None
+    # sph_harm_y is the non-deprecated replacement for sph_harm, available
+    # since scipy 1.15; sph_harm itself is removed in scipy 1.17.
+    from scipy.special import sph_harm_y
+except ImportError:
+    from scipy.special import sph_harm
 
-if _SCIPY_VERSION is not None and _SCIPY_VERSION >= Version("1.17.0"):
-    from scipy.special import spherical_jn, sph_harm_y
-else:
-    from scipy.special import spherical_jn, sph_harm
     def sph_harm_y(n, m, theta, phi):
         return sph_harm(m, n, phi, theta)
-# ---------
 
 
 from abtem.array import ArrayObject
@@ -214,7 +207,12 @@ def numerov(f, x0, dx, dh):
     """Given precomputed function f(x), solves for x(t), which satisfies:
     x''(t) = f(t) x(t)
     """
-    x = np.zeros(len(f))
+    # f.copy() rather than np.zeros(len(f)): some numba/numpy pairings
+    # (observed: numba 0.64.0 + numpy 2.4.3) fail to type numba's internal
+    # np.zeros -> np.empty lowering inside @njit, while ndarray.copy() is
+    # unaffected. Every element of x is overwritten below before being
+    # read, so the borrowed initial values from f are never used.
+    x = f.copy()
     x[0] = x0
     x[1] = x0 + dh * dx
     h2 = dh**2
@@ -571,7 +569,14 @@ class TransitionPotential(BaseTransitionPotential):
         return interp1d(radial_grid, integral)(k)
 
     def _calculate_form_factor(self, bound, excited, k, phi, theta):
-        from sympy.physics.wigner import wigner_3j
+        try:
+            from sympy.physics.wigner import wigner_3j
+        except ImportError as e:
+            raise ImportError(
+                "Calculating core-loss EELS form factors requires sympy. "
+                "Install it with `pip install abtem[gpaw]` or "
+                "`pip install sympy`."
+            ) from e
 
         Hn0 = np.zeros_like(k, dtype=complex)
         l = bound.l
@@ -1066,123 +1071,970 @@ class TransitionPotentialArray(ArrayObject, BaseTransitionPotential):
         return self.to_images().show(**kwargs)
 
 
-def linear_scaling_transition_multislice(
-    S1: SMatrix, S2: SMatrix, scan, transition_potentials, reverse_multislice=False
-):
-    xp = get_array_module(S1._device)
-    from tqdm.auto import tqdm
+def _extract_scattering_sites(potential, sites):
+    """Extract scattering sites from a potential, or validate provided sites.
 
-    positions = scan.get_positions(lazy=False).reshape((-1, 2))
+    Handles ``Potential`` (via ``get_sliced_atoms``), ``FrozenPhonons``-wrapped
+    potentials (via ``atoms``), and ``CrystalPotential`` (via
+    ``potential_unit.get_transformed_atoms`` tiled by ``repetitions``).
+    """
+    from abtem.slicing import SliceIndexedAtoms
 
-    prism_region = (
-        S1.extent[0] / S1.interpolation[0] / 2,
-        S1.extent[1] / S1.interpolation[1] / 2,
-    )
+    if sites is None and hasattr(potential, "get_sliced_atoms"):
+        sites = potential.get_sliced_atoms()
+    elif sites is None and hasattr(potential, "atoms"):
+        sites = potential.atoms
+    elif sites is None and hasattr(potential, "potential_unit"):
+        if hasattr(potential.potential_unit, "get_transformed_atoms"):
+            unit_atoms = potential.potential_unit.get_transformed_atoms()
+            sites = unit_atoms * potential.repetitions
 
-    positions = xp.asarray(positions, dtype=np.float32)
+    if isinstance(sites, Atoms):
+        sites = SliceIndexedAtoms(sites, slice_thickness=potential.slice_thickness)
+    elif not isinstance(sites, SliceIndexedAtoms):
+        raise ValueError(
+            "Could not derive scattering sites from the potential "
+            f"({type(potential).__name__}). Pass ``sites=`` explicitly as an "
+            "ase.Atoms or SliceIndexedAtoms covering the full simulation cell."
+        )
 
-    wave_vectors = xp.asarray(S1.wave_vectors)
-    coefficients = complex_exponential(
-        -2.0 * xp.float32(xp.pi) * positions[:, 0, None] * wave_vectors[None, :, 0]
-    )
-    coefficients *= complex_exponential(
-        -2.0 * xp.float32(np.pi) * positions[:, 1, None] * wave_vectors[None, :, 1]
-    )
-    coefficients = coefficients / xp.sqrt(coefficients.shape[1]).astype(np.float32)
+    return sites
 
-    potential = S1.potential
 
-    sites = transition_potentials.validate_sites(potential.atoms)
+def _prism_eels_common_setup(s_matrix, transition_potentials, scan, detectors, sites):
+    """Shared setup for the real-space and beam-basis PRISM-EELS drivers."""
+    import types as _types
 
-    chunks = S1.chunks
-    stream = S1._device == "gpu" and S1._store_on_host
+    from abtem.antialias import AntialiasAperture
+    from abtem.core.utils import get_dtype
+    from abtem.detectors import FlexibleAnnularDetector, validate_detectors
+    from abtem.multislice import FresnelPropagator, conventional_multislice_step
+    from abtem.prism.utils import plane_waves
+    from abtem.scan import validate_scan
+    from abtem.transfer import CTF
+    from abtem.waves import Waves
 
-    S1 = S1.build(lazy=False, stop=0)
-
-    if reverse_multislice:
-        S2_multislice = S2.build(lazy=False, start=len(potential), stop=0)
+    if isinstance(transition_potentials, (list, tuple)):
+        if len(transition_potentials) != 1:
+            raise NotImplementedError(
+                "PRISM-EELS supports a single transition potential."
+            )
+        transition_potential = transition_potentials[0]
     else:
-        S2_multislice = S2
+        transition_potential = transition_potentials
 
-    images = np.zeros(len(positions), dtype=np.float32)
-    for i in tqdm(range(len(potential)), delay=0.5):
-        if stream:
-            S1 = S1.streaming_multislice(
-                potential, chunks=chunks, start=max(i - 1, 0), stop=i
+    if isinstance(transition_potential, TransitionPotential):
+        transition_potential = transition_potential.build()
+
+    potential = s_matrix.potential
+    energy = s_matrix.energy
+    extent = s_matrix.extent
+    gpts = s_matrix.gpts
+    xp = get_array_module(s_matrix.device)
+    complex_dtype = get_dtype(complex=True)
+
+    scan = validate_scan(scan)
+
+    if detectors is None:
+        detectors = [FlexibleAnnularDetector()]
+    detectors = validate_detectors(detectors)
+
+    wave_vectors = s_matrix.wave_vectors
+    wave_vectors_np = np.array(
+        wave_vectors.get() if hasattr(wave_vectors, "get") else wave_vectors
+    )
+    n_k = len(wave_vectors_np)
+
+    s_array = plane_waves(
+        xp.asarray(wave_vectors_np, dtype=np.float32), extent, gpts
+    )
+    s_array = s_array * (
+        np.prod(s_matrix.interpolation) / np.prod(s_array.shape[-2:])
+    )
+
+    s_waves = Waves(
+        s_array,
+        energy=energy,
+        extent=extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_k)))],
+    )
+
+    antialias_aperture = AntialiasAperture()
+    propagator = FresnelPropagator()
+
+    transmissions = [
+        antialias_aperture.bandlimit(
+            s.transmission_function(energy=energy), in_place=False
+        )
+        for s in potential.generate_slices()
+    ]
+
+    transition_potential.grid.match(s_waves)
+    transition_potential.accelerator.match(s_waves)
+    transition_potential = transition_potential.copy_to_device(s_matrix.device)
+    Z = transition_potential.Z
+
+    sites = _extract_scattering_sites(potential, sites)
+
+    positions_np = np.asarray(scan.get_positions()).reshape((-1, 2))
+    positions = xp.asarray(positions_np, dtype=np.float32)
+    n_positions = positions.shape[0]
+    wave_vectors_xp = xp.asarray(wave_vectors_np, dtype=np.float32)
+
+    position_coefficients = complex_exponential(
+        -2.0 * np.float32(np.pi)
+        * positions[:, 0:1]
+        * wave_vectors_xp[None, :, 0]
+    ) * complex_exponential(
+        -2.0 * np.float32(np.pi)
+        * positions[:, 1:2]
+        * wave_vectors_xp[None, :, 1]
+    )
+
+    ctf = CTF(semiangle_cutoff=s_matrix.semiangle_cutoff, energy=energy)
+    ctf.grid.match(s_matrix.dummy_probes())
+    alpha = (
+        xp.sqrt(wave_vectors_xp[:, 0] ** 2 + wave_vectors_xp[:, 1] ** 2)
+        * np.float32(ctf.wavelength)
+    )
+    phi = xp.arctan2(wave_vectors_xp[:, 1], wave_vectors_xp[:, 0])
+    ctf_array = ctf._evaluate_from_angular_grid(alpha, phi)
+    ctf_array = ctf_array / xp.sqrt(
+        (ctf_array**2).sum(axis=-1, keepdims=True)
+    )
+    coefficients = (position_coefficients * ctf_array[None, :]).astype(
+        complex_dtype
+    )
+
+    full_sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
+    full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+
+    return _types.SimpleNamespace(
+        transition_potential=transition_potential,
+        Z=Z,
+        potential=potential,
+        energy=energy,
+        extent=extent,
+        gpts=gpts,
+        xp=xp,
+        complex_dtype=complex_dtype,
+        scan=scan,
+        detectors=detectors,
+        wave_vectors_np=wave_vectors_np,
+        n_k=n_k,
+        s_waves=s_waves,
+        antialias_aperture=antialias_aperture,
+        propagator=propagator,
+        transmissions=transmissions,
+        sites=sites,
+        positions=positions,
+        n_positions=n_positions,
+        coefficients=coefficients,
+        full_sampling=full_sampling,
+        full_sampling_arr=full_sampling_arr,
+    )
+
+
+def prism_transition_potential_scan(
+    s_matrix: "SMatrix",
+    transition_potentials,
+    scan,
+    detectors=None,
+    sites=None,
+    double_channel: bool = False,
+    inelastic_crop: float | tuple[float, float] | None = None,
+):
+    """PRISM-EELS driver following Brown et al. (Phys. Rev. Research 1,
+    033186, 2019).
+
+    Supports any ``interpolation`` factor, ``downsample`` setting, and both
+    single- and double-channel modes. The scatter and (optionally)
+    double-channel propagation operate on a cropped grid at full resolution
+    centered at each scattering site (Sec. IV B); when ``downsample`` is
+    enabled the scattered result is Fourier-cropped to the downsampled
+    resolution before per-position reduction.
+
+    At ``interpolation=(1,1)`` with ``downsample=False`` the output is
+    bit-equivalent (to float32 noise) to ``Probe.transition_potential_scan``
+    at the matching ``double_channel`` setting.
+
+    ``double_channel=True`` propagates the scattered state through the
+    remaining potential slices to the exit before reducing per-position;
+    ``double_channel=False`` (default) detects immediately at the scatter
+    slice — Brown's single-channel approximation.
+
+    Frozen-phonon ensemble averaging is handled at the ``SMatrix`` level
+    (see ``SMatrix.transition_potential_scan``); Dask lazy evaluation is
+    supported via the ``lazy`` parameter on that method.
+
+    Parameters
+    ----------
+    s_matrix : SMatrix
+        S-matrix specification (any ``interpolation``).
+    transition_potentials : BaseTransitionPotential
+        Atomic transition potential.
+    scan : BaseScan or tuple
+        Scan positions.
+    detectors : BaseDetector or list, optional
+        Detectors. Defaults to ``FlexibleAnnularDetector()``.
+    sites : Atoms or SliceIndexedAtoms, optional
+        Scattering sites. Auto-extracted from the potential if not given,
+        following the same logic as
+        ``transition_potential_multislice_and_detect``.
+    inelastic_crop : float or tuple of float, optional
+        Real-space side length [Å] of the window on which the transition
+        potential ``H_n0`` and the scattered wave are evaluated, following
+        Brown et al. Sec. IV B (their independent ``inelastic_crop`` factor).
+        Smaller windows speed up the scatter and — most significantly — the
+        double-channel inner propagation, at the cost of truncating the
+        ``H_n0`` tails (cf. their Fig. 4 / Table II). If ``None`` (default)
+        the full PRISM cell ``extent / interpolation`` is used (current
+        behaviour). The window is clamped to the PRISM cell: values larger
+        than ``extent / interpolation`` are not supported by this real-space
+        reduction (they would admit aliased probe copies) and are clamped
+        with a warning — exceeding the cell requires the beam-basis reduction
+        (see the PRISM-EELS follow-up note).
+
+    Returns
+    -------
+    BaseMeasurements or list of BaseMeasurements
+        One measurement per detector.
+    """
+    import warnings
+
+    from abtem.core.fft import fft_interpolate
+    from abtem.core.utils import get_dtype, safe_ceiling_int
+    from abtem.multislice import (
+        FresnelPropagator,
+        _potential_ensemble_shape_and_metadata,
+        allocate_multislice_measurements,
+        conventional_multislice_step,
+    )
+    from abtem.prism.utils import (
+        batch_crop_2d,
+        minimum_crop,
+        wrapped_crop_2d,
+    )
+    from abtem.waves import Waves, reduce_ensemble
+
+    ctx = _prism_eels_common_setup(
+        s_matrix, transition_potentials, scan, detectors, sites
+    )
+    transition_potential = ctx.transition_potential
+    Z = ctx.Z
+    potential = ctx.potential
+    energy = ctx.energy
+    extent = ctx.extent
+    gpts = ctx.gpts
+    xp = ctx.xp
+    complex_dtype = ctx.complex_dtype
+    real_dtype = get_dtype(complex=False)
+    scan = ctx.scan
+    detectors = ctx.detectors
+    n_k = ctx.n_k
+    s_waves = ctx.s_waves
+    transmissions = ctx.transmissions
+    n_slices = len(transmissions)
+    sites = ctx.sites
+    positions = ctx.positions
+    n_positions = ctx.n_positions
+    coefficients = ctx.coefficients
+    full_sampling = ctx.full_sampling
+    full_sampling_arr = ctx.full_sampling_arr
+
+    def _step(waves, transmission):
+        return conventional_multislice_step(
+            waves,
+            potential_slice=transmission,
+            propagator=ctx.propagator,
+            antialias_aperture=ctx.antialias_aperture,
+        )
+
+    # --- Window properties ---
+    interpolation = s_matrix.interpolation
+    ds_gpts = s_matrix.downsampled_gpts
+    full_sampling = (extent[0] / gpts[0], extent[1] / gpts[1])
+    ds_sampling = (extent[0] / ds_gpts[0], extent[1] / ds_gpts[1])
+    needs_downsample = ds_gpts != gpts
+
+    scatter_window_gpts = (
+        safe_ceiling_int(gpts[0] / interpolation[0]),
+        safe_ceiling_int(gpts[1] / interpolation[1]),
+    )
+    output_window_gpts = (
+        safe_ceiling_int(ds_gpts[0] / interpolation[0]),
+        safe_ceiling_int(ds_gpts[1] / interpolation[1]),
+    )
+    scatter_window_extent = (
+        scatter_window_gpts[0] * full_sampling[0],
+        scatter_window_gpts[1] * full_sampling[1],
+    )
+    output_window_extent = (
+        output_window_gpts[0] * ds_sampling[0],
+        output_window_gpts[1] * ds_sampling[1],
+    )
+
+    # --- Inelastic crop window (Brown et al. Sec. IV B, independent of the
+    # interpolation factor) ---
+    # The scatter and double-channel propagation run on this window; the
+    # scattered result is then embedded (centered, zero-padded) back into
+    # scatter_window_gpts before the per-position reduction so that the
+    # detection grid — and hence the validated normalisation — is unchanged.
+    # The window is clamped to the PRISM cell (scatter_window_gpts): a larger
+    # window would admit aliased probe copies in this real-space reduction
+    # and requires the beam-basis path instead.
+    if inelastic_crop is None:
+        inelastic_window_gpts = scatter_window_gpts
+    else:
+        if np.isscalar(inelastic_crop):
+            inelastic_crop = (inelastic_crop, inelastic_crop)
+        requested = (
+            safe_ceiling_int(inelastic_crop[0] / full_sampling[0]),
+            safe_ceiling_int(inelastic_crop[1] / full_sampling[1]),
+        )
+        inelastic_window_gpts = (
+            min(requested[0], scatter_window_gpts[0]),
+            min(requested[1], scatter_window_gpts[1]),
+        )
+        if (
+            requested[0] > scatter_window_gpts[0]
+            or requested[1] > scatter_window_gpts[1]
+        ):
+            warnings.warn(
+                "inelastic_crop exceeds the PRISM cell "
+                f"(extent / interpolation = {scatter_window_extent[0]:.2f} x "
+                f"{scatter_window_extent[1]:.2f} A); clamping to the cell. "
+                "Larger inelastic windows require the beam-basis reduction.",
+                stacklevel=2,
             )
-            if hasattr(S2_multislice, "build"):
-                S2 = S2.streaming_multislice(
-                    potential, chunks=chunks, start=max(i - 1, 0), stop=i
+    inelastic_window_extent = (
+        inelastic_window_gpts[0] * full_sampling[0],
+        inelastic_window_gpts[1] * full_sampling[1],
+    )
+
+    def _embed_in_scatter_window(arr):
+        # Place an inelastic_window_gpts-sized array (centered on the site)
+        # into a scatter_window_gpts-sized zero array (also centered). When
+        # the two match (inelastic_crop is None) this is a no-op.
+        src = tuple(arr.shape[-2:])
+        if src == tuple(scatter_window_gpts):
+            return arr
+        out = xp.zeros(
+            arr.shape[:-2] + tuple(scatter_window_gpts), dtype=arr.dtype
+        )
+        o0 = (scatter_window_gpts[0] - src[0]) // 2
+        o1 = (scatter_window_gpts[1] - src[1]) // 2
+        out[..., o0 : o0 + src[0], o1 : o1 + src[1]] = arr
+        return out
+
+    # --- Pre-compute windowed TP (Brown et al. Sec. IV B) ---
+    # Scatter and double-channel propagation operate on an
+    # inelastic_window_gpts-sized grid centered at each site.
+    _tp_real_origin = ifft2(
+        transition_potential.array * energy2sigma(energy)
+    )
+    _tp_crop_corner = (
+        -inelastic_window_gpts[0] // 2,
+        -inelastic_window_gpts[1] // 2,
+    )
+    _tp_window_real = wrapped_crop_2d(
+        _tp_real_origin, _tp_crop_corner, inelastic_window_gpts
+    )
+    _tp_window_k = fft2(_tp_window_real)
+    _window_propagator = FresnelPropagator()
+
+    _dummy_window_waves = Waves(
+        xp.zeros((1,) + tuple(inelastic_window_gpts), dtype=complex_dtype),
+        energy=energy,
+        extent=inelastic_window_extent,
+        ensemble_axes_metadata=[OrdinalAxis(values=(0,))],
+    )
+    full_sampling_arr = np.array(full_sampling, dtype=np.float32)
+
+    # Reduction helpers operate in the downsampled grid.
+    pixel_positions = positions / xp.asarray(ds_sampling, dtype=np.float32)
+    reduce_crop_corner, reduce_size, reduce_corners = minimum_crop(
+        pixel_positions, output_window_gpts
+    )
+
+    # --- Exit planes ---
+    exit_planes = potential.exit_planes
+    n_exit = len(exit_planes)
+    (
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    ) = _potential_ensemble_shape_and_metadata(potential)
+
+    # --- Allocate measurements with the scan shape ---
+    scan_axes_metadata = scan.ensemble_axes_metadata
+    scan_shape = scan.shape
+    dummy_scan_waves = Waves(
+        xp.zeros(scan_shape + output_window_gpts, dtype=complex_dtype),
+        energy=energy,
+        extent=output_window_extent,
+        ensemble_axes_metadata=scan_axes_metadata,
+    )
+    measurements = allocate_multislice_measurements(
+        dummy_scan_waves,
+        detectors,
+        extra_ensemble_axes_shape,
+        extra_ensemble_axes_metadata,
+    )
+
+    # --- Reduce, detect, accumulate helper ---
+    def _reduce_and_record(scattered_window, site_xy, exit_idx):
+        ds_sampling_arr = np.array(ds_sampling, dtype=np.float32)
+        site_pixel_ds = site_xy / ds_sampling_arr
+        site_pixel_int_ds = np.rint(site_pixel_ds).astype(int)
+        site_crop_corner_ds = (
+            int(site_pixel_int_ds[0]) - output_window_gpts[0] // 2,
+            int(site_pixel_int_ds[1]) - output_window_gpts[1] // 2,
+        )
+        site_in_bbox = (
+            site_crop_corner_ds[0] - reduce_crop_corner[0],
+            site_crop_corner_ds[1] - reduce_crop_corner[1],
+        )
+        bbox_scattered = xp.zeros(
+            scattered_window.shape[:-2] + tuple(reduce_size),
+            dtype=complex_dtype,
+        )
+        for _n0 in range(-1, 2):
+            for _n1 in range(-1, 2):
+                _r0 = site_in_bbox[0] + _n0 * ds_gpts[0]
+                _r1 = site_in_bbox[1] + _n1 * ds_gpts[1]
+                _s0 = max(0, -_r0)
+                _s1 = max(0, -_r1)
+                _d0 = max(0, _r0)
+                _d1 = max(0, _r1)
+                _e0 = min(reduce_size[0], _r0 + output_window_gpts[0])
+                _e1 = min(reduce_size[1], _r1 + output_window_gpts[1])
+                if _d0 >= _e0 or _d1 >= _e1:
+                    continue
+                bbox_scattered[
+                    ..., _d0:_e0, _d1:_e1
+                ] = scattered_window[
+                    ...,
+                    _s0 : _s0 + (_e0 - _d0),
+                    _s1 : _s1 + (_e1 - _d1),
+                ]
+
+        reduced = xp.tensordot(
+            coefficients, bbox_scattered, axes=[-1, -3]
+        )
+        reduced = xp.moveaxis(reduced, 1, 0)
+        waves_at_positions = batch_crop_2d(
+            reduced, reduce_corners, output_window_gpts
+        )
+
+        position_waves_shape = (
+            waves_at_positions.shape[:-3]
+            + scan_shape
+            + waves_at_positions.shape[-2:]
+        )
+        waves_at_positions = waves_at_positions.reshape(
+            position_waves_shape
+        )
+
+        n_T = waves_at_positions.shape[0]
+        position_waves = Waves(
+            waves_at_positions,
+            energy=energy,
+            extent=output_window_extent,
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(n_T)))
+            ]
+            + list(scan_axes_metadata),
+        )
+
+        for det_idx, detector in enumerate(detectors):
+            m = detector.detect(position_waves)
+            m = m.sum((0,))
+            if isinstance(exit_idx, int):
+                idx = () if n_exit == 1 else (exit_idx,)
+                measurements[det_idx].array[idx] += m.array
+            else:
+                measurements[det_idx].array[exit_idx] += (
+                    m.array[(None,) * len(exit_idx)]
                 )
-            else:
-                S2_multislice = S2_multislice.build(
-                    potential, chunks=chunks, start=max(i - 1, 0), stop=i
+
+    def _scatter_at_site(atom):
+        site_xy = np.array(
+            [atom.position[0], atom.position[1]], dtype=np.float32
+        )
+        site_pixel = site_xy / full_sampling_arr
+        site_pixel_int = np.rint(site_pixel).astype(int)
+        sub_pixel = xp.asarray(
+            (site_pixel - site_pixel_int).reshape(1, 2), dtype=np.float32,
+        )
+        site_crop_corner = (
+            int(site_pixel_int[0]) - inelastic_window_gpts[0] // 2,
+            int(site_pixel_int[1]) - inelastic_window_gpts[1] // 2,
+        )
+        s_cropped = wrapped_crop_2d(
+            s_waves.array, site_crop_corner, inelastic_window_gpts
+        )
+        shift_k = fft_shift_kernel(sub_pixel, inelastic_window_gpts)
+        tp_shifted = ifft2(_tp_window_k * shift_k)
+        sw = tp_shifted[:, None] * s_cropped[None, :]
+        return sw, site_xy, site_crop_corner
+
+    # --- Main loop ---
+    for slice_index, transmission in enumerate(transmissions):
+        s_waves = _step(s_waves, transmission)
+
+        sites_this_slice = sites.get_atoms_in_slices(
+            slice_index, atomic_number=Z
+        )
+        if len(sites_this_slice) == 0:
+            continue
+
+        if not double_channel:
+            ep_start = bisect_left(exit_planes, slice_index)
+            exit_idx = () if n_exit == 1 else (
+                slice(ep_start, n_exit),
+            )
+            for atom in sites_this_slice:
+                sw, site_xy, _ = _scatter_at_site(atom)
+                sw = _embed_in_scatter_window(sw)
+                if needs_downsample:
+                    sw = fft_interpolate(
+                        sw, output_window_gpts,
+                        normalization="intensity",
+                    )
+                _reduce_and_record(sw, site_xy, exit_idx)
+            continue
+
+        site_xys = []
+        site_crop_corners = []
+        scattered_windows = []
+        for atom in sites_this_slice:
+            sw, site_xy, site_crop_corner = _scatter_at_site(atom)
+            site_xys.append(site_xy)
+            site_crop_corners.append(site_crop_corner)
+            scattered_windows.append(sw)
+
+        n_T_val = scattered_windows[0].shape[0]
+        n_sites_slice = len(scattered_windows)
+
+        # Double-channel: batch inner propagation across all sites in
+        # this slice.  Shape: (n_sites, n_T * n_k, wh, ww) on the inelastic
+        # window; embedded back into scatter_window_gpts at each exit plane.
+        batched = xp.stack([
+            sw.reshape((-1,) + tuple(inelastic_window_gpts))
+            for sw in scattered_windows
+        ])
+
+        if slice_index in exit_planes:
+            ep_idx = exit_planes.index(slice_index)
+            for s_idx in range(n_sites_slice):
+                sw_out = _embed_in_scatter_window(
+                    batched[s_idx].reshape(
+                        (n_T_val, n_k) + tuple(inelastic_window_gpts)
+                    )
                 )
-        else:
-            S1 = S1.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
-        # S2_multislice = S2.build(start=len(potential), stop=i, lazy=False)
+                if needs_downsample:
+                    sw_out = fft_interpolate(
+                        sw_out, output_window_gpts,
+                        normalization="intensity",
+                    )
+                _reduce_and_record(sw_out, site_xys[s_idx], ep_idx)
 
-        if reverse_multislice:
-            S2_multislice = S2_multislice.multislice(
-                potential, chunks=chunks, start=max(i - 1, 0), stop=i, conjugate=True
+        for inner_idx, inner_transmission in enumerate(
+            transmissions[slice_index + 1:]
+        ):
+            # Crop transmission for each site: (n_sites, 1, wh, ww).
+            # Transmissions may carry a leading singleton ensemble dim
+            # (shape (1, H, W)); squeeze to 2D before stacking.
+            t_arr = inner_transmission.array
+            if t_arr.ndim > 2:
+                t_arr = t_arr[0]
+            cropped_t = xp.stack([
+                wrapped_crop_2d(t_arr, sc, inelastic_window_gpts)
+                for sc in site_crop_corners
+            ])[:, None]
+            batched *= cropped_t
+
+            kernel = _window_propagator.get_array(
+                _dummy_window_waves,
+                thickness=inner_transmission.slice_thickness[0],
             )
-        else:
-            S2_multislice = S2.build(lazy=False, start=len(potential), stop=i)
+            batched = fft2_convolve(batched, kernel, overwrite_x=True)
 
-        sites_slice = transition_potentials.validate_sites(sites[i])
+            abs_inner = slice_index + 1 + inner_idx
+            if abs_inner in exit_planes:
+                ep_idx = exit_planes.index(abs_inner)
+                for s_idx in range(n_sites_slice):
+                    sw_out = _embed_in_scatter_window(
+                        batched[s_idx].reshape(
+                            (n_T_val, n_k) + tuple(inelastic_window_gpts)
+                        )
+                    )
+                    if needs_downsample:
+                        sw_out = fft_interpolate(
+                            sw_out, output_window_gpts,
+                            normalization="intensity",
+                        )
+                    _reduce_and_record(
+                        sw_out, site_xys[s_idx], ep_idx
+                    )
 
-        for site in sites_slice:
-            # S2_crop = S2.crop_to_positions(site)
-            S2_crop = S2_multislice.crop_to_positions(site)
-            scattered_S1 = S1.crop_to_positions(site)
+    # Squeeze out single-point-scan axes the same way the multislice path
+    # does (via reduce_ensemble inside Waves.transition_potential_multislice
+    # — see waves.py:1075). This is what makes ``scan=(0, 0)`` return a bare
+    # detector-shaped measurement instead of a ``(1, *detector_shape)``
+    # array with a singleton scan axis.
+    measurements = [reduce_ensemble(m) for m in measurements]
 
-            if stream:
-                S2_crop = S2_crop.copy("gpu")
-                scattered_S1 = scattered_S1.copy("gpu")
+    if len(measurements) == 1:
+        return measurements[0]
+    return measurements
 
-            shifted_site = site - np.array(scattered_S1.crop_offset) * np.array(
-                scattered_S1.sampling
+
+def prism_transition_potential_scan_beam_basis(
+    s_matrix: "SMatrix",
+    transition_potentials,
+    scan,
+    detectors=None,
+    sites=None,
+    double_channel: bool = True,
+    inelastic_crop: float | tuple[float, float] | None = None,
+):
+    """PRISM-EELS beam-basis reduction (Brown et al. Sec. IV B / Eq. dropped
+    in supplementary; ``PRISM_double_channeling_nanoparticle.m``) — the
+    accuracy-oriented alternative to :func:`prism_transition_potential_scan`.
+
+    Implements Brown's beam-basis contraction (un-reduced S-matrix columns
+    against a transition-potential window, *before* applying the periodic
+    position phase ramps). This was originally pursued (GitHub issue
+    abTEM/abTEM#293) to let the transition-potential window *exceed* the
+    real-space driver's PRISM-cell cap, in the hope of fixing the
+    delocalized-edge truncation error at ``interpolation > 1``. **That goal
+    turned out to be unfounded:** the interpolation-decimated PRISM probe is
+    exactly periodic with the PRISM cell (``extent / interpolation``), so a
+    window larger than the cell multiplies the transition-potential tail
+    against an exact *copy* of the probe peak — adding spurious signal rather
+    than recovering accuracy. A direct experiment (issue #293, Update 4)
+    confirms the shape error is flat-to-worse as the window grows past the
+    cell, and Brown's own published run uses a window *smaller* than the cell.
+    ``inelastic_crop`` is therefore clamped to the cell, exactly like the
+    real-space driver. This function is kept as a **validated, independent
+    re-derivation** of Brown's reduction (bit-exact at ``interpolation=1``);
+    it does not — and now appears it cannot — beat the real-space path on
+    delocalized-edge accuracy. The lever for delocalized edges is a larger
+    cell (lower ``interpolation`` or a bigger supercell), not a larger window.
+
+    Normalisation derivation (validated bit-exact against
+    ``Probe.transition_potential_scan`` at ``interpolation=(1, 1)`` for both
+    single- and double-channel; see ``project_prism_eels_beam_basis_convention``
+    memory note): for an abtem ``fft2``/``ifft2`` pair (unnormalised forward,
+    ``1/N`` inverse),
+
+    .. code-block::
+
+        fft2(forward_propagate(psi))[q] = N * sum_r conj(S2[q, r]) * psi[r]
+
+    where ``N = prod(gpts)`` and ``S2[q]`` is built by reverse-propagating
+    ``ifft2(delta_q)`` through the remaining slices with
+    ``conventional_multislice_step(..., conjugate=True, transpose=True)``.
+    The full contraction is
+
+    .. code-block::
+
+        SHn0[q, k]    = N * sum_{r in window} conj(S2[q, r]) * H(r) * S1[k, r]
+        recip[pos, q] = sum_k coeff[pos, k] * SHn0[q, k]
+
+    **Limitations** (this is a validated reference implementation, not an
+    optimised production path — see GitHub issue abTEM/abTEM#293):
+
+    - ``inelastic_crop`` exceeding the PRISM cell is clamped (with a warning):
+      it is not a useful regime — see the docstring intro.
+    - ``S2`` (double-channel) is built over the *full* native reciprocal grid
+      (``prod(gpts)`` beams). Memory and compute scale as ``O(prod(gpts)^2)``
+      per scattering site per slice — only practical for small grids.
+    - Single exit plane only (``len(potential.exit_planes) == 1``).
+    - No frozen-phonon ensemble (``potential.ensemble_shape == ()``).
+    - No ``downsample`` support (``s_matrix.downsampled_gpts == s_matrix.gpts``).
+    - Eager only; no Dask laziness.
+
+    Parameters
+    ----------
+    s_matrix : SMatrix
+        S-matrix specification (any ``interpolation``).
+    transition_potentials : BaseTransitionPotential
+        Atomic transition potential.
+    scan : BaseScan or tuple
+        Scan positions.
+    detectors : BaseDetector or list, optional
+        Detectors. Defaults to ``FlexibleAnnularDetector()``.
+    sites : Atoms or SliceIndexedAtoms, optional
+        Scattering sites. Auto-extracted from the potential if not given.
+    double_channel : bool, optional
+        If ``True`` (default), propagate the scattered state to the exit via
+        a reverse-multislice ``S2`` before reducing. If ``False``, detect
+        immediately at the scatter slice (single-channel): ``S2`` is then
+        trivial — the contraction reduces to an FFT of the windowed
+        scattered field directly, no reverse multislice needed.
+    inelastic_crop : float or tuple of float, optional
+        Real-space side length [Å] of the window on which ``H_n0`` and the
+        scattered wave are evaluated. Clamped to the PRISM cell
+        (``extent / interpolation``) with a warning if larger — see
+        Limitations above. If ``None`` (default), the PRISM cell is used,
+        matching the real-space driver's default window.
+
+    Returns
+    -------
+    BaseMeasurements or list of BaseMeasurements
+        One measurement per detector.
+    """
+    import warnings
+
+    from abtem.core.utils import safe_ceiling_int
+    from abtem.multislice import (
+        allocate_multislice_measurements,
+        conventional_multislice_step,
+    )
+    from abtem.prism.utils import wrapped_crop_2d
+    from abtem.waves import Waves
+
+    ctx = _prism_eels_common_setup(
+        s_matrix, transition_potentials, scan, detectors, sites
+    )
+    transition_potential = ctx.transition_potential
+    Z = ctx.Z
+    potential = ctx.potential
+    energy = ctx.energy
+    extent = ctx.extent
+    gpts = ctx.gpts
+    xp = ctx.xp
+    complex_dtype = ctx.complex_dtype
+    scan = ctx.scan
+    detectors = ctx.detectors
+    n_k = ctx.n_k
+    s_waves = ctx.s_waves
+    transmissions = ctx.transmissions
+    sites = ctx.sites
+    positions = ctx.positions
+    n_positions = ctx.n_positions
+    coefficients = ctx.coefficients
+    full_sampling = ctx.full_sampling
+    full_sampling_arr = ctx.full_sampling_arr
+
+    if s_matrix.downsampled_gpts != gpts:
+        raise NotImplementedError(
+            "PRISM-EELS beam-basis does not yet support downsample "
+            "(s_matrix.downsampled_gpts != s_matrix.gpts)."
+        )
+
+    if potential.ensemble_shape:
+        raise NotImplementedError(
+            "PRISM-EELS beam-basis does not yet support frozen-phonon "
+            "ensembles (potential.ensemble_shape is non-empty)."
+        )
+
+    exit_planes = potential.exit_planes
+    if len(exit_planes) != 1:
+        raise NotImplementedError(
+            "PRISM-EELS beam-basis only supports a single exit plane "
+            f"(got {len(exit_planes)})."
+        )
+
+    def _step(waves, transmission, **kwargs):
+        return conventional_multislice_step(
+            waves,
+            potential_slice=transmission,
+            propagator=ctx.propagator,
+            antialias_aperture=ctx.antialias_aperture,
+            **kwargs,
+        )
+
+    tp_k = transition_potential.array * energy2sigma(energy)
+    n_T = tp_k.shape[0]
+    n_pix = gpts[0] * gpts[1]
+
+    interpolation = s_matrix.interpolation
+
+    cell_gpts = (
+        safe_ceiling_int(gpts[0] / interpolation[0]),
+        safe_ceiling_int(gpts[1] / interpolation[1]),
+    )
+    cell_extent = (
+        cell_gpts[0] * full_sampling[0],
+        cell_gpts[1] * full_sampling[1],
+    )
+    prism_region = (cell_extent[0] / 2, cell_extent[1] / 2)
+
+    if inelastic_crop is None:
+        window_gpts = cell_gpts
+    else:
+        if np.isscalar(inelastic_crop):
+            inelastic_crop = (inelastic_crop, inelastic_crop)
+        window_gpts = (
+            min(gpts[0], safe_ceiling_int(inelastic_crop[0] / full_sampling[0])),
+            min(gpts[1], safe_ceiling_int(inelastic_crop[1] / full_sampling[1])),
+        )
+
+    if window_gpts[0] > cell_gpts[0] or window_gpts[1] > cell_gpts[1]:
+        warnings.warn(
+            "PRISM-EELS beam-basis: inelastic_crop exceeding the PRISM cell "
+            "(extent / interpolation) does not improve accuracy and is "
+            "clamped to the cell. The interpolation-decimated PRISM probe is "
+            "exactly cell-periodic, so a larger window multiplies the "
+            "transition-potential tail against a copy of the probe peak "
+            "(spurious signal, not recovered accuracy) — see GitHub issue "
+            "abTEM/abTEM#293, Update 4. The lever for delocalized edges is a "
+            "larger cell (lower interpolation / bigger supercell).",
+            stacklevel=2,
+        )
+        window_gpts = (
+            min(window_gpts[0], cell_gpts[0]),
+            min(window_gpts[1], cell_gpts[1]),
+        )
+
+    # --- Allocate measurements (full scan shape; identical pattern to the
+    # real-space driver, single exit plane). ---
+    # Detection resolution: double-channel's q-basis is intrinsically the
+    # full native reciprocal grid (S2 is built over all ``gpts`` pixels), so
+    # detect at ``gpts``/``extent``. Single-channel's q is whatever size we
+    # FFT (no reverse multislice) — detecting on a *zero-padded* gpts-sized
+    # array would inflate the Parseval-summed intensity by
+    # ``prod(gpts) / prod(window_gpts)`` relative to the real-space driver's
+    # convention (detector.detect() does its own internal FFT at whatever
+    # array size it is given, and the unnormalised-forward/``1/N``-inverse
+    # FFT pair used throughout abtem is not size-invariant for the *total*
+    # intensity). So single-channel must FFT and detect directly at
+    # ``window_gpts``/``window_extent``, matching the real-space driver's
+    # ``output_window_gpts``-sized detection grid when ``window_gpts``
+    # equals the cell.
+    detect_gpts = gpts if double_channel else window_gpts
+    detect_extent = (
+        detect_gpts[0] * full_sampling[0],
+        detect_gpts[1] * full_sampling[1],
+    )
+
+    scan_axes_metadata = scan.ensemble_axes_metadata
+    scan_shape = scan.shape
+    dummy_scan_waves = Waves(
+        xp.zeros(scan_shape + tuple(detect_gpts), dtype=complex_dtype),
+        energy=energy,
+        extent=detect_extent,
+        ensemble_axes_metadata=scan_axes_metadata,
+    )
+    measurements = allocate_multislice_measurements(
+        dummy_scan_waves, detectors, (), []
+    )
+
+    def _detect_and_accumulate(recip_full, mask):
+        # recip_full: (n_T, n_masked, *detect_gpts) reciprocal-space.
+        real_full = ifft2(recip_full)
+        wave = Waves(
+            real_full,
+            energy=energy,
+            extent=detect_extent,
+            ensemble_axes_metadata=[
+                OrdinalAxis(values=tuple(range(n_T))),
+                OrdinalAxis(values=tuple(range(int(mask.sum())))),
+            ],
+        )
+        for det_idx, detector in enumerate(detectors):
+            m = detector.detect(wave)
+            m = m.sum((0,))
+            full_partial = xp.zeros(
+                (n_positions,) + m.array.shape[1:], dtype=m.array.dtype
             )
-            scattered_S1 = transition_potentials.scatter(scattered_S1, shifted_site)
+            full_partial[mask] = m.array
+            full_partial = copy_to_device(full_partial, measurements[det_idx].array)
+            measurements[det_idx].array += full_partial.reshape(
+                scan_shape + m.array.shape[1:]
+            )
 
-            if S1.interpolation == (1, 1):
-                cropped_coefficients = coefficients
-                mask = None
+    # --- Main loop ---
+    for slice_index, transmission in enumerate(transmissions):
+        s_waves = _step(s_waves, transmission)
+
+        sites_this_slice = sites.get_atoms_in_slices(slice_index, atomic_number=Z)
+        if len(sites_this_slice) == 0:
+            continue
+
+        s2_full = None
+        if double_channel:
+            # Build S2 over the FULL native reciprocal grid: reverse
+            # multislice (conjugate transmission, transposed propagate
+            # order) of every reciprocal-pixel delta function, batched.
+            delta_k = xp.eye(n_pix, dtype=complex_dtype).reshape((n_pix,) + tuple(gpts))
+            s2_array = ifft2(delta_k)
+            s2_waves = Waves(
+                s2_array,
+                energy=energy,
+                extent=extent,
+                ensemble_axes_metadata=[OrdinalAxis(values=tuple(range(n_pix)))],
+            )
+            for t in reversed(transmissions[slice_index + 1 :]):
+                s2_waves = _step(s2_waves, t, conjugate=True, transpose=True)
+            s2_full = s2_waves.array  # (n_pix, *gpts)
+
+        for atom in sites_this_slice:
+            site_xy = np.array(
+                [atom.position[0], atom.position[1]], dtype=np.float32
+            )
+            site_pixel = site_xy / full_sampling_arr
+            site_pixel_int = np.rint(site_pixel).astype(int)
+            crop_corner = (
+                int(site_pixel_int[0]) - window_gpts[0] // 2,
+                int(site_pixel_int[1]) - window_gpts[1] // 2,
+            )
+
+            shift_k = fft_shift_kernel(
+                xp.asarray(site_pixel.reshape(1, 2), dtype=np.float32), gpts
+            )[0]
+            H_full = ifft2(tp_k * shift_k)  # (n_T, *gpts), shifted to true site position
+            H_crop = wrapped_crop_2d(H_full, crop_corner, window_gpts)
+            s1_crop = wrapped_crop_2d(s_waves.array, crop_corner, window_gpts)
+            HS1 = H_crop[:, None] * s1_crop[None, :]  # (n_T, n_k, wh, ww)
+
+            mask = xp.ones(n_positions, dtype=bool)
+            if interpolation[0] > 1:
+                mask &= (
+                    xp.abs(positions[:, 0] - site_xy[0])
+                    % (extent[0] - prism_region[0])
+                ) <= prism_region[0]
+            if interpolation[1] > 1:
+                mask &= (
+                    xp.abs(positions[:, 1] - site_xy[1])
+                    % (extent[1] - prism_region[1])
+                ) <= prism_region[1]
+
+            coeff_masked = coefficients[mask]  # (n_masked, n_k)
+
+            if double_channel:
+                S2_crop = wrapped_crop_2d(s2_full, crop_corner, window_gpts)
+                S2_flat = S2_crop.conj().reshape(n_pix, -1)
+                recip_full = xp.stack(
+                    [
+                        (
+                            n_pix
+                            * (S2_flat @ HS1[t].reshape(n_k, -1).T)  # (n_pix, n_k)
+                        )
+                        @ coeff_masked.T  # (n_pix, n_masked)
+                        for t in range(n_T)
+                    ]
+                )  # (n_T, n_pix, n_masked)
+                recip_full = xp.moveaxis(recip_full, -1, 1).reshape(
+                    (n_T, -1) + tuple(gpts)
+                )  # (n_T, n_masked, *gpts)
             else:
-                mask = xp.ones(len(coefficients), dtype=bool)
-                if S1.interpolation[0] > 1:
-                    mask *= (
-                        xp.abs(positions[:, 0] - site[0])
-                        % (S1.extent[0] - prism_region[0])
-                    ) <= prism_region[0]
-                if S1.interpolation[1] > 1:
-                    mask *= (
-                        xp.abs(positions[:, 1] - site[1])
-                        % (S1.extent[1] - prism_region[1])
-                    ) <= prism_region[1]
+                # Single channel: S2 is trivial -- FFT the windowed
+                # scattered field directly (no reverse multislice, and no
+                # zero-padding to the full grid: detect at window_gpts
+                # resolution to match the real-space driver's convention,
+                # see the ``detect_gpts`` note above).
+                SHn0 = fft2(HS1)  # (n_T, n_k, *window_gpts)
+                recip_full = xp.tensordot(
+                    coeff_masked, SHn0, axes=[1, 1]
+                )  # (n_masked, n_T, *window_gpts)
+                recip_full = xp.moveaxis(recip_full, 0, 1)  # (n_T, n_masked, *window_gpts)
 
-                cropped_coefficients = coefficients[mask]
+            _detect_and_accumulate(recip_full, mask)
 
-            a = S2_crop.array.reshape((1, len(S2), -1))
-            b = xp.swapaxes(
-                scattered_S1.array.reshape((len(scattered_S1.array), len(S1), -1)), 1, 2
-            )
-
-            SHn0 = xp.dot(a, b)
-            SHn0 = xp.swapaxes(SHn0[0], 0, 1)
-
-            new_values = copy_to_device(
-                (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum(
-                    (0, 1, 2)
-                ),
-                np,
-            )
-            if mask is not None:
-                images[mask] += new_values
-            else:
-                images += new_values
-
-    images *= np.prod(S1.interpolation).astype(np.float32) ** 2
-
-    images = Images(images.reshape(scan.gpts), sampling=scan.sampling)
-    return images
+    if len(measurements) == 1:
+        return measurements[0]
+    return measurements

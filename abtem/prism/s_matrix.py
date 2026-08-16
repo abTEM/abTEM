@@ -3706,8 +3706,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             n % f == 0 for f, n in zip(self.interpolation, self.gpts)
         ):
             warnings.warn(
-                "The interpolation factor does not exactly divide 'gpts', "
-                "normalization may not be exactly preserved."
+                "The interpolation factor does not exactly divide 'gpts', normalization "
+                "may not be exactly preserved."
             )
 
     @property
@@ -4797,7 +4797,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             lazy=lazy,
         )
 
-    def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
+    def _build_ensemble_shape_metadata(self):
         extra_ensemble_axes_shape = ()
         extra_ensemble_axes_metadata = []
         for shape, axis_metadata in zip(
@@ -4816,6 +4816,218 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
                 self.potential.base_axes_metadata[0]
             ]
+        return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
+
+    def _eager_transition_potential_scan(
+        self, scan, detectors, transition_potentials, sites, double_channel,
+        inelastic_crop=None,
+        squeeze=True,
+    ):
+        from abtem.inelastic.core_loss import prism_transition_potential_scan
+
+        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
+            self._build_ensemble_shape_metadata()
+        )
+
+        if self.ensemble_shape:
+            dummy_waves = self.build(lazy=True).dummy_probes(scan)
+            measurements = allocate_multislice_measurements(
+                dummy_waves,
+                detectors,
+                extra_ensemble_axes_shape,
+                extra_ensemble_axes_metadata,
+            )
+        else:
+            measurements = None
+
+        num_blocks = 0
+        for i, _, s_matrix in self.generate_blocks(1):
+            s_matrix = s_matrix.item()
+
+            new_measurements = ensure_list(
+                prism_transition_potential_scan(
+                    s_matrix=s_matrix,
+                    transition_potentials=transition_potentials,
+                    scan=scan,
+                    detectors=detectors,
+                    sites=sites,
+                    double_channel=double_channel,
+                    inelastic_crop=inelastic_crop,
+                )
+            )
+
+            if measurements is None:
+                measurements = new_measurements
+            else:
+                for measurement, new_measurement in zip(
+                    measurements, new_measurements
+                ):
+                    if measurement.axes_metadata[0]._ensemble_mean:
+                        measurement.array[:] += new_measurement.array
+                    else:
+                        measurement.array[i] = new_measurement.array
+
+            num_blocks += 1
+
+        for idx, measurement in enumerate(measurements):
+            if measurement.axes_metadata[0]._ensemble_mean:
+                if num_blocks > 1:
+                    measurement.array[:] /= num_blocks
+                if squeeze:
+                    measurements[idx] = measurement.squeeze((0,))
+
+        return measurements
+
+    @staticmethod
+    def _lazy_transition_potential_scan(
+        s_matrix, scan, detectors, transition_potentials, sites, double_channel,
+        inelastic_crop=None,
+    ):
+        s_matrix = s_matrix.item()
+        measurements = s_matrix._eager_transition_potential_scan(
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            double_channel=double_channel,
+            inelastic_crop=inelastic_crop,
+            squeeze=False,
+        )
+
+        array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
+        itemset(array, 0, measurements)
+        return array
+
+    def transition_potential_scan(
+        self,
+        transition_potentials,
+        scan=None,
+        detectors=None,
+        sites=None,
+        double_channel: bool = False,
+        inelastic_crop=None,
+        lazy: bool = None,
+    ):
+        """**Experimental** PRISM-based core-loss scan.
+
+        Mirrors :meth:`Probe.transition_potential_scan` but uses the S-matrix
+        plane-wave decomposition instead of running a full multislice per
+        scan position. Supports any ``interpolation`` factor and both
+        single- and double-channel modes. At ``interpolation=(1, 1)`` the
+        result is bit-equivalent to ``Probe.transition_potential_scan``
+        (float32 noise) against the matching ``double_channel`` setting.
+        At ``interpolation > 1`` the reduced wave functions are returned at
+        ``window_gpts`` size, matching the elastic :meth:`scan` convention.
+
+        See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan`
+        for the algorithm details.
+
+        Parameters
+        ----------
+        transition_potentials : BaseTransitionPotential
+            Atomic transition potential (single instance).
+        scan : BaseScan or tuple, optional
+            Scan positions. Defaults to a ``GridScan`` over the full extent
+            at Nyquist sampling, mirroring :meth:`scan`.
+        detectors : BaseDetector or list, optional
+            Detectors. Defaults to a ``FlexibleAnnularDetector``.
+        sites : Atoms or SliceIndexedAtoms, optional
+            Scattering sites. Auto-extracted from the potential if not given.
+        double_channel : bool, optional
+            If True, propagate the scattered wave through the remaining
+            potential slices to the exit before detection (matching the
+            multislice EELS ``double_channel=True`` branch). If False
+            (default), detect immediately at the scatter slice — Brown's
+            single-channel approximation.
+        inelastic_crop : float or tuple of float, optional
+            Real-space side length [Å] of the window on which the transition
+            potential and scattered wave are evaluated (Brown et al. Sec.
+            IV B). Smaller windows speed up the scatter and double-channel
+            propagation at the cost of truncating the transition-potential
+            tails. Defaults to ``None`` (the full PRISM cell,
+            ``extent / interpolation``). Values larger than the PRISM cell
+            are clamped with a warning.
+        lazy : bool, optional
+            If True, create the measurements lazily using Dask; otherwise,
+            compute eagerly. Defaults to the user configuration value.
+
+        Returns
+        -------
+        BaseMeasurements or list of BaseMeasurements
+            One measurement per detector.
+        """
+        from abtem.inelastic.core_loss import (
+            prism_transition_potential_scan,
+        )
+
+        if scan is None:
+            scan = GridScan(
+                start=(0, 0),
+                end=self.extent,
+                sampling=self.dummy_probes().aperture.nyquist_sampling,
+            )
+
+        detectors = validate_detectors(detectors)
+        scan = validate_scan(scan, self)
+        lazy = validate_lazy(lazy)
+
+        if not lazy:
+            measurements = self._eager_transition_potential_scan(
+                scan=scan,
+                detectors=detectors,
+                transition_potentials=transition_potentials,
+                sites=sites,
+                double_channel=double_channel,
+                inelastic_crop=inelastic_crop,
+            )
+            return _wrap_measurements(measurements)
+
+        blocks = self.ensemble_blocks(1)
+
+        chunks = ()
+        drop_axis = ()
+        if not self.ensemble_shape:
+            blocks = blocks[None]
+            drop_axis = (0,)
+            new_axis = tuple_range(offset=0, length=len(scan.shape))
+        else:
+            chunks += blocks.chunks
+            new_axis = tuple_range(
+                offset=len(blocks.shape), length=len(scan.shape)
+            )
+
+        chunks += scan.shape
+
+        arrays = blocks.map_blocks(
+            self._lazy_transition_potential_scan,
+            drop_axis=drop_axis,
+            new_axis=new_axis,
+            chunks=chunks,
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            double_channel=double_channel,
+            inelastic_crop=inelastic_crop,
+            meta=np.array((), dtype=object),
+        )
+
+        waves = self.build(lazy=True).dummy_probes(scan=scan)
+
+        extra_axes_metadata = []
+        if self.potential is not None:
+            extra_axes_metadata = self.potential.ensemble_axes_metadata
+
+        measurements = _finalize_lazy_measurements(
+            arrays, waves, detectors, extra_axes_metadata
+        )
+
+        return _wrap_measurements(measurements)
+
+    def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
+        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
+            self._build_ensemble_shape_metadata()
+        )
 
         detectors = validate_detectors(detectors)
 

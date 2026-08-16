@@ -40,7 +40,6 @@ dependencies = [
     "ipywidgets",
     "ipympl",
     "tqdm",
-    "rich", # Required for supporting Zarr zip storage
 ]
 dynamic = ["version"]
 
@@ -51,6 +50,17 @@ extra = [
     "dask-labextension",
     "bokeh",
 ]
+gpaw = [
+    "hankel",
+    "sympy",
+]
+# Install every optional runtime extra at once. GPU packages (cupy, dask-cuda)
+# are intentionally excluded: their wheels are CUDA/RAPIDS-version specific and
+# must be installed to match the local toolkit (see the multi-GPU docs).
+all = [
+    "abtem[extra]",
+    "abtem[gpaw]",
+]
 
 [dependency-groups]
 dev = [
@@ -58,6 +68,7 @@ dev = [
     "isort>=7.0.0",
     "jupyterlab-code-formatter>=3.0.2",
     "mypy>=1.19.1",
+    "nvidia-ml-py",
     "pre-commit>=4.5.1",
     "ruff>=0.15.0",
     "types-pyyaml>=6.0.12.20250915",
@@ -74,6 +85,7 @@ test = [
     "jupyter-client>=8.8.0",
     "py>=1.11.0",
     "pytest-cov>=7.0.0",
+    "sympy",
     "tox>=4.34.1",
 ]
 
