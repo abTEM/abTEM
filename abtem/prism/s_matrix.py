@@ -4425,9 +4425,18 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # unchanged by it, and a cropped one is improved — the drift of the
         # reduced wave is halved, so less of it is lost to the window.
         if self._reference_depth > 0.0:
-            array = ifft2(
-                fft2(array) * self._reference_propagator(gpts, xp, 1.0)[None]
-            )
+            # IN BATCHES OVER BEAMS. Transforming the whole matrix at once
+            # needs two further copies of it -- fft2's output and the product
+            # -- so the peak is three times the scattering matrix. On the 100 A
+            # Pt/C cell at f=8 that is 3 x 15.8 GB and the build cannot run on
+            # a 46 GB card, even though the matrix itself is only a third of
+            # it. The transform and the phase are independent per beam, so
+            # batching is exact and the result is written back in place.
+            propagator = self._reference_propagator(gpts, xp, 1.0)[None]
+            reference_batch = max(1, int(2**30 // (np.prod(gpts) * 8)))
+            for start in range(0, len(array), reference_batch):
+                stop = min(start + reference_batch, len(array))
+                array[start:stop] = ifft2(fft2(array[start:stop]) * propagator)
 
         # the conjugate of the propagation phase flattens the quadratic phase
         # variation of the phase-removed matrix; it is added back below
