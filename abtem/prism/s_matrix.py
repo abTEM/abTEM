@@ -1929,7 +1929,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
     def _contract_modes_batched(self, fields, flat_indices, kernel, gather_kernel):
         """Contract the modes for a batch of probe positions: for every position
-        ``p`` and window pixel ``w``, ``sum_k gathered[p, w, k] * fixed[w, k]``,
+        ``p`` and window pixel ``w``, ``sum_k gathered[k, p, w] * fixed[k, w]``,
         where the gathered operand is indexed by ``flat_indices[p, w]``.
 
         ``gather_kernel`` selects which operand is gathered per position: the
@@ -1937,6 +1937,17 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         displaced kernel (full-window reduction). The contraction is chunked
         over the modes first — so the gathered blocks stay within the memory
         budget at several positions per batch — and accumulated.
+
+        BOTH OPERANDS ARE MODES-FIRST, ``(K, pixels)``, and that is the whole
+        point. A modes-last operand makes ``[..., k_start:k_stop]`` a strided
+        view, so every mode chunk needs ``ascontiguousarray`` — and getting the
+        operands into modes-last order in the first place cost a full
+        contiguous transpose of each, K * gpts^2 * 8 bytes apiece. On Pt/C that
+        was 12.2 GB per array at f=8 and 41 GB at f=4, held simultaneously with
+        the originals, and it was what put C-PRISM f=8 out of reach of a 46 GB
+        card and f=4 out of reach of everything. Modes-first slicing is already
+        contiguous, so the chunks are free views and no transpose is needed
+        anywhere.
         """
         xp = get_array_module(self._device)
         dtype = get_dtype(complex=True)
@@ -1944,11 +1955,11 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         num_positions = flat_indices.shape[0]
         out_shape = flat_indices.shape[1:]
         num_pixels = int(np.prod(out_shape))
-        num_modes = kernel.shape[-1]
+        num_modes = kernel.shape[0]
 
         flat_indices = flat_indices.reshape(num_positions, num_pixels)
-        fields = fields.reshape(-1, num_modes)
-        kernel = kernel.reshape(-1, num_modes)
+        fields = fields.reshape(num_modes, -1)
+        kernel = kernel.reshape(num_modes, -1)
 
         waves = xp.zeros((num_positions, num_pixels), dtype=dtype)
 
@@ -1959,17 +1970,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         for k_start in range(0, num_modes, mode_chunk):
             k_stop = min(k_start + mode_chunk, num_modes)
-            gathered_source = xp.ascontiguousarray(
-                (kernel if gather_kernel else fields)[:, k_start:k_stop]
-            )
-            fixed = xp.ascontiguousarray(
-                (fields if gather_kernel else kernel)[:, k_start:k_stop]
-            )
+            # contiguous slices of a modes-first array: no copy
+            gathered_source = (kernel if gather_kernel else fields)[k_start:k_stop]
+            fixed = (fields if gather_kernel else kernel)[k_start:k_stop]
             for start in range(0, num_positions, max_batch):
                 stop = min(start + max_batch, num_positions)
-                gathered = gathered_source[flat_indices[start:stop]]
+                gathered = gathered_source[:, flat_indices[start:stop]]
                 waves[start:stop] += xp.einsum(
-                    "pwk,wk->pw", gathered, fixed, optimize=True
+                    "kpw,kw->pw", gathered, fixed, optimize=True
                 )
 
         return waves.reshape((num_positions,) + out_shape)
@@ -2079,8 +2087,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         dtype = get_dtype(complex=True)
 
         gpts = self.gpts
-        window = tuple(kernel.shape[:2])
-        num_modes = kernel.shape[-1]
+        # modes-first: (K, window_x, window_y) and (K, gpts_x, gpts_y)
+        window = tuple(kernel.shape[1:])
+        num_modes = kernel.shape[0]
         step_x, step_y = step
         num_y = scan_shape[1]
         num_block = x_stop - x_start
@@ -2133,9 +2142,13 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     value_y, whole_y[select_y], 0, num_y, 1
                 )
 
-                modes = u_modes[index_x][:, index_y]
-                block_kernel = kernel[xp.asarray(select_x)][:, xp.asarray(select_y)]
-                kernel_matrix = block_kernel.reshape(-1, num_modes).T
+                modes = u_modes[:, index_x][:, :, index_y]
+                block_kernel = kernel[:, xp.asarray(select_x)][
+                    :, :, xp.asarray(select_y)
+                ]
+                # already (K, pixels): the .T the modes-last layout needed here
+                # was a full copy of the block
+                kernel_matrix = block_kernel.reshape(num_modes, -1)
 
                 # the product holds every (grid row, grid column, window
                 # offset) combination; at small scan steps its row size is
@@ -2149,7 +2162,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
                 if capacity >= len(index_x):
                     product = (
-                        modes.reshape(-1, num_modes) @ kernel_matrix
+                        modes.reshape(num_modes, -1).T @ kernel_matrix
                     ).reshape(
                         len(index_x), len(index_y), len(select_x), len(select_y)
                     )
@@ -2174,7 +2187,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 for chunk_start in range(0, len(index_x), capacity):
                     chunk_stop = min(chunk_start + capacity, len(index_x))
                     product = (
-                        modes[chunk_start:chunk_stop].reshape(-1, num_modes)
+                        modes[:, chunk_start:chunk_stop].reshape(num_modes, -1).T
                         @ kernel_matrix
                     ).reshape(
                         chunk_stop - chunk_start,
@@ -2220,7 +2233,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         )
 
         xp = get_array_module(self._device)
-        u_modes = xp.ascontiguousarray(xp.asarray(self._u).transpose(1, 2, 0))
+        # modes-first, no transpose: _contract_modes_batched consumes (K, ...)
+        u_modes = xp.asarray(self._u)
         window = self.window_gpts
 
         # block the scan rows so the reduced wave functions of one block stay
@@ -2254,23 +2268,19 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
             coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
             kernel = plane_wave_kernel = None
             if keep_interpolated:
-                kernel = xp.ascontiguousarray(
-                    self._window_kernel(
-                        self._coefficient_values(coefficients), offset
-                    ).transpose(1, 2, 0)
+                kernel = self._window_kernel(
+                    self._coefficient_values(coefficients), offset
                 )
             if keep_plane_wave:
                 plane_wave_scale = get_dtype(complex=False)(
                     np.sqrt(np.prod(self.gpts) / np.prod(self.window_gpts))
                 )
-                plane_wave_kernel = xp.ascontiguousarray(
-                    self._window_kernel(
-                        plane_wave_scale
-                        * self._coefficient_values(
-                            self._lattice_coefficients(coefficients)
-                        ),
-                        offset,
-                    ).transpose(1, 2, 0)
+                plane_wave_kernel = self._window_kernel(
+                    plane_wave_scale
+                    * self._coefficient_values(
+                        self._lattice_coefficients(coefficients)
+                    ),
+                    offset,
                 )
             if blend_angle is not None:
                 blend_weight = self._blend_weight(
@@ -2406,13 +2416,14 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
         Parameters
         ----------
         u_windows : array
-            Left singular vectors with the mode axis last, of shape
-            (gpts_x, gpts_y, K).
+            Left singular vectors with the mode axis FIRST, of shape
+            (K, gpts_x, gpts_y) -- the layout they are stored in, so that no
+            transposed copy of them has to exist.
         snapped_pixels : array of int
             Whole-pixel probe positions of shape (n, 2).
         kernel : array
-            Reduction kernel with the mode axis last, of shape
-            (window_gpts_x, window_gpts_y, K).
+            Reduction kernel with the mode axis FIRST, of shape
+            (K, window_gpts_x, window_gpts_y).
         """
         xp = get_array_module(self._device)
 
@@ -2435,8 +2446,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         # Each window is at most four contiguous blocks of the scattering matrix
         # (due to the periodic wrap-around), hence the contraction over the modes
-        # is evaluated on views without gathering; the mode axis is contiguous in
-        # both operands.
+        # is evaluated on views without gathering. The mode axis leads in both
+        # operands, so the blocks are views into the stored arrays.
         def reduce_position(n):
             cx, cy = int(corners[n, 0]), int(corners[n, 1])
             x_split = min(gpts[0] - cx, window_gpts[0])
@@ -2448,9 +2459,9 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     if wy0 == wy1:
                         continue
                     waves[n, wx0:wx1, wy0:wy1] = xp.einsum(
-                        "ijk,ijk->ij",
-                        u_windows[sx : sx + wx1 - wx0, sy : sy + wy1 - wy0],
-                        kernel[wx0:wx1, wy0:wy1],
+                        "kij,kij->ij",
+                        u_windows[:, sx : sx + wx1 - wx0, sy : sy + wy1 - wy0],
+                        kernel[:, wx0:wx1, wy0:wy1],
                     )
 
         def reduce_chunk(chunk):
@@ -2598,7 +2609,7 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
 
         xp = get_array_module(self._device)
 
-        u_windows = xp.ascontiguousarray(xp.asarray(self._u).transpose(1, 2, 0))
+        u_windows = xp.asarray(self._u)
 
         n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
         pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
@@ -2665,10 +2676,8 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                     )
 
                     def branch(branch_values):
-                        kernel = xp.ascontiguousarray(
-                            self._window_kernel(
-                                branch_values, offset, center=not absolute
-                            ).transpose(1, 2, 0)
+                        kernel = self._window_kernel(
+                            branch_values, offset, center=not absolute
                         )
                         return reduce_to_waves(u_windows, snapped[mask], kernel)
 
@@ -4416,9 +4425,18 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # unchanged by it, and a cropped one is improved — the drift of the
         # reduced wave is halved, so less of it is lost to the window.
         if self._reference_depth > 0.0:
-            array = ifft2(
-                fft2(array) * self._reference_propagator(gpts, xp, 1.0)[None]
-            )
+            # IN BATCHES OVER BEAMS. Transforming the whole matrix at once
+            # needs two further copies of it -- fft2's output and the product
+            # -- so the peak is three times the scattering matrix. On the 100 A
+            # Pt/C cell at f=8 that is 3 x 15.8 GB and the build cannot run on
+            # a 46 GB card, even though the matrix itself is only a third of
+            # it. The transform and the phase are independent per beam, so
+            # batching is exact and the result is written back in place.
+            propagator = self._reference_propagator(gpts, xp, 1.0)[None]
+            reference_batch = max(1, int(2**30 // (np.prod(gpts) * 8)))
+            for start in range(0, len(array), reference_batch):
+                stop = min(start + reference_batch, len(array))
+                array[start:stop] = ifft2(fft2(array[start:stop]) * propagator)
 
         # the conjugate of the propagation phase flattens the quadratic phase
         # variation of the phase-removed matrix; it is added back below
