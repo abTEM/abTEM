@@ -926,6 +926,7 @@ def pauli_multislice(
     average_field: Optional[np.ndarray] = None,
     algorithm: Optional[FourierMultislice | RealSpaceMultislice] = None,
     gauge_origin: Optional[str | tuple[float, float, float]] = None,
+    max_batch: int | str = "auto",
 ) -> BaseMeasurements | "Waves" | list[BaseMeasurements | "Waves"]:
     """
     Run the paraxial Pauli multislice algorithm [PRB 94, 174414 (2016),
@@ -1069,6 +1070,17 @@ def pauli_multislice(
         converge the transverse grid first; a residual difference at
         coarse sampling mostly reflects the stencil dispersion of the
         series scheme, not a split-step deficiency.
+    max_batch : int or str, optional
+        Maximum ensemble members (e.g. scan positions) per dask block, as
+        for `Waves.multislice`. The default `"auto"` sizes each block from
+        the wave array alone, without accounting for the extra device
+        memory this solver needs beyond it: the A_xy gradient's Taylor
+        series holds several wave-sized temporaries per term (padded
+        fields, the running term, the accumulator), and both the potential
+        and the tiled field arrays add their own footprint independent of
+        block size. On a memory-constrained GPU this combination can OOM
+        even where "auto" alone would not; pass a smaller integer (an
+        explicit member count, not a byte budget) to force smaller blocks.
 
     Returns
     -------
@@ -1141,4 +1153,4 @@ def pauli_multislice(
         gauge_origin=gauge_origin,
     )
 
-    return transform.apply(waves)
+    return transform.apply(waves, max_batch=max_batch)
