@@ -45,7 +45,9 @@ from abtem.core.backend import (
     copy_to_device,
     cp,
     device_name_from_array_module,
+    ensure_cuda_cluster,
     get_array_module,
+    is_gpu_dask_client,
 )
 from abtem.core.chunks import Chunks, iterate_chunk_ranges, validate_chunks
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -419,21 +421,20 @@ class ComputableList(list):
         if not compute:
             return delayed_write
 
-        # Match ArrayObject.compute: GPU computations must run on the
-        # synchronous scheduler (see _gpu_compute_kwargs). The scheduler is
-        # additionally set via dask.config because the delayed writer calls
-        # array.compute() internally -- a nested compute that would
-        # otherwise fall back to the default threaded scheduler, running
-        # multiple GPU blocks concurrently and multiplying peak device
-        # memory by the worker count.
-        kwargs, is_gpu = _gpu_compute_kwargs(self, kwargs)
-        scheduler_context = (
-            dask.config.set(scheduler=kwargs["scheduler"])
-            if is_gpu
-            else nullcontext()
+        # On GPU, force the synchronous scheduler to avoid multiple dask tasks
+        # running in parallel, each loading potential chunks + wave arrays into
+        # VRAM simultaneously. We must use dask.config.set() (via the guard) rather
+        # than just passing scheduler= to dask.compute(), because the delayed graph
+        # contains inner array.compute() calls that would otherwise use dask's
+        # default threaded scheduler. The guard makes an exception for an active
+        # single-threaded dask-cuda client, which already runs one task per GPU.
+        is_gpu = config.get("device") == "gpu" or any(
+            _is_gpu_array_object(obj) for obj in self
         )
+        if is_gpu:
+            check_cupy_is_installed()
 
-        with scheduler_context, _compute_context(
+        with _gpu_scheduler_guard(is_gpu), _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
             output = dask.compute(delayed_write, **kwargs)[0]
@@ -506,31 +507,44 @@ def _compute_context(
         yield progress_bar_ctx1, profiler_ctx1, resource_profiler_ctx1
 
 
-def _gpu_compute_kwargs(array_objects, kwargs: dict) -> tuple[dict, bool]:
-    """Apply the GPU scheduler defaults shared by every compute entry point.
+def _is_gpu_array_object(obj) -> bool:
+    """Return True if obj's computation involves GPU (CuPy) arrays.
 
-    Dask's default threaded scheduler runs multiple blocks concurrently;
-    on a GPU that multiplies peak device memory by the worker count, so
-    all GPU computations must default to the synchronous scheduler. The
-    output object's own device is not a sufficient signal (detectors copy
-    measurements to the CPU by default, so a GPU multislice pipeline can
-    end in a NumPy-backed lazy array) -- the global ``device``
-    configuration option is checked as well.
+    Detects GPU even when the output array has numpy meta, e.g. when a detector
+    with to_cpu=True produces CPU-resident results from GPU wave computations.
+    ArrayObject.device checks _device first (set in apply_transform when the source
+    was GPU), so this correctly handles the to_cpu=True case.
     """
-    is_gpu = config.get("device") == "gpu" or any(
-        hasattr(obj, "device") and obj.device == "gpu" for obj in array_objects
-    )
+    return hasattr(obj, "device") and obj.device == "gpu"
 
+
+@contextmanager
+def _gpu_scheduler_guard(is_gpu: bool):
+    """Guard nested/implicit GPU computes against the threaded scheduler.
+
+    On GPU, force the synchronous scheduler so that nested ``array.compute()``
+    calls cannot fall back to dask's default threaded scheduler and load multiple
+    potential/wave chunks into a single GPU's memory at once. When a single-
+    threaded dask-cuda client is active (one worker pinned per GPU), that per-GPU
+    exclusivity already holds inside each worker, so the work is left to the
+    client to distribute across the cluster instead of being forced synchronous.
+    """
     if not is_gpu:
-        return kwargs, False
+        yield
+        return
 
-    check_cupy_is_installed()
+    from distributed import get_client
 
-    kwargs = dict(kwargs)
-    kwargs.setdefault("scheduler", "synchronous")
-    kwargs.setdefault("num_workers", cp.cuda.runtime.getDeviceCount())
-    kwargs.setdefault("threads_per_worker", cp.cuda.runtime.getDeviceCount())
-    return kwargs, True
+    try:
+        client = get_client()
+    except ValueError:
+        client = None
+
+    if is_gpu_dask_client(client):
+        yield
+    else:
+        with dask.config.set(scheduler="synchronous"):
+            yield
 
 
 def _compute(
@@ -540,7 +554,36 @@ def _compute(
     resource_profiler: bool = False,
     **kwargs,
 ) -> tuple[list[ArrayObjectType], tuple]:
-    kwargs, _ = _gpu_compute_kwargs(array_objects, kwargs)
+    is_gpu = config.get("device") == "gpu" or any(
+        _is_gpu_array_object(obj) for obj in array_objects
+    )
+
+    if is_gpu:
+        check_cupy_is_installed()
+
+        from distributed import get_client
+
+        try:
+            client = get_client()
+        except ValueError:
+            client = None
+
+        # Start a dask-cuda cluster spanning all visible GPUs when multi-GPU is
+        # enabled, no client is already handling the computation, and the user has
+        # not explicitly requested a scheduler.
+        if (
+            client is None
+            and "scheduler" not in kwargs
+            and config.get("dask.multi-gpu", False)
+            and cp.cuda.runtime.getDeviceCount() > 1
+        ):
+            client = ensure_cuda_cluster()
+
+        # The threaded scheduler and multi-threaded workers cannot be used with CuPy;
+        # fall back to synchronous execution unless a suitable (dask-cuda) client is
+        # handling the computation.
+        if not is_gpu_dask_client(client) and "scheduler" not in kwargs:
+            kwargs["scheduler"] = "synchronous"
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
@@ -860,6 +903,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        # _device may be set explicitly (e.g. for CPU-resident measurements that
+        # were produced by GPU computation) following the WavesBuilder convention.
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
@@ -1289,7 +1336,10 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             if i not in squeezed
         ]
 
-        return self.__class__(**kwargs)
+        result = self.__class__(**kwargs)
+        if hasattr(self, "_device"):
+            result._device = self._device
+        return result
 
     def ensure_lazy(self, chunks: Chunks = "auto") -> Self:
         """Creates an equivalent lazy version of the array object.
@@ -1560,6 +1610,15 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
         if self.is_lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self.base_shape))
+            elif max_batch == "auto" and self.device == "gpu":
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(
+                    self.base_shape, self.dtype, "gpu"
+                )
+                # Convert probes → total elements so validate_chunks
+                # receives an int and skips its own config-based "auto" path.
+                max_batch = int(n_probes * np.prod(self.base_shape))
 
             chunks = transform._default_ensemble_chunks + self._lazy_array.chunks
 
@@ -1647,6 +1706,14 @@ class ArrayObject(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
             output = cls.from_array_and_metadata(
                 array, axes_metadata=axes_metadata, metadata=metadata
             )
+            # When the source was on GPU but the output is CPU-resident
+            # Record the computation device on the output so _compute()
+            # selects the synchronous scheduler for GPU work.  Check
+            # self.device (which honours _device on lazy arrays) rather
+            # than inspecting the dask-array module, which always returns
+            # numpy for a not-yet-computed lazy array.
+            if self.device == "gpu":
+                output._device = "gpu"
             outputs.append(output)
 
         if len(outputs) > 1:

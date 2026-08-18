@@ -224,14 +224,16 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         )  # noqa
 
     def get_gaussians(self, symbol, gpts, sampling):
-        if symbol in self._gaussians:
-            return self._gaussian[(symbol, gpts, sampling)]
+        key = (symbol, gpts, sampling)
+        if key in self._gaussians:
+            return self._gaussians[key]
 
         return gaussian_projected_scattering_factors(symbol, gpts, sampling)
 
     def get_corrections(self, symbol, gpts, sampling):
-        if symbol in self._corrections:
-            return self._corrections[(symbol, gpts, sampling)]
+        key = (symbol, gpts, sampling)
+        if key in self._corrections:
+            return self._corrections[key]
 
         return correction_projected_scattering_factors(symbol, gpts, sampling)
 
@@ -244,13 +246,15 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         weights = gaussian_projection_weights(symbol, shifted_a, shifted_b)
 
         xp = get_array_module(device)
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
+        fp_dtype = get_dtype(complex=False)
+        cx_dtype = get_dtype(complex=True)
+        positions = (positions[:, :2] / sampling).astype(fp_dtype)
 
-        array = xp.zeros(gpts, dtype=xp.complex64)
+        array = xp.zeros(gpts, dtype=cx_dtype)
         for i in range(5):
-            temp = xp.zeros_like(array, dtype=xp.complex64)
+            temp = xp.zeros_like(array, dtype=cx_dtype)
             superpose_deltas(positions, temp, weights=weights[i])
-            array += fft2(temp, overwrite_x=False) * gaussians[i].astype(xp.complex64)
+            array += fft2(temp, overwrite_x=True) * gaussians[i].astype(cx_dtype)
 
         return array
 
@@ -258,11 +262,13 @@ class GaussianProjectionIntegrals(FieldIntegrator):
         corrections = self.get_corrections(symbol, gpts, sampling)
 
         xp = get_array_module(device)
+        fp_dtype = get_dtype(complex=False)
+        cx_dtype = get_dtype(complex=True)
 
         positions = positions[(positions[:, 2] >= a) * (positions[:, 2] < b)]
-        positions = (positions[:, :2] / sampling).astype(xp.float32)
+        positions = (positions[:, :2] / sampling).astype(fp_dtype)
 
-        array = xp.zeros(gpts, dtype=xp.complex64)
+        array = xp.zeros(gpts, dtype=cx_dtype)
 
         superpose_deltas(positions, array)
 
@@ -294,7 +300,14 @@ class GaussianProjectionIntegrals(FieldIntegrator):
                 positions, symbol, a, b, gpts, sampling, device
             )
 
-        return ifft2(array / sinc(gpts, sampling, device)).real
+        if not hasattr(self, "_sinc_cache"):
+            self._sinc_cache = {}
+
+        sinc_key = (gpts, sampling, device)
+        if sinc_key not in self._sinc_cache:
+            self._sinc_cache[sinc_key] = sinc(gpts, sampling, device)
+
+        return ifft2(array / self._sinc_cache[sinc_key]).real
 
 
 def sinc(
@@ -769,14 +782,16 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
         self._sorted_disks: dict[
             tuple[str, tuple[float, float]], tuple[np.ndarray, np.ndarray]
         ] = {}
-        # Device-resident copies of disk_indices/radial_gpts, keyed by
-        # (symbol, sampling, device). Both are invariant per (symbol,
+        # Device-resident copy of the sorted disk, keyed by
+        # (symbol, sampling, device). The disk is invariant per (symbol,
         # sampling) across all slices, but integrate_on_grid is called once
         # per slice per species; without this cache each call re-uploads
-        # them to the GPU from scratch, which measurably dominated GPU
-        # build time (see PR #309 discussion) despite the arrays never
-        # changing between calls.
-        self._device_arrays: dict[tuple[str, tuple[float, float], str], tuple] = {}
+        # it to the GPU from scratch, which measurably dominated GPU
+        # build time (see PR #309 discussion) despite the array never
+        # changing between calls. Only disks small enough to fit within
+        # the chunked-transfer bound are cached; larger disks are streamed
+        # in memory-bounded chunks instead (see integrate_on_grid).
+        self._device_arrays: dict[tuple[str, tuple[float, float], str], object] = {}
 
         super().__init__(periodic=False, finite=True)
 
@@ -930,6 +945,8 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             shifted_a = a - positions[:, 2]
             shifted_b = b - positions[:, 2]
 
+            fp_dtype = get_dtype(complex=False)
+
             cutoff = table.radial_gpts[-1]
             disk_key = (chemical_symbols[number], tuple(sampling))
             if disk_key in self._sorted_disks:
@@ -959,58 +976,93 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
             disk_counts = np.searchsorted(
                 disk_radii, lateral_cutoff + margin, side="right"
             )
-            # Cheap host-side reduction so the GPU kernel launcher doesn't
-            # need a device sync just to size its grid; unused on CPU.
+            # Cheap host-side reduction: the largest per-atom truncation index
+            # bounds how much of the sorted disk the kernels need at all.
             max_disk_count = int(disk_counts.max()) if len(disk_counts) else 0
 
-            if xp is cp:
-                device_key = disk_key + (device,)
-                cached_device_arrays = self._device_arrays.get(device_key)
-                if cached_device_arrays is None:
-                    cached_device_arrays = (
-                        xp.asarray(disk),
-                        xp.asarray(table.radial_gpts),
-                    )
-                    self._device_arrays[device_key] = cached_device_arrays
-                disk_indices, radial_gpts_xp = cached_device_arrays
-            else:
-                disk_indices = xp.asarray(disk)
-                radial_gpts_xp = table.radial_gpts
+            # Transfer the integral table and radial grid to the compute dtype
+            # (float32 or float64 according to the precision config) so that all
+            # subsequent GPU operations stay in the configured precision.
+            # Without the explicit dtype, table.integrate() returns numpy float64
+            # and xp.asarray() would preserve that, creating a full float64 GPU
+            # allocation even when precision='float32'.
+            radial_potential = xp.asarray(
+                table.integrate(shifted_a, shifted_b), dtype=fp_dtype
+            )
+            radial_gpts_device = xp.asarray(table.radial_gpts, dtype=fp_dtype)
 
-            radial_potential = xp.asarray(table.integrate(shifted_a, shifted_b))
+            positions = xp.asarray(positions, dtype=fp_dtype)
 
-            positions = xp.asarray(positions, dtype=get_dtype(complex=False))
-
+            # Compute derivative entirely in the compute dtype.  Using
+            # table.radial_gpts (float64 numpy) as the denominator would upcast
+            # the division to float64 and then silently downcast back when
+            # assigned into the float32 derivative array.
             radial_potential_derivative = xp.zeros_like(radial_potential)
             radial_potential_derivative[:, :-1] = (
-                xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_xp)[None]
+                xp.diff(radial_potential, axis=1) / xp.diff(radial_gpts_device)[None]
             )
 
             if len(self._parametrization.sigmas):
-                temp = xp.zeros(gpts, dtype=get_dtype(complex=False))
+                temp = xp.zeros(gpts, dtype=fp_dtype)
             else:
                 temp = array
 
             if xp is cp:
-                interpolate_radial_functions_cuda(
-                    array=temp,
-                    positions=positions,
-                    disk_indices=disk_indices,
-                    disk_counts=xp.asarray(disk_counts),
-                    sampling=sampling,
-                    radial_gpts=radial_gpts_xp,
-                    radial_functions=radial_potential,
-                    radial_derivative=radial_potential_derivative,
-                    max_disk_count=max_disk_count,
-                )
+                # radial_gpts_device already has the correct dtype (computed
+                # above); reuse it directly instead of re-converting.
+                # The kernel truncates per atom at disk_counts (with the
+                # chunk's global offset), so at most the max_disk_count prefix
+                # of the radius-sorted disk is ever scanned.
+                disk_counts_device = cp.asarray(disk_counts)
+                chunk_size = 2_000_000
+                if len(disk) <= chunk_size:
+                    # Common case: the disk fits comfortably on device, so keep
+                    # a cached copy -- re-uploading it every slice measurably
+                    # dominated GPU build time (see PR #309 discussion).
+                    device_key = disk_key + (device,)
+                    disk_device = self._device_arrays.get(device_key)
+                    if disk_device is None:
+                        disk_device = cp.asarray(disk)
+                        self._device_arrays[device_key] = disk_device
+                    interpolate_radial_functions_cuda(
+                        array=temp,
+                        positions=positions,
+                        disk_indices=disk_device[:max_disk_count],
+                        disk_counts=disk_counts_device,
+                        sampling=sampling,
+                        radial_gpts=radial_gpts_device,
+                        radial_functions=radial_potential,
+                        radial_derivative=radial_potential_derivative,
+                    )
+                else:
+                    # For very fine sampling the disk can contain hundreds of
+                    # millions of pixels (>5 GB) which would exceed device
+                    # memory: stream the needed prefix in bounded chunks so the
+                    # full disk never resides on the GPU.  The CUDA kernel
+                    # accumulates via atomic adds, so multiple calls produce
+                    # the same result.
+                    for start in range(0, max_disk_count, chunk_size):
+                        disk_chunk = cp.asarray(disk[start : start + chunk_size])
+                        interpolate_radial_functions_cuda(
+                            array=temp,
+                            positions=positions,
+                            disk_indices=disk_chunk,
+                            disk_counts=disk_counts_device,
+                            sampling=sampling,
+                            radial_gpts=radial_gpts_device,
+                            radial_functions=radial_potential,
+                            radial_derivative=radial_potential_derivative,
+                            chunk_offset=start,
+                        )
+                        del disk_chunk
             else:
                 _threaded_interpolate_radial_functions(
                     array=temp,
                     positions=positions,
-                    disk_indices=disk_indices,
+                    disk_indices=disk,
                     disk_counts=disk_counts,
                     sampling=sampling,
-                    radial_gpts=radial_gpts_xp,
+                    radial_gpts=np.asarray(table.radial_gpts, dtype=fp_dtype),
                     radial_functions=radial_potential,
                     radial_derivative=radial_potential_derivative,
                 )

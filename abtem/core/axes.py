@@ -160,9 +160,20 @@ class AxisMetadata:
         )
 
     def _to_blocks(self, chunks):
+        # Mirrors `ArrayObject._partition_ensemble_axes_metadata`'s
+        # `axis[slic] if hasattr(axis, "__getitem__") else axis.copy()`
+        # fallback. Any axis whose metadata depends on WHICH range of the
+        # array it covers (e.g. LinearAxis's offset) must define
+        # __getitem__ to shift that dependent state per block -- without it,
+        # every block silently gets an identical copy of the GLOBAL axis,
+        # including state that is only valid for the first block.
+        # `OrdinalAxis` overrides this method directly rather than relying
+        # on the fallback, since its `values` tuple needs no per-block
+        # adjustment beyond slicing, which `__getitem__` already does.
         arr = np.empty((len(chunks[0]),), dtype=object)
+        has_getitem = hasattr(self, "__getitem__")
         for i, slic in iterate_chunk_ranges(chunks):
-            arr[i] = copy(self)
+            arr[i] = self[slic] if has_getitem else copy(self)
         arr = da.from_array(arr, chunks=1)
         return arr
 
@@ -235,6 +246,70 @@ class LinearAxis(AxisMetadata):
         return tuple(
             np.linspace(self.offset, self.offset + self.sampling * n, n, endpoint=False)
         )
+
+    def __getitem__(self, item):
+        """Return the axis restricted to a contiguous sub-range, with `offset`
+        shifted to match.
+
+        Without this, `_partition_ensemble_axes_metadata` (dask ensemble
+        partitioning) falls back to `hasattr(axis, "__getitem__")` being
+        False and uses `axis.copy()` instead: every chunk gets an identical
+        copy of the GLOBAL axis, including its global `offset`, regardless
+        of which chunk it actually is. A `LinearAxis` (offset + sampling)
+        does not store its own length, so unlike `OrdinalAxis.__getitem__`
+        (which slices an explicit `values` tuple), only `offset` needs to
+        change here -- the number of points continues to come from the
+        array's own shape wherever this axis is used.
+
+        Only simple, positive-step, non-empty slices/indices -- which is all
+        `iterate_chunk_ranges` chunk partitioning ever produces -- are
+        represented exactly; anything else raises TypeError rather than
+        silently returning an axis with the wrong offset. TypeError
+        specifically: `ArrayObject._get_ensemble_axes_metadata_items`
+        (general user-facing indexing, e.g. `waves[::-1]`) already wraps
+        `axis[item]` in `try/except TypeError` and falls back to a plain
+        copy for whatever an axis can't represent exactly -- the same
+        fallback this axis relied on before it had a `__getitem__` at all.
+        Chunk partitioning is unaffected either way, since it never
+        constructs a slice this doesn't support.
+        """
+        kwargs = dataclasses.asdict(self)
+
+        # `iterate_chunk_ranges` always yields a tuple of slices, one per
+        # axis, even when partitioning a single axis on its own (as
+        # `_to_blocks` does) -- numpy's indexing unwraps a length-1 tuple to
+        # its element automatically, which is what makes this transparent
+        # for `OrdinalAxis` (a plain array index); do the same here.
+        if isinstance(item, tuple):
+            if len(item) != 1:
+                raise TypeError(
+                    f"{type(self).__name__} indices must be a single "
+                    f"int/slice or a length-1 tuple of one, got {item!r}"
+                )
+            item = item[0]
+
+        if isinstance(item, Number):
+            start = item
+        elif isinstance(item, slice):
+            if item.step not in (None, 1):
+                raise TypeError(
+                    f"{type(self).__name__} does not support a strided "
+                    f"slice, got step={item.step}"
+                )
+            start = item.start or 0
+            if start < 0 or (item.stop is not None and item.stop <= start):
+                raise TypeError(
+                    f"{type(self).__name__} does not support a negative "
+                    f"or empty slice, got {item}"
+                )
+        else:
+            raise TypeError(
+                f"{type(self).__name__} indices must be an int or a simple "
+                f"positive-step slice, got {type(item).__name__}"
+            )
+
+        kwargs["offset"] = self.offset + start * self.sampling
+        return self.__class__(**kwargs)
 
     def to_ordinal_axis(self, n):
         values = tuple(self.coordinates(n))
