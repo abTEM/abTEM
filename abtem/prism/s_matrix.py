@@ -1758,13 +1758,16 @@ class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
                 )
             probe = self.dummy_probes()
             probe.grid.check_is_defined()
-            kernel = np.abs(np.asarray(probe.aperture._evaluate_kernel(probe)))
-            if kernel.shape != tuple(window):
+            # the dummy probe is built on this object's device, so the kernel
+            # is a device array and must stay in its own array module: numpy
+            # refuses to convert one implicitly
+            kernel = xp.abs(probe.aperture._evaluate_kernel(probe))
+            if tuple(kernel.shape) != tuple(window):
                 raise RuntimeError(
                     "aperture weight does not match the reduction window"
                 )
-            kernel /= kernel.max()
-            return xp.asarray(kernel, dtype=get_dtype(complex=False))
+            kernel = kernel / kernel.max()
+            return kernel.astype(get_dtype(complex=False))
 
         wavelength = self.wavelength
         qx = np.fft.fftfreq(window[0], d=self.sampling[0])

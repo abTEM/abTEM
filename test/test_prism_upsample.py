@@ -39,6 +39,20 @@ def _relative_error(measurement, reference):
     return np.sqrt(((measurement - reference) ** 2).mean()) / reference.mean()
 
 
+def _assert_chunking_unchanged(whole, chunked, what):
+    """The chunked reduction must reproduce the unchunked one.
+
+    Not bit for bit: the chunk size sets the row count of the lattice matrix
+    products, and BLAS picks its kernel (hence its summation order) from the
+    operand shape, so the last bits legitimately move on some builds. A real
+    chunking bug misplaces whole rows and lands far above this bound.
+    """
+    whole, chunked = _array(whole), _array(chunked)
+    scale = max(float(np.abs(whole).max()), 1e-30)
+    error = float(np.abs(whole - chunked).max()) / scale
+    assert error < 1e-6, f"{what}: chunking moved values by {error:.3e} relative"
+
+
 @devices
 @pytest.mark.parametrize("interpolation", [(1, 1), (2, 2), (2, 4)])
 def test_upsample_matches_probe(interpolation, device):
@@ -776,10 +790,11 @@ def test_upsample_batched_windowed_reduction_matches_loop(device):
     values = s_matrix_array._coefficient_values(
         s_matrix_array._calculate_ctf_coefficients(ctf)
     )
-    kernel = xp.ascontiguousarray(
-        s_matrix_array._window_kernel(values, np.zeros(2)).transpose(1, 2, 0)
-    )
-    u_windows = xp.ascontiguousarray(s_matrix_array._u.transpose(1, 2, 0))
+    # both operands carry the mode axis FIRST, the layout the modes are stored
+    # in, so neither needs a transposed copy
+    kernel = s_matrix_array._window_kernel(values, np.zeros(2))
+    u_windows = xp.asarray(s_matrix_array._u)
+    assert kernel.shape[0] == u_windows.shape[0] == s_matrix_array.rank
     snapped = xp.asarray([[0, 0], [3, 45], [40, 2], [46, 47], [11, 30]])
 
     loop = s_matrix_array._reduce_to_waves(u_windows, snapped, kernel)
@@ -1056,7 +1071,7 @@ def test_upsample_lattice_detection_chunking(device):
         chunked = s_matrix_array.scan(scan=scan, detectors=detectors)
 
         for a, b in zip(whole, chunked):
-            assert np.array_equal(_array(a), _array(b))
+            _assert_chunking_unchanged(a, b, f"blend={blend}")
 
 
 def test_upsample_blend_snapping():
@@ -1197,7 +1212,7 @@ def test_upsample_lattice_product_chunking(device):
         chunked = _array(built.reduce(scan=scan, detectors=detector))
         del built._REDUCE_BATCH_BYTES
 
-        assert np.array_equal(whole, chunked)
+        _assert_chunking_unchanged(whole, chunked, f"scan {scan_gpts}")
 
 
 @devices
