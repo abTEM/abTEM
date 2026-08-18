@@ -1122,35 +1122,13 @@ def pauli_multislice(
                 chunks[:spin_axis] + ((2,),) + chunks[spin_axis + 1 :]
             )
 
-        if isinstance(gauge_origin, str) and gauge_origin == "probe":
-            # `_probe_gauge_origins` (called per dask block inside the
-            # multislice loop) reads each member's position from the block's
-            # OWN ensemble_axes_metadata. For an explicit-position scan
-            # (CustomScan's PositionsAxis) that metadata is an explicit
-            # values array, correct under slicing by construction. For a
-            # GridScan's ScanAxis (offset + sampling) it is not: the
-            # per-block metadata dask builds for a chunked ScanAxis reports
-            # the axis's global offset regardless of which chunk it is
-            # (verified -- every chunk of an 8x8 GridScan showed the same
-            # offset), so any chunk past the first gets the wrong gauge
-            # origin for every member in it. Collapsing the scan/position
-            # ensemble axes to one block sidesteps that: with a single
-            # block, "this block's metadata" IS the global metadata, which
-            # is correct. This is a limitation of gauge_origin="probe"
-            # specifically -- the fixed-origin path never reads per-member
-            # metadata and is unaffected.
-            scan_axes = [
-                i
-                for i, m in enumerate(waves.ensemble_axes_metadata)
-                if isinstance(m, (ScanAxis, PositionsAxis))
-            ]
-            if scan_axes and any(
-                len(chunks[i]) != 1 for i in scan_axes
-            ):
-                new_chunks = list(chunks)
-                for i in scan_axes:
-                    new_chunks[i] = (waves.ensemble_shape[i],)
-                waves = waves.rechunk(tuple(new_chunks))
+    # gauge_origin="probe" relies on `_probe_gauge_origins` reading each dask
+    # block's own probe positions from that block's `ensemble_axes_metadata`
+    # (called per block inside the multislice loop). This is correct
+    # regardless of how the scan is chunked as long as `LinearAxis.__getitem__`
+    # (abtem/core/axes.py) shifts `offset` per block -- which is what makes
+    # `ScanAxis` (GridScan) chunk-safe the same way `PositionsAxis`
+    # (CustomScan) already was. No special-case rechunking is needed here.
 
     transform = MultisliceTransform(
         potential=potential,

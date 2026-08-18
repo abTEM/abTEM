@@ -1250,6 +1250,102 @@ def test_probe_gauge_origin_restores_periodicity_across_dask_chunks(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+def test_probe_gauge_origin_custom_scan_is_correct_and_not_forced_to_one_chunk(
+    device,
+):
+    """CustomScan's PositionsAxis carries explicit position values, which
+    are correct under slicing by construction -- unlike GridScan's ScanAxis
+    (offset + sampling; see the sibling dask-chunk test), so it does NOT
+    need `pauli_multislice`'s single-chunk rechunk.
+
+    This matters beyond correctness: forcing a whole scan into one dask
+    block means every probe's wavefunction is held in device memory at
+    once, which does not fit at production scan sizes (this is what
+    actually happened -- the fix originally forced ALL scan/position axes
+    into one block, which was correct but caused an out-of-memory error on
+    a real 16x16 GridScan sweep). The library must leave CustomScan's normal
+    chunking alone while still being correct.
+    """
+    atoms = bulk("Si", cubic=True) * (2, 2, 6)
+    lattice = atoms.cell[0, 0] / 2
+    gpts = 128
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0).build(
+        lazy=False
+    )
+    extent = potential.extent[0]
+    n_slices = potential.array.shape[0]
+    A, B = zero_fields(n_slices, gpts, extent, potential.slice_thickness)
+
+    p = (0.3 * lattice, 0.2 * lattice)
+    translated = (p[0], p[1] + lattice)
+    positions = [p, translated] + [
+        (0.1 * lattice + i * 0.05 * lattice, 0.15 * lattice) for i in range(10)
+    ]
+    detector = abtem.AnnularDetector(inner=0.0, outer=4.0)
+
+    def run(force_multiple_chunks, spy_calls=None):
+        probe = abtem.Probe(
+            aperture=abtem.transfer.Vortex(
+                quantum_number=1, semiangle_cutoff=20.0, soft=False
+            ),
+            energy=ENERGY,
+            extent=extent,
+            gpts=gpts,
+            device=device,
+        )
+        waves = probe.build(
+            scan=abtem.CustomScan(np.array(positions)), lazy=True
+        ).to_spinor((1.0, 0.0))
+        position_axis = [
+            i
+            for i, m in enumerate(waves.ensemble_axes_metadata)
+            if type(m).__name__ == "PositionsAxis"
+        ][0]
+        if force_multiple_chunks:
+            waves = waves.rechunk({position_axis: (1,) * len(positions)})
+        input_chunks = waves._lazy_array.chunks[position_axis]
+
+        if spy_calls is not None:
+            original_rechunk = type(waves).rechunk
+
+            def spying_rechunk(self, chunks, **kwargs):
+                spy_calls.append(chunks)
+                return original_rechunk(self, chunks, **kwargs)
+
+            type(waves).rechunk = spying_rechunk
+        try:
+            measurement = pauli_multislice(
+                waves,
+                potential,
+                vector_potential=A,
+                magnetic_field=B,
+                average_field=(0.0, 0.0, 1.385),
+                algorithm=FourierMultislice(),
+                detectors=detector,
+                gauge_origin="probe",
+            )
+        finally:
+            if spy_calls is not None:
+                type(waves).rechunk = original_rechunk
+
+        # pauli_multislice must not have rechunked the position axis away
+        # from what the caller set up -- only the (unrelated) spin axis may
+        # be rechunked for a spinor scan of this shape
+        for call_chunks in spy_calls or []:
+            if isinstance(call_chunks, tuple) and len(call_chunks) > position_axis:
+                assert call_chunks[position_axis] == input_chunks
+
+        collected = to_numpy(measurement.array).sum(axis=0)  # sum spin
+        return collected.reshape(len(positions), -1).sum(axis=1)
+
+    calls_multi, calls_single = [], []
+    v_multi = run(force_multiple_chunks=True, spy_calls=calls_multi)
+    v_single = run(force_multiple_chunks=False, spy_calls=calls_single)
+
+    assert np.array_equal(v_multi, v_single)
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_probe_gauge_origin_is_a_noop_without_average_field(device):
     """With no uniform field there is no A_np, so the gauge origin cannot
     matter -- the two settings must agree bit for bit."""
