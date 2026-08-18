@@ -1158,6 +1158,98 @@ def test_probe_gauge_origin_restores_lattice_periodicity(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", gpu])
+def test_probe_gauge_origin_restores_periodicity_across_dask_chunks(device):
+    """gauge_origin='probe' must be correct for a GridScan split across
+    MULTIPLE dask chunks, not just for a single chunk or CustomScan.
+
+    `_probe_gauge_origins` (called once per dask block inside the multislice
+    loop) reads each member's position off that block's OWN
+    ensemble_axes_metadata. CustomScan's PositionsAxis carries an explicit
+    values array that slices correctly per block by construction, so testing
+    only CustomScan (as the sibling test above does, with lazy=False to
+    boot -- no chunking at all) cannot catch a bug specific to a chunked
+    ScanAxis (offset + sampling). This regressed once already: the
+    per-block metadata dask builds for a chunked GridScan axis reported the
+    GLOBAL scan offset regardless of which chunk it was, so every chunk
+    past the first got the wrong gauge origin for every member in it --
+    `pauli_multislice` now forces the scan/position ensemble axes to a
+    single dask chunk whenever gauge_origin='probe' is active specifically
+    to sidestep this (see the comment there); this test is what would have
+    caught the regression before it reached this file's smoke test.
+
+    Two GridScan points separated by exactly one lattice vector -- which
+    must be physically equivalent -- explicitly forced into two SEPARATE
+    dask chunks so the second point can only be correct if the rechunk
+    actually happens.
+    """
+    atoms = bulk("Si", cubic=True) * (2, 2, 6)
+    lattice = atoms.cell[0, 0] / 2
+    gpts = 128
+    potential = abtem.Potential(atoms, gpts=gpts, slice_thickness=1.0).build(
+        lazy=False
+    )
+    extent = potential.extent[0]
+    n_slices = potential.array.shape[0]
+    A, B = zero_fields(n_slices, gpts, extent, potential.slice_thickness)
+
+    p = (0.3 * lattice, 0.2 * lattice)
+    translated = (p[0], p[1] + lattice)
+    detector = abtem.AnnularDetector(inner=0.0, outer=4.0)
+
+    def run(gauge_origin, force_multiple_chunks):
+        probe = abtem.Probe(
+            aperture=abtem.transfer.Vortex(
+                quantum_number=1, semiangle_cutoff=20.0, soft=False
+            ),
+            energy=ENERGY,
+            extent=extent,
+            gpts=gpts,
+            device=device,
+        )
+        # a real GridScan (ScanAxis, not PositionsAxis), one point on each
+        # of its two axes so p and translated land on grid indices (0,0)
+        # and (0,1)
+        scan = abtem.GridScan(
+            start=p, end=translated, gpts=(1, 2), endpoint=True
+        )
+        waves = probe.build(scan=scan, lazy=True).to_spinor((1.0, 0.0))
+        if force_multiple_chunks:
+            # explicitly split the y scan axis (index 2: spin, scan-x,
+            # scan-y) into one chunk per point, rather than relying on
+            # dask's "auto" heuristic to do it for a 2-point axis
+            waves = waves.rechunk({2: (1, 1)})
+            assert waves._lazy_array.chunks[2] == (1, 1)
+        measurement = pauli_multislice(
+            waves,
+            potential,
+            vector_potential=A,
+            magnetic_field=B,
+            average_field=(0.0, 0.0, 1.385),
+            algorithm=FourierMultislice(),
+            detectors=detector,
+            gauge_origin=gauge_origin,
+        )
+        collected = to_numpy(measurement.array).sum(axis=0)  # sum spin
+        return collected.reshape(2, -1).sum(axis=1)  # one number per position
+
+    fixed = run(None, force_multiple_chunks=True)
+    probe_centred_multi_chunk = run("probe", force_multiple_chunks=True)
+    probe_centred_single_chunk = run("probe", force_multiple_chunks=False)
+
+    def relative_spread(v):
+        return abs(v[0] - v[1]) / abs(v[0])
+
+    assert relative_spread(fixed) > 1e-9
+    assert relative_spread(probe_centred_multi_chunk) < relative_spread(fixed) / 20
+    # the whole point: multiple chunks must agree with a single chunk to
+    # near machine precision, not just be "better than the fixed origin"
+    assert (
+        relative_spread(probe_centred_multi_chunk)
+        < 10 * relative_spread(probe_centred_single_chunk) + 1e-9
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_probe_gauge_origin_is_a_noop_without_average_field(device):
     """With no uniform field there is no A_np, so the gauge origin cannot
     matter -- the two settings must agree bit for bit."""
