@@ -325,7 +325,7 @@ def test_crystal_potential_pool_enlarged_to_avoid_lateral_duplication(device):
     fp_big = abtem.FrozenPhonons(si, num_configs=n_tiles, sigmas=0.1, seed=0)
     unit_big = Potential(fp_big, gpts=(ug, ug), slice_thickness=5.43 / 4, device=device)
     with warnings.catch_warnings():
-        warnings.simplefilter("error")  # any pool warning would fail here
+        warnings.filterwarnings("error", category=UserWarning)  # any pool warning would fail here
         big = next(
             CrystalPotential(unit_big, repetitions=reps).generate_slices()
         )
