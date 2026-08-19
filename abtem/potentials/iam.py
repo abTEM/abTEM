@@ -1225,6 +1225,14 @@ class FieldArray(BaseField, ArrayObject):
         )
 
     @property
+    def metadata(self) -> dict:
+        cell = self.grid.cell
+        if cell is not None:
+            # store the non-orthogonal cell so it survives array/metadata round-trips
+            self._metadata["cell"] = tuple(map(tuple, cell.tolist()))
+        return self._metadata
+
+    @property
     def num_configurations(self):
         indices = _find_axes_type(self, FrozenPhononsAxis)
         if indices:
@@ -1361,6 +1369,14 @@ class FieldArray(BaseField, ArrayObject):
             )
         else:
             new_extent = None
+
+        if self.grid.cell is not None:
+            new_cell = self.grid.cell.copy()
+            new_cell[0] *= repetitions[0]
+            new_cell[1] *= repetitions[1]
+        else:
+            new_cell = None
+
         new_slice_thickness = tuple(np.tile(self.slice_thickness, repetitions[2]))
 
         return self.__class__(
@@ -1368,6 +1384,7 @@ class FieldArray(BaseField, ArrayObject):
             slice_thickness=new_slice_thickness,
             extent=new_extent,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
+            cell=new_cell,
         )
 
     def to_hyperspy(self, transpose: bool = True):

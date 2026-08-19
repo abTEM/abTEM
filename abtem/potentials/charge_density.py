@@ -412,7 +412,12 @@ class ChargeDensityPotential(_PotentialBuilder):
         self._charge_density = charge_density.astype(np.float32)
         self._repetitions = repetitions
 
-        cell = self._frozen_phonons.atoms.cell * repetitions
+        # ``Cell * repetitions`` broadcasts over columns, which only scales lattice
+        # vectors correctly for an orthogonal cell. For a skewed cell with
+        # anisotropic repetitions, each row (lattice vector) must be scaled by its
+        # own repetition factor instead.
+        cell = np.array(self._frozen_phonons.atoms.cell, dtype=float)
+        cell = cell * np.array(repetitions, dtype=float)[:, None]
 
         super().__init__(
             array_object=PotentialArray,
