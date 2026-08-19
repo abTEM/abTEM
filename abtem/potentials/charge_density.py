@@ -183,10 +183,23 @@ def _fourier_space_gaussian(k2, width):
 
 
 def add_point_charges_fourier(
-    array: np.ndarray, atoms: Atoms, broadening: float = 0.05
+    array: np.ndarray, atoms: Atoms, broadening: float = 0.05, atoms_per_chunk: int = 256
 ) -> np.ndarray:
     """
     Add the nuclear point charges in Reciprocal space.
+
+    The per-atom phase factor ``exp(-2pi i k.r)`` is evaluated exactly (as an
+    analytic delta function in Fourier space, not a real-space interpolation of a
+    singularity), but reorganised for speed: for a plane-wave FFT grid, k is always
+    an integer combination ``h1 b1 + h2 b2 + h3 b3`` of the reciprocal lattice
+    vectors (true for both orthogonal and skewed cells), so
+    ``k.r = h1 s1 + h2 s2 + h3 s3`` for the atom's fractional coordinates
+    ``(s1, s2, s3)``. This separates the phase factor into three small 1D
+    exponentials (sizes nx, ny, nz) per atom instead of one exponential over the
+    full nx*ny*nz grid per atom, and the atom sum is then evaluated as a matrix
+    product (BLAS) rather than a Python loop. Atoms are processed in chunks to
+    bound peak memory. Numerically identical to the direct per-atom evaluation to
+    floating-point precision.
 
     Parameters
     ----------
@@ -197,6 +210,9 @@ def add_point_charges_fourier(
         determined.
     broadening : float
         Gaussian broadening of the point charges (default is 0.05).
+    atoms_per_chunk : int
+        Number of atoms processed per batch, bounding the peak memory of the
+        intermediate (two smallest grid axes x chunk) tensor.
 
     Returns
     -------
@@ -217,9 +233,41 @@ def add_point_charges_fourier(
     if hasattr(atoms, "atoms"):
         atoms = atoms.atoms
 
-    for atom in atoms:
-        scale = atom.number / pixel_volume
-        array += scale * broadening * _fourier_space_delta(kx, ky, kz, *atom.position)
+    n_atoms = len(atoms)
+    if n_atoms == 0:
+        return array
+
+    shape = array.shape
+    h_axes = [np.fft.fftfreq(n, d=1 / n) for n in shape]
+
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    scale = atoms.numbers / pixel_volume
+
+    # Contract the two smallest grid axes first, to bound the size of the
+    # (axis_a, axis_b, chunk) intermediate tensor -- e.g. the z-axis is usually
+    # much smaller than x/y since it has already been cropped to num_slices.
+    small_a, small_b, big = (int(i) for i in np.argsort(shape))
+
+    accum = np.zeros((shape[small_a], shape[small_b], shape[big]), dtype=complex)
+
+    for start in range(0, n_atoms, atoms_per_chunk):
+        stop = min(start + atoms_per_chunk, n_atoms)
+        s = scaled_positions[start:stop]
+        c = scale[start:stop]
+
+        phase_a = np.exp(-2j * np.pi * np.multiply.outer(h_axes[small_a], s[:, small_a]))
+        phase_b = np.exp(-2j * np.pi * np.multiply.outer(h_axes[small_b], s[:, small_b]))
+        phase_big = np.exp(-2j * np.pi * np.multiply.outer(h_axes[big], s[:, big]))
+        phase_big = phase_big * c[None, :]
+
+        pairwise = (phase_a[:, None, :] * phase_b[None, :, :]).reshape(-1, stop - start)
+        accum += (pairwise @ phase_big.T).reshape(
+            shape[small_a], shape[small_b], shape[big]
+        )
+
+    accum = np.moveaxis(accum, (0, 1, 2), (small_a, small_b, big))
+
+    array += accum * broadening
 
     return array
 
