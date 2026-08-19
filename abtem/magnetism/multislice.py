@@ -625,13 +625,35 @@ def pauli_multislice_and_detect(
     xp = get_array_module(waves.device)
     real_dtype = get_dtype(complex=False)
 
-    # Kept on their native (usually host) device; each slice is transferred
-    # on demand in the loop below, so the full field stacks never need to
-    # fit in device memory alongside the waves.
-    vector_potential_arrays = vector_potential.array
+    # Materialize the field stacks ONCE, here, before the slice loop.
+    #
+    # These may arrive lazy -- `from_zarr(...).tile(...)` stays a dask array --
+    # and the loop below indexes them per slice and calls `xp.asarray` on the
+    # result. On a dask array that forces a synchronous graph execution *per
+    # slice, per dask block*: zarr read, decompress, tile, then transfer. For a
+    # 60 u.c. run at c/16 with a 256-position scan in blocks of 2 that is ~123k
+    # materializations of an ~88 MB slice, which starves the GPU (it shows up as
+    # a mostly-idle device with occasional bursts) and is by far the dominant
+    # cost. abTEM also forces dask's synchronous scheduler on GPU (see
+    # `_gpu_scheduler_guard` in abtem/array.py), so none of it overlaps with
+    # compute. Computing once here makes the per-slice access a plain host
+    # array index.
+    #
+    # The arrays stay on the host: the caller can move them to the device
+    # beforehand (`field.to_gpu()`) to eliminate the per-slice transfer as well,
+    # at the cost of keeping the whole stack in VRAM. `xp.asarray` below is then
+    # a no-op. Deliberately not done automatically -- for a tiled supercell the
+    # stack can be gigabytes, and this function must not silently claim that.
+    def _materialize(field):
+        array = field.array
+        if hasattr(array, "compute"):
+            array = array.compute()
+        return array
+
+    vector_potential_arrays = _materialize(vector_potential)
     magnetic_field_arrays = None
     if magnetic_field is not None:
-        magnetic_field_arrays = magnetic_field.array
+        magnetic_field_arrays = _materialize(magnetic_field)
 
     if average_field is not None:
         average_field = np.asarray(average_field, dtype=float)
