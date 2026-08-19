@@ -10,7 +10,7 @@ from ase import Atoms
 from ase.cell import Cell
 from numba import njit  # type: ignore
 
-from abtem.core.backend import cp
+from abtem.core.backend import cp, get_array_module
 from abtem.core.energy import energy2wavelength
 
 
@@ -154,7 +154,10 @@ def make_hkl_grid(
 
 
 def excitation_errors(
-    g: np.ndarray, energy: float, use_wave_eq: bool = False
+    g: np.ndarray,
+    energy: float,
+    use_wave_eq: bool = False,
+    beam_direction: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Calculate excitation errors for a set of reciprocal space vectors.
@@ -168,6 +171,14 @@ def excitation_errors(
     use_wave_eq : bool, optional
         Whether to use the excitation errors derived from the wave equation.
         Default is False.
+    beam_direction : np.ndarray, optional
+        The incident-beam direction as a length-3 vector (need not be normalized).
+        Default is None, which corresponds to a beam along the surface normal ``z``,
+        i.e. ``[0, 0, 1]``. A tilted beam direction generalizes the excitation error
+        to ``sg = -(n_hat . g) - lambda/2 (|g|^2 - <wave-eq term>)`` following Mendis
+        (Acta Cryst. A80, 2024), Eq. 12, where ``n_hat`` is the normalized beam
+        direction. This is used to re-evaluate the excitation errors after an inelastic
+        deflection of the incident wavevector.
 
     Returns
     -------
@@ -175,11 +186,27 @@ def excitation_errors(
         Excitation errors [1/Å].
     """
     assert g.shape[-1] == 3
+    xp = get_array_module(g)
     wavelength = energy2wavelength(energy)
+
+    if beam_direction is None:
+        # Beam along the surface normal z; preserve the exact legacy expressions
+        # (bit-for-bit) so existing Bloch results are unchanged.
+        if use_wave_eq:
+            sg = (-2 * g[..., 2] - wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)) / 2.0
+        else:
+            sg = (-2 * g[..., 2] - wavelength * xp.sum(g * g, axis=-1)) / 2.0
+        return sg
+
+    beam_direction = xp.asarray(beam_direction).astype(g.dtype)
+    beam_direction = beam_direction / xp.linalg.norm(beam_direction)
+    gn = g @ beam_direction
+    g2 = xp.sum(g * g, axis=-1)
+
     if use_wave_eq:
-        sg = (-2 * g[..., 2] - wavelength * (g[..., 0] ** 2 + g[..., 1] ** 2)) / 2.0
+        sg = -gn - wavelength * (g2 - gn**2) / 2.0
     else:
-        sg = (-2 * g[..., 2] - wavelength * np.sum(g * g, axis=-1)) / 2.0
+        sg = -gn - wavelength * g2 / 2.0
     return sg
 
 
@@ -226,7 +253,7 @@ def fast_filter_excitation_errors(
     wavelength: float,
     sg_max: float,
 ) -> None:
-    g_length_2 = (g**2).sum(axis=-1)
+    g_length_2 = g[:, 0] ** 2 + g[:, 1] ** 2 + g[:, 2] ** 2
 
     b = 0.5 * wavelength * g_length_2
     for i in range(len(orientation_matrices)):
