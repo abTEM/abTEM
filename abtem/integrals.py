@@ -605,6 +605,7 @@ def interpolate_radial_functions_skew(
     array: np.ndarray,
     positions: np.ndarray,
     disk_indices: np.ndarray,
+    disk_counts: np.ndarray,
     sampling_vectors: np.ndarray,
     inv_jacobian: np.ndarray,
     radial_gpts: np.ndarray,
@@ -616,9 +617,11 @@ def interpolate_radial_functions_skew(
     Pixel ``(k, m)`` sits at Cartesian ``r = k * a1 + m * a2`` where ``a1, a2`` are the
     two real-space sampling vectors (rows of ``sampling_vectors``). ``inv_jacobian`` is
     the inverse of ``[[a1; a2]].T`` (precomputed) and maps a Cartesian position to its
-    fractional pixel coordinates. ``disk_indices`` are pixel-index offsets covering a
-    rectangle in (k, m) space that contains the cutoff disk in Cartesian space; the
-    radial-out-of-range branches below silently skip pixels outside the disk.
+    fractional pixel coordinates. ``disk_indices`` are pixel-index offsets sorted by
+    Cartesian distance from the atom and covering the cutoff disk; ``disk_counts[i]``
+    is how many of those (nearest-first) offsets fall within atom ``i``'s lateral
+    cutoff for the current slice (the radial-out-of-range branch below is a final
+    safety net, not the primary truncation).
     """
     n = radial_gpts.shape[0]
     dt = np.log(radial_gpts[-1] / radial_gpts[0]) / (n - 1)
@@ -638,7 +641,7 @@ def interpolate_radial_functions_skew(
         px = int(round(fk))
         py = int(round(fm))
 
-        for j in range(disk_indices.shape[0]):
+        for j in range(disk_counts[i]):
             k = px + disk_indices[j, 0]
             m = py + disk_indices[j, 1]
 
@@ -1061,11 +1064,41 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                 # use a square mesh whose operator-norm bound (||inv_J||_op * R) safely
                 # contains the ellipse (the radial-out-of-range branch silently skips
                 # any pixels that turn out to be outside the actual Cartesian disk).
-                # The skew kernel scans the full mesh (no disk_counts truncation),
-                # and skew is CPU-only, so no sorted-disk or device caching applies.
-                op_norm = float(np.linalg.norm(inv_jacobian, ord=2))
-                disk_radius_pixels = int(np.ceil(table.radial_gpts[-1] * op_norm))
-                disk_indices = xp.asarray(disk_meshgrid(disk_radius_pixels))
+                # skew is CPU-only, so no device caching applies, but the mesh itself
+                # (and its sort by true Cartesian radius) is cached like the
+                # orthogonal case, and truncated per atom/slice via disk_counts below
+                # -- without this a parametrization whose cutoff exceeds the cell (e.g.
+                # the Ewald short-range correction) rescans the full, hugely oversized
+                # mesh for every slice even though most slices are far enough from the
+                # atom in z that only a tiny lateral neighborhood can contribute.
+                cutoff = table.radial_gpts[-1]
+                disk_key = (chemical_symbols[number], tuple(sampling_vectors.ravel()))
+                if disk_key in self._sorted_disks:
+                    disk, disk_radii = self._sorted_disks[disk_key]
+                else:
+                    op_norm = float(np.linalg.norm(inv_jacobian, ord=2))
+                    disk_radius_pixels = int(np.ceil(cutoff * op_norm))
+                    disk = disk_meshgrid(disk_radius_pixels)
+                    cartesian = disk[:, 0:1] * sampling_vectors[0] + disk[
+                        :, 1:2
+                    ] * sampling_vectors[1]
+                    disk_radii = np.linalg.norm(cartesian, axis=1)
+                    order = np.argsort(disk_radii)
+                    disk = np.ascontiguousarray(disk[order])
+                    disk_radii = disk_radii[order]
+                    self._sorted_disks[disk_key] = (disk, disk_radii)
+
+                dz = np.maximum(np.maximum(shifted_a, -shifted_b), 0.0)
+                lateral_cutoff = np.sqrt(np.maximum(cutoff**2 - dz**2, 0.0))
+                margin = (
+                    np.linalg.norm(sampling_vectors[0])
+                    + np.linalg.norm(sampling_vectors[1])
+                ) / 2
+                disk_counts = np.searchsorted(
+                    disk_radii, lateral_cutoff + margin, side="right"
+                )
+
+                disk_indices = xp.asarray(disk)
                 radial_gpts_xp = table.radial_gpts
             else:
                 cutoff = table.radial_gpts[-1]
@@ -1134,6 +1167,7 @@ class QuadratureProjectionIntegrals(FieldIntegrator):
                     array=temp,
                     positions=positions,
                     disk_indices=disk_indices,
+                    disk_counts=disk_counts,
                     sampling_vectors=sampling_vectors,
                     inv_jacobian=inv_jacobian,
                     radial_gpts=table.radial_gpts,

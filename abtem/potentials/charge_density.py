@@ -182,6 +182,28 @@ def _fourier_space_gaussian(k2, width):
     return np.exp(-1 / (4 * a**2) * k2)
 
 
+def _resolvable_ewald_width(
+    sampling: tuple[float, float], slice_thickness, factor: float = 4.0
+) -> float:
+    """The Ewald real-space/reciprocal-space splitting width needed to represent
+    nuclear point charges on a charge-density-derived grid.
+
+    The short-range correction's real-space cutoff -- and with it how far atoms
+    must be periodically padded and how many neighbouring image atoms have to be
+    stamped onto the grid in ``QuadratureProjectionIntegrals`` -- grows with
+    ``width``. A fixed, resolution-independent width (e.g. a constant 3 Angstrom)
+    therefore forces unnecessarily expensive padding on a small, finely sampled
+    cell. The width only needs to be a small multiple of the coarsest spacing the
+    Gaussian-smeared charge is actually represented on -- the in-plane pixel
+    sampling and the (FFT-uniform) z-spacing implied by the number of slices -- to
+    stay well resolved.
+    """
+    coarsest = max(
+        float(sampling[0]), float(sampling[1]), float(np.mean(slice_thickness))
+    )
+    return factor * coarsest
+
+
 def add_point_charges_fourier(
     array: np.ndarray, atoms: Atoms, broadening: float = 0.05, atoms_per_chunk: int = 256
 ) -> np.ndarray:
@@ -601,6 +623,15 @@ class ChargeDensityPotential(_PotentialBuilder):
         kwargs = self._copy_kwargs(
             exclude=("atoms", "charge_density"), cls=ChargeDensityPotential
         )
+        # self.box has already been resolved from None to a concrete tuple (see
+        # _FieldBuilder.__init__): non-orthogonal auto-detection only triggers when
+        # box is None, so feeding the resolved box back into a fresh
+        # ChargeDensityPotential (as happens on every lazy/dask block reconstruction)
+        # would silently skip skew detection and orthogonalise the cell. Reset it to
+        # None here so the reconstructed instance re-detects the skew from the atoms,
+        # matching _get_ewald_potential's box = None if self._non_orthogonal else ...
+        if self._non_orthogonal:
+            kwargs["box"] = None
         frozen_phonons_partial = (
             self._get_ewald_potential().frozen_phonons._from_partitioned_args()
         )
@@ -612,7 +643,9 @@ class ChargeDensityPotential(_PotentialBuilder):
         )
 
     def _get_ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(width=3)
+        ewald_parametrization = EwaldParametrization(
+            width=_resolvable_ewald_width(self.sampling, self.slice_thickness)
+        )
 
         # When the in-plane cell is non-orthogonal, do NOT forward ``box`` to the
         # internal ewald Potential: the box-given path forces an orthogonalising
@@ -666,7 +699,9 @@ class ChargeDensityPotential(_PotentialBuilder):
         if self.repetitions != (1, 1, 1):
             array = np.tile(array, self.repetitions)
             atoms = self.frozen_phonons.atoms * self.repetitions
-            ewald_parametrization = EwaldParametrization(width=3)
+            ewald_parametrization = EwaldParametrization(
+                width=_resolvable_ewald_width(self.sampling, self.slice_thickness)
+            )
             # See _get_ewald_potential: when the in-plane cell is non-orthogonal,
             # leave box=None so the ewald Potential auto-detects the skew geometry
             # rather than rectifying it.

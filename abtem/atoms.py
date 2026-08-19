@@ -1141,11 +1141,22 @@ def pad_atoms(
 
     reps = [1, 1, 1]
     for axis, margin in zip(axes, margins):
-        reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
+        # Use the true lattice-vector length (not the diagonal cell entry) so a
+        # skewed axis is padded enough to actually cover the margin.
+        axis_length = np.linalg.norm(atoms.cell[axis])
+        reps[axis] = int(1 + 2 * np.ceil(margin / axis_length))
 
     if any([rep > 1 for rep in reps]):
         atoms = atoms * reps
-        atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
+        # Recentre the repeated block on the original cell by shifting back by
+        # (rep // 2) copies of each lattice vector. ``old_cell.sum(axis=0) *
+        # [rep // 2 for rep in reps]`` only computes this correctly when all three
+        # rep // 2 values are equal (it mixes Cartesian components across lattice
+        # vectors otherwise), which silently shifts atoms on a skewed cell whenever
+        # the per-axis repetition counts differ.
+        atoms.positions[:] -= sum(
+            (rep // 2) * old_cell[axis] for axis, rep in enumerate(reps)
+        )
         atoms.cell = old_cell
 
     atoms = atoms_in_cell(atoms, margins)
