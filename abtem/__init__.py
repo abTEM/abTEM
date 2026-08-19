@@ -23,6 +23,12 @@ from abtem.measurements import (
     RealSpaceLineProfiles,
     ReciprocalSpaceLineProfiles,
 )
+from abtem.magnetism.iam import (
+    MagneticField,
+    MagneticFieldArray,
+    VectorPotential,
+    VectorPotentialArray,
+)
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.scan import CustomScan, GridScan, LineScan
@@ -59,6 +65,10 @@ __all__ = [
     "Potential",
     "CrystalPotential",
     "PotentialArray",
+    "VectorPotential",
+    "VectorPotentialArray",
+    "MagneticField",
+    "MagneticFieldArray",
     "CustomScan",
     "LineScan",
     "GridScan",

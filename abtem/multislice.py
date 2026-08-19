@@ -592,12 +592,17 @@ class RealSpaceMultislice:
         Finite-difference accuracy for Laplace operator (default 6)
     max_terms: int, optional
         Max terms in exponent Taylor series expansion (default 80)
+    tolerance: float, optional
+        Convergence tolerance for the per-slice exponent Taylor series
+        (default 1e-16); terms are added until the last term's relative
+        amplitude falls below this value.
     """
 
     order: int = 1
     expansion_scope: Literal["propagator", "full"] = "propagator"
     derivative_accuracy: int = 6
     max_terms: int = 80
+    tolerance: float = 1e-16
 
 
 def multislice_and_detect(
@@ -697,6 +702,7 @@ def multislice_and_detect(
                 potential_slice=potential_slice,
                 next_slice=next_slice,
                 laplace=laplace_operator,
+                tolerance=algorithm.tolerance,
                 max_terms=algorithm.max_terms,
                 order=algorithm.order,
                 fully_corrected=algorithm.expansion_scope == "full",

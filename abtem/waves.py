@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import warnings
 from abc import abstractmethod
-from copy import copy
+from copy import copy, deepcopy
 from functools import partial
 from numbers import Number
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, overload
@@ -23,6 +23,7 @@ from abtem.core.axes import (
     OrdinalAxis,
     RealSpaceAxis,
     ReciprocalSpaceAxis,
+    SpinAxis,
     ThicknessAxis,
 )
 from abtem.core.backend import (
@@ -628,6 +629,106 @@ class Waves(BaseWaves, ArrayObject):
         """
         transform = _WavesNormalization(space=space, in_place=in_place)
         return transform.apply(self)
+
+    def to_spinor(
+        self,
+        polarization: tuple[complex, complex] = (1.0, 0.0),
+        normalize: bool = True,
+    ) -> Waves:
+        """
+        Turn scalar wave functions into two-component spinor wave functions.
+
+        Adds a leading `SpinAxis` ensemble axis of length two holding the
+        spin-up and spin-down components, `polarization[0] * psi` and
+        `polarization[1] * psi`, for use with the Pauli multislice solver.
+        The spin axis is kept in a single dask chunk, since the solver mixes
+        the two components.
+
+        Apply after `normalize`: normalization acts per ensemble member and
+        would otherwise renormalize each spin component separately.
+
+        Parameters
+        ----------
+        polarization : two complex numbers
+            The initial spin state (spin-up, spin-down amplitudes), e.g.
+            (1, 0) for spin up along z (default), (0, 1) for spin down, or
+            (1, 1) / sqrt(2) for spin up along x.
+        normalize : bool, optional
+            If True (default), normalize the polarization vector so the
+            spinor carries the same total intensity as the scalar wave.
+
+        Returns
+        -------
+        spinor_waves : Waves
+            The spinor wave functions, with a length-2 `SpinAxis` as the
+            first ensemble axis.
+        """
+        spinor = np.array(polarization, dtype=get_dtype(complex=True))
+
+        if spinor.shape != (2,):
+            raise ValueError(
+                f"polarization must be two complex numbers, got {polarization}"
+            )
+
+        if normalize:
+            norm = np.linalg.norm(spinor)
+            if norm == 0.0:
+                raise ValueError("polarization must be nonzero")
+            spinor = spinor / norm
+
+        # Match the wave device: CuPy rejects arithmetic with non-scalar
+        # NumPy operands.
+        xp = get_array_module(self.device)
+        spinor = xp.asarray(spinor)
+
+        array = self.array[None] * spinor.reshape((2,) + (1,) * len(self.shape))
+
+        kwargs = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
+        kwargs["ensemble_axes_metadata"] = [SpinAxis()] + deepcopy(
+            self.ensemble_axes_metadata
+        )
+        waves = self.__class__(array, **kwargs)
+
+        if waves.is_lazy:
+            # The Pauli solver mixes the two spin components inside each
+            # dask block, so the spin axis must never be split into chunks.
+            # Forcing it into one chunk of size 2 doubles the byte size of
+            # every existing chunk -- the chunking along the OTHER axes was
+            # decided by build()'s max_batch="auto" before this spin axis
+            # existed, so it has no way to account for that doubling.
+            # Left uncorrected, blocks can end up to 2x the intended
+            # dask.chunk-size(-gpu) budget, which is a real source of GPU
+            # OOM inside pauli_multislice's per-slice FFTs. Re-derive the
+            # other axes' chunk sizes with validate_chunks, targeting the
+            # same byte budget the pre-spinor chunking already respected
+            # (inferred from its own largest block), with the spin axis
+            # pinned at (2,) and everything else auto again.
+            old_chunks = self._lazy_array.chunks
+            old_block_elements = int(np.prod([max(c) for c in old_chunks]))
+            # only the ensemble axes (scan positions etc., now including the
+            # new spin axis) may be auto-shrunk; the base/pixel-grid axes
+            # must stay whole, matching how _build_validated chunks them
+            # in the first place (self._default_ensemble_chunks + self._valid_gpts)
+            n_ensemble = len(waves.ensemble_shape)
+            chunks_spec = (
+                (2,) + ("auto",) * (n_ensemble - 1) + waves.base_shape
+            )
+            # if the pre-spinor ensemble chunks were already at the minimum
+            # (size 1, e.g. a single scan position), there is nothing left
+            # to shrink to absorb the spin axis's 2x -- fall back to the
+            # smallest achievable block size instead of erroring.
+            min_block_elements = 2 * int(np.prod(waves.base_shape))
+            max_elements = max(old_block_elements, min_block_elements)
+            valid_chunks = validate_chunks(
+                shape=waves.shape,
+                chunks=chunks_spec,
+                max_elements=max_elements,
+                dtype=waves.dtype,
+                device=waves.device,
+            )
+            waves = waves.rechunk(valid_chunks)
+
+        return waves
 
     def tile(self, repetitions: tuple[int, int], renormalize: bool = False) -> Waves:
         """Tile the wave functions. Can only be applied in real space.

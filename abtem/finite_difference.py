@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from typing import TYPE_CHECKING, Callable, Sequence
 
 import numpy as np
@@ -191,9 +192,22 @@ def _laplace_stencil_array(accuracy):
     return stencil
 
 
+@lru_cache(maxsize=None)
 def _laplace_operator_stencil(
     accuracy, prefactor, mode: str = "wrap", dtype=None, device: str = "cpu"
 ):
+    """
+    Build (and cache) the compiled Laplace stencil function.
+
+    Numba recompiles a `@njit` closure from scratch whenever it sees a new
+    Python function object, even if two closures are functionally
+    identical -- so without this cache, every fresh `LaplaceOperator`
+    instance (e.g. one built per `pauli_multislice`/`multislice_and_detect`
+    call, or once per dask chunk on the lazy path) pays a full JIT compile
+    (order of a second) even when an identical stencil was already compiled
+    moments ago. Caching here, keyed on the actual numerical parameters,
+    lets independent `LaplaceOperator` instances share one compiled kernel.
+    """
     if dtype is None:
         dtype = get_dtype(complex=True)
     c = finite_difference_coefficients(2, accuracy)
@@ -325,7 +339,7 @@ class LaplaceOperator:
         self._stencil = None
 
     def _get_new_stencil(self, key, device: str = "cpu"):
-        wavelength, sampling = key
+        wavelength, sampling, dtype = key
         prefactor = 1 / np.prod(np.array(sampling, dtype=float))
         return _laplace_operator_stencil(
             self._accuracy, prefactor, mode="wrap",
@@ -352,12 +366,14 @@ class LaplaceOperator:
         key = (
             waves.wavelength,
             waves.sampling,
+            waves.array.dtype.type,
+            device,
         )
 
         if key == self._key:
             return self._stencil
 
-        self._stencil = self._get_new_stencil(key, device=device)
+        self._stencil = self._get_new_stencil(key[:3], device=device)
         self._key = key
         return self._stencil
 
@@ -387,45 +403,56 @@ def _multislice_exponential_series(
     max_terms: int = 300,
     order: int = 1,
     fully_corrected: bool = False,
+    operator: Callable | None = None,
 ):
+    """
+    Apply exp(1j * thickness * H) to the waves by Taylor series, where H is
+    the per-slice multislice operator.
+
+    By default H is the conventional operator built from `laplace` and
+    `transmission_function` (expanded via `propagator_taylor_series` or
+    `full_series` for order > 1). A custom `operator` callable H(array) may
+    be injected instead — e.g. the Pauli operator including magnetic terms —
+    which requires order=1 and fully_corrected=False.
+    """
     xp = get_array_module(waves)
     initial_amplitude = xp.abs(waves).sum()
 
-    if fully_corrected:
-        temp = full_series(
-            waves, laplace, transmission_function, order, wavelength, thickness
-        )
+    if operator is not None:
+        if order != 1 or fully_corrected:
+            raise ValueError(
+                "a custom multislice operator requires order=1 and "
+                "expansion_scope='propagator'"
+            )
+
+        def _series_term(array):
+            return operator(array) * (1.0j * thickness)
+
+    elif fully_corrected:
+
+        def _series_term(array):
+            return full_series(
+                array, laplace, transmission_function, order, wavelength, thickness
+            )
+
     else:
-        temp = propagator_taylor_series(
-            waves,
-            order=order,
-            laplace=laplace,
-            transmission_function=transmission_function,
-            wavelength=wavelength,
-            thickness=thickness,
-        )
+
+        def _series_term(array):
+            return propagator_taylor_series(
+                array,
+                order=order,
+                laplace=laplace,
+                transmission_function=transmission_function,
+                wavelength=wavelength,
+                thickness=thickness,
+            )
+
+    temp = _series_term(waves)
 
     waves += temp
 
     for i in range(2, max_terms + 1):
-        if fully_corrected:
-            temp = (
-                full_series(
-                    temp, laplace, transmission_function, order, wavelength, thickness
-                )
-                / i
-            )
-        else:
-            temp = (
-                propagator_taylor_series(
-                    temp,
-                    order=order,
-                    laplace=laplace,
-                    transmission_function=transmission_function,
-                    wavelength=wavelength,
-                    thickness=thickness,
-                )
-            ) / i
+        temp = _series_term(temp) / i
 
         waves += temp
         temp_amplitude = xp.abs(temp).sum()
