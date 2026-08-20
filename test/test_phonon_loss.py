@@ -1,5 +1,6 @@
 """Tests for phonon_loss_diffraction_patterns."""
 
+import dask.array as da
 import numpy as np
 import pytest
 from ase import units
@@ -9,13 +10,15 @@ from abtem.measurements import phonon_loss_diffraction_patterns
 from abtem.waves import Waves
 
 
-def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0):
+def _make_exit_waves(e_values, n_configs=6, gpts=24, seed=0, lazy=False):
     rng = np.random.default_rng(seed)
     n_energies = len(e_values)
     array = (
         rng.normal(size=(n_energies, n_configs, gpts, gpts))
         + 1j * rng.normal(size=(n_energies, n_configs, gpts, gpts))
     ).astype(np.complex64)
+    if lazy:
+        array = da.from_array(array, chunks=(1, 1, gpts, gpts))
     return Waves(
         array,
         energy=100e3,
@@ -135,3 +138,41 @@ class TestThermalWeighting:
             phonon_loss_diffraction_patterns(
                 waves_unsorted, component="tds", temperature=300.0
             )
+
+
+class TestLazyExitWaves:
+    """exit_waves may be a lazy (dask-backed) Waves object -- e.g. built with
+    multislice(..., lazy=True) and fed straight into to_zarr(). CuPy's own
+    concatenate/flip/stack do not accept a dask array (unlike NumPy, which
+    dispatches to dask via __array_function__), so on GPU these must route
+    through dask's own implementations rather than get_array_module's xp
+    directly. Exercised here via a dask-wrapped numpy array, which hits the
+    same "still a da.core.Array" code path independent of the device."""
+
+    def test_thermal_weighting_matches_eager(self):
+        e_values = [0.0, 0.02, 0.05, 0.10]
+        waves_eager = _make_exit_waves(e_values, lazy=False)
+        waves_lazy = _make_exit_waves(e_values, lazy=True)
+
+        dp_eager = phonon_loss_diffraction_patterns(
+            waves_eager, component="tds", temperature=300.0
+        )
+        dp_lazy = phonon_loss_diffraction_patterns(
+            waves_lazy, component="tds", temperature=300.0
+        )
+
+        assert isinstance(dp_lazy.array, da.core.Array), (
+            "result should stay lazy when exit_waves was lazy"
+        )
+        np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)
+
+    def test_component_all_matches_eager(self):
+        e_values = [0.0, 0.02, 0.05]
+        waves_eager = _make_exit_waves(e_values, lazy=False)
+        waves_lazy = _make_exit_waves(e_values, lazy=True)
+
+        dp_eager = phonon_loss_diffraction_patterns(waves_eager, component="all")
+        dp_lazy = phonon_loss_diffraction_patterns(waves_lazy, component="all")
+
+        assert isinstance(dp_lazy.array, da.core.Array)
+        np.testing.assert_allclose(dp_lazy.array.compute(), dp_eager.array, rtol=1e-4)

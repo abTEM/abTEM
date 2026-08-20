@@ -5338,6 +5338,14 @@ def _thermal_weight_tds(
         )
 
     xp = get_array_module(I_tds)
+    # I_tds may still be a lazy dask array (wrapping either numpy or cupy
+    # chunks) if exit_waves was lazy. CuPy's own concatenate/flip do not
+    # accept a dask array (unlike NumPy, which dispatches to dask via
+    # __array_function__), so route to dask's own implementations whenever
+    # the input is still lazy, regardless of device.
+    is_lazy = isinstance(I_tds, da.core.Array)
+    concatenate = da.concatenate if is_lazy else xp.concatenate
+    flip = da.flip if is_lazy else xp.flip
 
     nonzero_e = e_values[1:]
     beta = 1.0 / (units.kB * temperature)
@@ -5363,9 +5371,9 @@ def _thermal_weight_tds(
     I_loss = I_tds[nonzero_slice] * _broadcast(loss_weight)
     # Reverse along the energy axis: ascending |E| -> descending (most
     # negative first), so the final signed axis comes out ascending overall.
-    I_gain = xp.flip(I_tds[nonzero_slice] * _broadcast(gain_weight), axis=energy_axis_idx)
+    I_gain = flip(I_tds[nonzero_slice] * _broadcast(gain_weight), axis=energy_axis_idx)
 
-    result_array = xp.concatenate([I_gain, I_zero, I_loss], axis=energy_axis_idx)
+    result_array = concatenate([I_gain, I_zero, I_loss], axis=energy_axis_idx)
     e_values_signed = np.concatenate([-nonzero_e[::-1], [0.0], nonzero_e])
 
     return result_array, e_values_signed
@@ -5506,7 +5514,10 @@ def phonon_loss_diffraction_patterns(
 
     if component == "all":
         xp = get_array_module(I_tds)
-        result_array = xp.stack([I_coherent, I_incoherent, I_tds], axis=0)
+        # I_tds/I_coherent/I_incoherent may still be lazy dask arrays; CuPy's
+        # own stack does not accept a dask array (see _thermal_weight_tds).
+        stack_fn = da.stack if isinstance(I_tds, da.core.Array) else xp.stack
+        result_array = stack_fn([I_coherent, I_incoherent, I_tds], axis=0)
         component_axis = OrdinalAxis(
             label="component",
             values=("coherent", "incoherent", "tds"),
