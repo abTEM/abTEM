@@ -219,6 +219,25 @@ def _scan_extent(measurement):
     return extent
 
 
+def _array_module_fn(array, xp: ModuleType, name: str):
+    """Return the array-module function ``name`` (e.g. ``"concatenate"``),
+    routed through dask's own implementation whenever ``array`` is still a
+    lazy dask array, regardless of device.
+
+    NumPy dispatches a top-level call like ``np.concatenate([dask_array])``
+    to dask automatically via ``__array_function__``, but CuPy does not: its
+    functions raise ``TypeError`` when given a ``dask.array.core.Array``
+    rather than a genuine ``cupy.ndarray``. Any code that resolves ``xp`` via
+    :func:`get_array_module` and then calls ``xp.<name>(...)`` directly on an
+    array that might still be lazy (e.g. because it was built from
+    ``exit_waves.array``/``dp.array`` without forcing computation) must go
+    through this helper instead of calling ``xp.<name>`` unconditionally.
+    """
+    if isinstance(array, da.core.Array):
+        return getattr(da, name)
+    return getattr(xp, name)
+
+
 def _spatial_frequency_squared(
     gpts: tuple[int, int],
     sampling: tuple[float, float],
@@ -5219,7 +5238,11 @@ class MomentumResolvedSpectrum(BaseMeasurements):
                 axis_to_value.get(d, 0) for d in range(n_ensemble)
             )
             data = array[full] if full else array
-            data = np.asarray(data)
+            # array may be GPU-resident (cupy); np.asarray() cannot convert a
+            # cupy array implicitly (cupy deliberately blocks it), so prefer
+            # .get() when available, matching the convention used elsewhere
+            # (e.g. noise.py) for a possibly-cupy, possibly-numpy array.
+            data = data.get() if hasattr(data, "get") else np.asarray(data)
             if data.shape != (n_q, n_e):
                 raise ValueError(
                     f"Shape mismatch in MomentumResolvedSpectrum.show(): "
@@ -5338,14 +5361,9 @@ def _thermal_weight_tds(
         )
 
     xp = get_array_module(I_tds)
-    # I_tds may still be a lazy dask array (wrapping either numpy or cupy
-    # chunks) if exit_waves was lazy. CuPy's own concatenate/flip do not
-    # accept a dask array (unlike NumPy, which dispatches to dask via
-    # __array_function__), so route to dask's own implementations whenever
-    # the input is still lazy, regardless of device.
     is_lazy = isinstance(I_tds, da.core.Array)
-    concatenate = da.concatenate if is_lazy else xp.concatenate
-    flip = da.flip if is_lazy else xp.flip
+    concatenate = _array_module_fn(I_tds, xp, "concatenate")
+    flip = _array_module_fn(I_tds, xp, "flip")
 
     nonzero_e = e_values[1:]
     beta = 1.0 / (units.kB * temperature)
@@ -5374,6 +5392,15 @@ def _thermal_weight_tds(
     I_gain = flip(I_tds[nonzero_slice] * _broadcast(gain_weight), axis=energy_axis_idx)
 
     result_array = concatenate([I_gain, I_zero, I_loss], axis=energy_axis_idx)
+    if is_lazy:
+        # I_gain/I_zero/I_loss each inherit exit_waves' original per-config
+        # chunking along the energy axis (e.g. one chunk per energy value),
+        # so the concatenated result ends up with many tiny chunks there.
+        # Downstream dask operations on this axis (e.g. interpolate_line in
+        # momentum_resolved_spectrum) mishandle that level of fragmentation,
+        # so consolidate it into a single chunk here at the source rather
+        # than relying on every consumer to work around it.
+        result_array = result_array.rechunk({energy_axis_idx: -1})
     e_values_signed = np.concatenate([-nonzero_e[::-1], [0.0], nonzero_e])
 
     return result_array, e_values_signed
@@ -5514,9 +5541,7 @@ def phonon_loss_diffraction_patterns(
 
     if component == "all":
         xp = get_array_module(I_tds)
-        # I_tds/I_coherent/I_incoherent may still be lazy dask arrays; CuPy's
-        # own stack does not accept a dask array (see _thermal_weight_tds).
-        stack_fn = da.stack if isinstance(I_tds, da.core.Array) else xp.stack
+        stack_fn = _array_module_fn(I_tds, xp, "stack")
         result_array = stack_fn([I_coherent, I_incoherent, I_tds], axis=0)
         component_axis = OrdinalAxis(
             label="component",
@@ -5668,7 +5693,14 @@ def momentum_resolved_spectrum(
         start_inv = (offset_inv[0] + q_min_inv * cos_a, offset_inv[1] + q_min_inv * sin_a)
         end_inv = (offset_inv[0] + q_max_inv * cos_a, offset_inv[1] + q_max_inv * sin_a)
 
-        line_profiles = dp.interpolate_line(
+        # A fragmented energy axis (e.g. one chunk per energy value, as
+        # EnergyResolvedAtomsEnsemble produces by default, or as
+        # _thermal_weight_tds's concatenate leaves it) causes dask's
+        # interpolate_line + the q-binning reshape below to compute an
+        # incorrect result size. Consolidate it into a single chunk first.
+        dp_for_interp = dp.rechunk({energy_axis_idx: -1}) if dp.is_lazy else dp
+
+        line_profiles = dp_for_interp.interpolate_line(
             start=start_inv,
             end=end_inv,
             gpts=N,
@@ -5685,7 +5717,8 @@ def momentum_resolved_spectrum(
 
         # energy dim is at energy_axis_idx; move it last → (...other, n_q, n_E)
         xp = get_array_module(line_profiles.array)
-        spectrum_array = xp.moveaxis(
+        moveaxis = _array_module_fn(line_profiles.array, xp, "moveaxis")
+        spectrum_array = moveaxis(
             line_profiles.array * n_perp, energy_axis_idx, -1
         )
         q_values_fine = np.linspace(detector.q_min, detector.q_max, N)
@@ -5746,8 +5779,17 @@ def momentum_resolved_spectrum(
         )
 
         # Single batched contraction: (...ens, gy, gx) × (n_q, gy, gx) → (...ens, n_q)
-        spectrum_array = xp.tensordot(dp.array, masks, axes=([-2, -1], [-2, -1]))
-        spectrum_array = xp.moveaxis(spectrum_array, energy_axis_idx, -1)  # (...ens, n_q, n_E)
+        tensordot = _array_module_fn(dp.array, xp, "tensordot")
+        # dask (as of 2025.11.0) silently computes the wrong result for
+        # da.tensordot with negative axis indices -- declared shape is
+        # correct but the actual data is not. Positive indices are
+        # unaffected and work identically for numpy/cupy's own tensordot,
+        # so always use them here rather than only when routed through dask.
+        dp_axes = (dp.array.ndim - 2, dp.array.ndim - 1)
+        mask_axes = (masks.ndim - 2, masks.ndim - 1)
+        spectrum_array = tensordot(dp.array, masks, axes=(dp_axes, mask_axes))
+        moveaxis = _array_module_fn(spectrum_array, xp, "moveaxis")
+        spectrum_array = moveaxis(spectrum_array, energy_axis_idx, -1)  # (...ens, n_q, n_E)
 
     else:
         raise TypeError(

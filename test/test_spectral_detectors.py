@@ -17,13 +17,23 @@ from abtem.measurements import (
 )
 
 
-def _make_dp(n_energies=3, gpts=64, sampling=1.0, energy=300e3):
-    """Create a simple DiffractionPatterns with an EnergyLossAxis for testing."""
+def _make_dp(n_energies=3, gpts=64, sampling=1.0, energy=300e3, lazy=False):
+    """Create a simple DiffractionPatterns with an EnergyLossAxis for testing.
+
+    lazy=True chunks one element per energy value along the ensemble axis,
+    matching the fragmented chunking EnergyResolvedAtomsEnsemble produces by
+    default (or that phonon_loss_diffraction_patterns' thermal-weighting
+    concatenate leaves behind), rather than one convenient whole-array chunk.
+    """
     from abtem.core.axes import EnergyLossAxis, OrdinalAxis
 
     rng = np.random.default_rng(42)
     e_values = np.array([0.02, 0.05, 0.10])  # eV
     array = rng.random((n_energies, gpts, gpts)).astype(np.float32)
+    if lazy:
+        import dask.array as da
+
+        array = da.from_array(array, chunks=(1, gpts, gpts))
 
     energy_axis = EnergyLossAxis(values=e_values, units="eV")
     metadata = {"energy": energy, "label": "intensity", "units": "arb. unit"}
@@ -337,3 +347,80 @@ def test_show_warns_on_ensemble_collapse():
     spec, _ = _make_multiaxis_spectrum()
     with pytest.warns(UserWarning, match="showing member"):
         spec.show()
+
+
+# ---- momentum_resolved_spectrum with a lazy (dask-backed) input -------------
+
+
+@pytest.mark.parametrize(
+    "make_detector",
+    [
+        lambda: SpectralSlitDetector(width=3.0, q_sampling=1.0, q_max=15.0),
+        lambda: SpectralAnnularDetector(outer=1.5, q_sampling=1.0, q_max=15.0),
+    ],
+    ids=["slit", "annular"],
+)
+def test_momentum_resolved_spectrum_lazy_matches_eager(make_detector):
+    """A lazy DiffractionPatterns (fragmented, one chunk per energy value --
+    the chunking EnergyResolvedAtomsEnsemble and phonon_loss_diffraction_patterns'
+    thermal weighting produce) must give the same result as the eager input,
+    and must actually stay correct once computed (not just declare a correct
+    shape while the underlying dask graph silently computes something else --
+    see the tensordot negative-axis regression this guards)."""
+    dp_eager = _make_dp(gpts=48, sampling=0.5, lazy=False)
+    dp_lazy = _make_dp(gpts=48, sampling=0.5, lazy=True)
+    detector = make_detector()
+
+    spec_eager = momentum_resolved_spectrum(dp_eager, detector)
+    spec_lazy = momentum_resolved_spectrum(dp_lazy, detector)
+
+    assert hasattr(spec_lazy.array, "compute"), "result should stay lazy"
+    computed = spec_lazy.array.compute()
+    assert computed.shape == spec_eager.array.shape
+    np.testing.assert_allclose(computed, spec_eager.array, rtol=1e-4)
+
+
+# ---- MomentumResolvedSpectrum.show() with GPU-resident (cupy-like) data -----
+
+
+class _FakeCupyArray:
+    """Minimal stand-in for a cupy.ndarray: blocks implicit np.asarray()
+    conversion (as real cupy arrays do) but supports .get()."""
+
+    def __init__(self, arr):
+        self._arr = arr
+
+    def __array__(self, *args, **kwargs):
+        raise TypeError(
+            "Implicit conversion to a NumPy array is not allowed. Please use "
+            "`.get()` to construct a NumPy array explicitly."
+        )
+
+    def get(self):
+        return self._arr
+
+    def __getitem__(self, idx):
+        return _FakeCupyArray(self._arr[idx]) if idx else self
+
+    @property
+    def shape(self):
+        return self._arr.shape
+
+    @property
+    def ndim(self):
+        return self._arr.ndim
+
+
+def test_show_handles_gpu_resident_array():
+    """show() must not call np.asarray() directly on GPU-resident (cupy-like)
+    data -- cupy deliberately raises TypeError on that, requiring .get()."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    rng = np.random.default_rng(0)
+    q_values = np.linspace(0, 10, 5)
+    e_values = np.linspace(-0.1, 0.1, 6)
+    array = _FakeCupyArray(rng.random((5, 6)).astype(np.float32))
+
+    spec = MomentumResolvedSpectrum(array, q_values=q_values, e_values=e_values)
+    fig, ax = spec.show()  # must not raise
