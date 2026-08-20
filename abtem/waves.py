@@ -30,7 +30,7 @@ from abtem.core.backend import (
     get_array_module,
     validate_device,
 )
-from abtem.core.chunks import validate_chunks
+from abtem.core.chunks import estimate_potential_chunk_size, validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.ensemble import Ensemble, _wrap_with_array, unpack_blockwise_args
@@ -55,7 +55,7 @@ from abtem.multislice import (
     MultisliceTransform,
     transition_potential_multislice_and_detect,
 )
-from abtem.potentials.iam import BasePotential, validate_potential
+from abtem.potentials.iam import BasePotential, PotentialArray, validate_potential
 from abtem.scan import BaseScan, CustomScan, GridScan, validate_scan
 from abtem.slicing import SliceIndexedAtoms
 from abtem.tilt import TiltType2D, validate_tilt
@@ -106,6 +106,39 @@ def _antialias_cutoff_gpts(
     extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
     new_gpts = safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
     return _ensure_parity_of_gpts(new_gpts, gpts, parity="same")
+
+
+def _prebuild_reused_potential(
+    potential: Optional[BasePotential], waves: Waves
+) -> Optional[BasePotential]:
+    """Build an unbuilt potential once, up front, if it is about to be reused
+    across more than one lazy chunk of ``waves`` (e.g. a scan over many probe
+    positions).
+
+    Without this, each chunk's multislice task independently rebuilds the full
+    potential from atoms, since the atom-projection integration happens eagerly
+    inside the per-chunk dask task body rather than as a shared, cached dask
+    node (see abTEM issue #339). Only pre-build when the whole potential fits
+    within the same per-chunk memory budget that ``generate_chunked_slices``
+    already uses, so this never risks exceeding memory for potentials too
+    large to build in one piece.
+    """
+    if (
+        potential is None
+        or isinstance(potential, PotentialArray)
+        or not waves.is_lazy
+    ):
+        return potential
+
+    if int(np.prod(waves.array.numblocks)) <= 1:
+        return potential
+
+    chunk_size = estimate_potential_chunk_size(potential.gpts, potential.device)
+
+    if potential.num_slices <= chunk_size:
+        potential = potential.build()
+
+    return potential
 
 
 class BaseWaves(HasGrid2DMixin, HasAcceleratorMixin):
@@ -436,6 +469,8 @@ class Waves(BaseWaves, ArrayObject):
     @property
     def device(self) -> str:
         """The device where the array is stored."""
+        if hasattr(self, "_device"):
+            return self._device
         return device_name_from_array_module(get_array_module(self.array))
 
     @property
@@ -1309,6 +1344,7 @@ class Waves(BaseWaves, ArrayObject):
             transition_potentials = [transition_potentials]
 
         potential = validate_potential(potential, self)
+        potential = _prebuild_reused_potential(potential, self)
 
         measurements: list[Waves | BaseMeasurements] = []
         for transition_potential in transition_potentials:
@@ -1370,9 +1406,14 @@ class Waves(BaseWaves, ArrayObject):
             converted to measurements after running the multislice algorithm.
             See `abtem.measurements.detect` for a list of implemented detectors. If
             not given, returns the wave functions themselves.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
-
 
         Returns
         -------
@@ -1383,6 +1424,7 @@ class Waves(BaseWaves, ArrayObject):
             (if no detector(s) given).
         """
         potential = validate_potential(potential, self)
+        potential = _prebuild_reused_potential(potential, self)
 
         multislice_transform = MultisliceTransform(
             potential=potential, detectors=detectors, **multislice_func_kwargs
@@ -1480,7 +1522,21 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
     def apply_transform(
         self, transform, max_batch: int | str = "auto", lazy: bool = True
     ):
-        return self.build(lazy=lazy).apply_transform(transform, max_batch=max_batch)
+        # Resolve VRAM-aware batch size *before* building so that
+        # _build_validated receives the correct probe count and creates
+        # the right dask chunks.  If we let max_batch="auto" reach
+        # _build_validated it falls back to the dask.chunk-size-gpu config
+        # (512 MB default → batch≈2 at 4096²), ignoring free CUDA memory.
+        if max_batch == "auto" and self._device == "gpu":
+            from abtem.core.chunks import estimate_scan_batch_size
+
+            max_batch = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+
+        built = self.build(lazy=lazy, max_batch=max_batch)
+        # Keep _device so that ArrayObject.apply_transform can select the
+        # synchronous scheduler for GPU work and propagate device to outputs.
+        built._device = self._device
+        return built.apply_transform(transform, max_batch=max_batch)
 
     def check_can_build(self):
         """Check whether the wave functions can be built."""
@@ -1629,6 +1685,15 @@ class WavesBuilder(BaseWaves, Ensemble, CopyMixin, EqualityMixin):
         if lazy:
             if isinstance(max_batch, int):
                 max_batch = int(max_batch * np.prod(self._valid_gpts))
+            elif max_batch == "auto" and self.device == "gpu":
+                # Query free CUDA memory to pick a probe batch that fits in
+                # VRAM.  The config-based fallback (dask.chunk-size-gpu,
+                # default 512 MB) gives only ~2 probes at 4096², which is
+                # far below the GPU-optimal batch size.
+                from abtem.core.chunks import estimate_scan_batch_size
+
+                n_probes = estimate_scan_batch_size(self.gpts, self.dtype, "gpu")
+                max_batch = int(n_probes * np.prod(self._valid_gpts))
 
             chunks = self._default_ensemble_chunks + self._valid_gpts
 
@@ -1823,6 +1888,12 @@ class PlaneWave(WavesBuilder):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly.
             If None, this defaults to the setting in the user configuration file.
+        potential_chunk_size : int or str, optional
+            Number of potential slices to build and hold in memory at once.
+            ``"auto"`` (default) selects a size based on the available memory
+            budget. Smaller values reduce peak memory at the cost of more
+            build overhead. Can be set globally via the
+            ``potential.slice-chunk-size`` configuration key.
         **multislice_func_kwargs
             Additional keyword arguments passed to the multislice function.
 
@@ -2143,6 +2214,8 @@ class Probe(WavesBuilder):
             probe.grid.match(potential)
 
         waves = probe.build(scan=scan, max_batch=max_batch, lazy=lazy)
+
+        potential = _prebuild_reused_potential(potential, waves)
 
         multislice = MultisliceTransform(potential, detectors, **multislice_func_kwargs)
 

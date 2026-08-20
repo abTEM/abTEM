@@ -32,8 +32,8 @@ from abtem.inelastic.phonons import (
     FrozenPhonons,
     _safe_read_atoms,
 )
-from abtem.parametrizations import EwaldParametrization, LobatoParametrization
-from abtem.potentials.charge_density import _interpolate_slice, _resolvable_ewald_width
+from abtem.parametrizations import LobatoParametrization
+from abtem.potentials.charge_density import _interpolate_slice
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
 
 try:
@@ -82,15 +82,36 @@ class _DummyGPAW:
         atoms = gpaw.atoms.copy()
         atoms.calc = None
 
+        # GPAW's new-style calculator (default since GPAW 26) renames the
+        # compensation charge coefficients from Q_aL to ccc_aL.
+        Q_aL = getattr(gpaw.density, "Q_aL", None)
+        if Q_aL is None:
+            Q_aL = getattr(gpaw.density, "ccc_aL", None)
+        if Q_aL is None:
+            # Neither attribute is populated: on old-style GPAW (Density.Q_aL
+            # starts as None) this happens for a calculator restarted from a
+            # .gpw file without rerunning the SCF loop, since Q_aL is filled
+            # in as a side effect of calculate() rather than eagerly on load.
+            # Compute it explicitly instead of assuming it is already cached.
+            if hasattr(gpaw.density, "calculate_multipole_moments"):
+                _, Q_aL = gpaw.density.calculate_multipole_moments()
+            elif hasattr(gpaw.density, "calculate_compensation_charge_coefficients"):
+                Q_aL = gpaw.density.calculate_compensation_charge_coefficients()
+            else:
+                raise AttributeError(
+                    "could not find or compute GPAW's compensation charge "
+                    "coefficients (Q_aL/ccc_aL) on this density object"
+                )
+
         kwargs = {
-            "setup_mode": gpaw.parameters["mode"],
-            "setup_xc": gpaw.parameters["xc"],
+            "setup_mode": gpaw.parameters.mode,
+            "setup_xc": gpaw.parameters.xc,
             "nt_sG": gpaw.density.nt_sG.copy(),
             "gd": gpaw.density.gd.new_descriptor(comm=SerialCommunicator()),
             "D_asp": dict(gpaw.density.D_asp),
             "atoms": atoms,
             "valence_potential": gpaw.get_electrostatic_potential(),
-            "Q_aL": dict(gpaw.density.Q_aL),
+            "Q_aL": dict(Q_aL),
         }
 
         return cls(**kwargs)
@@ -414,76 +435,6 @@ class GPAWPotential(_PotentialBuilder):
     def calculators(self):
         return self._calculators
 
-    def _get_all_electron_density(self):
-        calculator = (
-            self.calculators[0]
-            if isinstance(self.calculators, list)
-            else self.calculators
-        )
-
-        try:
-            calculator = calculator.compute()
-        except AttributeError:
-            pass
-
-        # assert len(self.calculators) == 1
-
-        calculator = _DummyGPAW.from_generic(calculator)
-
-        atoms = self.frozen_phonons.atoms
-
-        if self.repetitions != (1, 1, 1):
-            cell_cv = calculator.gd.cell_cv * self.repetitions
-            N_c = tuple(
-                n_c * rep for n_c, rep in zip(calculator.gd.N_c, self.repetitions)
-            )
-            gd = calculator.gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
-            atoms = atoms * self.repetitions
-            nt_sG = np.tile(calculator.nt_sG, self.repetitions)
-        else:
-            gd = calculator.gd
-            nt_sG = calculator.nt_sG
-
-        random_atoms = self.frozen_phonons.randomize(atoms)
-
-        calc = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
-        calc.initialize(random_atoms)
-
-        return self._get_all_electron_density(
-            nt_sG=nt_sG,
-            gd=gd,
-            D_asp=calculator.D_asp,
-            setups=calc.setups,
-            gridrefinement=self.gridrefinement,
-            atoms=random_atoms,
-        )
-
-    def _get_ewald_potential(self):
-        ewald_parametrization = EwaldParametrization(
-            width=_resolvable_ewald_width(self.sampling, self.slice_thickness)
-        )
-
-        atoms = self.frozen_phonons.atoms * self.repetitions
-
-        atoms = self.frozen_phonons.randomize(atoms)
-
-        ewald_potential = Potential(
-            atoms=atoms,
-            gpts=self.gpts,
-            sampling=self.sampling,
-            parametrization=ewald_parametrization,
-            slice_thickness=self.slice_thickness,
-            projection="finite",
-            # integral_method="quadrature",
-            plane=self.plane,
-            box=self.box,
-            origin=self.origin,
-            exit_planes=self.exit_planes,
-            device=self.device,
-        )
-
-        return ewald_potential
-
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
         """
         Generate the slices for the potential.
@@ -581,6 +532,7 @@ class GPAWPotential(_PotentialBuilder):
 
         if args["frozen_phonons"] is not None:
             frozen_phonons = frozen_phonons_partial(args["frozen_phonons"])
+            frozen_phonons = frozen_phonons.item()
         else:
             frozen_phonons = None
 
@@ -625,9 +577,16 @@ class GPAWPotential(_PotentialBuilder):
 
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)
-            for i, fp in enumerate(
-                self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
-            ):
+            partitioned = self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
+
+            # Iterating a dask array yields per-element dask array slices;
+            # passing those into dask.delayed() and wrapping the result with
+            # another from_delayed()/concatenate() confuses dask's shape
+            # inference (IndexError deep in dask.array.core during compute).
+            # Delayed objects from to_delayed() compose correctly instead.
+            fp_chunks = partitioned.to_delayed().ravel() if lazy else partitioned
+
+            for i, fp in enumerate(fp_chunks):
                 if lazy:
                     block = dask.delayed(frozen_phonons)(calculators, fp)
 
@@ -667,23 +626,30 @@ class GPAWPotential(_PotentialBuilder):
 
         return (array,)
 
-        # return (array,)
-        # # if lazy:
-
-        # #     print(array)
-
-        # #     return (da.concatenate(list(array)),)
-        # # else:
-        # #     return (array,)
-
 
 class GPAWParametrization:
     """
     Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT
     calculation.
+
+    Parameters
+    ----------
+    nodes : int, optional
+        Number of nodes used by the Hankel transform (`hankel.SymmetricFourierTransform`)
+        that converts the all-electron radial charge density into an X-ray
+        scattering factor. `None` (default) lets `hankel` choose automatically.
+    integration_step : float, optional
+        Step size used by the Hankel transform. The default of 0.002 is fine
+        for light elements, but is too coarse for heavier ones (e.g. In, Z=49),
+        where it can produce a non-monotonic, unphysical scattering factor; 0.001
+        resolves this for most elements at negligible extra cost. The heaviest
+        elements (e.g. Re, Z=75) may still show a several-percent-level
+        mismatch against tabulated parametrizations even at this step size,
+        plausibly from GPAW's scalar-relativistic treatment diverging from
+        whatever reference the tabulated parameters were fit to.
     """
 
-    def __init__(self, nodes=None, integration_step=0.002):
+    def __init__(self, nodes=None, integration_step=0.001):
         self._nodes = nodes
         self._integration_step = integration_step
         self._potential_functions = {}
@@ -723,20 +689,24 @@ class GPAWParametrization:
         if isinstance(symbol, Number):
             symbol = chemical_symbols[symbol]
 
+        added_electrons = self._get_added_electrons(symbol, charge)
+
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
             ae = AllElectronAtom(symbol, spinpol=True, xc="PBE")
-            ae.run()
+
+            for n, l, df in added_electrons:
+                ae.add(n, l, df)
+
+            if added_electrons:
+                # The occupations perturbed by add() need a more conservative
+                # mixing schedule to reach self-consistency than the default,
+                # which is tuned for the unperturbed (neutral) configuration.
+                ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+            else:
+                ae.run()
+
             ae.scalar_relativistic = True
             ae.refine()
-
-        # added_electrons = self._get_added_electrons(symbol, charge)
-        #
-        # for added_electron in added_electrons:
-        #     ae.add(*added_electron[:2], added_electron[-1])
-
-        # # ae.run()
-        # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-        # maxiter=5000, mix=0.005, dnmax=1e-5)
 
         return ae
 
@@ -766,7 +736,13 @@ class GPAWParametrization:
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
 
-        from hankel import SymmetricFourierTransform
+        try:
+            from hankel import SymmetricFourierTransform
+        except ImportError as e:
+            raise ImportError(
+                "Calculating a GPAW-derived scattering factor requires hankel. "
+                "Install it with `pip install abtem[gpaw]` or `pip install hankel`."
+            ) from e
 
         ht = SymmetricFourierTransform(ndim=3, h=self._integration_step, N=self._nodes)
         k = np.linspace(0.001, 12, 2000)
@@ -785,6 +761,13 @@ class GPAWParametrization:
         return fx
 
     def _to_lobato(self, symbol, charge):
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+
+        key = (symbol, charge)
+        if key in self._potential_functions:
+            return self._potential_functions[key]
+
         fx = self.x_ray_scattering_factor(symbol, charge)
         n = self.charge(symbol, charge)
 
@@ -798,47 +781,27 @@ class GPAWParametrization:
         fe[k != 0] = (Z - fx(k[k > 0])) / k[k > 0] ** 2 / (2 * np.pi**2 * units.Bohr)
         fe[k == 0] = fe0
 
-        if isinstance(symbol, str):
-            symbol = atomic_numbers[symbol]
-
+        # The Lobato functional form has near-degenerate parameter
+        # directions -- large, nearly-cancelling terms that barely affect
+        # the fitted curve in k-space but can shift the real-space
+        # reconstruction substantially near r = 0. An unregularized refit of
+        # DFT-derived (as opposed to exact tabulated) data can wander along
+        # those directions; a small regularization keeping the fit close to
+        # the tabulated Lobato parameters (used as the initial guess)
+        # measurably improves agreement without materially degrading the
+        # fit to `fe` itself.
         parametrization_aeatom = LobatoParametrization({})
-        parametrization_aeatom.fit(symbol, k, fe)
+        parametrization_aeatom.fit(atomic_numbers[symbol], k, fe, regularization=0.05)
+
+        self._potential_functions[key] = parametrization_aeatom
         return parametrization_aeatom
 
     def potential(self, symbol: str, charge: float = 0.0):
-        return self._to_lobato(symbol, charge).potential(symbol, charge)
+        # The DFT calculation for `charge` already produced the ionized
+        # density the fit below is based on, so the returned
+        # LobatoParametrization's own (separate, cation-unsupported) charge
+        # correction must not be triggered by passing charge through again.
+        return self._to_lobato(symbol, charge).potential(symbol)
 
     def scattering_factor(self, symbol, charge: float = 0.0):
-        return self._to_lobato(symbol, charge).scattering_factor(symbol, charge)
-
-    # def potential(self, symbol: str, charge: float = 0.0):
-    #     return interp1d(k, fe, fill_value=(fe0, 0.), bounds_error=False)
-    # def potential(self, symbol: str, charge: float = 0.0):
-    #     """
-    #     Calculate the radial electrostatic potential for an atom.
-    #
-    #     Parameters
-    #     ----------
-    #     symbol : str
-    #         Chemical symbol of the atomic element.
-    #     charge : float, optional
-    #         Charge the atom by the given fractional number of electrons.
-    #
-    #     Returns
-    #     -------
-    #     potential : callable
-    #         Function of the radial electrostatic potential with parameter 'r'
-    # corresponding to the radial distance from the core.
-    #     """
-    #
-    #     ae = self._get_all_electron_atom(symbol, charge)
-    #     r = ae.rgd.r_g * units.Bohr
-    #
-    #     ve = -ae.rgd.poisson(ae.n_sg.sum(0))
-    #     ve = interp1d(r, ve, fill_value="extrapolate", bounds_error=False)
-    #
-    #     vr = (
-    #         lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0)
-    #         + ve(r) / r * units.Hartree * units.Bohr
-    #     )
-    #     return vr
+        return self._to_lobato(symbol, charge).scattering_factor(symbol)

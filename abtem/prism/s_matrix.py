@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import operator
 import warnings
@@ -28,7 +29,8 @@ from abtem.core.complex import complex_exponential
 from abtem.core.diagnostics import TqdmWrapper
 from abtem.core.energy import Accelerator
 from abtem.core.ensemble import Ensemble, _wrap_with_array
-from abtem.core.grid import Grid, GridUndefinedError
+from abtem.core.fft import fft2, ifft2
+from abtem.core.grid import Grid, GridUndefinedError, spatial_frequencies
 from abtem.core.utils import (
     CopyMixin,
     EqualityMixin,
@@ -43,6 +45,8 @@ from abtem.detectors import (
     AnnularDetector,
     BaseDetector,
     FlexibleAnnularDetector,
+    PixelatedDetector,
+    SegmentedDetector,
     WavesDetector,
     validate_detectors,
 )
@@ -1125,7 +1129,9 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
         )
         phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
         array = ctf._evaluate_from_angular_grid(alpha, phi)
-        array = array / xp.sqrt((array**2).sum(axis=-1, keepdims=True))
+        # the coefficients may be complex when the ctf includes aberrations, hence
+        # the normalization must use the absolute square
+        array = array / xp.sqrt((xp.abs(array) ** 2).sum(axis=-1, keepdims=True))
         return array
 
     def _batch_reduce_to_measurements(
@@ -1449,7 +1455,2112 @@ class SMatrixArray(BaseSMatrix, ArrayObject):
             ctf=ctf,
             detectors=detectors,
             max_batch_reduction=max_batch_reduction,
-            rechunk=rechunk,
+            reduction_scheme=rechunk,
+        )
+
+
+# the coarse plane-wave expansion of the upsampled (C-PRISM) scattering matrix is
+# built on a disk around the aperture: every beam within this normalized radius
+# (unity at the aperture edge) of the aperture, or one coarse cell, whichever is
+# larger. The margin beams anchor the interpolation of the aperture-edge beams:
+# on the Ge benchmark cell 0.3 improves the single-probe pattern over no margin
+# by 30% inside the disk and 10-13% at and beyond its edge, for ~20% more
+# multislice runs; band-integrated scan errors are insensitive to it. The far
+# corners of the bounding rectangle are dropped either way.
+_COARSE_SUPPORT_MARGIN = 0.3
+
+
+def _dense_wave_vector_indices(
+    extent: tuple[float, float],
+    gpts: tuple[int, int],
+    energy: float,
+    semiangle_cutoff: float,
+) -> np.ndarray:
+    """Integer Fourier-space indices of all plane waves inside the aperture at
+    interpolation (1, 1), including the soft edge."""
+    probe = Probe._from_ctf(
+        extent=extent,
+        gpts=gpts,
+        ctf=CTF(energy=energy, semiangle_cutoff=semiangle_cutoff),
+        energy=energy,
+        device="cpu",
+    )
+    aperture = probe.aperture._evaluate_kernel(probe)
+
+    indices = np.where(aperture > 0.0)
+
+    n = np.fft.fftfreq(aperture.shape[0], d=1 / aperture.shape[0])[indices[0]]
+    m = np.fft.fftfreq(aperture.shape[1], d=1 / aperture.shape[1])[indices[1]]
+    return np.stack([n, m], axis=-1).astype(int)
+
+
+class _FullGridPixelatedDetector(PixelatedDetector):
+    """Pixelated detection on a fixed real-space grid.
+
+    Window-reduced wave functions are zero-padded to the full simulation grid
+    before the diffraction patterns are computed, so the patterns of
+    differently windowed reductions share one angular grid (the intensity of a
+    diffraction pattern does not depend on where the window sits in the padded
+    frame). This is what lets the two branches of a blended reduction be
+    detected separately and their intensities added per pixel.
+    """
+
+    def __init__(self, detector: PixelatedDetector, gpts: tuple[int, int]):
+        if not detector.reciprocal_space:
+            raise ValueError(
+                "padding pixelated detection to the full grid requires "
+                "reciprocal-space output"
+            )
+        self._pad_gpts = tuple(int(n) for n in gpts)
+        super().__init__(
+            max_angle=detector.max_angle,
+            resample=detector.resample,
+            reciprocal_space=detector.reciprocal_space,
+            to_cpu=detector.to_cpu,
+            url=detector.url,
+        )
+
+    def _padded(self, waves):
+        if tuple(waves.gpts) == self._pad_gpts:
+            return waves
+        if isinstance(waves, Waves):
+            xp = get_array_module(waves.array)
+            array = xp.zeros(
+                waves.array.shape[:-2] + self._pad_gpts, dtype=waves.array.dtype
+            )
+            # a unit probe carries a real-space power of 1 / grid size, so the
+            # window field is rescaled to the convention of the padded grid
+            scale = np.sqrt(
+                np.prod(waves.gpts) / np.prod(self._pad_gpts)
+            ).astype(get_dtype(complex=False))
+            array[..., : waves.gpts[0], : waves.gpts[1]] = waves.array * scale
+            return Waves(
+                array,
+                sampling=tuple(waves._valid_sampling),
+                energy=waves.energy,
+                ensemble_axes_metadata=waves.ensemble_axes_metadata,
+                metadata=waves.metadata,
+            )
+        # padding extends the extent at fixed sampling — setting only the gpts
+        # would instead refine the window and mislabel the angular sampling
+        waves = waves.copy()
+        waves.extent = tuple(
+            s * n for s, n in zip(waves._valid_sampling, self._pad_gpts)
+        )
+        waves.gpts = self._pad_gpts
+        return waves
+
+    def angular_limits(self, waves):
+        return super().angular_limits(self._padded(waves))
+
+    def _new_sampling_and_gpts(self, waves):
+        return super()._new_sampling_and_gpts(self._padded(waves))
+
+    def _calculate_new_array(self, waves):
+        return super()._calculate_new_array(self._padded(waves))
+
+
+class CompressedSMatrixArray(BaseSMatrix, CopyMixin, EqualityMixin):
+    """
+    A compressed scattering matrix defined by its truncated singular value
+    decomposition, returned by :meth:`.SMatrix.build` when ``upsample=True`` (the
+    C-PRISM algorithm). The coarse phase-removed scattering matrix is interpolated
+    to the plane waves of the aperture at interpolation (1, 1) and factored as
+    :math:`T \\approx U \\Sigma V^H`, where the left singular vectors :math:`U` are
+    real-space images and the right singular vectors hold the plane-wave
+    coefficients of each mode.
+
+    Parameters
+    ----------
+    u : np.ndarray
+        Left singular vectors of the phase-removed scattering matrix of shape
+        (K, gpts_x, gpts_y), where K is the number of retained modes.
+    sigma : np.ndarray
+        Retained singular values of shape (K,).
+    vh_dense : np.ndarray
+        Right singular vectors interpolated to the dense plane-wave expansion of
+        shape (K, number of dense plane waves).
+    dense_indices : np.ndarray
+        Integer Fourier-space indices of the dense plane waves of shape (N, 2).
+    semiangle_cutoff : float
+        The radial cutoff of the plane-wave expansion [mrad].
+    energy : float
+        Electron energy [eV].
+    extent : two float
+        Lateral extent of the scattering matrix [Å].
+    interpolation : two int
+        Interpolation factor used for the coarse plane-wave expansion.
+    window_gpts : two int
+        The number of grid points describing the cropping window of the reduced
+        wave functions.
+    position_quantization : int, optional
+        If given, the fractional part of the probe positions is quantized to this
+        number of fractions of a pixel. The default is None, ie. the positions are
+        not quantized.
+    device : str
+        The device used for the reduction ('cpu' or 'gpu').
+    metadata : dict
+        A dictionary defining wave function metadata.
+    """
+
+    def __init__(
+        self,
+        u: np.ndarray,
+        sigma: np.ndarray,
+        vh_dense: np.ndarray,
+        dense_indices: np.ndarray,
+        semiangle_cutoff: float,
+        energy: float,
+        extent: tuple[float, float],
+        interpolation: tuple[int, int],
+        window_gpts: tuple[int, int],
+        position_quantization: int = None,
+        max_batch_expansion: int | str = "auto",
+        blend_angle: float = None,
+        device: str = None,
+        metadata: dict = None,
+        singular_values: np.ndarray = None,
+        reference_depth: float = 0.0,
+    ):
+        self._u = u
+        self._sigma = sigma
+        self._vh_dense = vh_dense
+        self._dense_indices = dense_indices
+        self._singular_values = singular_values
+        self._max_batch_expansion = max_batch_expansion
+        self._blend_angle = blend_angle
+        self._reference_depth = float(reference_depth)
+
+        self._grid = Grid(extent=extent, gpts=u.shape[-2:], lock_gpts=True)
+        self._accelerator = Accelerator(energy=energy)
+
+        self._semiangle_cutoff = semiangle_cutoff
+        self._interpolation = interpolation
+        self._window_gpts = tuple(window_gpts)
+        self._position_quantization = position_quantization
+        self._device = validate_device(device)
+        self._metadata = {} if metadata is None else metadata
+
+    @staticmethod
+    def _detects_the_wave(detectors) -> bool:
+        """Whether any detector reads the wave rather than its diffracted
+        intensity.
+
+        The beams are referenced to a depth inside the specimen (see
+        :meth:`SMatrix._reference_depth`), so the reduced wave is the exit wave
+        propagated to that depth. A reciprocal-space intensity does not see the
+        difference — the reference is a phase in ``q`` — but a wave function or
+        a real-space intensity does, and is propagated back to the exit
+        surface first.
+        """
+        for detector in ensure_list(detectors):
+            if isinstance(detector, WavesDetector):
+                return True
+            if isinstance(detector, PixelatedDetector) and not (
+                detector.reciprocal_space
+            ):
+                return True
+        return False
+
+    def _to_exit_reference(self, array):
+        """Propagate reduced waves from the reference depth to the exit surface."""
+        if self._reference_depth == 0.0:
+            return array
+        xp = get_array_module(array)
+        gpts = array.shape[-2:]
+        sampling = tuple(e / n for e, n in zip(self.extent, self.gpts))
+        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        propagator = complex_exponential(
+            -np.pi * self.wavelength * self._reference_depth
+            * (kx[:, None] ** 2 + ky[None] ** 2)
+        ).astype(get_dtype(complex=True))
+        return ifft2(fft2(array) * propagator)
+
+    @property
+    def ensemble_axes_metadata(self) -> list[AxisMetadata]:
+        return []
+
+    @property
+    def ensemble_shape(self) -> tuple[int, ...]:
+        return ()
+
+    @property
+    def u(self) -> np.ndarray:
+        """Left singular vectors of shape (K, gpts_x, gpts_y)."""
+        return self._u
+
+    @property
+    def sigma(self) -> np.ndarray:
+        """Retained singular values."""
+        return self._sigma
+
+    @property
+    def vh_dense(self) -> np.ndarray:
+        """Right singular vectors at the dense plane-wave expansion."""
+        return self._vh_dense
+
+    @property
+    def rank(self) -> int:
+        """Number of retained modes.
+
+        At least the number of built beams — their row space is retained whole
+        so that the plane-wave branch of the reduction is the PRISM algorithm
+        exactly — unless ``max_rank`` was given. The stored modes and the
+        reduction both scale with it."""
+        return len(self._sigma)
+
+    @property
+    def singular_values(self) -> np.ndarray:
+        """The full singular-value spectrum of the interpolated operator,
+        including the modes truncated by ``tolerance`` and ``max_rank``. Useful
+        for choosing either: where the spectrum falls off is the intrinsic
+        dimensionality of the specimen, and the rank may be cut towards it for
+        proportional savings in memory and reduction time. The retained part is
+        :attr:`sigma`."""
+        if self._singular_values is None:
+            return self._sigma
+        return self._singular_values
+
+    @property
+    def max_batch_expansion(self) -> int | str:
+        """Number of plane waves expanded at a time by the full-window
+        reduction; 'auto' materializes the full expansion."""
+        return self._max_batch_expansion
+
+    @property
+    def blend_angle(self) -> float | None:
+        """Scattering angle [mrad] above which the reduction follows the
+        plane-wave (PRISM) reduction of the built beams (None: no blending)."""
+        return self._blend_angle
+
+    @property
+    def metadata(self) -> dict:
+        self._metadata["energy"] = self.energy
+        return self._metadata
+
+    @property
+    def interpolation(self) -> tuple[int, int]:
+        return self._interpolation
+
+    @property
+    def semiangle_cutoff(self) -> float:
+        return self._semiangle_cutoff
+
+    @property
+    def wave_vectors(self) -> np.ndarray:
+        """The wave vectors of the dense plane-wave expansion."""
+        extent = self.extent
+        dtype = get_dtype(complex=False)
+        wave_vectors = self._dense_indices.astype(dtype)
+        wave_vectors[:, 0] /= dtype(extent[0])
+        wave_vectors[:, 1] /= dtype(extent[1])
+        return wave_vectors
+
+    @property
+    def window_gpts(self) -> tuple[int, int]:
+        return self._window_gpts
+
+    @property
+    def window_extent(self) -> tuple[float, float]:
+        return (
+            self.window_gpts[0] * self.sampling[0],
+            self.window_gpts[1] * self.sampling[1],
+        )
+
+    def _calculate_ctf_coefficients(self, ctf: CTF):
+        xp = get_array_module(self._device)
+        wave_vectors = xp.asarray(self.wave_vectors)
+
+        alpha = (
+            xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
+        )
+        phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
+        array = ctf._evaluate_from_angular_grid(alpha, phi)
+        array = array / xp.sqrt((xp.abs(array) ** 2).sum(axis=-1, keepdims=True))
+        return array
+
+    def _coefficient_values(self, coefficients):
+        """The dense plane-wave amplitudes of each mode of the expansion."""
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        values = xp.asarray(self._sigma[:, None] * self._vh_dense, dtype=dtype)
+        return values * xp.asarray(coefficients, dtype=dtype)[None]
+
+    def _lattice_coefficients(self, coefficients):
+        """CTF coefficients restricted to the built (coarse lattice) plane waves.
+
+        The trigonometric interpolation is interpolatory — the reconstruction at
+        the lattice plane waves equals the built scattering matrix — hence
+        reducing with the restricted (and renormalized) coefficients yields the
+        wave functions of the PRISM algorithm from the same compressed factors.
+        """
+        xp = get_array_module(self._device)
+
+        indices = np.asarray(self._dense_indices)
+        mask = (indices[:, 0] % self._interpolation[0] == 0) & (
+            indices[:, 1] % self._interpolation[1] == 0
+        )
+
+        restricted = coefficients * xp.asarray(mask)
+        return restricted / xp.sqrt(
+            (xp.abs(restricted) ** 2).sum(axis=-1, keepdims=True)
+        )
+
+    def _blend_weight(self, blend_angle, window: tuple[int, int], taper=None):
+        """Radial Fourier-space weight switching from the interpolated (C-PRISM)
+        wave below ``blend_angle`` to the plane-wave (PRISM) wave above it, with
+        a smooth cosine taper.
+
+        ``blend_angle='aperture'`` uses the amplitude of the probe-forming
+        aperture as the weight instead: the interpolated wave inside the
+        bright-field disk, the plane-wave reduction outside it, with the soft
+        aperture edge as the transition.
+        """
+        xp = get_array_module(self._device)
+
+        if isinstance(blend_angle, str):
+            if blend_angle != "aperture":
+                raise ValueError(
+                    f"blend_angle must be a number, 'aperture' or None; "
+                    f"got {blend_angle!r}"
+                )
+            probe = self.dummy_probes()
+            probe.grid.check_is_defined()
+            # the dummy probe is built on this object's device, so the kernel
+            # is a device array and must stay in its own array module: numpy
+            # refuses to convert one implicitly
+            kernel = xp.abs(probe.aperture._evaluate_kernel(probe))
+            if tuple(kernel.shape) != tuple(window):
+                raise RuntimeError(
+                    "aperture weight does not match the reduction window"
+                )
+            kernel = kernel / kernel.max()
+            return kernel.astype(get_dtype(complex=False))
+
+        wavelength = self.wavelength
+        qx = np.fft.fftfreq(window[0], d=self.sampling[0])
+        qy = np.fft.fftfreq(window[1], d=self.sampling[1])
+        angle = (
+            np.sqrt(qx[:, None] ** 2 + qy[None, :] ** 2) * wavelength * 1e3
+        )  # mrad
+
+        # the blend angle is an upper bound on the validity of the
+        # interpolation, hence the taper ends AT it rather than straddling it
+        if taper is None:
+            taper = max(4.0, 0.2 * blend_angle)
+
+        if taper <= 0.0:
+            # a sharp cut, used when the blend angle has been snapped to a
+            # detector boundary: a taper would reach back into the band below
+            # and mix the branches inside it
+            weight = (angle < blend_angle).astype(np.float64)
+        else:
+            weight = 0.5 * (
+                1.0 + np.cos(np.pi * (angle - blend_angle + taper) / taper)
+            )
+            weight[angle <= blend_angle - taper] = 1.0
+            weight[angle >= blend_angle] = 0.0
+        return xp.asarray(weight, dtype=get_dtype(complex=False))
+
+    @staticmethod
+    def _snapped_blend_angle(blend_angle, detectors):
+        """The blend angle lowered to a detector collection boundary.
+
+        Above the blend angle the reduction is the plane-wave branch alone,
+        which is the PRISM algorithm exactly; below it the interpolated branch
+        takes over. A detector whose collection range straddles the blend angle
+        therefore mixes the two, and is the only way the blended reduction can
+        come out worse than PRISM on a band. Snapping the angle down to the
+        nearest boundary leaves every band wholly on one side: the bands above
+        are PRISM, the bands below are the interpolated reduction.
+        """
+        if blend_angle is None or isinstance(blend_angle, str):
+            return blend_angle
+
+        if detectors is None:
+            return blend_angle
+        if not isinstance(detectors, (list, tuple)):
+            detectors = [detectors]
+
+        bounds = set()
+        for detector in detectors:
+            for name in ("inner", "outer"):
+                value = getattr(detector, name, None)
+                if value is not None and np.isfinite(value):
+                    bounds.add(float(value))
+
+        tolerance = blend_angle * (1.0 + 1e-6) + 1e-9
+        below = [value for value in bounds if 0.0 < value <= tolerance]
+        return max(below) if below else blend_angle
+
+    @staticmethod
+    def _blend_branches(blend_angle, blend_component):
+        """Which of the two blended reductions the result actually needs.
+
+        Selecting a component keeps a single branch, so the other one — and the
+        window kernel it would be reduced with — is never evaluated.
+        """
+        return (
+            blend_component != "high",
+            blend_angle is not None and blend_component != "low",
+        )
+
+    def _blend_wave_batches(self, interpolated, plane_wave, weight, component=None):
+        """Combine the two reductions in Fourier space with the radial weight.
+
+        ``component='low'`` returns the interpolated branch alone weighted by
+        ``sqrt(weight)``, ``component='high'`` the plane-wave branch alone
+        weighted by ``sqrt(1 - weight)``: detecting the two and summing the
+        measurements blends the intensities instead of the amplitudes, which
+        permits a different reduction window per branch. The branch a component
+        discards may be given as ``None`` (see :meth:`_blend_branches`).
+        """
+        if component == "low":
+            interpolated = fft2(interpolated, overwrite_x=True)
+            interpolated *= np.sqrt(weight)[None]
+            return ifft2(interpolated, overwrite_x=True)
+        if component == "high":
+            plane_wave = fft2(plane_wave, overwrite_x=True)
+            plane_wave *= np.sqrt(1.0 - weight)[None]
+            return ifft2(plane_wave, overwrite_x=True)
+        interpolated = fft2(interpolated, overwrite_x=True)
+        plane_wave = fft2(plane_wave, overwrite_x=True)
+        interpolated *= weight[None]
+        interpolated += plane_wave * (1.0 - weight)[None]
+        return ifft2(interpolated, overwrite_x=True)
+
+    def _window_kernel(self, values, fractional_offset, center: bool = True):
+        """The window kernels :math:`B_k` obtained by reducing the dense plane waves
+        for a probe displaced by a fraction of a pixel.
+
+        With ``center=True`` (default) the kernel is cropped to the reduction
+        window with the probe at its center; with ``center=False`` the kernel is
+        returned on the full grid indexed by the displacement from the probe
+        (used by the full-window mode reduction, which keeps the absolute frame).
+        """
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        gpts = self.gpts
+        window_gpts = self.window_gpts
+
+        if np.any(np.abs(fractional_offset) > 1e-9):
+            offset = xp.asarray(fractional_offset * np.array(self.sampling))
+            wave_vectors = xp.asarray(self.wave_vectors)
+            values = values * complex_exponential(
+                -2.0
+                * xp.pi
+                * (wave_vectors[:, 0] * offset[0] + wave_vectors[:, 1] * offset[1])
+            )[None].astype(dtype)
+
+        indices = xp.asarray(self._dense_indices)
+        scattered = xp.zeros((self.rank,) + gpts, dtype=dtype)
+        scattered[:, indices[:, 0] % gpts[0], indices[:, 1] % gpts[1]] = values
+
+        # The normalization of the wave functions scales with the number of grid
+        # points of the cropping window, such that the intensity of each reduced
+        # probe is unity.
+        normalization = np.prod(gpts) * np.sqrt(np.prod(gpts) / np.prod(window_gpts))
+
+        kernel = ifft2(scattered, overwrite_x=True)
+        kernel *= get_dtype(complex=False)(normalization)
+
+        if not center:
+            return kernel
+
+        ix = (xp.arange(window_gpts[0]) - window_gpts[0] // 2) % gpts[0]
+        iy = (xp.arange(window_gpts[1]) - window_gpts[1] // 2) % gpts[1]
+        return kernel[:, ix[:, None], iy[None, :]]
+
+    # memory budget of one gathered block in the batched mode contractions;
+    # the modes are chunked so several probe positions fit in every batch even
+    # at large ranks, keeping the device operations big and few
+    _REDUCE_BATCH_BYTES = 2**30
+    _REDUCE_MODE_CHUNK = 64
+    # the lattice reduction re-gathers a halo of window / step scan rows per
+    # row block, hence the device rows blocks are several times larger
+    _REDUCE_GPU_ROW_BLOCK_FACTOR = 8
+    # ... but never larger than the device can hold: detecting a block also
+    # holds its Fourier transform, the transform work area and the detected
+    # intensity, so the peak is a few times the block itself
+    _REDUCE_GPU_MEMORY_FRACTION = 0.5
+
+    def _reduce_memory_budget(self):
+        """Bytes that one reduced block of wave functions may occupy.
+
+        Unbounded on the host; on the device a fraction of the memory that is
+        actually free, counting the blocks the memory pool holds but is not
+        using.
+        """
+        if self._device != "gpu" or cp is None:
+            return np.inf
+
+        free = cp.cuda.Device().mem_info[0] + cp.get_default_memory_pool().free_bytes()
+        return int(free * self._REDUCE_GPU_MEMORY_FRACTION)
+
+    def _contract_modes_batched(self, fields, flat_indices, kernel, gather_kernel):
+        """Contract the modes for a batch of probe positions: for every position
+        ``p`` and window pixel ``w``, ``sum_k gathered[k, p, w] * fixed[k, w]``,
+        where the gathered operand is indexed by ``flat_indices[p, w]``.
+
+        ``gather_kernel`` selects which operand is gathered per position: the
+        windows of the left singular vectors (windowed reduction) or the
+        displaced kernel (full-window reduction). The contraction is chunked
+        over the modes first — so the gathered blocks stay within the memory
+        budget at several positions per batch — and accumulated.
+
+        BOTH OPERANDS ARE MODES-FIRST, ``(K, pixels)``, and that is the whole
+        point. A modes-last operand makes ``[..., k_start:k_stop]`` a strided
+        view, so every mode chunk needs ``ascontiguousarray`` — and getting the
+        operands into modes-last order in the first place cost a full
+        contiguous transpose of each, K * gpts^2 * 8 bytes apiece. On Pt/C that
+        was 12.2 GB per array at f=8 and 41 GB at f=4, held simultaneously with
+        the originals, and it was what put C-PRISM f=8 out of reach of a 46 GB
+        card and f=4 out of reach of everything. Modes-first slicing is already
+        contiguous, so the chunks are free views and no transpose is needed
+        anywhere.
+        """
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        num_positions = flat_indices.shape[0]
+        out_shape = flat_indices.shape[1:]
+        num_pixels = int(np.prod(out_shape))
+        num_modes = kernel.shape[0]
+
+        flat_indices = flat_indices.reshape(num_positions, num_pixels)
+        fields = fields.reshape(num_modes, -1)
+        kernel = kernel.reshape(num_modes, -1)
+
+        waves = xp.zeros((num_positions, num_pixels), dtype=dtype)
+
+        mode_chunk = min(num_modes, self._REDUCE_MODE_CHUNK)
+        max_batch = max(
+            1, int(self._REDUCE_BATCH_BYTES // max(num_pixels * mode_chunk * 8, 1))
+        )
+
+        for k_start in range(0, num_modes, mode_chunk):
+            k_stop = min(k_start + mode_chunk, num_modes)
+            # contiguous slices of a modes-first array: no copy
+            gathered_source = (kernel if gather_kernel else fields)[k_start:k_stop]
+            fixed = (fields if gather_kernel else kernel)[k_start:k_stop]
+            for start in range(0, num_positions, max_batch):
+                stop = min(start + max_batch, num_positions)
+                gathered = gathered_source[:, flat_indices[start:stop]]
+                waves[start:stop] += xp.einsum(
+                    "kpw,kw->pw", gathered, fixed, optimize=True
+                )
+
+        return waves.reshape((num_positions,) + out_shape)
+
+    def _lattice_geometry(self, scan, warn: bool = False):
+        """Describe a scan as a lattice of the pixel grid, or return None.
+
+        The fast reduction below requires the probe positions to form a regular
+        grid whose step is a whole number of pixels, so that a window offset
+        splits into a whole-step and a sub-step part. The scan may cover any
+        part of the grid and its origin may fall between pixels — a common
+        fractional offset is applied to the reduction kernel instead.
+
+        Returns ``(origin, step, shape, offset)``: the whole-pixel origin, the
+        integer pixel step, the scan shape, and the common fractional offset.
+        """
+        if not isinstance(scan, GridScan):
+            return None
+
+        positions = np.asarray(scan.get_positions())
+        if positions.ndim != 3 or min(positions.shape[:2]) < 2:
+            return None
+
+        pixels = positions / np.array(self.sampling)
+        origin = pixels[0, 0]
+        steps = (pixels[1, 0] - pixels[0, 0], pixels[0, 1] - pixels[0, 0])
+
+        if abs(steps[0][1]) > 1e-6 or abs(steps[1][0]) > 1e-6:
+            return None
+
+        step = (steps[0][0], steps[1][1])
+        shape = positions.shape[:2]
+
+        # the scan must be the exact lattice implied by its first row and column
+        if not (
+            np.allclose(pixels[:, 0, 0], origin[0] + np.arange(shape[0]) * step[0])
+            and np.allclose(pixels[0, :, 1], origin[1] + np.arange(shape[1]) * step[1])
+        ):
+            return None
+
+        # the positions are stored in single precision, so the wholeness of
+        # the step can only be resolved relative to its magnitude
+        if any(
+            abs(value - round(value)) > 1e-5 * max(1.0, abs(value))
+            for value in step
+        ):
+            if warn:
+                suggestion = tuple(
+                    min(
+                        (d for d in range(1, gpts + 1) if gpts % d == 0),
+                        key=lambda d: abs(d - n),
+                    )
+                    for n, gpts in zip(shape, self.gpts)
+                )
+                warnings.warn(
+                    "The scan step is not a whole number of pixels "
+                    f"({step[0]:.3f}, {step[1]:.3f}), so the reduction of the "
+                    "compressed scattering matrix falls back to its general "
+                    "(much slower) implementation. Choose a scan whose step "
+                    "divides the grid — for this scattering matrix "
+                    f"{self.gpts} — for example gpts={suggestion}, or build "
+                    "the scan with GridScan.commensurate(potential, ...).",
+                    stacklevel=3,
+                )
+            return None
+
+        step = tuple(int(round(value)) for value in step)
+        if min(step) < 1:
+            return None
+
+        # a common fractional origin is exact: it is applied as a sub-pixel
+        # phase ramp on the reduction kernel
+        whole = tuple(int(np.rint(value)) for value in origin)
+        offset = np.array(origin) - np.array(whole)
+
+        # a half-pixel offset rounds inconsistently along the scan (ties round
+        # to even), which would centre the cropping windows of neighbouring
+        # positions one pixel apart; leave those scans to the general path
+        if np.any(np.abs(np.abs(offset) - 0.5) < 1e-6):
+            return None
+
+        return whole, step, shape, offset
+
+    def _lattice_waves_block(
+        self, u_modes, kernel, origin, step, scan_shape, x_start, x_stop
+    ):
+        """Reduce a block of scan rows by the lattice decomposition of the
+        window offsets.
+
+        The reduction ``psi[p, j] = sum_k U[r_p + j - c, k] B[j, k]`` gathers a
+        window of the modes per probe position, which reuses no data: every
+        gathered element is consumed by a single multiply, so it runs at a few
+        percent of the achievable rate. When the probe positions lie on a
+        lattice of the pixel grid with step ``s``, the window offset splits as
+        ``j - c = a * s + b``, and the probe position enters only through the
+        whole-step part::
+
+            psi[p, a s + b] = sum_k U[(p + a) s + b, k] B[a s + b, k]
+
+        For each sub-step offset ``b`` the modes are sliced with stride ``s``
+        (a view, not a gather) and every ``(position + a)`` pair is evaluated
+        by a single matrix product; the probe-dependent shift is then applied
+        by extracting ``G[p + a, a]``. The matrix products reuse both operands
+        across the whole block, which is what the gather formulation cannot do.
+        """
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        gpts = self.gpts
+        # modes-first: (K, window_x, window_y) and (K, gpts_x, gpts_y)
+        window = tuple(kernel.shape[1:])
+        num_modes = kernel.shape[0]
+        step_x, step_y = step
+        num_y = scan_shape[1]
+        num_block = x_stop - x_start
+
+        offsets = []
+        for length, center, stride in zip(
+            window, (window[0] // 2, window[1] // 2), step
+        ):
+            displacement = np.arange(length) - center
+            sub_step = displacement % stride
+            offsets.append((sub_step, (displacement - sub_step) // stride))
+        (sub_x, whole_x), (sub_y, whole_y) = offsets
+
+        def axis_indices(value, steps, start, num, axis):
+            """Grid indices of the strided slice and the extraction offsets.
+
+            When the scan lattice tiles the periodic axis the window offsets
+            wrap onto the same points, otherwise the slice is extended by the
+            halo of points the window reaches beyond the scan.
+            """
+            if num * step[axis] == gpts[axis] and start == 0:
+                index = (origin[axis] + value + np.arange(num) * step[axis]) % gpts[axis]
+                return xp.asarray(index), xp.asarray(
+                    (np.arange(num)[:, None] + steps[None, :]) % num
+                )
+            first = int(steps.min())
+            length = num + int(steps.max()) - first
+            index = (
+                origin[axis] + value + (start + first + np.arange(length)) * step[axis]
+            ) % gpts[axis]
+            return xp.asarray(index), xp.asarray(
+                np.arange(num)[:, None] + (steps - first)[None, :]
+            )
+
+        waves = xp.zeros((num_block, num_y) + window, dtype=dtype)
+
+        for value_x in range(step_x):
+            select_x = np.flatnonzero(sub_x == value_x)
+            if not len(select_x):
+                continue
+            index_x, row_index = axis_indices(
+                value_x, whole_x[select_x], x_start, num_block, 0
+            )
+
+            for value_y in range(step_y):
+                select_y = np.flatnonzero(sub_y == value_y)
+                if not len(select_y):
+                    continue
+                index_y, column_index = axis_indices(
+                    value_y, whole_y[select_y], 0, num_y, 1
+                )
+
+                modes = u_modes[:, index_x][:, :, index_y]
+                block_kernel = kernel[:, xp.asarray(select_x)][
+                    :, :, xp.asarray(select_y)
+                ]
+                # already (K, pixels): the .T the modes-last layout needed here
+                # was a full copy of the block
+                kernel_matrix = block_kernel.reshape(num_modes, -1)
+
+                # the product holds every (grid row, grid column, window
+                # offset) combination; at small scan steps its row size is
+                # large (the sub-step groups hold window / step offsets each),
+                # so the rows are processed in chunks within the batch budget
+                # rather than materialized whole
+                row_bytes = (
+                    len(index_y) * len(select_x) * len(select_y) * 8
+                )
+                capacity = max(1, int(self._REDUCE_BATCH_BYTES // row_bytes))
+
+                if capacity >= len(index_x):
+                    product = (
+                        modes.reshape(num_modes, -1).T @ kernel_matrix
+                    ).reshape(
+                        len(index_x), len(index_y), len(select_x), len(select_y)
+                    )
+
+                    waves[
+                        :,
+                        :,
+                        xp.asarray(select_x)[:, None],
+                        xp.asarray(select_y)[None, :],
+                    ] = product[
+                        row_index[:, None, :, None],
+                        column_index[None, :, None, :],
+                        xp.arange(len(select_x))[None, None, :, None],
+                        xp.arange(len(select_y))[None, None, None, :],
+                    ]
+                    continue
+
+                columns = xp.arange(num_y)
+                offsets = xp.arange(len(select_y))
+                select_x = xp.asarray(select_x)
+                select_y = xp.asarray(select_y)
+                for chunk_start in range(0, len(index_x), capacity):
+                    chunk_stop = min(chunk_start + capacity, len(index_x))
+                    product = (
+                        modes[:, chunk_start:chunk_stop].reshape(num_modes, -1).T
+                        @ kernel_matrix
+                    ).reshape(
+                        chunk_stop - chunk_start,
+                        len(index_y),
+                        len(select_x),
+                        len(select_y),
+                    )
+
+                    inside = (row_index >= chunk_start) & (row_index < chunk_stop)
+                    block_rows, window_rows = xp.nonzero(inside)
+                    if not len(block_rows):
+                        continue
+                    waves[
+                        block_rows[:, None, None],
+                        columns[None, :, None],
+                        select_x[window_rows][:, None, None],
+                        select_y[None, None, :],
+                    ] = product[
+                        (row_index[block_rows, window_rows] - chunk_start)[
+                            :, None, None
+                        ],
+                        column_index[None, :, :],
+                        window_rows[:, None, None],
+                        offsets[None, None, :],
+                    ]
+
+        return waves.reshape((num_block * num_y,) + window)
+
+    def _lattice_batch_reduce_to_measurements(
+        self, scan, ctf, detectors, lattice, pbar: bool = False,
+        blend_angle: float = None,
+        blend_component: str = None,
+        blend_taper: float = None,
+    ):
+        """Windowed reduction of a lattice scan (see :meth:`_lattice_waves_block`)."""
+        origin, step, scan_shape, offset = lattice
+
+        measurements = allocate_multislice_measurements(
+            self.dummy_probes(scan=scan, ctf=ctf),
+            detectors,
+            extra_ensemble_axes_shape=(),
+            extra_ensemble_axes_metadata=[],
+        )
+
+        xp = get_array_module(self._device)
+        # modes-first, no transpose: _contract_modes_batched consumes (K, ...)
+        u_modes = xp.asarray(self._u)
+        window = self.window_gpts
+
+        # block the scan rows so the reduced wave functions of one block stay
+        # within a fixed budget; larger blocks amortize the halo of window /
+        # step rows that neighbouring blocks re-gather and re-multiply, hence
+        # the device budget is set several times higher than the host one
+        budget = self._REDUCE_BATCH_BYTES * (
+            self._REDUCE_GPU_ROW_BLOCK_FACTOR if self._device == "gpu" else 2
+        )
+        budget = min(budget, self._reduce_memory_budget())
+        row_bytes = scan_shape[1] * int(np.prod(window)) * 8
+        num_rows = max(1, int(budget // max(row_bytes, 1)))
+        num_rows = min(num_rows, scan_shape[0])
+        detect_rows = max(1, int(self._REDUCE_BATCH_BYTES // max(row_bytes, 1)))
+        detect_rows = min(detect_rows, num_rows)
+
+        keep_interpolated, keep_plane_wave = self._blend_branches(
+            blend_angle, blend_component
+        )
+
+        pbar = TqdmWrapper(
+            enabled=pbar,
+            total=int(np.prod(scan.shape + ctf.ensemble_shape)),
+            leave=False,
+            desc="reduce",
+        )
+
+        for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
+            sub_ctf = sub_ctf.item()
+            coefficients = self._calculate_ctf_coefficients(sub_ctf)
+            coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
+            kernel = plane_wave_kernel = None
+            if keep_interpolated:
+                kernel = self._window_kernel(
+                    self._coefficient_values(coefficients), offset
+                )
+            if keep_plane_wave:
+                plane_wave_scale = get_dtype(complex=False)(
+                    np.sqrt(np.prod(self.gpts) / np.prod(self.window_gpts))
+                )
+                plane_wave_kernel = self._window_kernel(
+                    plane_wave_scale
+                    * self._coefficient_values(
+                        self._lattice_coefficients(coefficients)
+                    ),
+                    offset,
+                )
+            if blend_angle is not None:
+                blend_weight = self._blend_weight(
+                    blend_angle, self.window_gpts, taper=blend_taper
+                )
+
+            for x_start in range(0, scan_shape[0], num_rows):
+                x_stop = min(x_start + num_rows, scan_shape[0])
+
+                interpolated = (
+                    self._lattice_waves_block(
+                        u_modes, kernel, origin, step, scan_shape, x_start, x_stop
+                    )
+                    if keep_interpolated
+                    else None
+                )
+                plane_wave = (
+                    self._lattice_waves_block(
+                        u_modes, plane_wave_kernel, origin, step, scan_shape,
+                        x_start, x_stop,
+                    )
+                    if keep_plane_wave
+                    else None
+                )
+
+                # the row block is sized for the matrix products; the blend and
+                # the detectors transform what it produces, which needs the
+                # transform, its work area and the detected intensity live at
+                # once, so they walk the block in plain-budget chunks
+                for start in range(x_start, x_stop, detect_rows):
+                    stop = min(start + detect_rows, x_stop)
+                    rows = slice(
+                        (start - x_start) * scan_shape[1],
+                        (stop - x_start) * scan_shape[1],
+                    )
+
+                    waves_array = interpolated[rows] if keep_interpolated else None
+                    if blend_angle is not None:
+                        waves_array = self._blend_wave_batches(
+                            waves_array,
+                            plane_wave[rows] if keep_plane_wave else None,
+                            blend_weight,
+                            component=blend_component,
+                        )
+                    waves_array = waves_array.reshape(
+                        (1,) * len(sub_ctf.ensemble_shape)
+                        + (stop - start, scan_shape[1])
+                        + window
+                    )
+
+                    ensemble_axes_metadata = [
+                        UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
+                    ] + [ScanAxis(), ScanAxis()]
+
+                    if self._detects_the_wave(detectors):
+                        waves_array = self._to_exit_reference(waves_array)
+
+                    waves = Waves(
+                        waves_array,
+                        sampling=tuple(self.sampling),
+                        energy=self.energy,
+                        ensemble_axes_metadata=ensemble_axes_metadata,
+                        metadata=self.metadata,
+                    )
+
+                    indices = ctf_slics + (slice(start, stop),)
+
+                    pbar.update_if_exists((stop - start) * scan_shape[1])
+
+                    for detector, measurement in zip(detectors, measurements):
+                        measurement.array[indices] = detector.detect(waves).array
+
+                del interpolated, plane_wave
+
+        pbar.close_if_exists()
+
+        return tuple(measurements)
+
+    def _reduce_to_waves_batched(self, u_windows, snapped_pixels, kernel):
+        """Vectorized equivalent of :meth:`_reduce_to_waves`: the windows of the
+        left singular vectors are gathered for batches of probe positions and
+        contracted with the kernel in large batched einsums.
+
+        The per-position loop of :meth:`_reduce_to_waves` evaluates thousands of
+        small kernels, which is launch-overhead bound on the GPU.
+        """
+        xp = get_array_module(self._device)
+
+        gpts = self.gpts
+        window_gpts = self.window_gpts
+
+        corners = (
+            snapped_pixels
+            - xp.asarray((window_gpts[0] // 2, window_gpts[1] // 2))[None]
+        ) % xp.asarray(gpts)[None]
+
+        window_x = (corners[:, 0, None] + xp.arange(window_gpts[0])[None]) % gpts[0]
+        window_y = (corners[:, 1, None] + xp.arange(window_gpts[1])[None]) % gpts[1]
+        flat_indices = (
+            window_x[:, :, None] * gpts[1] + window_y[:, None, :]
+        ).astype(np.int32)
+
+        return self._contract_modes_batched(
+            u_windows, flat_indices, kernel, gather_kernel=False
+        )
+
+    def _reduce_to_waves_absolute(self, u_full, snapped_pixels, kernel):
+        """Full-window reduction in the absolute frame: contract the modes with
+        the kernel displaced to each probe position.
+
+        ``kernel`` is the uncentered kernel on the full grid (mode axis last),
+        indexed by the displacement from the probe; the result matches the
+        reduction of the expanded scattering matrix to floating point precision.
+        """
+        xp = get_array_module(self._device)
+
+        gpts = self.gpts
+
+        shift_x = (xp.arange(gpts[0])[None] - snapped_pixels[:, 0, None]) % gpts[0]
+        shift_y = (xp.arange(gpts[1])[None] - snapped_pixels[:, 1, None]) % gpts[1]
+        flat_indices = (
+            shift_x[:, :, None] * gpts[1] + shift_y[:, None, :]
+        ).astype(np.int32)
+
+        return self._contract_modes_batched(
+            u_full, flat_indices, kernel, gather_kernel=True
+        )
+
+    def _reduce_to_waves(self, u_windows, snapped_pixels, kernel):
+        """Reduce the compressed scattering matrix to wave functions at the given
+        snapped pixel positions.
+
+        Parameters
+        ----------
+        u_windows : array
+            Left singular vectors with the mode axis FIRST, of shape
+            (K, gpts_x, gpts_y) -- the layout they are stored in, so that no
+            transposed copy of them has to exist.
+        snapped_pixels : array of int
+            Whole-pixel probe positions of shape (n, 2).
+        kernel : array
+            Reduction kernel with the mode axis FIRST, of shape
+            (K, window_gpts_x, window_gpts_y).
+        """
+        xp = get_array_module(self._device)
+
+        if xp is not np:
+            # per-position loops are launch-overhead bound on the GPU
+            return self._reduce_to_waves_batched(u_windows, snapped_pixels, kernel)
+
+        gpts = self.gpts
+        window_gpts = self.window_gpts
+
+        corners = (
+            snapped_pixels
+            - xp.asarray((window_gpts[0] // 2, window_gpts[1] // 2))[None]
+        ) % xp.asarray(gpts)[None]
+        corners = corners if xp is np else corners.get()
+
+        waves = xp.zeros(
+            (len(snapped_pixels),) + window_gpts, dtype=get_dtype(complex=True)
+        )
+
+        # Each window is at most four contiguous blocks of the scattering matrix
+        # (due to the periodic wrap-around), hence the contraction over the modes
+        # is evaluated on views without gathering. The mode axis leads in both
+        # operands, so the blocks are views into the stored arrays.
+        def reduce_position(n):
+            cx, cy = int(corners[n, 0]), int(corners[n, 1])
+            x_split = min(gpts[0] - cx, window_gpts[0])
+            y_split = min(gpts[1] - cy, window_gpts[1])
+            for wx0, wx1, sx in ((0, x_split, cx), (x_split, window_gpts[0], 0)):
+                if wx0 == wx1:
+                    continue
+                for wy0, wy1, sy in ((0, y_split, cy), (y_split, window_gpts[1], 0)):
+                    if wy0 == wy1:
+                        continue
+                    waves[n, wx0:wx1, wy0:wy1] = xp.einsum(
+                        "kij,kij->ij",
+                        u_windows[:, sx : sx + wx1 - wx0, sy : sy + wy1 - wy0],
+                        kernel[:, wx0:wx1, wy0:wy1],
+                    )
+
+        def reduce_chunk(chunk):
+            for n in range(chunk.start, min(chunk.stop, len(snapped_pixels))):
+                reduce_position(n)
+
+        num_threads = int(config.get("fftw.threads", 1)) if xp is np else 1
+
+        if num_threads > 1 and len(snapped_pixels) > 1:
+            # the contraction of each position releases the GIL for its large
+            # array operations; the positions write to disjoint slices
+            from concurrent.futures import ThreadPoolExecutor
+
+            max_batch = -(len(snapped_pixels) // -(num_threads * 4))
+            chunks = [
+                slice(start, start + max_batch)
+                for start in range(0, len(snapped_pixels), max_batch)
+            ]
+            with ThreadPoolExecutor(num_threads) as executor:
+                list(executor.map(reduce_chunk, chunks))
+        else:
+            reduce_chunk(slice(0, len(snapped_pixels)))
+
+        return waves
+
+    def _group_by_fractional_offset(self, pixel_positions, decimals: int = 4):
+        """Group probe positions by their fractional pixel offset.
+
+        The offsets are rounded to ``10**-decimals`` pixels, which is well below
+        the numerical precision of the probe positions.
+        """
+        xp = get_array_module(pixel_positions)
+
+        snapped = xp.rint(pixel_positions).astype(int)
+        fractional = pixel_positions - snapped
+
+        fractional = fractional if xp is np else fractional.get()
+
+        if self._position_quantization:
+            fractional = (
+                np.round(fractional * self._position_quantization)
+                / self._position_quantization
+            )
+
+        rounded = np.round(fractional, decimals=decimals)
+        rounded += 0.0  # remove negative zero
+        unique, inverse = np.unique(rounded, axis=0, return_inverse=True)
+        return snapped, unique, inverse
+
+    def _expanded_slab(self, start: int, stop: int, xp, dtype) -> np.ndarray:
+        """The plane waves ``[start, stop)`` of the scattering matrix expanded
+        to interpolation (1, 1): one matrix product over the modes followed by
+        the reattachment of the plane-wave phases."""
+        gpts = self.gpts
+        extent = self.extent
+
+        values = xp.asarray(
+            self._sigma[:, None] * self._vh_dense[:, start:stop], dtype=dtype
+        )
+        u = xp.asarray(self._u).reshape(self.rank, -1)
+        slab = (values.T @ u).reshape((-1,) + tuple(gpts))
+
+        wave_vectors = xp.asarray(self.wave_vectors[start:stop])
+        real_dtype = get_dtype(complex=False)
+        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=real_dtype)
+        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=real_dtype)
+        slab *= complex_exponential(
+            2.0 * xp.pi * wave_vectors[:, 0, None, None] * x[:, None]
+        ) * complex_exponential(
+            2.0 * xp.pi * wave_vectors[:, 1, None, None] * y[None, :]
+        )
+        return slab
+
+    def _expanded_s_matrix_array(self) -> SMatrixArray:
+        """Expand the compressed factorization to the interpolated scattering
+        matrix at interpolation (1, 1).
+
+        The expanded matrix has the same memory footprint as a PRISM scattering
+        matrix at interpolation (1, 1); provide `max_batch_expansion` to stream
+        the expansion instead, or `window_gpts` to reduce from the compressed
+        modes.
+        """
+        if getattr(self, "_s_matrix_array", None) is not None:
+            return self._s_matrix_array
+
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        gpts = self.gpts
+
+        n_dense = len(self.wave_vectors)
+        array = xp.empty((n_dense,) + tuple(gpts), dtype=dtype)
+
+        max_batch = max(1, int(256**3 / np.prod(gpts)))
+        for start in range(0, n_dense, max_batch):
+            stop = min(start + max_batch, n_dense)
+            slab = self._expanded_slab(start, stop, xp, dtype)
+            # the expanded beams carry their tilt ramp, so the reference depth
+            # is undone here beam by beam and this matrix describes the exit
+            # surface — it is handed to the plain scattering-matrix reduction,
+            # which knows nothing of the reference
+            array[start:stop] = self._to_exit_reference(slab)
+
+        self._s_matrix_array = SMatrixArray(
+            array,
+            # the reduction multiplies these into the plane-wave coefficients,
+            # so anything wider than the working precision promotes the whole
+            # reduction (and doubles its memory)
+            wave_vectors=np.asarray(
+                self.wave_vectors, dtype=get_dtype(complex=False)
+            ),
+            semiangle_cutoff=self.semiangle_cutoff,
+            energy=self.energy,
+            interpolation=(1, 1),
+            sampling=tuple(self.sampling),
+            window_gpts=tuple(gpts),
+            window_offset=(0, 0),
+            periodic=(True, True),
+            device=self._device,
+            ensemble_axes_metadata=[],
+            metadata=dict(self.metadata),
+        )
+        return self._s_matrix_array
+
+    def _batch_reduce_to_measurements(
+        self,
+        scan: BaseScan,
+        ctf: CTF,
+        detectors: list[BaseDetector],
+        max_batch_reduction: int,
+        pbar: bool = False,
+        absolute: bool = False,
+        blend_angle: float = None,
+        blend_component: str = None,
+        blend_taper: float = None,
+    ) -> tuple[BaseMeasurements | Waves, ...]:
+        dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
+
+        measurements = allocate_multislice_measurements(
+            dummy_probes,
+            detectors,
+            extra_ensemble_axes_shape=(),
+            extra_ensemble_axes_metadata=[],
+        )
+
+        xp = get_array_module(self._device)
+
+        u_windows = xp.asarray(self._u)
+
+        n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
+        pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
+
+        sampling = xp.asarray(self.sampling)
+
+        keep_interpolated, keep_plane_wave = self._blend_branches(
+            blend_angle, blend_component
+        )
+
+        for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
+            sub_ctf = sub_ctf.item()
+            coefficients = self._calculate_ctf_coefficients(sub_ctf)
+
+            # the generated blocks contain a single ensemble member
+            coefficients = coefficients.reshape((-1, coefficients.shape[-1]))[0]
+
+            values = self._coefficient_values(coefficients)
+            if keep_plane_wave:
+                # the plane-wave reduction spreads a unit probe over
+                # prod(interpolation) periodized copies; a window holds
+                # window / gpts of them, hence the amplitude is rescaled so the
+                # in-window intensity matches the interpolated branch (exact
+                # when the window is a multiple of the period gpts /
+                # interpolation, unity for the full window)
+                plane_wave_scale = get_dtype(complex=False)(
+                    np.sqrt(np.prod(self.gpts) / np.prod(self.window_gpts))
+                )
+                plane_wave_values = plane_wave_scale * self._coefficient_values(
+                    self._lattice_coefficients(coefficients)
+                )
+            if blend_angle is not None:
+                blend_weight = self._blend_weight(
+                    blend_angle, self.window_gpts, taper=blend_taper
+                )
+
+            for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
+                sub_scan = sub_scan.item()
+
+                positions = xp.asarray(sub_scan.get_positions())
+                scan_shape = positions.shape[:-1]
+                positions = positions.reshape((-1, 2))
+
+                # in double precision independently of ``config['precision']``:
+                # the positions are grouped by their fractional pixel offset
+                # rounded to 1e-4 pixels, which single-precision positions of a
+                # large cell cannot resolve
+                pixel_positions = positions.astype(np.float64) / sampling
+
+                snapped, unique_offsets, inverse = self._group_by_fractional_offset(
+                    pixel_positions
+                )
+
+                waves_array = xp.zeros(
+                    (len(positions),) + self.window_gpts,
+                    dtype=get_dtype(complex=True),
+                )
+                for i, offset in enumerate(unique_offsets):
+                    mask = xp.asarray(inverse == i)
+                    reduce_to_waves = (
+                        self._reduce_to_waves_absolute
+                        if absolute
+                        else self._reduce_to_waves
+                    )
+
+                    def branch(branch_values):
+                        kernel = self._window_kernel(
+                            branch_values, offset, center=not absolute
+                        )
+                        return reduce_to_waves(u_windows, snapped[mask], kernel)
+
+                    new_waves = branch(values) if keep_interpolated else None
+                    if blend_angle is not None:
+                        new_waves = self._blend_wave_batches(
+                            new_waves,
+                            branch(plane_wave_values) if keep_plane_wave else None,
+                            blend_weight,
+                            component=blend_component,
+                        )
+                    waves_array[mask] = new_waves
+
+                waves_array = waves_array.reshape(
+                    (1,) * len(sub_ctf.ensemble_shape) + scan_shape + self.window_gpts
+                )
+
+                ensemble_axes_metadata = [
+                    UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
+                ]
+                ensemble_axes_metadata += [ScanAxis() for _ in range(len(scan_shape))]
+
+                if self._detects_the_wave(detectors):
+                    waves_array = self._to_exit_reference(waves_array)
+
+                waves = Waves(
+                    waves_array,
+                    sampling=tuple(self.sampling),
+                    energy=self.energy,
+                    ensemble_axes_metadata=ensemble_axes_metadata,
+                    metadata=self.metadata,
+                )
+
+                indices = ctf_slics + slics
+
+                pbar.update_if_exists(len(positions))
+
+                for detector, measurement in zip(detectors, measurements):
+                    measurement.array[indices] = detector.detect(waves).array
+
+        pbar.close_if_exists()
+
+        return tuple(measurements)
+
+    def _streamed_batch_reduce_to_measurements(
+        self,
+        scan: BaseScan,
+        ctf: CTF,
+        detectors: list[BaseDetector],
+        max_batch_reduction: int,
+        max_batch_expansion: int,
+        pbar: bool = False,
+    ) -> tuple[BaseMeasurements | Waves, ...]:
+        """Full-window reduction streaming the interpolation-(1, 1) expansion.
+
+        Equivalent to ``self._expanded_s_matrix_array().reduce(...)``, but the
+        expanded scattering matrix is never materialized: the plane waves are
+        expanded in slabs of ``max_batch_expansion`` and contracted with the
+        reduction coefficients on the fly. Peak memory is one slab plus one
+        batch of reduced wave functions, instead of the full ``n x gpts``
+        expanded matrix. The expansion is repeated for every batch of probe
+        positions, hence the relative overhead is ``rank / batch size`` matrix
+        product work; the caller enlarges the reduction batches accordingly.
+
+        The coefficients must match :meth:`SMatrixArray.reduce` exactly (same
+        position phases and the same globally normalized CTF coefficients), so
+        the streamed and expanded reductions agree to floating point precision.
+        """
+        dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
+
+        measurements = allocate_multislice_measurements(
+            dummy_probes,
+            detectors,
+            extra_ensemble_axes_shape=(),
+            extra_ensemble_axes_metadata=[],
+        )
+
+        xp = get_array_module(self._device)
+        dtype = get_dtype(complex=True)
+
+        wave_vectors = xp.asarray(self.wave_vectors)
+        n_dense = len(wave_vectors)
+
+        n_positions = int(np.prod(scan.shape + ctf.ensemble_shape))
+        pbar = TqdmWrapper(enabled=pbar, total=n_positions, leave=False, desc="reduce")
+
+        for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
+            sub_ctf = sub_ctf.item()
+
+            # must match SMatrixArray._calculate_ctf_coefficients: normalized
+            # by the absolute square over the full plane-wave expansion
+            alpha = (
+                xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2)
+                * sub_ctf.wavelength
+            )
+            phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
+            ctf_coefficients = sub_ctf._evaluate_from_angular_grid(alpha, phi)
+            ctf_coefficients = ctf_coefficients / xp.sqrt(
+                (xp.abs(ctf_coefficients) ** 2).sum(axis=-1, keepdims=True)
+            )
+
+            for _, slics, sub_scan in scan.generate_blocks(max_batch_reduction):
+                sub_scan = sub_scan.item()
+
+                # must match SMatrixArray._calculate_positions_coefficients
+                if isinstance(sub_scan, GridScan):
+                    x = xp.asarray(sub_scan._x_coordinates())
+                    y = xp.asarray(sub_scan._y_coordinates())
+                    positions_coefficients = complex_exponential(
+                        -2.0 * xp.pi * x[:, None, None] * wave_vectors[None, None, :, 0]
+                    ) * complex_exponential(
+                        -2.0 * xp.pi * y[None, :, None] * wave_vectors[None, None, :, 1]
+                    )
+                else:
+                    positions = xp.asarray(sub_scan.get_positions())
+                    positions_coefficients = complex_exponential(
+                        -2.0 * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None]
+                        - 2.0 * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None]
+                    )
+
+                (
+                    expanded_ctf_coefficients,
+                    positions_coefficients,
+                ) = expand_dims_to_broadcast(
+                    ctf_coefficients,
+                    positions_coefficients,
+                    match_dims=[(-1,), (-1,)],
+                )
+                coefficients = xp.asarray(
+                    positions_coefficients * expanded_ctf_coefficients, dtype=dtype
+                )
+
+                waves_array = xp.zeros(
+                    coefficients.shape[:-1] + tuple(self.gpts), dtype=dtype
+                )
+                for start in range(0, n_dense, max_batch_expansion):
+                    stop = min(start + max_batch_expansion, n_dense)
+                    slab = self._expanded_slab(start, stop, xp, dtype)
+                    waves_array += xp.tensordot(
+                        coefficients[..., start:stop], slab, axes=[-1, -3]
+                    )
+
+                ensemble_axes_metadata = [
+                    UnknownAxis() for _ in range(len(sub_ctf.ensemble_shape))
+                ]
+                ensemble_axes_metadata += [
+                    ScanAxis() for _ in range(len(sub_scan.shape))
+                ]
+
+                if self._detects_the_wave(detectors):
+                    waves_array = self._to_exit_reference(waves_array)
+
+                waves = Waves(
+                    waves_array,
+                    sampling=tuple(self.sampling),
+                    energy=self.energy,
+                    ensemble_axes_metadata=ensemble_axes_metadata,
+                    metadata=self.metadata,
+                )
+
+                indices = ctf_slics + slics
+
+                pbar.update_if_exists(int(np.prod(sub_scan.shape)))
+
+                for detector, measurement in zip(detectors, measurements):
+                    measurement.array[indices] = detector.detect(waves).array
+
+        pbar.close_if_exists()
+
+        return tuple(measurements)
+
+    def reduce(
+        self,
+        scan: BaseScan = None,
+        ctf: CTF = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        max_batch_reduction: int | str = "auto",
+        max_batch_expansion: int | str = None,
+        method: str = "auto",
+        blend_angle: float = None,
+        blend_window_gpts: int | tuple[int, int] | str = None,
+        blend_taper: float = None,
+        _blend_component: str = None,
+        _blend_taper: float = None,
+    ) -> BaseMeasurements | Waves | list[BaseMeasurements | Waves]:
+        """
+        Scan the probe across the potential and record a measurement for each detector.
+
+        Parameters
+        ----------
+        scan : BaseScan
+            Positions of the probe wave functions. If not given, reduces a single
+            probe at the center of the potential.
+        ctf : CTF, optional
+            The probe contrast transfer function. Default is None (aperture is set by
+            the plane-wave cutoff).
+        detectors : BaseDetector or list of BaseDetector
+            The detectors recording the measurements.
+        max_batch_reduction : int or str, optional
+            Number of positions per reduction operation. If 'auto' (default), the
+            batch size is automatically chosen based on the abTEM user configuration
+            settings "dask.chunk-size" and "dask.chunk-size-gpu".
+        max_batch_expansion : int or str, optional
+            The number of plane waves expanded at a time when the reduced wave
+            functions are not cropped. If 'auto', the full plane-wave expansion is
+            materialized once (fastest, but with the memory footprint of a PRISM
+            scattering matrix at interpolation 1); an integer streams the expansion
+            instead, bounding the memory at one batch of plane waves plus one batch
+            of reduced wave functions, at the cost of repeating the expansion for
+            every batch of probe positions. If not given (default), the value set
+            on the :class:`.SMatrix` is used. Only used with ``method='expand'``.
+        method : {'auto', 'expand', 'modes'}, optional
+            How the full-window reduction is evaluated. ``'expand'`` expands the
+            compressed factorization to the interpolation-(1, 1) scattering matrix
+            and reduces it with one large matrix product per batch of probe
+            positions — high arithmetic intensity, fastest on the CPU, but with a
+            cost proportional to the number of dense plane waves. ``'modes'``
+            contracts the retained modes directly against a probe-displaced
+            reduction kernel — a cost proportional to the number of modes (usually
+            far fewer than the plane waves), fastest on the GPU where the
+            contraction saturates memory bandwidth. Both produce identical wave
+            functions to floating point precision. ``'auto'`` (default) selects
+            'modes' on the GPU and 'expand' on the CPU, unless streaming was
+            requested through ``max_batch_expansion``. Ignored when the reduced
+            wave functions are cropped (``window_gpts``), which always contracts
+            the modes.
+
+        blend_angle : float, optional
+            Above this scattering angle [mrad] the reduced wave functions follow
+            the plane-wave (PRISM) reduction of the built beams, below it the
+            interpolated (C-PRISM) reduction, with a smooth taper between them.
+            The interpolation is band limited and aliases the contributions of
+            electrons displaced beyond half its period, which harms high-angle
+            detectors; the plane-wave reduction of the same built beams does not,
+            hence blending bounds the high-angle error by that of the PRISM
+            algorithm while keeping the interpolated accuracy at low angles. If
+            not given, the value set on the :class:`.SMatrix` is used ('auto'
+            derives it from the aliasing limit of the interpolation); a
+            non-positive value disables blending.
+
+        Returns
+        -------
+        measurements : BaseMeasurements or Waves or list of BaseMeasurements or Waves
+        """
+        self.accelerator.check_is_defined()
+
+        explicit_blend = blend_angle is not None
+        if blend_angle is None:
+            blend_angle = self._blend_angle
+        if (
+            blend_angle is not None
+            and not isinstance(blend_angle, str)
+            and blend_angle <= 0
+        ):
+            blend_angle = None
+
+        if (
+            blend_window_gpts is not None
+            and blend_angle is not None
+            and _blend_component is None
+        ):
+            return self._composite_blend_reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                method=method,
+                blend_angle=blend_angle,
+                blend_window_gpts=blend_window_gpts,
+                blend_taper=0.0 if blend_taper is None else blend_taper,
+            )
+
+        if blend_angle is not None and _blend_component is None:
+            cut = (
+                float(self._semiangle_cutoff)
+                if isinstance(blend_angle, str)
+                else blend_angle
+            )
+            if detectors is not None:
+                routed = self._routed_reduce(
+                    scan, ctf, detectors, cut, max_batch_reduction, method,
+                    blend_taper=0.0 if blend_taper is None else blend_taper,
+                )
+                if routed is not None:
+                    return routed
+            if not explicit_blend:
+                # the default blend acts only through the routing: when the
+                # detectors are not routable (a band straddles the cut, or the
+                # output is wave functions or a full diffraction pattern) the
+                # reduction is the plain interpolated one, and blending must be
+                # requested explicitly
+                blend_angle = None
+
+        if _blend_taper is None and blend_taper is not None:
+            _blend_taper = blend_taper
+
+        if method not in ("auto", "expand", "modes"):
+            raise ValueError(
+                f"method must be 'auto', 'expand' or 'modes'; got {method!r}"
+            )
+
+        if max_batch_expansion is None:
+            max_batch_expansion = self._max_batch_expansion
+
+        full_window = tuple(self.window_gpts) == tuple(self.gpts)
+
+        if not full_window:
+            if max_batch_expansion != "auto":
+                raise ValueError(
+                    "max_batch_expansion applies to the reduction of the expanded "
+                    "scattering matrix; it cannot be combined with window_gpts."
+                )
+            if method == "expand":
+                raise ValueError(
+                    "method='expand' applies to the full-window reduction; with "
+                    "window_gpts the modes are always contracted directly."
+                )
+        else:
+            if method == "auto":
+                if max_batch_expansion != "auto":
+                    method = "expand"
+                elif self._device == "gpu":
+                    method = "modes"
+                else:
+                    method = "expand"
+            if method == "modes" and max_batch_expansion != "auto":
+                raise ValueError(
+                    "max_batch_expansion streams the expanded scattering matrix; "
+                    "it cannot be combined with method='modes'."
+                )
+
+        if blend_angle is not None and full_window and method == "expand":
+            # the blend combines two kernel reductions, hence needs the mode path
+            method = "modes"
+
+        if full_window and method == "expand" and max_batch_expansion == "auto":
+            return self._expanded_s_matrix_array().reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+            )
+
+        if ctf is None:
+            ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)
+
+        ctf.grid.match(self.dummy_probes())
+        ctf.accelerator.match(self)
+
+        if ctf.semiangle_cutoff == np.inf:
+            ctf.semiangle_cutoff = self.semiangle_cutoff
+
+        squeeze = () if isinstance(scan, BaseScan) else (-3,)
+
+        if scan is None:
+            scan = self.extent[0] / 2, self.extent[1] / 2
+
+        scan = validate_scan(
+            scan, Probe._from_ctf(extent=self.extent, ctf=ctf, energy=self.energy)
+        )
+
+        detectors = validate_detectors(detectors, self.dummy_probes())
+
+        from abtem.core.chunks import validate_chunks
+
+        shape = (len(scan),) + self.window_gpts
+        chunks = (max_batch_reduction, -1, -1)
+        validated_max_batch_reduction = validate_chunks(
+            shape, chunks, dtype=np.dtype("complex64")
+        )[0][0]
+
+        pbar = config.get("diagnostics.task_progress", False)
+
+        if full_window and method == "expand":
+            if max_batch_reduction == "auto":
+                # the expansion is repeated for every batch of probe positions
+                # with a relative matrix product overhead of rank / batch size;
+                # enlarge the automatic batches so the overhead stays small
+                validated_max_batch_reduction = min(
+                    max(validated_max_batch_reduction, 4 * self.rank), len(scan)
+                )
+            measurements = self._streamed_batch_reduce_to_measurements(
+                scan,
+                ctf,
+                detectors,
+                validated_max_batch_reduction,
+                int(max_batch_expansion),
+                pbar=pbar,
+            )
+        else:
+            lattice = (
+                None if full_window else self._lattice_geometry(scan, warn=True)
+            )
+            if lattice is not None:
+                measurements = self._lattice_batch_reduce_to_measurements(
+                    scan, ctf, detectors, lattice, pbar=pbar,
+                    blend_angle=blend_angle,
+                    blend_component=_blend_component,
+                    blend_taper=_blend_taper,
+                )
+            else:
+                measurements = self._batch_reduce_to_measurements(
+                    scan,
+                    ctf,
+                    detectors,
+                    validated_max_batch_reduction,
+                    pbar=pbar,
+                    absolute=full_window,
+                    blend_angle=blend_angle,
+                    blend_component=_blend_component,
+                    blend_taper=_blend_taper,
+                )
+
+        measurements = [measurement.squeeze(squeeze) for measurement in measurements]
+        return _wrap_measurements(measurements)
+
+    def _routing_sides(self, cut, detectors, taper: float = 0.0):
+        """Which branch each detector reads from, or None when not routable.
+
+        A detector collecting only below the blend angle reads the interpolated
+        reduction, one collecting only above it the plane-wave (PRISM)
+        reduction; nothing is mixed, so no Fourier weighting is needed. With a
+        taper, a band overlapping the taper zone ``[cut - taper, cut]`` reads
+        the tapered combination of the two intensities, which makes the
+        underlying angular density continuous across the cut. A detector
+        straddling the cut without a taper, or one whose collection range is
+        not an angular band, is not routable.
+        """
+        sides = []
+        for detector in detectors:
+            if isinstance(detector, (AnnularDetector, SegmentedDetector)):
+                outer = detector.outer
+                inner = detector.inner
+                if outer is not None and outer <= cut - taper:
+                    sides.append("low")
+                elif inner is not None and inner >= cut:
+                    sides.append("high")
+                elif taper > 0.0 and inner is not None and outer is not None:
+                    sides.append("taper")
+                elif outer is not None and outer <= cut:
+                    sides.append("low")
+                else:
+                    return None
+            elif isinstance(detector, PixelatedDetector):
+                max_angle = detector.max_angle
+                divisible = all(
+                    g % i == 0 for g, i in zip(self.gpts, self._interpolation)
+                )
+                if tuple(self.window_gpts) == tuple(self.gpts):
+                    # the patterns are already on the simulation grid
+                    if isinstance(max_angle, (int, float)) and (
+                        max_angle <= cut - taper
+                    ):
+                        sides.append("low")
+                    else:
+                        return None
+                elif detector.reciprocal_space and not detector.resample and divisible:
+                    # patterns of a windowed reduction are always detected on
+                    # the full grid, whether or not the cut falls inside them:
+                    # the window is an internal accuracy device, and its
+                    # reciprocal sampling is not one a user asked for
+                    sides.append("pattern")
+                else:
+                    return None
+            else:
+                return None
+        return sides
+
+    def _routed_reduce(
+        self, scan, ctf, detectors, blend_angle, max_batch_reduction, method,
+        blend_taper: float = 0.0,
+    ):
+        """Route each detector to the branch its band lies in, or return None.
+
+        The blend angle is snapped to a detector boundary, so that every
+        detector band lies wholly below or above it: the bands below read the
+        interpolated (C-PRISM) reduction on this array's window, the bands
+        above the plane-wave reduction on one interpolation period — the
+        window and the algorithm of PRISM. This is the composite blend without
+        any Fourier weighting, possible whenever no band straddles the cut.
+        """
+        single = not isinstance(detectors, (list, tuple))
+        detectors = [detectors] if single else list(detectors)
+
+        cut = self._snapped_blend_angle(blend_angle, detectors)
+        sides = self._routing_sides(cut, detectors, taper=blend_taper)
+        if sides is None:
+            return None
+
+        def measure(component, subset):
+            if component == "pattern":
+                measurements = self._stitched_pattern_reduce(
+                    scan, ctf, subset, cut, max_batch_reduction, method
+                )
+            elif component == "taper":
+                measurements = self._composite_blend_reduce(
+                    scan=scan,
+                    ctf=ctf,
+                    detectors=subset,
+                    max_batch_reduction=max_batch_reduction,
+                    method=method,
+                    blend_angle=cut,
+                    blend_window_gpts="period",
+                    blend_taper=blend_taper,
+                    snap=False,
+                )
+            elif component == "low":
+                measurements = self.reduce(
+                    scan=scan,
+                    ctf=ctf,
+                    detectors=subset,
+                    max_batch_reduction=max_batch_reduction,
+                    method=method,
+                    blend_angle=0.0,
+                )
+            else:
+                period = tuple(
+                    min(-(-g // i), g)
+                    for g, i in zip(self.gpts, self._interpolation)
+                )
+                measurements = self._with_window(period).reduce(
+                    scan=scan,
+                    ctf=ctf,
+                    detectors=subset,
+                    max_batch_reduction=max_batch_reduction,
+                    blend_angle=cut,
+                    _blend_component="high",
+                    _blend_taper=0.0,
+                )
+            if not isinstance(measurements, (list, tuple)):
+                measurements = [measurements]
+            return list(measurements)
+
+        ordered = [None] * len(detectors)
+        for component in ("low", "high", "taper", "pattern"):
+            subset = [d for d, side in zip(detectors, sides) if side == component]
+            if not subset:
+                continue
+            for index, measurement in zip(
+                (i for i, side in enumerate(sides) if side == component),
+                measure(component, subset),
+            ):
+                ordered[index] = measurement
+
+        return ordered[0] if single else _wrap_measurements(ordered)
+
+    def _stitched_pattern_reduce(
+        self, scan, ctf, detectors, cut, max_batch_reduction, method
+    ):
+        """Diffraction patterns stitched from the two branches of the blend.
+
+        Below the cut the pattern is the interpolated reduction of this
+        array's window, detected on the full simulation grid (the window is
+        zero-padded, which leaves the pattern of an isolated probe
+        unchanged). At and above the cut it is the plane-wave (PRISM)
+        reduction: the plane-wave field is periodic with one period
+        ``gpts / interpolation``, so its full-grid pattern is its period-grid
+        pattern scattered onto every interpolation-th pixel, exactly — zeros
+        in between, no interpolation smearing of the Bragg reflections. The
+        stitch is sharp at the cut; a blend taper does not apply to patterns.
+        """
+        padded = [
+            _FullGridPixelatedDetector(detector, tuple(self.gpts))
+            for detector in detectors
+        ]
+        low_list = ensure_list(
+            self.reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=padded,
+                max_batch_reduction=max_batch_reduction,
+                method=method,
+                blend_angle=0.0,
+            )
+        )
+
+        # a cut beyond the largest detected angle leaves nothing to paste, so
+        # the plane-wave branch is not reduced at all
+        if not any(
+            np.hypot(
+                (measurement.array.shape[-2] // 2) * measurement.angular_sampling[0],
+                (measurement.array.shape[-1] // 2) * measurement.angular_sampling[1],
+            )
+            >= cut
+            for measurement in low_list
+        ):
+            return low_list
+
+        if self._device == "gpu" and cp is not None:
+            cp.get_default_memory_pool().free_all_blocks()
+
+        period = tuple(g // i for g, i in zip(self.gpts, self._interpolation))
+        # a vanishing blend angle keeps the plane-wave branch whole except at
+        # the zero-frequency pixel, which lies far below any usable cut
+        high_list = ensure_list(
+            self._with_window(period).reduce(
+                scan=scan,
+                ctf=ctf,
+                detectors=detectors,
+                max_batch_reduction=max_batch_reduction,
+                blend_angle=1e-12,
+                _blend_component="high",
+                _blend_taper=0.0,
+            )
+        )
+
+        return [
+            self._stitch_patterns(low, high, cut)
+            for low, high in zip(low_list, high_list)
+        ]
+
+    @staticmethod
+    def _stitch_patterns(low, high, cut):
+        """Paste the plane-wave pattern onto the interpolated one at and above
+        the cut.
+
+        Both patterns are fftshifted and centered on the zero-frequency pixel,
+        and a pixel of the coarse (period-grid) pattern subtends the same
+        angle as its lattice pixel on the fine grid, so the radial masks of
+        the two grids agree exactly.
+        """
+        xp = get_array_module(low.array)
+
+        def centered_axes(measurement):
+            return tuple(
+                (np.arange(n) - n // 2) * sampling
+                for n, sampling in zip(
+                    measurement.array.shape[-2:], measurement.angular_sampling
+                )
+            )
+
+        fine_x, fine_y = centered_axes(low)
+        low.array[
+            ..., xp.asarray(np.hypot(fine_x[:, None], fine_y[None, :]) >= cut)
+        ] = 0.0
+
+        coarse_x, coarse_y = centered_axes(high)
+        factors = tuple(
+            int(round(high.angular_sampling[i] / low.angular_sampling[i]))
+            for i in (0, 1)
+        )
+        index_x = low.array.shape[-2] // 2 + factors[0] * (
+            np.arange(high.array.shape[-2]) - high.array.shape[-2] // 2
+        )
+        index_y = low.array.shape[-1] // 2 + factors[1] * (
+            np.arange(high.array.shape[-1]) - high.array.shape[-1] // 2
+        )
+        keep = np.hypot(coarse_x[:, None], coarse_y[None, :]) >= cut
+        keep &= (index_x >= 0)[:, None] & (index_x < low.array.shape[-2])[:, None]
+        keep &= (index_y >= 0)[None, :] & (index_y < low.array.shape[-1])[None, :]
+
+        rows, cols = np.nonzero(keep)
+        low.array[
+            ..., xp.asarray(index_x[rows]), xp.asarray(index_y[cols])
+        ] = high.array[..., xp.asarray(rows), xp.asarray(cols)]
+        return low
+
+    def _with_window(self, window_gpts):
+        """A view of this compressed scattering matrix with another reduction
+        window; the factors are shared, not copied."""
+        return self.__class__(
+            u=self._u,
+            sigma=self._sigma,
+            vh_dense=self._vh_dense,
+            dense_indices=self._dense_indices,
+            semiangle_cutoff=self._semiangle_cutoff,
+            energy=self.energy,
+            extent=self.extent,
+            interpolation=self._interpolation,
+            window_gpts=window_gpts,
+            position_quantization=self._position_quantization,
+            blend_angle=self._blend_angle,
+            device=self._device,
+            metadata=self._metadata,
+            singular_values=self._singular_values,
+            reference_depth=self._reference_depth,
+        )
+
+    def _composite_blend_reduce(
+        self,
+        scan,
+        ctf,
+        detectors,
+        max_batch_reduction,
+        method,
+        blend_angle,
+        blend_window_gpts,
+        blend_taper: float = 0.0,
+        snap: bool = True,
+    ):
+        """Blend the intensities of two reductions with different windows.
+
+        The interpolated branch is reduced on this array's own (typically full)
+        window, weighted by ``sqrt(weight)`` in Fourier space; the plane-wave
+        branch is reduced on ``blend_window_gpts`` — ``'period'`` selects one
+        period ``gpts / interpolation`` of its periodized wave functions, the
+        window the PRISM algorithm itself uses, which restores the local
+        high-angle signal that the full-grid periodized field averages over its
+        copies — weighted by ``sqrt(1 - weight)``. The detected intensities add,
+        hence the detectors must be intensity-valued (not :class:`WavesDetector`)
+        and produce window-independent shapes (annular and radial detectors; the
+        diffraction patterns of the two branches have different samplings).
+        """
+        if isinstance(blend_window_gpts, str):
+            if blend_window_gpts != "period":
+                raise ValueError(
+                    "blend_window_gpts must be an int, a pair of ints or "
+                    f"'period'; got {blend_window_gpts!r}"
+                )
+            window = tuple(
+                min(-(-g // i), g)
+                for g, i in zip(self.gpts, self._interpolation)
+            )
+        elif np.isscalar(blend_window_gpts):
+            window = (int(blend_window_gpts),) * 2
+        else:
+            window = tuple(int(n) for n in blend_window_gpts)
+
+        # snap to a collection boundary, so that no detector band straddles
+        # the blend without a taper: every band is either the plane-wave
+        # (PRISM) reduction exactly, or the interpolated one, or (inside the
+        # taper zone) a convex combination of the two intensities
+        if snap:
+            blend_angle = self._snapped_blend_angle(blend_angle, detectors)
+
+        low = self.reduce(
+            scan=scan,
+            ctf=ctf,
+            detectors=detectors,
+            max_batch_reduction=max_batch_reduction,
+            method=method,
+            blend_angle=blend_angle,
+            _blend_component="low",
+            _blend_taper=blend_taper,
+        )
+
+        if self._device == "gpu" and cp is not None:
+            cp.get_default_memory_pool().free_all_blocks()
+
+        high_array = self.__class__(
+            u=self._u,
+            sigma=self._sigma,
+            vh_dense=self._vh_dense,
+            dense_indices=self._dense_indices,
+            semiangle_cutoff=self._semiangle_cutoff,
+            energy=self.energy,
+            extent=self.extent,
+            interpolation=self._interpolation,
+            window_gpts=window,
+            position_quantization=self._position_quantization,
+            blend_angle=self._blend_angle,
+            device=self._device,
+            metadata=self._metadata,
+            singular_values=self._singular_values,
+            reference_depth=self._reference_depth,
+        )
+        high = high_array.reduce(
+            scan=scan,
+            ctf=ctf,
+            detectors=detectors,
+            max_batch_reduction=max_batch_reduction,
+            blend_angle=blend_angle,
+            _blend_component="high",
+            _blend_taper=blend_taper,
+        )
+
+        low_list, high_list = ensure_list(low), ensure_list(high)
+        for low_measurement, high_measurement in zip(low_list, high_list):
+            if np.iscomplexobj(low_measurement.array) or (
+                low_measurement.array.shape != high_measurement.array.shape
+            ):
+                raise NotImplementedError(
+                    "blend_window_gpts adds the detected intensities of the "
+                    "two branches, hence it requires intensity-valued "
+                    "detectors whose measurements do not depend on the "
+                    "reduction window (for example annular detectors)."
+                )
+            low_measurement.array[:] += high_measurement.array
+
+        return low if not isinstance(low, list) else _wrap_measurements(low_list)
+
+    def scan(
+        self,
+        scan: BaseScan = None,
+        detectors: BaseDetector | list[BaseDetector] = None,
+        ctf: CTF = None,
+        max_batch_reduction: int | str = "auto",
+        max_batch_expansion: int | str = None,
+        method: str = "auto",
+        blend_angle: float = None,
+        blend_window_gpts: int | tuple[int, int] | str = None,
+        blend_taper: float = None,
+    ):
+        """
+        Reduce the compressed scattering matrix at the positions of a scan.
+
+        See :meth:`.CompressedSMatrixArray.reduce`.
+        """
+        if scan is None:
+            scan = GridScan()
+
+        return self.reduce(
+            scan=scan,
+            detectors=detectors,
+            ctf=ctf,
+            max_batch_reduction=max_batch_reduction,
+            max_batch_expansion=max_batch_expansion,
+            method=method,
+            blend_angle=blend_angle,
+            blend_window_gpts=blend_window_gpts,
+            blend_taper=blend_taper,
         )
 
 
@@ -1481,6 +3592,78 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         Interpolation factor in the `x` and `y` directions (default is 1, ie. no
         interpolation). If a single value is provided, assumed to be the same for both
         directions.
+    upsample : bool, optional
+        If True, interpolate the plane-wave expansion built at the given
+        interpolation factor back to the full plane-wave expansion of the aperture
+        and compress it by an exact adaptive truncated singular value decomposition
+        (the C-PRISM algorithm); :meth:`.SMatrix.build` then returns a
+        :class:`.CompressedSMatrixArray`. Every probe is reduced from the full
+        expansion, avoiding the real-space cropping and coarsened aperture sampling
+        errors of PRISM at the same interpolation factor: the interpolation factor
+        only affects the number of multislice runs required to build the scattering
+        matrix. At an interpolation factor of 1 the expansion is already complete
+        and this option has no effect. Default is False.
+    tolerance : float, optional
+        Relative singular value threshold applied when ``upsample=True`` to the
+        part of the interpolated scattering matrix that the built beams do not
+        already span (default is 1e-3). Decrease for higher accuracy at
+        increased cost of the reduction. Ignored when ``upsample=False``.
+
+        Note that this does not set the rank on its own. The row space of the
+        built beams is retained whole, which is what makes the plane-wave
+        branch of the reduction the PRISM algorithm exactly, so the rank is at
+        least the number of built beams however large the tolerance. Use
+        ``max_rank`` to go below that.
+    max_rank : int, optional
+        Maximum number of modes retained by the compression when
+        ``upsample=True``, keeping those carrying the largest amplitude. If
+        None (default) every mode described above is retained.
+
+        This is the parameter that trades accuracy for the memory and the
+        reduction time, both of which are proportional to the rank: the modes
+        are the bulk of the stored scattering matrix, and the reduction
+        contracts them. It is worth setting when the beams outnumber the
+        intrinsic dimensionality of the specimen, which is the case at small
+        interpolation factors — halving the rank of a factor-2 expansion costs
+        a few percent of the error on the cells measured, while at factor 4
+        there is little to no slack and truncating is expensive. Inspect
+        :attr:`CompressedSMatrixArray.singular_values` to see where the
+        spectrum of a given specimen falls off.
+    blend_angle : float or str, optional
+        Scattering angle [mrad] above which the reduction of the compressed
+        scattering matrix follows the plane-wave (PRISM) reduction of the built
+        beams, below which the interpolated (C-PRISM) reduction. Acts through
+        the detector routing of the reduction: the angle is snapped down to a
+        detector collection boundary and each detector reads the branch its
+        band lies in, guaranteeing the dark-field bands match the PRISM
+        algorithm. 'auto' (default with ``upsample=True``) derives the angle
+        from the aliasing limit of the interpolation,
+        ``extent / (2 * interpolation * thickness)``; a number fixes it;
+        0 disables blending. Only used when ``upsample=True``.
+    window_gpts : one or two int or 'full', optional
+        The number of grid points describing the cropping window of the wave
+        functions reduced from the compressed scattering matrix. Only used when
+        ``upsample=True``. If None (default), the window is inferred from the
+        specimen and the probe (the probe tails plus the beam spreading over
+        the thickness), falling back to the full grid when there is no
+        potential; 'full' disables cropping. Unlike the PRISM cropping window,
+        this window is decoupled from the interpolation factor.
+    position_quantization : int, optional
+        If given, the fractional part of the probe positions is quantized to this
+        number of fractions of a pixel, limiting the number of reduction kernels
+        calculated by the windowed compressed reduction for scans that are
+        incommensurate with the grid of the scattering matrix. The maximum position
+        error is half a quantization step. Only used when ``upsample=True``. The
+        default is None, ie. the positions are not quantized.
+    max_batch_expansion : int, optional
+        The number of plane waves expanded at a time by the reduction of the
+        compressed scattering matrix. By default the full plane-wave expansion is
+        materialized once (fastest, but with the memory footprint of a PRISM
+        scattering matrix at interpolation 1); providing a batch size streams the
+        expansion instead, bounding the memory at one batch of plane waves plus
+        one batch of reduced wave functions, at the cost of repeating the
+        expansion for every batch of probe positions. Only used when
+        ``upsample=True`` and the reduced wave functions are not cropped.
     downsample : {'cutoff', 'valid'} or float or bool
         Controls whether to downsample the scattering matrix after running the
         multislice algorithm.
@@ -1512,6 +3695,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         sampling: float | tuple[float, float] = None,
         extent: float | tuple[float, float] = None,
         interpolation: int | tuple[int, int] = 1,
+        upsample: bool = False,
+        tolerance: float = 1e-3,
+        blend_angle: float | str = None,
+        max_rank: int = None,
+        window_gpts: int | tuple[int, int] = None,
+        position_quantization: int = None,
+        max_batch_expansion: int | str = "auto",
         downsample: bool | str = "cutoff",
         # tilt: Tuple[float, float] = (0.0, 0.0),
         device: str = None,
@@ -1538,18 +3728,94 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         self._semiangle_cutoff = semiangle_cutoff
         self._downsample = downsample
 
+        if not upsample:
+            invalid = tuple(
+                name
+                for name, value in (
+                    ("max_rank", max_rank),
+                    ("blend_angle", blend_angle),
+                    ("position_quantization", position_quantization),
+                    ("window_gpts", window_gpts),
+                    (
+                        "max_batch_expansion",
+                        None if max_batch_expansion == "auto" else max_batch_expansion,
+                    ),
+                )
+                if value is not None
+            )
+            if invalid:
+                raise ValueError(
+                    f"{' and '.join(invalid)} require(s) upsample=True."
+                )
+
+        self._upsample = bool(upsample)
+        self._tolerance = tolerance
+        # the blend against the plane-wave (PRISM) reduction is on by default:
+        # it acts through the detector routing of the reduction, which uses the
+        # interpolated wave functions below the blend angle and the plane-wave
+        # reduction above it; pass 0 to disable
+        if upsample and blend_angle is None:
+            blend_angle = "auto"
+        self._blend_angle = blend_angle
+        self._max_rank = max_rank
+        self._position_quantization = position_quantization
+        self._max_batch_expansion = max_batch_expansion
+
         self._accelerator = Accelerator(energy=energy)
         # self._beam_tilt = BeamTilt(tilt=tilt)
+
+        # window_gpts is only used by the compressed (upsampled) reduction; it is
+        # rejected above otherwise. Copies pass back the value given here rather
+        # than the derived window (see :meth:`_copy_kwargs`), so a PRISM
+        # scattering matrix round-trips without tripping that rejection.
+        if isinstance(window_gpts, str):
+            if window_gpts != "full":
+                raise ValueError(
+                    f"window_gpts must be an int, a pair of ints, 'full' or "
+                    f"None (automatic); got {window_gpts!r}"
+                )
+        elif window_gpts is not None:
+            if np.isscalar(window_gpts):
+                window_gpts = (int(window_gpts),) * 2
+            else:
+                window_gpts = tuple(int(n) for n in window_gpts)
+            if window_gpts == tuple(self.downsampled_gpts):
+                # a window covering the full grid is no window; copies pass the
+                # derived full-grid window back through this argument
+                window_gpts = "full"
+            elif max_batch_expansion != "auto":
+                raise ValueError(
+                    "max_batch_expansion applies to the reduction of the expanded "
+                    "scattering matrix; it cannot be combined with window_gpts."
+                )
+
+        self._window_gpts = window_gpts
 
         self._store_on_host = store_on_host
 
         assert semiangle_cutoff > 0.0
 
-        if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
+        if not self._upsample and not all(
+            n % f == 0 for f, n in zip(self.interpolation, self.gpts)
+        ):
             warnings.warn(
-                "The interpolation factor does not exactly divide 'gpts', normalization"
+                "The interpolation factor does not exactly divide 'gpts', normalization "
                 "may not be exactly preserved."
             )
+
+    def _copy_kwargs(self, exclude: tuple[str, ...] = (), cls=None) -> dict:
+        """The constructor arguments of this scattering matrix.
+
+        ``window_gpts`` is passed back as it was given rather than as the
+        derived cropping window: the window is derived from the specimen and
+        the probe when it is not given, and copying the derived value would
+        both pin it and make a copy of a PRISM scattering matrix (where the
+        window is an internal quantity) look like a user request.
+        """
+        kwargs = super()._copy_kwargs(exclude=exclude, cls=cls)
+        if "window_gpts" in kwargs:
+            kwargs["window_gpts"] = copy.deepcopy(self._window_gpts)
+        return kwargs
 
     @property
     def base_shape(self) -> tuple[int, int, int]:
@@ -1619,8 +3885,31 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     @property
     def wave_vectors(self) -> np.ndarray:
+        """The wave vectors of the plane-wave expansion. When upsampling, the coarse
+        expansion spans a disk around the aperture (see :meth:`_coarse_mask`),
+        padding it by a support margin so that the interpolation of the compressed
+        modes is supported on all sides."""
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+
+        if self._upsample_enabled:
+            bounds = self._coarse_bounds()
+
+            dtype = get_dtype(complex=False)
+            n = np.arange(-bounds[0], bounds[0] + 1, dtype=dtype)
+            m = np.arange(-bounds[1], bounds[1] + 1, dtype=dtype)
+
+            w, h = self.extent
+
+            kx = n / w * dtype(self.interpolation[0])
+            ky = m / h * dtype(self.interpolation[1])
+
+            kx, ky = np.meshgrid(kx, ky, indexing="ij")
+
+            mask = self._coarse_mask()
+            xp = get_array_module(self.device)
+            return xp.asarray([kx.ravel()[mask], ky.ravel()[mask]]).T
+
         dummy_probes = self.dummy_probes(device="cpu")
 
         aperture = dummy_probes.aperture._evaluate_kernel(dummy_probes)
@@ -1632,17 +3921,18 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         cell = getattr(self.grid, "_cell", None)
 
+        dtype = get_dtype(complex=False)
         if cell is None:
             w, h = self.extent
 
-            kx = n / w * np.float32(self.interpolation[0])
-            ky = m / h * np.float32(self.interpolation[1])
+            kx = n / w * dtype(self.interpolation[0])
+            ky = m / h * dtype(self.interpolation[1])
         else:
             # reciprocal-lattice points g = n*ix*b1 + m*iy*b2 (Cartesian), with b1, b2
             # the reciprocal basis of the non-orthogonal cell.
             reciprocal = np.linalg.inv(np.asarray(cell, dtype=float)).T  # rows b1, b2
-            nx = n * np.float32(self.interpolation[0])
-            my = m * np.float32(self.interpolation[1])
+            nx = n * dtype(self.interpolation[0])
+            my = m * dtype(self.interpolation[1])
             kx = nx * reciprocal[0, 0] + my * reciprocal[1, 0]
             ky = nx * reciprocal[0, 1] + my * reciprocal[1, 1]
 
@@ -1672,6 +3962,112 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
     def interpolation(self) -> tuple[int, int]:
         return self._interpolation
 
+    @property
+    def upsample(self) -> bool:
+        """Interpolate the coarse plane-wave expansion back to the full expansion of
+        the aperture and compress it (the C-PRISM algorithm)."""
+        return self._upsample
+
+    @property
+    def tolerance(self) -> float:
+        """Relative singular value threshold applied to the part of the
+        interpolated scattering matrix that the built beams do not already
+        span. The row space of the built beams is retained whole regardless, so
+        this does not lower the rank below their number — see
+        :attr:`max_rank`."""
+        return self._tolerance
+
+    @property
+    def max_rank(self) -> int | None:
+        """Maximum number of retained modes, or None to keep every one.
+
+        The rank sets both the memory of the compressed scattering matrix and
+        the cost of its reduction, and is the parameter to lower on a small
+        device."""
+        return self._max_rank
+
+    @property
+    def position_quantization(self) -> int | None:
+        """Quantization of the fractional probe positions in fractions of a pixel."""
+        return self._position_quantization
+
+    @property
+    def max_batch_expansion(self) -> int | str:
+        """Number of plane waves expanded at a time by the reduction of the
+        compressed scattering matrix; 'auto' materializes the full expansion."""
+        return self._max_batch_expansion
+
+    @property
+    def blend_angle(self) -> float | str | None:
+        """Scattering angle [mrad] above which the reduction follows the
+        plane-wave (PRISM) reduction of the built beams; 'auto' derives it from
+        the aliasing limit of the interpolation, None disables blending."""
+        return self._blend_angle
+
+    def _resolved_blend_angle(self) -> float | None:
+        """The blend angle in mrad, resolving 'auto' from the aliasing limit.
+
+        An electron scattered to an angle theta drifts theta * t laterally over
+        the thickness t, and the band-limited interpolation aliases once the
+        drift exceeds half its period extent / interpolation. The interpolated
+        reduction is therefore trusted up to::
+
+            theta_max = min_i extent_i / (2 * interpolation_i * t)
+        """
+        if self._blend_angle is None:
+            return None
+        if not isinstance(self._blend_angle, str):
+            return float(self._blend_angle)
+        if self._blend_angle == "aperture":
+            return "aperture"
+        if self._blend_angle != "auto":
+            raise ValueError(
+                f"blend_angle must be a number, 'auto', 'aperture' or None; "
+                f"got {self._blend_angle!r}"
+            )
+        thickness = self.potential.thickness if self.potential is not None else 0.0
+        if thickness <= 0.0:
+            return None
+        # the beams are referenced to the middle of the specimen, which centres
+        # the tilt spectrum on zero: the drift the interpolation must resolve
+        # spans +/- theta t / 2 rather than [0, theta t], so the same beams
+        # reach twice the angle (see :meth:`_reference_depth`)
+        centred = 2.0 if self._reference_depth > 0.0 else 1.0
+        angle = 1e3 * min(
+            centred * extent / (2.0 * interpolation * thickness)
+            for extent, interpolation in zip(self.extent, self.interpolation)
+        )
+        if angle < self.semiangle_cutoff:
+            # blending below the bright-field disk imports the periodized ghost
+            # probes of the plane-wave reduction; clamp to the aperture edge and
+            # warn that the interpolation is aliased inside the disk itself
+            warnings.warn(
+                "The interpolation of the compressed scattering matrix is "
+                f"aliased above {angle:.1f} mrad, inside the bright-field disk "
+                f"({self.semiangle_cutoff:.1f} mrad): the interpolation factor "
+                "is too large for this thickness and the accuracy will be "
+                "degraded at every angle. The blend is clamped to the aperture "
+                "edge."
+            )
+            return "aperture"
+
+        # theta_max bounds where the interpolation is *valid*, which is the
+        # right default when the goal is accuracy against multislice: below it
+        # the extra beams carry real information and usually beat the sparse
+        # plane-wave sampling. It does not, however, promise the interpolated
+        # reduction beats PRISM on every band below it. Pass
+        # ``blend_angle='aperture'`` to confine the interpolation to the
+        # bright-field disk, which trades some low-angle accuracy for
+        # PRISM-or-better on every dark-field band of any specimen.
+        return angle
+
+    @property
+    def _upsample_enabled(self) -> bool:
+        """The compression applies only when the coarse expansion is incomplete; at
+        an interpolation factor of (1, 1) the scattering matrix is identical to the
+        PRISM scattering matrix."""
+        return self._upsample and self.interpolation != (1, 1)
+
     def _wave_vector_chunks(self, max_batch):
         if isinstance(max_batch, int):
             max_batch = max_batch * reduce(operator.mul, self.gpts)
@@ -1687,9 +4083,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
     @property
     def downsampled_gpts(self) -> tuple[int, int]:
-        """The gpts of the SMatrix after downsampling."""
+        """The gpts of the SMatrix after downsampling. When upsampling, the
+        downsampled gpts are independent of the interpolation factor, hence probe
+        positions commensurate with the grid remain commensurate at any
+        interpolation."""
         if self.downsample:
             downsampled_gpts = self._gpts_within_angle(self.downsample)
+            if self._upsample:
+                return tuple(n + (-n) % 4 for n in downsampled_gpts)
             rounded = _round_gpts_to_multiple_of_interpolation(
                 downsampled_gpts, self.interpolation
             )
@@ -1697,8 +4098,60 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         else:
             return self.gpts
 
+    # empirical extent of the reduced wave functions, calibrated against
+    # multislice on thick cells: the exit wave spreads by roughly twice
+    # thickness x aperture through multiple scattering, and the aperture-limited
+    # probe carries tails of several Airy lobes
+    _WINDOW_SPREAD_FACTOR = 2.0
+    _WINDOW_TAIL_LOBES = 6.0
+
+    def _auto_window_gpts(self):
+        """The cropping window inferred from the specimen and the probe, or None
+        (the full grid) when there is no potential to infer it from."""
+        if self._potential is None:
+            return None
+
+        thickness = self._potential.thickness
+        alpha = self._semiangle_cutoff * 1e-3
+        if alpha <= 0.0 or thickness is None:
+            return None
+
+        half_extent = (
+            self._WINDOW_SPREAD_FACTOR * thickness * alpha
+            + self._WINDOW_TAIL_LOBES * self.wavelength / alpha
+        )
+
+        window = ()
+        for extent, gpts, interpolation in zip(
+            self.extent, self.downsampled_gpts, self.interpolation
+        ):
+            n = int(np.ceil(2.0 * half_extent / (extent / gpts) / 16.0)) * 16
+            # at a window of exactly one period the reduction loses its
+            # bright-field advantage over PRISM (measured +7% at any
+            # thickness); at 1.75 periods the bright-field error reaches its
+            # floor (measured 0.06% on the Ge benchmark cell, where 1.4
+            # periods gives 0.2-0.4%)
+            period = safe_ceiling_int(gpts / interpolation)
+            n = max(n, int(np.ceil(1.75 * period / 16.0)) * 16)
+            window += (min(n, gpts),)
+        return window
+
     @property
     def window_gpts(self):
+        """The number of grid points describing the cropping window of the reduced
+        wave functions."""
+        if self._upsample:
+            if self._window_gpts == "full":
+                return self.downsampled_gpts
+            if self._window_gpts is None:
+                window = self._auto_window_gpts()
+                return self.downsampled_gpts if window is None else window
+
+            return (
+                min(self._window_gpts[0], self.downsampled_gpts[0]),
+                min(self._window_gpts[1], self.downsampled_gpts[1]),
+            )
+
         return (
             safe_ceiling_int(self.downsampled_gpts[0] / self.interpolation[0]),
             safe_ceiling_int(self.downsampled_gpts[1] / self.interpolation[1]),
@@ -1839,12 +4292,390 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         return waves.array
 
+    def _dense_indices(self) -> np.ndarray:
+        return _dense_wave_vector_indices(
+            self.extent, self.downsampled_gpts, self.energy, self.semiangle_cutoff
+        )
+
+    def _coarse_bounds(self) -> tuple[int, int]:
+        dense_indices = self._dense_indices()
+        bounds = ()
+        for i in range(2):
+            n_max = int(np.abs(dense_indices[:, i]).max())
+            bounds += (-(n_max // -self.interpolation[i]) + 1,)
+        return bounds
+
+    def _coarse_mask(self) -> np.ndarray:
+        """Boolean mask over the raveled coarse bounding rectangle selecting the
+        beams that are built (run through the multislice algorithm).
+
+        Only the beams within a support disk around the aperture are kept: those
+        with a normalized radius (unity at the aperture edge) within one coarse
+        cell, or a fixed margin, of the aperture. The far corners of the bounding
+        rectangle are dropped. At a coarse interpolation the grid under-samples
+        the scattering matrix at those corners, and including them makes the
+        trigonometric interpolation overfit; dropping them both reduces the
+        number of multislice runs and improves the interpolation, most strongly
+        at large interpolation factors where the corners dominate the rectangle.
+        """
+        bounds = self._coarse_bounds()
+        dense_indices = self._dense_indices()
+        n_max = [max(1, int(np.abs(dense_indices[:, i]).max())) for i in range(2)]
+
+        n = np.arange(-bounds[0], bounds[0] + 1)
+        m = np.arange(-bounds[1], bounds[1] + 1)
+
+        radius_x = (n[:, None] * self.interpolation[0]) / n_max[0]
+        radius_y = (m[None, :] * self.interpolation[1]) / n_max[1]
+        radius = np.sqrt(radius_x**2 + radius_y**2)
+
+        cell = max(self.interpolation[0] / n_max[0], self.interpolation[1] / n_max[1])
+        keep_radius = 1.0 + max(cell, _COARSE_SUPPORT_MARGIN)
+        return (radius <= keep_radius).ravel()
+
+    def _coarse_fill_indices(self) -> np.ndarray:
+        """For every position of the coarse bounding rectangle, the index (into
+        the built, disk-masked beams) of the nearest built beam.
+
+        The dropped corners of the rectangle are filled by the nearest built beam
+        rather than by zeros, so that the trigonometric interpolation extends the
+        scattering matrix smoothly into the corners instead of dropping a
+        discontinuity there. In particular a rank-one (vacuum) scattering matrix,
+        constant over the built beams, is filled to a constant and reconstructed
+        exactly.
+        """
+        from scipy import ndimage
+
+        bounds = self._coarse_bounds()
+        shape = (2 * bounds[0] + 1, 2 * bounds[1] + 1)
+        kept = self._coarse_mask().reshape(shape)
+
+        nearest = ndimage.distance_transform_edt(
+            ~kept, return_distances=False, return_indices=True
+        )
+        nearest_flat = (nearest[0] * shape[1] + nearest[1]).ravel()
+
+        # map a flat rectangle index to its position in the built (kept) order
+        rectangle_to_kept = np.full(int(np.prod(shape)), -1, dtype=int)
+        rectangle_to_kept[np.flatnonzero(kept.ravel())] = np.arange(int(kept.sum()))
+        return rectangle_to_kept[nearest_flat]
+
+    def _interpolate_beam_functions(self, functions, dense_indices) -> np.ndarray:
+        """Trigonometric interpolation of functions of the coarse plane waves
+        (given as rows over the coarse rectangle) to the dense plane-wave
+        expansion.
+
+        The trigonometric interpolant is band limited: it does not alias the
+        interpolation error to displaced copies of the probe. A local (spline)
+        interpolant leaks such attenuated ghost probes displaced by
+        extent/interpolation, which an annular detector integrates as a large
+        error even when the interpolant is more accurate in the mean-square
+        sense.
+        """
+        xp = get_array_module(functions)
+
+        bounds = self._coarse_bounds()
+        shape = (2 * bounds[0] + 1, 2 * bounds[1] + 1)
+
+        # the built beams span a disk, not the full rectangle; extend them into
+        # the rectangle expected by the (rectangular) fft by filling the dropped
+        # corners with the nearest built beam (smooth, and exact for a rank-one
+        # scattering matrix) rather than with zeros
+        num_rectangle = int(np.prod(shape))
+        if functions.shape[-1] != num_rectangle:
+            fill_indices = xp.asarray(self._coarse_fill_indices())
+            functions = functions[..., fill_indices]
+
+        functions = functions.reshape((-1,) + shape)
+
+        coefficients = xp.fft.fft2(functions, axes=(-2, -1))
+        coefficients /= get_dtype(complex=False)(np.prod(shape))
+
+        dtype = get_dtype(complex=True)
+        kernels = ()
+        for i, (bound, length) in enumerate(zip(bounds, shape)):
+            frequencies = xp.fft.fftfreq(length, d=1 / length).astype(int)
+            dense_coordinate = (
+                xp.arange(
+                    -bound * self.interpolation[i], bound * self.interpolation[i] + 1
+                )
+                / self.interpolation[i]
+            )
+            kernels += (
+                complex_exponential(
+                    2.0
+                    * xp.pi
+                    * (dense_coordinate[:, None] + bound)
+                    * frequencies[None]
+                    / length
+                ).astype(dtype),
+            )
+
+        interpolated = xp.tensordot(coefficients, kernels[0], axes=[[-2], [-1]])
+        interpolated = xp.tensordot(interpolated, kernels[1], axes=[[-2], [-1]])
+
+        offset = (bounds[0] * self.interpolation[0], bounds[1] * self.interpolation[1])
+        return interpolated[
+            :, dense_indices[:, 0] + offset[0], dense_indices[:, 1] + offset[1]
+        ]
+
+    @property
+    def _reference_depth(self) -> float:
+        """The depth the beams are referenced to for the interpolation [Å].
+
+        The tilt dependence of a beam is a shear of the specimen: scattering at
+        depth ``z`` to a frequency ``q`` displaces laterally by
+        ``lambda (t - z) q`` before it reaches the exit surface, so the
+        interpolated function of the tilt has a spectrum occupying
+        ``[0, lambda t q]`` — one sided, anchored at zero. Trigonometric
+        interpolation resolves a spectrum spanning one period ``extent /
+        interpolation`` *centred* on zero, hence half of that budget is spent
+        on an empty half interval.
+
+        Referencing the beams to the middle of the specimen (a Fresnel
+        propagation, undone after the compression) centres the spectrum on
+        zero and doubles the scattering angle the same beams interpolate
+        without aliasing.
+        """
+        thickness = self.potential.thickness if self.potential is not None else 0.0
+        return 0.5 * thickness
+
+    def _defocus_phase(self, wave_vectors) -> np.ndarray:
+        """The propagation (defocus) phase :math:`\\exp(-i \\pi \\lambda t |k|^2)`
+        accumulated by each plane wave propagating through the cell of thickness
+        :math:`t`.
+
+        Factoring this phase out of the scattering matrix before the
+        interpolation (and adding it back on the dense plane waves) references the
+        beams to the entrance surface, where the probe is focused. It flattens the
+        quadratic phase variation of the phase-removed scattering matrix across
+        the aperture, which the coarse interpolation would otherwise have to
+        capture, improving the accuracy at no additional cost. In vacuum, or for a
+        zero-thickness potential, the phase is unity and the compression is
+        unchanged.
+        """
+        thickness = self.potential.thickness if self.potential is not None else 0.0
+        wavelength = self.wavelength
+        squared_wave_vectors = wave_vectors[..., 0] ** 2 + wave_vectors[..., 1] ** 2
+        return complex_exponential(
+            -np.pi
+            * wavelength
+            * (thickness - self._reference_depth)
+            * squared_wave_vectors
+        )
+
+    def _reference_propagator(self, gpts, xp, sign: float):
+        """The Fresnel propagator moving the beams to the reference depth.
+
+        The beams are given on the downsampled grid, whose sampling follows
+        from their own number of grid points rather than from this object.
+        """
+        sampling = tuple(e / n for e, n in zip(self.extent, gpts))
+        kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
+        squared = kx[:, None] ** 2 + ky[None] ** 2
+        return complex_exponential(
+            sign * np.pi * self.wavelength * self._reference_depth * squared
+        ).astype(get_dtype(complex=True))
+
+    def _compress(self, array) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Phase removal, interpolation to the dense plane-wave expansion and
+        exact truncated SVD of the interpolated operator.
+
+        The plane-wave tilt phase and the propagation (defocus) phase are factored
+        out of each beam before the interpolation, then added back on the dense
+        plane waves (see :meth:`_defocus_phase`). The phase-removed scattering
+        matrix is factored as :math:`T = L Q` with orthonormal :math:`Q`; the
+        interpolation acts on the small beam-side factor :math:`L`, hence the
+        singular value decomposition of the interpolated operator is obtained
+        exactly without ever forming it.
+        """
+        xp = get_array_module(array)
+        dtype = get_dtype(complex=True)
+
+        gpts = array.shape[-2:]
+        extent = self.extent
+
+        wave_vectors = self.wave_vectors
+        real_dtype = get_dtype(complex=False)
+        x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=real_dtype)
+        y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=real_dtype)
+
+        array = array.reshape((-1,) + tuple(gpts))
+
+        # reference the beams to the middle of the specimen, which centres the
+        # tilt spectrum the interpolation has to resolve (see
+        # :meth:`_reference_depth`). The propagator does not commute with the
+        # tilt ramp, so it cannot be undone beam by beam; it is left in place
+        # and the reduction inherits it, which is exact because the propagator
+        # is the same for every beam: the reduced wave is the exit wave of the
+        # probe propagated to the same depth. Diffraction patterns are
+        # unchanged by it, and a cropped one is improved — the drift of the
+        # reduced wave is halved, so less of it is lost to the window.
+        if self._reference_depth > 0.0:
+            # IN BATCHES OVER BEAMS. Transforming the whole matrix at once
+            # needs two further copies of it -- fft2's output and the product
+            # -- so the peak is three times the scattering matrix. On the 100 A
+            # Pt/C cell at f=8 that is 3 x 15.8 GB and the build cannot run on
+            # a 46 GB card, even though the matrix itself is only a third of
+            # it. The transform and the phase are independent per beam, so
+            # batching is exact and the result is written back in place.
+            propagator = self._reference_propagator(gpts, xp, 1.0)[None]
+            reference_batch = max(1, int(2**30 // (np.prod(gpts) * 8)))
+            for start in range(0, len(array), reference_batch):
+                stop = min(start + reference_batch, len(array))
+                array[start:stop] = ifft2(fft2(array[start:stop]) * propagator)
+
+        # the conjugate of the propagation phase flattens the quadratic phase
+        # variation of the phase-removed matrix; it is added back below
+        defocus_phase = self._defocus_phase(wave_vectors).conj()
+
+        normalization = np.prod(self.interpolation).astype(real_dtype)
+        max_batch = max(1, int(256**3 / np.prod(gpts)))
+        for start in range(0, len(array), max_batch):
+            chunk = slice(start, start + max_batch)
+            phase = complex_exponential(
+                -2.0 * xp.pi * wave_vectors[chunk, 0, None, None] * x[:, None]
+            ) * complex_exponential(
+                -2.0 * xp.pi * wave_vectors[chunk, 1, None, None] * y[None, :]
+            )
+            array[chunk] *= phase * defocus_phase[chunk, None, None] / normalization
+
+        matrix = array.reshape((len(array), -1))
+
+        # T = L Q with the rows of Q orthonormal. The orthonormal factor is
+        # obtained from the Gram matrix G = T T^H rather than a QR
+        # factorization: the tall QR is far slower than the two matrix products
+        # this costs (measured 5-14x) and materializes Q, a full extra copy of
+        # the scattering matrix, whereas here Q is contracted on the fly. The
+        # Gram matrix is accumulated in double precision independently of
+        # ``config['precision']``: its eigenvalues are the SQUARES of the
+        # singular values, so single precision would resolve the spectrum only
+        # to ~1e-3 relative, well above the smallest supported tolerance. The
+        # eigenvalues near the round-off floor (the coarse expansion is rank
+        # deficient) are dropped.
+        gram = xp.zeros((len(matrix), len(matrix)), dtype=np.complex128)
+        pixel_batch = max(1, int(256**3 / max(len(matrix), 1)))
+        for start in range(0, matrix.shape[1], pixel_batch):
+            chunk = matrix[:, start : start + pixel_batch].astype(np.complex128)
+            gram += chunk @ chunk.T.conj()
+
+        eigenvalues, eigenvectors = xp.linalg.eigh(gram)
+        eigenvalues = xp.clip(eigenvalues[::-1], 0.0, None)
+        eigenvectors = eigenvectors[:, ::-1]
+
+        # a round-off floor only: the tolerance must not truncate here, or the
+        # row space of the built beams is already incomplete before the
+        # interpolation and the plane-wave branch stops being exact
+        keep = max(1, int((eigenvalues > eigenvalues[0] * 1e-14).sum()))
+        singular_values = xp.sqrt(eigenvalues[:keep])
+
+        # L = V diag(s) and Q = diag(1 / s) V^H T, with T = L Q exact on the
+        # retained subspace
+        beam_factor = (eigenvectors[:, :keep] * singular_values[None]).astype(dtype)
+
+        dense_indices = self._dense_indices()
+
+        # the interpolated operator T_dense = (P L) Q shares the pixel-side
+        # factor Q, hence its exact SVD follows from the small matrix P L,
+        # obtained by interpolating the columns of L over the coarse plane waves
+        projected = self._interpolate_beam_functions(
+            xp.ascontiguousarray(beam_factor.T), xp.asarray(dense_indices)
+        ).T
+        projected = xp.ascontiguousarray(projected.astype(dtype))
+
+        # The retained subspace is chosen in two parts rather than by singular
+        # value alone. The plane-wave (PRISM) branch of the reduction uses only
+        # the rows of the dense expansion that coincide with built beams, so
+        # their row space is retained WHOLE; the leading directions of what is
+        # left over are then retained by tolerance. This makes the plane-wave
+        # branch exact at any tolerance — the blended reduction is bounded by
+        # PRISM on every band it covers — while the tolerance still controls the
+        # cost of the interpolated part.
+        moment = projected.conj().T @ projected
+
+        def leading(hermitian, threshold):
+            values, vectors = xp.linalg.eigh(hermitian)
+            values = xp.clip(values[::-1], 0.0, None)
+            count = int((xp.sqrt(values) >= threshold).sum())
+            return vectors[:, ::-1][:, :count].T.conj(), xp.sqrt(values)
+
+        _, spectrum = leading(moment, 0.0)
+        largest = float(spectrum[0]) if len(spectrum) else 0.0
+
+        lattice = (dense_indices[:, 0] % self._interpolation[0] == 0) & (
+            dense_indices[:, 1] % self._interpolation[1] == 0
+        )
+        # the floor sits above the single-precision noise of the coarse matrix
+        # (~1e-7 relative) and far below any usable tolerance, so the row space
+        # is captured whole without admitting round-off directions
+        lattice_rows = projected[xp.asarray(lattice)]
+        lattice_basis, _ = leading(
+            lattice_rows.conj().T @ lattice_rows, largest * 1e-6
+        )
+
+        # what the built beams do not already span, by tolerance
+        residual = xp.eye(moment.shape[0], dtype=dtype)
+        residual = residual - lattice_basis.conj().T @ lattice_basis
+        extra_basis, _ = leading(
+            residual @ moment @ residual, self._tolerance * largest
+        )
+
+        w = xp.concatenate([lattice_basis, extra_basis], axis=0)
+
+        # order the retained modes by how much of the expansion they carry, so
+        # that a rank cap keeps the largest and the reported spectrum descends
+        amplitudes = xp.ascontiguousarray((projected @ w.conj().T).T)
+        order = xp.argsort(xp.linalg.norm(amplitudes, axis=1))[::-1]
+        if self._max_rank is not None:
+            order = order[: max(1, self._max_rank)]
+        w, amplitudes = w[order], xp.ascontiguousarray(amplitudes[order])
+        rank = max(1, len(w))
+
+        # U = W Q = (W diag(1 / s) V^H) T without ever materializing Q
+        project = (
+            w * (1.0 / singular_values)[None].astype(dtype)
+        ) @ eigenvectors[:, :keep].T.conj().astype(dtype)
+        u = (project @ matrix).reshape((rank,) + tuple(gpts))
+
+        # the dense plane-wave amplitudes of each retained mode
+        sigma = xp.linalg.norm(amplitudes, axis=1)
+        vh_dense = amplitudes / xp.clip(sigma, 1e-30, None)[:, None]
+        singular_values = spectrum
+
+        # add the propagation phase back on the dense plane waves
+        dense_wave_vectors = xp.asarray(dense_indices, dtype=real_dtype)
+        dense_wave_vectors = dense_wave_vectors / xp.asarray(
+            extent, dtype=real_dtype
+        )
+        vh_dense = vh_dense * self._defocus_phase(dense_wave_vectors)[None].astype(
+            dtype
+        )
+
+        return (
+            u,
+            sigma[:rank].astype(get_dtype(complex=False)),
+            vh_dense.astype(dtype),
+            dense_indices,
+            singular_values.astype(get_dtype(complex=False)),
+        )
+
     def build(
         self, lazy: bool = None, max_batch: int | str = "auto", bound: bool = None
-    ) -> SMatrixArray:
+    ) -> SMatrixArray | CompressedSMatrixArray:
         """
         Build the plane waves of the scattering matrix and propagate them through the
         potential using the multislice algorithm.
+
+        When ``upsample=True``, the scattering matrix is subsequently compressed by
+        phase removal, interpolation to the full plane-wave expansion and an
+        adaptive truncated singular value decomposition, and a
+        :class:`.CompressedSMatrixArray` is returned. The multislice stage may be
+        computed lazily, however, the compression requires the scattering matrix in
+        memory, hence the returned :class:`.CompressedSMatrixArray` is always
+        computed. At an interpolation factor of (1, 1) the plane-wave expansion is
+        complete, hence the compression provides no benefit and the uncompressed
+        :class:`.SMatrixArray` is returned; the reduction is then identical to the
+        PRISM algorithm.
 
         Parameters
         ----------
@@ -1856,9 +4687,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         Returns
         -------
-        s_matrix_array : SMatrixArray
+        s_matrix_array : SMatrixArray or CompressedSMatrixArray
             The built scattering matrix.
         """
+        if self._upsample_enabled and np.prod(self.ensemble_shape) > 1:
+            raise NotImplementedError(
+                "SMatrix.build does not support ensemble potentials with "
+                "upsample=True; use SMatrix.reduce or SMatrix.scan, which average "
+                "over the potential ensemble."
+            )
+
         lazy = validate_lazy(lazy)
 
         downsampled_gpts = self.downsampled_gpts
@@ -1932,6 +4770,8 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     dtype=np.complex64,
                 )
 
+            pbar = config.get("diagnostics.task_progress", False)
+
             for i, _, s_matrix in self.generate_blocks(1):
                 s_matrix = s_matrix.item()
                 for start, stop in wave_vector_blocks:
@@ -1939,7 +4779,9 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                     if self.ensemble_shape:
                         items = i + items
 
-                    new_array = self._build_s_matrix(s_matrix, slice(start, stop))
+                    new_array = self._build_s_matrix(
+                        s_matrix, slice(start, stop), pbar=pbar
+                    )
 
                     if self.store_on_host:
                         new_array = xp.asnumpy(new_array)
@@ -1969,7 +4811,48 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             device=self.device,
         )
 
-        return s_matrix_array
+        if not self._upsample_enabled:
+            return s_matrix_array
+
+        compress_array = s_matrix_array.array
+        if s_matrix_array.is_lazy:
+            compress_array = compress_array.compute()
+
+        metadata = dict(s_matrix_array.metadata)
+
+        pbar = config.get("diagnostics.task_progress", False)
+        if pbar:
+            print(
+                f"compressing scattering matrix: {len(self)} plane waves "
+                f"interpolated to {len(self._dense_indices())}",
+                flush=True,
+            )
+
+        u, sigma, vh_dense, dense_indices, singular_values = self._compress(
+            compress_array
+        )
+
+        if pbar:
+            print(f"kept {len(sigma)} modes at tolerance {self._tolerance:g}")
+
+        return CompressedSMatrixArray(
+            u=u,
+            sigma=sigma,
+            vh_dense=vh_dense,
+            dense_indices=dense_indices,
+            semiangle_cutoff=self.semiangle_cutoff,
+            energy=self.energy,
+            extent=self.extent,
+            interpolation=self.interpolation,
+            window_gpts=self.window_gpts,
+            position_quantization=self._position_quantization,
+            max_batch_expansion=self._max_batch_expansion,
+            blend_angle=self._resolved_blend_angle(),
+            device=self.device,
+            metadata=metadata,
+            singular_values=singular_values,
+            reference_depth=self._reference_depth,
+        )
 
     def scan(
         self,
@@ -2053,7 +4936,7 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             lazy=lazy,
         )
 
-    def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
+    def _build_ensemble_shape_metadata(self):
         extra_ensemble_axes_shape = ()
         extra_ensemble_axes_metadata = []
         for shape, axis_metadata in zip(
@@ -2072,12 +4955,232 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             extra_ensemble_axes_metadata = extra_ensemble_axes_metadata + [
                 self.potential.base_axes_metadata[0]
             ]
+        return extra_ensemble_axes_shape, extra_ensemble_axes_metadata
+
+    def _eager_transition_potential_scan(
+        self, scan, detectors, transition_potentials, sites, double_channel,
+        inelastic_crop=None,
+        squeeze=True,
+    ):
+        from abtem.inelastic.core_loss import prism_transition_potential_scan
+
+        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
+            self._build_ensemble_shape_metadata()
+        )
+
+        if self.ensemble_shape:
+            dummy_waves = self.build(lazy=True).dummy_probes(scan)
+            measurements = allocate_multislice_measurements(
+                dummy_waves,
+                detectors,
+                extra_ensemble_axes_shape,
+                extra_ensemble_axes_metadata,
+            )
+        else:
+            measurements = None
+
+        num_blocks = 0
+        for i, _, s_matrix in self.generate_blocks(1):
+            s_matrix = s_matrix.item()
+
+            new_measurements = ensure_list(
+                prism_transition_potential_scan(
+                    s_matrix=s_matrix,
+                    transition_potentials=transition_potentials,
+                    scan=scan,
+                    detectors=detectors,
+                    sites=sites,
+                    double_channel=double_channel,
+                    inelastic_crop=inelastic_crop,
+                )
+            )
+
+            if measurements is None:
+                measurements = new_measurements
+            else:
+                for measurement, new_measurement in zip(
+                    measurements, new_measurements
+                ):
+                    if measurement.axes_metadata[0]._ensemble_mean:
+                        measurement.array[:] += new_measurement.array
+                    else:
+                        measurement.array[i] = new_measurement.array
+
+            num_blocks += 1
+
+        for idx, measurement in enumerate(measurements):
+            if measurement.axes_metadata[0]._ensemble_mean:
+                if num_blocks > 1:
+                    measurement.array[:] /= num_blocks
+                if squeeze:
+                    measurements[idx] = measurement.squeeze((0,))
+
+        return measurements
+
+    @staticmethod
+    def _lazy_transition_potential_scan(
+        s_matrix, scan, detectors, transition_potentials, sites, double_channel,
+        inelastic_crop=None,
+    ):
+        s_matrix = s_matrix.item()
+        measurements = s_matrix._eager_transition_potential_scan(
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            double_channel=double_channel,
+            inelastic_crop=inelastic_crop,
+            squeeze=False,
+        )
+
+        array = np.zeros((1,) + (1,) * len(scan.shape), dtype=object)
+        itemset(array, 0, measurements)
+        return array
+
+    def transition_potential_scan(
+        self,
+        transition_potentials,
+        scan=None,
+        detectors=None,
+        sites=None,
+        double_channel: bool = False,
+        inelastic_crop=None,
+        lazy: bool = None,
+    ):
+        """**Experimental** PRISM-based core-loss scan.
+
+        Mirrors :meth:`Probe.transition_potential_scan` but uses the S-matrix
+        plane-wave decomposition instead of running a full multislice per
+        scan position. Supports any ``interpolation`` factor and both
+        single- and double-channel modes. At ``interpolation=(1, 1)`` the
+        result is bit-equivalent to ``Probe.transition_potential_scan``
+        (float32 noise) against the matching ``double_channel`` setting.
+        At ``interpolation > 1`` the reduced wave functions are returned at
+        ``window_gpts`` size, matching the elastic :meth:`scan` convention.
+
+        See :func:`abtem.inelastic.core_loss.prism_transition_potential_scan`
+        for the algorithm details.
+
+        Parameters
+        ----------
+        transition_potentials : BaseTransitionPotential
+            Atomic transition potential (single instance).
+        scan : BaseScan or tuple, optional
+            Scan positions. Defaults to a ``GridScan`` over the full extent
+            at Nyquist sampling, mirroring :meth:`scan`.
+        detectors : BaseDetector or list, optional
+            Detectors. Defaults to a ``FlexibleAnnularDetector``.
+        sites : Atoms or SliceIndexedAtoms, optional
+            Scattering sites. Auto-extracted from the potential if not given.
+        double_channel : bool, optional
+            If True, propagate the scattered wave through the remaining
+            potential slices to the exit before detection (matching the
+            multislice EELS ``double_channel=True`` branch). If False
+            (default), detect immediately at the scatter slice — Brown's
+            single-channel approximation.
+        inelastic_crop : float or tuple of float, optional
+            Real-space side length [Å] of the window on which the transition
+            potential and scattered wave are evaluated (Brown et al. Sec.
+            IV B). Smaller windows speed up the scatter and double-channel
+            propagation at the cost of truncating the transition-potential
+            tails. Defaults to ``None`` (the full PRISM cell,
+            ``extent / interpolation``). Values larger than the PRISM cell
+            are clamped with a warning.
+        lazy : bool, optional
+            If True, create the measurements lazily using Dask; otherwise,
+            compute eagerly. Defaults to the user configuration value.
+
+        Returns
+        -------
+        BaseMeasurements or list of BaseMeasurements
+            One measurement per detector.
+        """
+        from abtem.inelastic.core_loss import (
+            prism_transition_potential_scan,
+        )
+
+        if scan is None:
+            scan = GridScan(
+                start=(0, 0),
+                end=self.extent,
+                sampling=self.dummy_probes().aperture.nyquist_sampling,
+            )
+
+        detectors = validate_detectors(detectors)
+        scan = validate_scan(scan, self)
+        lazy = validate_lazy(lazy)
+
+        if not lazy:
+            measurements = self._eager_transition_potential_scan(
+                scan=scan,
+                detectors=detectors,
+                transition_potentials=transition_potentials,
+                sites=sites,
+                double_channel=double_channel,
+                inelastic_crop=inelastic_crop,
+            )
+            return _wrap_measurements(measurements)
+
+        blocks = self.ensemble_blocks(1)
+
+        chunks = ()
+        drop_axis = ()
+        if not self.ensemble_shape:
+            blocks = blocks[None]
+            drop_axis = (0,)
+            new_axis = tuple_range(offset=0, length=len(scan.shape))
+        else:
+            chunks += blocks.chunks
+            new_axis = tuple_range(
+                offset=len(blocks.shape), length=len(scan.shape)
+            )
+
+        chunks += scan.shape
+
+        arrays = blocks.map_blocks(
+            self._lazy_transition_potential_scan,
+            drop_axis=drop_axis,
+            new_axis=new_axis,
+            chunks=chunks,
+            scan=scan,
+            detectors=detectors,
+            transition_potentials=transition_potentials,
+            sites=sites,
+            double_channel=double_channel,
+            inelastic_crop=inelastic_crop,
+            meta=np.array((), dtype=object),
+        )
+
+        waves = self.build(lazy=True).dummy_probes(scan=scan)
+
+        extra_axes_metadata = []
+        if self.potential is not None:
+            extra_axes_metadata = self.potential.ensemble_axes_metadata
+
+        measurements = _finalize_lazy_measurements(
+            arrays, waves, detectors, extra_axes_metadata
+        )
+
+        return _wrap_measurements(measurements)
+
+    def _eager_build_s_matrix_detect(self, scan, ctf, detectors, squeeze):
+        extra_ensemble_axes_shape, extra_ensemble_axes_metadata = (
+            self._build_ensemble_shape_metadata()
+        )
 
         detectors = validate_detectors(detectors)
 
         if self.ensemble_shape:
+            if self._upsample_enabled:
+                # building would compute the compression of a single ensemble
+                # member eagerly (and raises for ensemble potentials); the
+                # builder's dummy probes carry the same grid and metadata
+                dummy_probes = self.dummy_probes(scan, ctf)
+            else:
+                dummy_probes = self.build(lazy=True).dummy_probes(scan, ctf)
+
             measurements = allocate_multislice_measurements(
-                self.build(lazy=True).dummy_probes(scan, ctf),
+                dummy_probes,
                 detectors,
                 extra_ensemble_axes_shape,
                 extra_ensemble_axes_metadata,
@@ -2110,7 +5213,10 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         # measurements = list(measurements.values())
 
         for i, measurement in enumerate(measurements):
-            if measurement.axes_metadata[0]._ensemble_mean:
+            if (
+                measurement.axes_metadata
+                and measurement.axes_metadata[0]._ensemble_mean
+            ):
                 if num_blocks > 1:
                     measurement.array[:] /= num_blocks
                 if squeeze:
@@ -2191,7 +5297,13 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
             The detected measurement (if detector(s) given).
         """
 
-        detectors = validate_detectors(detectors, self.dummy_probes(downsample=False))
+        if self._upsample_enabled:
+            # the compressed scattering matrix spans the full downsampled grid
+            detectors = validate_detectors(detectors, self.dummy_probes())
+        else:
+            detectors = validate_detectors(
+                detectors, self.dummy_probes(downsample=False)
+            )
 
         if scan is None:
             scan = (self.extent[0] / 2, self.extent[1] / 2)
@@ -2200,8 +5312,14 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
 
         if ctf is None:
             ctf = CTF(semiangle_cutoff=self.semiangle_cutoff)
+        elif isinstance(ctf, dict):
+            ctf = CTF(semiangle_cutoff=self.semiangle_cutoff, **ctf)
 
-        if self.device == "gpu" and disable_s_matrix_chunks == "auto":
+        if self._upsample_enabled:
+            # the compression requires the scattering matrix in memory, hence each
+            # member of the potential ensemble is built and reduced as one task
+            disable_s_matrix_chunks = True
+        elif self.device == "gpu" and disable_s_matrix_chunks == "auto":
             disable_s_matrix_chunks = True
         elif disable_s_matrix_chunks == "auto":
             disable_s_matrix_chunks = False
@@ -2248,7 +5366,12 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
                 meta=np.array((), dtype=object),
             )
 
-            waves = self.build(lazy=True).dummy_probes(scan=scan)
+            if self._upsample_enabled:
+                # building would compute the compression eagerly; the builder's
+                # dummy probes carry the same grid and metadata
+                waves = self.dummy_probes(scan=scan)
+            else:
+                waves = self.build(lazy=True).dummy_probes(scan=scan)
 
             extra_axes_metadata = []
             if self.potential is not None:

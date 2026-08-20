@@ -17,8 +17,8 @@ from abtem.atoms import plane_to_axes
 from abtem.core.backend import copy_to_device
 from abtem.core.constants import eps0
 from abtem.core.ensemble import _wrap_with_array
-from abtem.core.fft import fft_crop
-from abtem.core.utils import itemset
+from abtem.core.fft import fft_crop, fft_interpolate
+from abtem.core.utils import get_dtype, itemset
 from abtem.inelastic.phonons import AtomsEnsemble, DummyFrozenPhonons
 from abtem.parametrizations import EwaldParametrization
 from abtem.potentials.iam import Potential, PotentialArray, _PotentialBuilder
@@ -479,7 +479,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         else:
             raise RuntimeError()
 
-        self._charge_density = charge_density.astype(np.float32)
+        self._charge_density = charge_density.astype(get_dtype(complex=False))
         self._repetitions = repetitions
 
         # ``Cell * repetitions`` broadcasts over columns, which only scales lattice

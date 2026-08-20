@@ -8,7 +8,8 @@ from abtem.multislice import FourierMultislice, RealSpaceMultislice
 
 # Suppress Numba performance warnings during tests
 pytestmark = pytest.mark.filterwarnings(
-    "ignore::numba.core.errors.NumbaPerformanceWarning"
+    "ignore::numba.core.errors.NumbaPerformanceWarning",
+    "ignore::UserWarning"
 )
 
 
@@ -98,9 +99,11 @@ class TestLazyVsEager:
     @pytest.mark.parametrize(
         "algorithm",
         [
-            FourierMultislice(),
+            FourierMultislice(order=1),
             FourierMultislice(order=2),
-            RealSpaceMultislice(),
+            FourierMultislice(order='exact'),
+            RealSpaceMultislice(order=1),
+            RealSpaceMultislice(order=2),
             RealSpaceMultislice(order=3),
         ],
     )
@@ -140,7 +143,7 @@ class TestLazyVsEager:
 class TestFourierMultislice:
     """Test FourierMultislice algorithm with various configurations."""
 
-    @pytest.mark.parametrize("order", [1, 2])
+    @pytest.mark.parametrize("order", [1, 2,"exact"])
     def test_fourier_orders(self, test_system, order):
         """Test that FourierMultislice accepts valid orders."""
         probe = test_system["probe"]
@@ -162,7 +165,7 @@ class TestFourierMultislice:
         potential = test_system["potential"]
         scan = test_system["single_point_scan"]
 
-        with pytest.raises(ValueError, match="Only orders 1 and 2 are supported"):
+        with pytest.raises(ValueError, match="Only order 1, 2, and 'exact' are supported"):
             probe.multislice(
                 potential=potential,
                 scan=scan,

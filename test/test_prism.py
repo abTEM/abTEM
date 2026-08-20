@@ -413,3 +413,42 @@ def test_prism_non_orthogonal_matches_multislice_haadf():
 #     measurements.compute()
 #
 #     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan)
+
+
+def test_prism_aberrated_ctf_matches_probe():
+    # regression test for two bugs in the reduction coefficients: the
+    # normalization used the complex square instead of the absolute square, and
+    # the azimuthal angle convention must match polar_spatial_frequencies,
+    # ie. arctan2(ky, kx). the real-space intensity of an aberrated probe is
+    # sensitive to both; the vacuum diffraction intensity is sensitive to
+    # neither.
+    from abtem import CTF, Probe, SMatrix
+
+    ctf = CTF(
+        energy=100e3,
+        semiangle_cutoff=20,
+        defocus=50,
+        astigmatism=40,
+        astigmatism_angle=0.5236,
+        coma=3e3,
+        coma_angle=1.0,
+    )
+
+    probe = Probe._from_ctf(extent=20, gpts=128, ctf=ctf, energy=100e3)
+    probe_intensity = probe.build(lazy=False).intensity().array
+
+    s_matrix = SMatrix(
+        extent=20,
+        gpts=128,
+        energy=100e3,
+        semiangle_cutoff=20,
+        interpolation=1,
+        downsample=False,
+    )
+    prism_intensity = s_matrix.reduce(ctf=ctf, lazy=False).intensity().array
+
+    assert np.allclose(
+        np.squeeze(prism_intensity),
+        np.squeeze(probe_intensity),
+        atol=1e-5 * probe_intensity.max(),
+    )

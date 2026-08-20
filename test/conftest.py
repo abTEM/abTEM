@@ -23,6 +23,10 @@ def pytest_configure(config):
         "ignore",
         category=UserWarning,
     )
+    config.addinivalue_line(
+        "markers",
+        "multigpu: requires >=2 GPUs and dask-cuda; skipped otherwise",
+    )
 
 
 # def pytest_addoption(parser):

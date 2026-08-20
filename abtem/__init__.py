@@ -24,7 +24,7 @@ from abtem.measurements import (
     ReciprocalSpaceLineProfiles,
 )
 from abtem.potentials.iam import CrystalPotential, Potential, PotentialArray
-from abtem.prism.s_matrix import SMatrix, SMatrixArray
+from abtem.prism.s_matrix import CompressedSMatrixArray, SMatrix, SMatrixArray
 from abtem.scan import CustomScan, GridScan, LineScan
 from abtem.transfer import CTF, Aperture, SpatialEnvelope, TemporalEnvelope
 from abtem.visualize.visualizations import show_atoms
@@ -54,6 +54,7 @@ __all__ = [
     "IndexedDiffractionPatterns",
     "SMatrix",
     "SMatrixArray",
+    "CompressedSMatrixArray",
     "FrozenPhonons",
     "AtomsEnsemble",
     "Potential",

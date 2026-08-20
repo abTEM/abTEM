@@ -2213,7 +2213,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         """
 
         if pbar is None:
-            pbar = config.get("local_diagnostics.task_level_progress", False)
+            pbar = config.get("diagnostics.task_progress", False)
 
         if isinstance(thicknesses, (float, int)):
             ensemble_axes_metadata = []
@@ -2424,7 +2424,7 @@ class BlochwaveEnsemble(Ensemble, CopyMixin):
         """
 
         if pbar is None:
-            pbar = config.get("local_diagnostics.task_level_progress", False)
+            pbar = config.get("diagnostics.task_progress", False)
 
         if extent is None:
             base_cell = np.array(self._structure_factor.cell)

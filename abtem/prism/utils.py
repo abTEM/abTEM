@@ -257,7 +257,7 @@ def prism_coefficients(positions, wave_vectors, xp, ctf=None):
         alpha = (
             xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * ctf.wavelength
         )
-        phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+        phi = xp.arctan2(wave_vectors[:, 1], wave_vectors[:, 0])
 
         basis = ctf._evaluate_from_angular_grid(alpha, phi)
         basis, coefficients = expand_dims_to_broadcast(
