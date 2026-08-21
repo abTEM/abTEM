@@ -14,7 +14,7 @@ import numpy as np
 from ase import Atoms
 from dask.graph_manipulation import wait_on
 
-from abtem.array import ArrayObject, ComputableList, validate_lazy
+from abtem.array import ArrayObject, ComputableList, stack, validate_lazy
 from abtem.core import config
 from abtem.core.axes import (
     AxisMetadata,
@@ -4632,6 +4632,16 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         s_matrix_array : SMatrixArray or CompressedSMatrixArray
             The built scattering matrix.
         """
+        if self._upsample_enabled and len(self._energies) > 1:
+            raise NotImplementedError(
+                "SMatrix.build does not support multiple energies with "
+                "upsample=True: the compressed expansion is an energy-specific "
+                "SVD basis, so the per-energy bases have different ranks and "
+                "cannot be stacked into one array. Use SMatrix.reduce or "
+                "SMatrix.scan, which reduce each energy separately and stack "
+                "the measurements along an EnergyAxis."
+            )
+
         if self._upsample_enabled and np.prod(self.ensemble_shape) > 1:
             raise NotImplementedError(
                 "SMatrix.build does not support ensemble potentials with "
@@ -5299,6 +5309,45 @@ class SMatrix(BaseSMatrix, Ensemble, CopyMixin, EqualityMixin):
         Waves
             The detected measurement (if detector(s) given).
         """
+
+        # --- Multi-energy path ---
+        # The reduction contracts away the expansion axis, so each energy can be
+        # reduced independently and only the measurements are stacked. This needs
+        # no shared expansion basis across energies, hence it works for both the
+        # plane-wave (PRISM) and the compressed (C-PRISM) reduction.
+        if len(self._energies) > 1:
+            # Resolve the scan once against the whole ensemble: the Nyquist
+            # sampling of a default scan is wavelength-dependent, so validating
+            # it separately per energy would give each energy a different number
+            # of probe positions and the measurements could not be stacked.
+            if scan is None:
+                scan = (self.extent[0] / 2, self.extent[1] / 2)
+            scan = validate_scan(scan, self)
+
+            results = [
+                self._with_energy(float(e)).reduce(
+                    scan=scan,
+                    detectors=detectors,
+                    ctf=ctf,
+                    reduction_scheme=reduction_scheme,
+                    max_batch_multislice=max_batch_multislice,
+                    max_batch_reduction=max_batch_reduction,
+                    disable_s_matrix_chunks=disable_s_matrix_chunks,
+                    lazy=lazy,
+                )
+                for e in self._energies
+            ]
+            energy_axis = EnergyAxis(
+                values=tuple(float(e) for e in self._energies)
+            )
+            if isinstance(results[0], (list, ComputableList)):
+                return _wrap_measurements(
+                    [
+                        stack([r[i] for r in results], energy_axis)
+                        for i in range(len(results[0]))
+                    ]
+                )
+            return stack(results, energy_axis)
 
         if self._upsample_enabled:
             # the compressed scattering matrix spans the full downsampled grid
