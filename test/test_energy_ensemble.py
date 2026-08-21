@@ -612,10 +612,42 @@ class TestSMatrixReduceEnergyEnsemble:
             for axis in measurement.ensemble_axes_metadata
         )
 
-    def test_cprism_build_rejects_multiple_energies(self):
-        """build() cannot stack energy-specific compressed bases; reduce/scan can."""
+    @pytest.mark.parametrize("lazy", [False, True])
+    def test_cprism_build_rejects_multiple_energies(self, lazy):
+        """C-PRISM build() must reject energy ensembles with a clear error.
+
+        CompressedSMatrixArray has no ensemble machinery to carry an EnergyAxis,
+        so rather than fail obscurely downstream it refuses up front and points
+        at reduce()/scan(), which support energy ensembles.
+        """
         s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=PRISM_ENERGIES,
                     gpts=PRISM_GPTS, sampling=PRISM_SAMPLING,
                     interpolation=2, upsample=True)
         with pytest.raises(NotImplementedError, match="multiple energies"):
-            s.build(lazy=False)
+            s.build(lazy=lazy)
+
+    def test_upsample_without_compression_allows_multiple_energies(self):
+        """The guard is scoped to an active compression.
+
+        At interpolation (1, 1) the expansion is already complete, so build()
+        returns a plain SMatrixArray and the energy ensemble must still work.
+        """
+        s = SMatrix(semiangle_cutoff=PRISM_SEMIANGLE, energy=PRISM_ENERGIES,
+                    gpts=PRISM_GPTS, sampling=PRISM_SAMPLING,
+                    interpolation=1, upsample=True)
+        sma = s.build(lazy=False)
+        assert isinstance(sma, SMatrixArray)
+        assert sma.array.shape[0] == len(PRISM_ENERGIES)
+        assert isinstance(sma.ensemble_axes_metadata[0], EnergyAxis)
+
+    def test_cprism_scan_supports_multiple_energies(self):
+        """The error on build() must not imply C-PRISM rejects energy ensembles."""
+        potential = _reduce_potential()
+        scan = abtem.GridScan(start=(0, 0), end=potential.extent, sampling=0.6)
+        measurement = SMatrix(
+            semiangle_cutoff=PRISM_SEMIANGLE, energy=PRISM_ENERGIES,
+            potential=potential, interpolation=2, upsample=True,
+        ).scan(scan=scan, detectors=abtem.AnnularDetector(inner=30, outer=70),
+               lazy=False)
+        assert measurement.shape[0] == len(PRISM_ENERGIES)
+        assert isinstance(measurement.ensemble_axes_metadata[0], EnergyAxis)
