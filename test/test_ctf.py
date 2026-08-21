@@ -38,7 +38,7 @@ SAMPLING = (0.1, 0.1)  # Å/pixel
 def _aperture():  return Aperture(30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
 def _annular():   return AnnularAperture(10.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
 def _vortex():    return Vortex(1, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
-def _bullseye():  return Bullseye(4, 5.0, 3, 2.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+def _bullseye():  return Bullseye(4, 5.0, 3, 0.5, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
 def _zernike():   return Zernike(2.0, np.pi / 2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
 def _rpp():       return RadialPhasePlate(2, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
 def _temporal():  return TemporalEnvelope(100.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
@@ -212,7 +212,7 @@ def test_vortex_quantum_number():
 
 
 def test_bullseye_attributes():
-    b = Bullseye(4, 5.0, 3, 2.0, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
+    b = Bullseye(4, 5.0, 3, 0.5, 30.0, energy=ENERGY, gpts=GPTS, sampling=SAMPLING)
     assert b.num_spokes == 4 and b.num_rings == 3 and b.soft is False
 
 
