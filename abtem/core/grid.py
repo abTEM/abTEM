@@ -287,6 +287,17 @@ class Grid(CopyMixin, EqualityMixin):
                 for r, d, e in zip(extent, sampling, self._endpoint)
             )
 
+            if config.get("grid.round-to-fast-fft", False):
+                from abtem.core.fft import next_fast_fft_size
+
+                # Round upward only, so the realized sampling is never coarser
+                # than requested. Endpoint grids are not periodic FFT grids and
+                # keep the exact ceil-derived size.
+                self._gpts = tuple(
+                    n if e else next_fast_fft_size(n)
+                    for n, e in zip(self._gpts, self._endpoint)
+                )
+
     def _adjust_sampling(
         self, extent: tuple[float, ...] | None, gpts: tuple[int, ...] | None
     ):
@@ -409,6 +420,36 @@ class Grid(CopyMixin, EqualityMixin):
             int(min(power ** np.ceil(np.log(n) / np.log(power)) for power in powers))
             for n in self.gpts
         )
+
+        self.gpts = gpts
+
+        return gpts
+
+    def round_to_fast_fft(self) -> tuple[int, ...]:
+        """
+        Round the grid gpts up to the nearest fast FFT lengths.
+
+        Fast lengths factorize completely into the primes 2, 3, 5 and 7, for
+        which FFT libraries (FFTW, pocketfft, MKL and cuFFT) ship optimized
+        kernels; any other length falls back to a slower generic algorithm --
+        on cuFFT the Bluestein algorithm, which additionally allocates a
+        workspace of several times the transform size. Rounding is always
+        upward, so the realized sampling is never coarser than before.
+
+        The same rounding can be applied automatically whenever gpts are
+        derived from a requested sampling by enabling the configuration option
+        ``grid.round-to-fast-fft``.
+
+        Returns
+        -------
+        tuple of int
+            The rounded gpts.
+        """
+        from abtem.core.fft import next_fast_fft_size
+
+        assert self.gpts is not None
+
+        gpts = tuple(next_fast_fft_size(n) for n in self.gpts)
 
         self.gpts = gpts
 

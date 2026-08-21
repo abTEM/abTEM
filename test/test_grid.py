@@ -7,6 +7,7 @@ import strategies as abtem_st
 from hypothesis import assume, given
 from utils import ensure_is_tuple
 
+from abtem.core import config
 from abtem.core.grid import Grid, GridUndefinedError
 
 
@@ -116,4 +117,63 @@ def test_sampling_change(grid_data, new_sampling):
         )
         assert np.allclose(grid.sampling, adjusted_sampling)
 
+    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+
+
+def test_fast_fft_rounding_off_by_default():
+    # 10 / 0.03 -> ceil = 334 = 2 * 167; 167 is prime, so 334 is not a fast
+    # FFT length and must be kept exactly as derived when the option is off.
+    grid = Grid(extent=10, sampling=0.03)
+    assert grid.gpts == (334, 334)
+
+
+def test_fast_fft_rounding_refines_sampling():
+    with config.set({"grid.round-to-fast-fft": True}):
+        grid = Grid(extent=10, sampling=0.03)
+
+    assert grid.gpts == (336, 336)  # 336 = 2**4 * 3 * 7
+    assert all(d <= 0.03 for d in grid.sampling)
+    assert grid.extent == (10.0, 10.0)
+    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+
+
+def test_fast_fft_rounding_keeps_fast_gpts():
+    with config.set({"grid.round-to-fast-fft": True}):
+        grid = Grid(extent=10, sampling=0.1)
+
+    assert grid.gpts == (100, 100)  # 100 = 2**2 * 5**2 is already fast
+
+
+def test_fast_fft_rounding_never_alters_explicit_gpts():
+    with config.set({"grid.round-to-fast-fft": True}):
+        grid = Grid(extent=10, gpts=334)
+
+    assert grid.gpts == (334, 334)
+
+
+def test_fast_fft_rounding_exempts_endpoint_grids():
+    with config.set({"grid.round-to-fast-fft": True}):
+        grid = Grid(extent=10, sampling=0.03, endpoint=True)
+
+    assert grid.gpts == (335, 335)
+
+
+def test_fast_fft_rounding_applies_on_sampling_change():
+    grid = Grid(extent=10, sampling=0.1)
+    with config.set({"grid.round-to-fast-fft": True}):
+        grid.sampling = 0.03
+
+    assert grid.gpts == (336, 336)
+    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+
+
+def test_round_to_fast_fft_method():
+    grid = Grid(extent=10, sampling=0.03)
+    assert grid.gpts == (334, 334)
+
+    gpts = grid.round_to_fast_fft()
+
+    assert gpts == (336, 336)
+    assert grid.gpts == (336, 336)
+    assert grid.extent == (10.0, 10.0)
     check_grid_consistent(grid.extent, grid.gpts, grid.sampling)

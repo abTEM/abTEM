@@ -43,6 +43,13 @@ fftw:
   planning_timelimit: 60
   # Whether to allow falling back to not using wisdom if the cache fails
   allow_fallback: true
+grid:
+  # Round gpts derived from a requested sampling up to the next fast FFT length
+  # (all prime factors in {2, 3, 5, 7}). The realized sampling then becomes at
+  # most the requested one, never coarser. Explicitly given gpts are never
+  # altered. Fast lengths avoid the slow, memory-hungry Bluestein FFT fallback
+  # on GPU and speed up CPU FFTs as well.
+  round-to-fast-fft: false
 warnings:
   # Show the dask warning about the blockwise performance when the number are increased dramatically
   dask-blockwise-performance: false
