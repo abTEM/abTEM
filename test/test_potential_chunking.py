@@ -1,12 +1,19 @@
 """Tests verifying that potential chunking does not affect numerical results."""
 
+import sys
+import types
+
 import numpy as np
 import pytest
 from ase.build import bulk
 
 from abtem import PlaneWave, Potential
 from abtem.core import config as abtem_config
-from abtem.core.chunks import _nearest_power_of_two, estimate_potential_chunk_size
+from abtem.core.chunks import (
+    _nearest_power_of_two,
+    estimate_potential_chunk_size,
+    estimate_scan_batch_size,
+)
 from abtem.core.complex import complex_exponential
 from abtem.potentials.iam import CrystalPotential, PotentialArray
 
@@ -64,6 +71,47 @@ class TestEstimatePotentialChunkSize:
         small = estimate_potential_chunk_size((64, 64), device="cpu")
         large = estimate_potential_chunk_size((512, 512), device="cpu")
         assert large <= small
+
+
+def _install_fake_cupy(monkeypatch, free, total, pool_used=0):
+    """Install a minimal cupy stand-in exposing the memory-probing API."""
+    fake = types.ModuleType("cupy")
+    fake.get_default_memory_pool = lambda: types.SimpleNamespace(
+        used_bytes=lambda: pool_used
+    )
+    fake.cuda = types.SimpleNamespace(
+        Device=lambda: types.SimpleNamespace(mem_info=(free, total))
+    )
+    monkeypatch.setitem(sys.modules, "cupy", fake)
+
+
+class TestEstimateScanBatchSize:
+    """Unit tests for the VRAM-aware scan-batch estimator (GPU path mocked)."""
+
+    def test_fast_radix_grid(self, monkeypatch):
+        _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
+        # budget = 20 GB; per probe = 2048² x 16 B x 6 -> 49 probes -> pow2 32
+        assert estimate_scan_batch_size((2048, 2048), np.complex128, "gpu") == 32
+
+    def test_bluestein_grid_uses_doubled_overhead(self, monkeypatch):
+        _install_fake_cupy(monkeypatch, free=40_000_000_000, total=40_000_000_000)
+        # 2623 = 43*61 and 2271 = 3*757 force the Bluestein FFT fallback;
+        # per probe = 2623*2271 x 16 B x 12 -> 17 probes -> pow2 16.
+        # (The 6x factor would have given 34 -> 32.)
+        assert estimate_scan_batch_size((2623, 2271), np.complex128, "gpu") == 16
+
+    def test_pool_usage_reduces_batch(self, monkeypatch):
+        _install_fake_cupy(
+            monkeypatch,
+            free=40_000_000_000,
+            total=40_000_000_000,
+            pool_used=30_000_000_000,
+        )
+        # effective free = min(free, total - pool_used) = 10 GB -> budget 5 GB
+        assert estimate_scan_batch_size((2048, 2048), np.complex128, "gpu") <= 16
+
+    def test_cpu_falls_back_to_chunk_size(self):
+        assert estimate_scan_batch_size((2048, 2048), np.complex128, "cpu") >= 1
 
 
 class TestChunkedSlicesCorrectness:
