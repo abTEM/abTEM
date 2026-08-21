@@ -14,6 +14,7 @@ import scipy  # type: ignore
 import scipy.ndimage  # type: ignore
 
 from abtem.core.config import config
+from abtem.core.config import get as _config_get
 
 try:
     import cupy as cp  # type: ignore
@@ -104,6 +105,21 @@ def ensure_cuda_cluster():
             cluster_kwargs["memory_limit"] = int(0.85 * MEMORY_LIMIT / n_gpus)
     except Exception:  # noqa: BLE001 -- fall back to dask-cuda's default sizing
         pass
+
+    # Optional RMM memory pool per worker (e.g. "20 GB"), forwarded to
+    # dask-cuda; a pre-grown pool avoids allocator churn on memory-intensive
+    # workloads.
+    rmm_pool = _config_get("dask.multi-gpu-rmm-pool", None)
+    if rmm_pool:
+        cluster_kwargs["rmm_pool_size"] = rmm_pool
+
+    # Optional subset of GPUs to span, as a list of device indices or a
+    # comma-separated string. By default the cluster spans all visible GPUs.
+    devices = _config_get("dask.multi-gpu-devices", None)
+    if devices:
+        if not isinstance(devices, str):
+            devices = ",".join(str(d) for d in devices)
+        cluster_kwargs["CUDA_VISIBLE_DEVICES"] = devices
 
     try:
         _cuda_cluster_client = Client(LocalCUDACluster(**cluster_kwargs))

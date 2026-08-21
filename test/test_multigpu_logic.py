@@ -113,6 +113,43 @@ def test_ensure_cuda_cluster_requires_dask_cuda(monkeypatch):
         backend.ensure_cuda_cluster()
 
 
+def _fake_dask_cuda_capturing(captured):
+    m = types.ModuleType("dask_cuda")
+
+    def init(self, **kwargs):
+        captured.update(kwargs)
+
+    m.LocalCUDACluster = type("LocalCUDACluster", (), {"__init__": init})
+    return m
+
+
+def test_ensure_cuda_cluster_forwards_rmm_pool_and_devices(monkeypatch):
+    monkeypatch.setattr(backend, "_cuda_cluster_client", None)
+    captured = {}
+    monkeypatch.setitem(sys.modules, "dask_cuda", _fake_dask_cuda_capturing(captured))
+    monkeypatch.setattr(
+        "distributed.Client", lambda cluster: mock.Mock(status="running")
+    )
+    with abtem.config.set(
+        {"dask.multi-gpu-rmm-pool": "20 GB", "dask.multi-gpu-devices": [0, 2]}
+    ):
+        backend.ensure_cuda_cluster()
+    assert captured.get("rmm_pool_size") == "20 GB"
+    assert captured.get("CUDA_VISIBLE_DEVICES") == "0,2"
+
+
+def test_ensure_cuda_cluster_defaults_omit_optional_kwargs(monkeypatch):
+    monkeypatch.setattr(backend, "_cuda_cluster_client", None)
+    captured = {}
+    monkeypatch.setitem(sys.modules, "dask_cuda", _fake_dask_cuda_capturing(captured))
+    monkeypatch.setattr(
+        "distributed.Client", lambda cluster: mock.Mock(status="running")
+    )
+    backend.ensure_cuda_cluster()
+    assert "rmm_pool_size" not in captured
+    assert "CUDA_VISIBLE_DEVICES" not in captured
+
+
 def test_ensure_cuda_cluster_explains_missing_main_guard(monkeypatch):
     """The cryptic multiprocessing spawn error is translated into guidance."""
     monkeypatch.setattr(backend, "_cuda_cluster_client", None)

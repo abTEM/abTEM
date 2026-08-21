@@ -21,6 +21,13 @@ dask:
   # Automatically distribute gpu computations over all visible gpus by starting a
   # dask-cuda cluster. Requires the optional dask-cuda package.
   multi-gpu: false
+  # Optional RMM memory-pool size per multi-gpu worker (e.g. "20 GB").
+  # null disables the RMM pool.
+  multi-gpu-rmm-pool: null
+  # Optional subset of GPUs for the multi-gpu cluster, as a list of device
+  # indices (e.g. [0, 1]) or a comma-separated string (e.g. "0,1").
+  # null spans all visible GPUs.
+  multi-gpu-devices: null
 cupy:
   # Maximum GPU memory (bytes) used by the cuFFT plan cache.
   # https://docs.cupy.dev/en/stable/user_guide/fft.html#fft-plan-cache
