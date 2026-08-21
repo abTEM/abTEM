@@ -331,7 +331,6 @@ class ComputableList(list):
 
         if is_zip:
             # Use ZipStore for .zip files
-            @dask.delayed
             def write_to_zipstore(
                 computed_arrays,
                 url,
@@ -372,16 +371,10 @@ class ComputableList(list):
 
                 return url
 
-            delayed_arrays = [
-                (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
-            ]
-            delayed_write = write_to_zipstore(
-                delayed_arrays, url, metadata_list, overwrite, compressors=compressors
-            )
+            write_func = write_to_zipstore
 
         else:
             # Use directory store for non-.zip files
-            @dask.delayed
             def write_to_directory(computed_arrays, url, metadata_list, overwrite):
                 import shutil
 
@@ -411,33 +404,42 @@ class ComputableList(list):
 
                 return url
 
+            write_func = write_to_directory
+
+        if not compute:
             delayed_arrays = [
                 (i, dask.delayed(array.compute)()) for i, array in arrays_to_write
             ]
-            delayed_write = write_to_directory(
+            return dask.delayed(write_func)(
                 delayed_arrays, url, metadata_list, overwrite
             )
 
-        if not compute:
-            return delayed_write
-
-        # On GPU, force the synchronous scheduler to avoid multiple dask tasks
-        # running in parallel, each loading potential chunks + wave arrays into
-        # VRAM simultaneously. We must use dask.config.set() (via the guard) rather
-        # than just passing scheduler= to dask.compute(), because the delayed graph
-        # contains inner array.compute() calls that would otherwise use dask's
-        # default threaded scheduler. The guard makes an exception for an active
-        # single-threaded dask-cuda client, which already runs one task per GPU.
+        # Compute the arrays first -- resolving the GPU execution context the
+        # same way as ArrayObject.compute, so the opt-in multi-GPU cluster
+        # (``dask.multi-gpu``) is started on this path too -- then write the
+        # gathered results eagerly. Writing through a delayed task that itself
+        # calls array.compute() would nest a compute inside a scheduler task:
+        # the synchronous scheduler then needs a global config override to
+        # reach the nested call, and under a distributed client the nested
+        # compute would run on the local scheduler inside a single worker,
+        # serializing the whole computation onto one GPU.
         is_gpu = config.get("device") == "gpu" or any(
             _is_gpu_array_object(obj) for obj in self
         )
         if is_gpu:
-            check_cupy_is_installed()
+            kwargs = _resolve_gpu_scheduler(dict(kwargs))
 
-        with _gpu_scheduler_guard(is_gpu), _compute_context(
+        with _compute_context(
             progress_bar, profiler=False, resource_profiler=False
         ) as (_, profiler, resource_profiler):
-            output = dask.compute(delayed_write, **kwargs)[0]
+            arrays = dask.compute([array for _, array in arrays_to_write], **kwargs)[0]
+
+        output = write_func(
+            [(i, array) for (i, _), array in zip(arrays_to_write, arrays)],
+            url,
+            metadata_list,
+            overwrite,
+        )
 
         profilers = tuple(p for p in (profiler, resource_profiler) if p is not None)
         if profilers:
@@ -518,20 +520,30 @@ def _is_gpu_array_object(obj) -> bool:
     return hasattr(obj, "device") and obj.device == "gpu"
 
 
-@contextmanager
-def _gpu_scheduler_guard(is_gpu: bool):
-    """Guard nested/implicit GPU computes against the threaded scheduler.
+def _resolve_gpu_scheduler(kwargs: dict) -> dict:
+    """Resolve the dask scheduler for a GPU computation.
 
-    On GPU, force the synchronous scheduler so that nested ``array.compute()``
-    calls cannot fall back to dask's default threaded scheduler and load multiple
-    potential/wave chunks into a single GPU's memory at once. When a single-
-    threaded dask-cuda client is active (one worker pinned per GPU), that per-GPU
-    exclusivity already holds inside each worker, so the work is left to the
-    client to distribute across the cluster instead of being forced synchronous.
+    Starts the opt-in multi-GPU cluster (``dask.multi-gpu``) when more than one
+    GPU is visible and no client or explicit scheduler is already in charge.
+    When no suitable single-threaded dask-cuda client ends up handling the
+    computation, the synchronous scheduler is selected instead: the threaded
+    scheduler and multi-threaded workers share a single CUDA context per
+    process, which cannot be used with CuPy, and concurrent tasks would load
+    multiple potential/wave chunks into a single GPU's memory at once.
+
+    Parameters
+    ----------
+    kwargs : dict
+        Keyword arguments destined for ``dask.compute``. A ``scheduler`` key
+        set by the caller is always respected.
+
+    Returns
+    -------
+    dict
+        The keyword arguments, with ``scheduler="synchronous"`` injected when
+        no suitable client is available.
     """
-    if not is_gpu:
-        yield
-        return
+    check_cupy_is_installed()
 
     from distributed import get_client
 
@@ -540,11 +552,21 @@ def _gpu_scheduler_guard(is_gpu: bool):
     except ValueError:
         client = None
 
-    if is_gpu_dask_client(client):
-        yield
-    else:
-        with dask.config.set(scheduler="synchronous"):
-            yield
+    # Start a dask-cuda cluster spanning all visible GPUs when multi-GPU is
+    # enabled, no client is already handling the computation, and the user has
+    # not explicitly requested a scheduler.
+    if (
+        client is None
+        and "scheduler" not in kwargs
+        and config.get("dask.multi-gpu", False)
+        and cp.cuda.runtime.getDeviceCount() > 1
+    ):
+        client = ensure_cuda_cluster()
+
+    if not is_gpu_dask_client(client) and "scheduler" not in kwargs:
+        kwargs["scheduler"] = "synchronous"
+
+    return kwargs
 
 
 def _compute(
@@ -559,31 +581,7 @@ def _compute(
     )
 
     if is_gpu:
-        check_cupy_is_installed()
-
-        from distributed import get_client
-
-        try:
-            client = get_client()
-        except ValueError:
-            client = None
-
-        # Start a dask-cuda cluster spanning all visible GPUs when multi-GPU is
-        # enabled, no client is already handling the computation, and the user has
-        # not explicitly requested a scheduler.
-        if (
-            client is None
-            and "scheduler" not in kwargs
-            and config.get("dask.multi-gpu", False)
-            and cp.cuda.runtime.getDeviceCount() > 1
-        ):
-            client = ensure_cuda_cluster()
-
-        # The threaded scheduler and multi-threaded workers cannot be used with CuPy;
-        # fall back to synchronous execution unless a suitable (dask-cuda) client is
-        # handling the computation.
-        if not is_gpu_dask_client(client) and "scheduler" not in kwargs:
-            kwargs["scheduler"] = "synchronous"
+        kwargs = _resolve_gpu_scheduler(kwargs)
 
     with _compute_context(
         progress_bar, profiler=profiler, resource_profiler=resource_profiler
